@@ -71,6 +71,7 @@ import draccus
 import numpy as np
 import pyarrow.parquet as pq
 import transformers
+from tqdm import tqdm
 
 from experiments.unified.unified_pretrain import UNIFIED_CACHE_PATH, UNIFIED_TOKENIZER_PATH
 from marin.utils import fsspec_exists, fsspec_glob
@@ -304,7 +305,7 @@ def process_parquet_rows(
 
     rng = random.Random(42)
 
-    for rank, i in enumerate(row_indices):
+    for i in row_indices:
         if has_caption_col:
             caption = table.column("caption")[i].as_py()
             raw_image_tokens = image_tokens_col[i].as_py()
@@ -327,9 +328,6 @@ def process_parquet_rows(
             yield build_text_first_sequence(caption_ids, shifted_image_tokens, w_visual)
         else:
             yield build_image_first_sequence(caption_ids, shifted_image_tokens, w_visual)
-
-        if (rank + 1) % 1000 == 0:
-            logger.info("  ... processed %d/%d %s rows", rank + 1, len(row_indices), split)
 
 
 # --- Shard processing (local files only, no GCS in workers) ---
@@ -628,7 +626,7 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
         os.makedirs(config.download_dir, exist_ok=True)
         os.makedirs(config.staging_dir, exist_ok=True)
         total_completed = 0
-        for chunk_idx in range(num_chunks):
+        for chunk_idx in tqdm(range(num_chunks), desc="Chunks", unit="chunk"):
             chunk = pending[chunk_idx * chunk_size : (chunk_idx + 1) * chunk_size]
             chunk_label = f"Chunk {chunk_idx + 1}/{num_chunks}"
 
@@ -643,7 +641,7 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
             # Step 1: Download this chunk's parquet shards from GCS
             logger.info("[%s] Downloading %d shards ...", chunk_label, len(chunk))
             chunk_jobs = []
-            for shard_path, gcs_out_path in chunk:
+            for shard_path, gcs_out_path in tqdm(chunk, desc="Downloading", unit="file", leave=False):
                 gcs_shard = shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}"
                 filename = shard_path.rsplit("/", 1)[-1]
                 local_parquet = os.path.join(local_parquet_dir, filename)
@@ -671,7 +669,9 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
                     for local_parquet, local_cache, _gcs_out, source_shard in chunk_jobs
                 }
 
-                for future in as_completed(futures):
+                for future in tqdm(
+                    as_completed(futures), desc=f"Processing ({total_completed}/{len(pending)})", total=len(futures), unit="shard", leave=False
+                ):
                     local_cache, source = futures[future]
                     try:
                         result = future.result()
@@ -680,7 +680,6 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
                         total_train_tokens += result["token_count"]
                         total_val_und_records += result.get("val_und_count", 0)
                         total_val_gen_records += result.get("val_gen_count", 0)
-                        logger.info("[%s] Shard done (%d/%d total)", chunk_label, total_completed, len(pending))
 
                         # Track val cache paths
                         if result.get("val_und_path"):
@@ -697,7 +696,9 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
 
             # Step 3: Upload results to GCS (train + val caches)
             logger.info("[%s] Uploading shard caches ...", chunk_label)
-            for _local_parquet, local_cache, gcs_out_path, _source in chunk_jobs:
+            for _local_parquet, local_cache, gcs_out_path, _source in tqdm(
+                chunk_jobs, desc="Uploading", unit="shard", leave=False
+            ):
                 # Upload train cache
                 gcs_dest = gcs_out_path if gcs_out_path.startswith("gs://") else f"gs://{gcs_out_path}"
                 gcs_upload(local_cache, gcs_dest)
@@ -838,7 +839,7 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     )
 
     # --- Process each batch ---
-    for batch_idx, batch in enumerate(batches):
+    for batch_idx, batch in tqdm(enumerate(batches), desc="Batches", total=len(batches), unit="batch"):
         batch_label = f"Batch {batch_idx + 1}/{len(batches)} ({len(batch)} files)"
         file_records: dict[str, list[dict[str, np.ndarray]]] = {}
 
@@ -854,7 +855,7 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
             os.makedirs(local_parquet_dir)
 
             local_parquets = []
-            for shard_path in sub_chunk:
+            for shard_path in tqdm(sub_chunk, desc="Downloading", unit="file", leave=False):
                 gcs_shard = shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}"
                 filename = shard_path.rsplit("/", 1)[-1]
                 local_parquet = os.path.join(local_parquet_dir, filename)
@@ -877,7 +878,9 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
                     for lp in local_parquets
                 }
 
-                for future in as_completed(futures):
+                for future in tqdm(
+                    as_completed(futures), desc="Tokenizing", total=len(futures), unit="file", leave=False
+                ):
                     source = futures[future]
                     try:
                         train_records, val_und, val_gen = future.result()
@@ -925,7 +928,7 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
         # --- Shuffle each shard buffer, write locally, then upload ---
         logger.info("[%s] Shuffling and writing %d shards ...", batch_label, num_shards_in_batch)
         staging_batch_dir = tempfile.mkdtemp(prefix=f"vlm_shards_batch{batch_idx}_", dir=config.staging_dir)
-        for buf in shard_buffers:
+        for buf in tqdm(shard_buffers, desc="Writing shards", unit="shard", leave=False):
             if not buf:
                 continue
             random.shuffle(buf)

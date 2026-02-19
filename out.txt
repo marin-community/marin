@@ -1,472 +1,804 @@
-f-workers-101] Task complete, reporting result for shard 39
-2026-02-18 11:22:03,854 - zephyr.execution - INFO - [stage0-Map] 49/160 tasks completed
-2026-02-18 11:22:05,705 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000105 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:05,706 - zephyr.execution - INFO - [shard 105] Complete: 1 chunks produced
-2026-02-18 11:22:05,706 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-53] Task complete, reporting result for shard 105
-2026-02-18 11:22:06,210 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000092 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:06,212 - zephyr.execution - INFO - [shard 92] Complete: 1 chunks produced
-2026-02-18 11:22:06,212 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-28] Task complete, reporting result for shard 92
-2026-02-18 11:22:06,317 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000107 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:06,318 - zephyr.execution - INFO - [shard 107] Complete: 1 chunks produced
-2026-02-18 11:22:06,318 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-47] Task complete, reporting result for shard 107
-2026-02-18 11:22:06,374 - zephyr.execution - INFO - [stage0-Map] 52/160 tasks completed
-2026-02-18 11:22:07,675 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000060 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:07,676 - zephyr.execution - INFO - [shard 60] Complete: 1 chunks produced
-2026-02-18 11:22:07,676 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-119] Task complete, reporting result for shard 60
-2026-02-18 11:22:07,821 - zephyr.execution - INFO - [stage0-Map] 53/160 complete, 107 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:07,919 - zephyr.execution - INFO - [stage0-Map] 53/160 tasks completed
-2026-02-18 11:22:09,816 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000004 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:09,817 - zephyr.execution - INFO - [shard 4] Complete: 1 chunks produced
-2026-02-18 11:22:09,817 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-70] Task complete, reporting result for shard 4
-2026-02-18 11:22:10,106 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000071 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:10,108 - zephyr.execution - INFO - [shard 71] Complete: 1 chunks produced
-2026-02-18 11:22:10,108 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-123] Task complete, reporting result for shard 71
-2026-02-18 11:22:10,197 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000106 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:10,198 - zephyr.execution - INFO - [shard 106] Complete: 1 chunks produced
-2026-02-18 11:22:10,198 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-52] Task complete, reporting result for shard 106
-2026-02-18 11:22:10,447 - zephyr.execution - INFO - [stage0-Map] 56/160 tasks completed
-2026-02-18 11:22:11,432 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000120 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:11,433 - zephyr.execution - INFO - [shard 120] Complete: 1 chunks produced
-2026-02-18 11:22:11,433 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-54] Task complete, reporting result for shard 120
-2026-02-18 11:22:11,462 - zephyr.execution - INFO - [stage0-Map] 57/160 tasks completed
-2026-02-18 11:22:12,823 - zephyr.execution - INFO - [stage0-Map] 57/160 complete, 103 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:15,971 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000112 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:15,972 - zephyr.execution - INFO - [shard 112] Complete: 1 chunks produced
-2026-02-18 11:22:15,972 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-64] Task complete, reporting result for shard 112
-2026-02-18 11:22:16,784 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000086 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:16,786 - zephyr.execution - INFO - [shard 86] Complete: 1 chunks produced
-2026-02-18 11:22:16,786 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-33] Task complete, reporting result for shard 86
-2026-02-18 11:22:16,862 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000057 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:16,863 - zephyr.execution - INFO - [shard 57] Complete: 1 chunks produced
-2026-02-18 11:22:16,863 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-112] Task complete, reporting result for shard 57
-2026-02-18 11:22:16,934 - zephyr.execution - INFO - [stage0-Map] 60/160 tasks completed
-2026-02-18 11:22:17,021 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000073 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:17,022 - zephyr.execution - INFO - [shard 73] Complete: 1 chunks produced
-2026-02-18 11:22:17,022 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-127] Task complete, reporting result for shard 73
-2026-02-18 11:22:17,057 - zephyr.execution - INFO - [stage0-Map] 61/160 tasks completed
-2026-02-18 11:22:17,073 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000100 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:17,074 - zephyr.execution - INFO - [shard 100] Complete: 1 chunks produced
-2026-02-18 11:22:17,074 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-34] Task complete, reporting result for shard 100
-2026-02-18 11:22:17,112 - zephyr.execution - INFO - [stage0-Map] 62/160 tasks completed
-2026-02-18 11:22:17,482 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000038 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:17,484 - zephyr.execution - INFO - [shard 38] Complete: 1 chunks produced
-2026-02-18 11:22:17,484 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-10] Task complete, reporting result for shard 38
-2026-02-18 11:22:17,518 - zephyr.execution - INFO - [stage0-Map] 63/160 tasks completed
-2026-02-18 11:22:17,654 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000089 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:17,655 - zephyr.execution - INFO - [shard 89] Complete: 1 chunks produced
-2026-02-18 11:22:17,655 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-25] Task complete, reporting result for shard 89
-2026-02-18 11:22:17,756 - zephyr.execution - INFO - [stage0-Map] 64/160 tasks completed
-2026-02-18 11:22:17,824 - zephyr.execution - INFO - [stage0-Map] 64/160 complete, 96 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:19,491 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000040 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:19,493 - zephyr.execution - INFO - [shard 40] Complete: 1 chunks produced
-2026-02-18 11:22:19,493 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-85] Task complete, reporting result for shard 40
-2026-02-18 11:22:20,256 - zephyr.execution - INFO - [stage0-Map] 65/160 tasks completed
-2026-02-18 11:22:21,470 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000138 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:21,471 - zephyr.execution - INFO - [shard 138] Complete: 1 chunks produced
-2026-02-18 11:22:21,471 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-4] Task complete, reporting result for shard 138
-2026-02-18 11:22:21,663 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000014 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:21,664 - zephyr.execution - INFO - [shard 14] Complete: 1 chunks produced
-2026-02-18 11:22:21,664 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-7] Task complete, reporting result for shard 14
-2026-02-18 11:22:21,846 - zephyr.execution - INFO - [stage0-Map] 67/160 tasks completed
-2026-02-18 11:22:21,894 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000028 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:21,895 - zephyr.execution - INFO - [shard 28] Complete: 1 chunks produced
-2026-02-18 11:22:21,895 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-93] Task complete, reporting result for shard 28
-2026-02-18 11:22:21,973 - zephyr.execution - INFO - [stage0-Map] 68/160 tasks completed
-2026-02-18 11:22:22,825 - zephyr.execution - INFO - [stage0-Map] 68/160 complete, 92 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:24,100 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000063 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:24,101 - zephyr.execution - INFO - [shard 63] Complete: 1 chunks produced
-2026-02-18 11:22:24,101 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-118] Task complete, reporting result for shard 63
-2026-02-18 11:22:24,467 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000002 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:24,469 - zephyr.execution - INFO - [shard 2] Complete: 1 chunks produced
-2026-02-18 11:22:24,469 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-65] Task complete, reporting result for shard 2
-2026-02-18 11:22:24,477 - zephyr.execution - INFO - [stage0-Map] 70/160 tasks completed
-2026-02-18 11:22:24,548 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000132 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:24,549 - zephyr.execution - INFO - [shard 132] Complete: 1 chunks produced
-2026-02-18 11:22:24,549 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-0] Task complete, reporting result for shard 132
-2026-02-18 11:22:24,608 - zephyr.execution - INFO - [stage0-Map] 71/160 tasks completed
-2026-02-18 11:22:24,826 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000115 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:24,827 - zephyr.execution - INFO - [shard 115] Complete: 1 chunks produced
-2026-02-18 11:22:24,827 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-50] Task complete, reporting result for shard 115
-2026-02-18 11:22:24,856 - zephyr.execution - INFO - [stage0-Map] 72/160 tasks completed
-2026-02-18 11:22:24,897 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000021 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:24,898 - zephyr.execution - INFO - [shard 21] Complete: 1 chunks produced
-2026-02-18 11:22:24,898 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-14] Task complete, reporting result for shard 21
-2026-02-18 11:22:24,906 - zephyr.execution - INFO - [stage0-Map] 73/160 tasks completed
-2026-02-18 11:22:25,074 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000077 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:25,075 - zephyr.execution - INFO - [shard 77] Complete: 1 chunks produced
-2026-02-18 11:22:25,075 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-22] Task complete, reporting result for shard 77
-2026-02-18 11:22:25,150 - zephyr.execution - INFO - [stage0-Map] 74/160 tasks completed
-2026-02-18 11:22:25,225 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000047 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:25,226 - zephyr.execution - INFO - [shard 47] Complete: 1 chunks produced
-2026-02-18 11:22:25,226 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-102] Task complete, reporting result for shard 47
-2026-02-18 11:22:25,281 - zephyr.execution - INFO - [stage0-Map] 75/160 tasks completed
-2026-02-18 11:22:25,697 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000110 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:25,698 - zephyr.execution - INFO - [shard 110] Complete: 1 chunks produced
-2026-02-18 11:22:25,698 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-56] Task complete, reporting result for shard 110
-2026-02-18 11:22:25,966 - zephyr.execution - INFO - [stage0-Map] 76/160 tasks completed
-2026-02-18 11:22:27,070 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000142 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:27,071 - zephyr.execution - INFO - [shard 142] Complete: 1 chunks produced
-2026-02-18 11:22:27,071 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-96] Task complete, reporting result for shard 142
-2026-02-18 11:22:27,545 - zephyr.execution - INFO - [stage0-Map] 77/160 tasks completed
-2026-02-18 11:22:27,826 - zephyr.execution - INFO - [stage0-Map] 77/160 complete, 83 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:29,293 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000094 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:29,295 - zephyr.execution - INFO - [shard 94] Complete: 1 chunks produced
-2026-02-18 11:22:29,295 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-46] Task complete, reporting result for shard 94
-2026-02-18 11:22:30,114 - zephyr.execution - INFO - [stage0-Map] 78/160 tasks completed
-2026-02-18 11:22:30,229 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000016 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:30,230 - zephyr.execution - INFO - [shard 16] Complete: 1 chunks produced
-2026-02-18 11:22:30,231 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-75] Task complete, reporting result for shard 16
-2026-02-18 11:22:30,234 - zephyr.execution - INFO - [stage0-Map] 79/160 tasks completed
-2026-02-18 11:22:30,486 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000049 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:30,487 - zephyr.execution - INFO - [shard 49] Complete: 1 chunks produced
-2026-02-18 11:22:30,487 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-98] Task complete, reporting result for shard 49
-2026-02-18 11:22:30,628 - zephyr.execution - INFO - [stage0-Map] 80/160 tasks completed
-2026-02-18 11:22:32,036 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000023 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:32,037 - zephyr.execution - INFO - [shard 23] Complete: 1 chunks produced
-2026-02-18 11:22:32,037 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-9] Task complete, reporting result for shard 23
-2026-02-18 11:22:32,100 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000036 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:32,101 - zephyr.execution - INFO - [shard 36] Complete: 1 chunks produced
-2026-02-18 11:22:32,101 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-87] Task complete, reporting result for shard 36
-2026-02-18 11:22:32,151 - zephyr.execution - INFO - [stage0-Map] 82/160 tasks completed
-2026-02-18 11:22:32,790 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000102 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:32,792 - zephyr.execution - INFO - [shard 102] Complete: 1 chunks produced
-2026-02-18 11:22:32,792 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-58] Task complete, reporting result for shard 102
-2026-02-18 11:22:32,808 - zephyr.execution - INFO - [stage0-Map] 83/160 tasks completed
-2026-02-18 11:22:32,828 - zephyr.execution - INFO - [stage0-Map] 83/160 complete, 77 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:32,940 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000125 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:32,941 - zephyr.execution - INFO - [shard 125] Complete: 1 chunks produced
-2026-02-18 11:22:32,941 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-3] Task complete, reporting result for shard 125
-2026-02-18 11:22:33,041 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000090 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:33,042 - zephyr.execution - INFO - [shard 90] Complete: 1 chunks produced
-2026-02-18 11:22:33,042 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-32] Task complete, reporting result for shard 90
-2026-02-18 11:22:33,046 - zephyr.execution - INFO - [stage0-Map] 85/160 tasks completed
-2026-02-18 11:22:33,283 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000015 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:33,284 - zephyr.execution - INFO - [shard 15] Complete: 1 chunks produced
-2026-02-18 11:22:33,284 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-77] Task complete, reporting result for shard 15
-2026-02-18 11:22:33,286 - zephyr.execution - INFO - [stage0-Map] 86/160 tasks completed
-2026-02-18 11:22:34,715 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000055 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:34,716 - zephyr.execution - INFO - [shard 55] Complete: 1 chunks produced
-2026-02-18 11:22:34,716 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-117] Task complete, reporting result for shard 55
-2026-02-18 11:22:34,917 - zephyr.execution - INFO - [stage0-Map] 87/160 tasks completed
-2026-02-18 11:22:36,659 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000012 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:36,660 - zephyr.execution - INFO - [shard 12] Complete: 1 chunks produced
-2026-02-18 11:22:36,660 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-73] Task complete, reporting result for shard 12
-2026-02-18 11:22:36,701 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000031 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:36,702 - zephyr.execution - INFO - [shard 31] Complete: 1 chunks produced
-2026-02-18 11:22:36,702 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-80] Task complete, reporting result for shard 31
-2026-02-18 11:22:37,299 - zephyr.execution - INFO - [stage0-Map] 89/160 tasks completed
-2026-02-18 11:22:37,829 - zephyr.execution - INFO - [stage0-Map] 89/160 complete, 71 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:37,866 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000075 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:37,867 - zephyr.execution - INFO - [shard 75] Complete: 1 chunks produced
-2026-02-18 11:22:37,867 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-115] Task complete, reporting result for shard 75
-2026-02-18 11:22:37,948 - zephyr.execution - INFO - [stage0-Map] 90/160 tasks completed
-2026-02-18 11:22:37,989 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000026 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:37,990 - zephyr.execution - INFO - [shard 26] Complete: 1 chunks produced
-2026-02-18 11:22:37,990 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-86] Task complete, reporting result for shard 26
-2026-02-18 11:22:37,995 - zephyr.execution - INFO - [stage0-Map] 91/160 tasks completed
-2026-02-18 11:22:39,997 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000084 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:39,998 - zephyr.execution - INFO - [shard 84] Complete: 1 chunks produced
-2026-02-18 11:22:39,998 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-29] Task complete, reporting result for shard 84
-2026-02-18 11:22:40,380 - zephyr.execution - INFO - [stage0-Map] 92/160 tasks completed
-2026-02-18 11:22:40,565 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000101 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:40,567 - zephyr.execution - INFO - [shard 101] Complete: 1 chunks produced
-2026-02-18 11:22:40,567 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-51] Task complete, reporting result for shard 101
-2026-02-18 11:22:40,611 - zephyr.execution - INFO - [stage0-Map] 93/160 tasks completed
-2026-02-18 11:22:41,221 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000155 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:41,222 - zephyr.execution - INFO - [shard 155] Complete: 1 chunks produced
-2026-02-18 11:22:41,222 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-76] Task complete, reporting result for shard 155
-2026-02-18 11:22:41,301 - zephyr.execution - INFO - [stage0-Map] 94/160 tasks completed
-2026-02-18 11:22:41,724 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000044 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:41,725 - zephyr.execution - INFO - [shard 44] Complete: 1 chunks produced
-2026-02-18 11:22:41,725 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-90] Task complete, reporting result for shard 44
-2026-02-18 11:22:41,936 - zephyr.execution - INFO - [stage0-Map] 95/160 tasks completed
-2026-02-18 11:22:42,537 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000011 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:42,538 - zephyr.execution - INFO - [shard 11] Complete: 1 chunks produced
-2026-02-18 11:22:42,538 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-74] Task complete, reporting result for shard 11
-2026-02-18 11:22:42,617 - zephyr.execution - INFO - [stage0-Map] 96/160 tasks completed
-2026-02-18 11:22:42,830 - zephyr.execution - INFO - [stage0-Map] 96/160 complete, 64 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:43,998 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000130 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:43,999 - zephyr.execution - INFO - [shard 130] Complete: 1 chunks produced
-2026-02-18 11:22:43,999 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-42] Task complete, reporting result for shard 130
-2026-02-18 11:22:44,239 - zephyr.execution - INFO - [stage0-Map] 97/160 tasks completed
-2026-02-18 11:22:45,229 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000029 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:45,230 - zephyr.execution - INFO - [shard 29] Complete: 1 chunks produced
-2026-02-18 11:22:45,230 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-84] Task complete, reporting result for shard 29
-2026-02-18 11:22:45,265 - zephyr.execution - INFO - [stage0-Map] 98/160 tasks completed
-2026-02-18 11:22:45,290 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000152 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:45,291 - zephyr.execution - INFO - [shard 152] Complete: 1 chunks produced
-2026-02-18 11:22:45,291 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-114] Task complete, reporting result for shard 152
-2026-02-18 11:22:45,316 - zephyr.execution - INFO - [stage0-Map] 99/160 tasks completed
-2026-02-18 11:22:46,043 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000010 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:46,044 - zephyr.execution - INFO - [shard 10] Complete: 1 chunks produced
-2026-02-18 11:22:46,044 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-69] Task complete, reporting result for shard 10
-2026-02-18 11:22:46,379 - zephyr.execution - INFO - [stage0-Map] 100/160 tasks completed
-2026-02-18 11:22:47,128 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000065 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:47,130 - zephyr.execution - INFO - [shard 65] Complete: 1 chunks produced
-2026-02-18 11:22:47,130 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-122] Task complete, reporting result for shard 65
-2026-02-18 11:22:47,324 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000020 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:47,326 - zephyr.execution - INFO - [shard 20] Complete: 1 chunks produced
-2026-02-18 11:22:47,326 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-81] Task complete, reporting result for shard 20
-2026-02-18 11:22:47,447 - zephyr.execution - INFO - [stage0-Map] 102/160 tasks completed
-2026-02-18 11:22:47,831 - zephyr.execution - INFO - [stage0-Map] 102/160 complete, 58 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:48,573 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000151 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:48,574 - zephyr.execution - INFO - [shard 151] Complete: 1 chunks produced
-2026-02-18 11:22:48,574 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-24] Task complete, reporting result for shard 151
-2026-02-18 11:22:49,024 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000097 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:49,025 - zephyr.execution - INFO - [shard 97] Complete: 1 chunks produced
-2026-02-18 11:22:49,025 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-37] Task complete, reporting result for shard 97
-2026-02-18 11:22:49,122 - zephyr.execution - INFO - [stage0-Map] 104/160 tasks completed
-2026-02-18 11:22:50,012 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000080 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:50,013 - zephyr.execution - INFO - [shard 80] Complete: 1 chunks produced
-2026-02-18 11:22:50,013 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-21] Task complete, reporting result for shard 80
-2026-02-18 11:22:50,102 - zephyr.execution - INFO - [stage0-Map] 105/160 tasks completed
-2026-02-18 11:22:50,837 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000143 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:50,838 - zephyr.execution - INFO - [shard 143] Complete: 1 chunks produced
-2026-02-18 11:22:50,838 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-103] Task complete, reporting result for shard 143
-2026-02-18 11:22:51,142 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000113 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:51,143 - zephyr.execution - INFO - [shard 113] Complete: 1 chunks produced
-2026-02-18 11:22:51,143 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-60] Task complete, reporting result for shard 113
-2026-02-18 11:22:51,177 - zephyr.execution - INFO - [stage0-Map] 107/160 tasks completed
-2026-02-18 11:22:52,832 - zephyr.execution - INFO - [stage0-Map] 107/160 complete, 53 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:53,081 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000159 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:53,083 - zephyr.execution - INFO - [shard 159] Complete: 1 chunks produced
-2026-02-18 11:22:53,083 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-72] Task complete, reporting result for shard 159
-2026-02-18 11:22:53,712 - zephyr.execution - INFO - [stage0-Map] 108/160 tasks completed
-2026-02-18 11:22:55,257 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000001 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:55,258 - zephyr.execution - INFO - [shard 1] Complete: 1 chunks produced
-2026-02-18 11:22:55,258 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-5] Task complete, reporting result for shard 1
-2026-02-18 11:22:55,370 - zephyr.execution - INFO - [stage0-Map] 109/160 tasks completed
-2026-02-18 11:22:55,514 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000157 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:55,516 - zephyr.execution - INFO - [shard 157] Complete: 1 chunks produced
-2026-02-18 11:22:55,516 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-11] Task complete, reporting result for shard 157
-2026-02-18 11:22:55,605 - zephyr.execution - INFO - [stage0-Map] 110/160 tasks completed
-2026-02-18 11:22:55,810 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000131 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:55,811 - zephyr.execution - INFO - [shard 131] Complete: 1 chunks produced
-2026-02-18 11:22:55,812 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-126] Task complete, reporting result for shard 131
-2026-02-18 11:22:55,850 - zephyr.execution - INFO - [stage0-Map] 111/160 tasks completed
-2026-02-18 11:22:55,853 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000046 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:55,854 - zephyr.execution - INFO - [shard 46] Complete: 1 chunks produced
-2026-02-18 11:22:55,854 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-106] Task complete, reporting result for shard 46
-2026-02-18 11:22:55,895 - zephyr.execution - INFO - [stage0-Map] 112/160 tasks completed
-2026-02-18 11:22:56,773 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000053 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:56,774 - zephyr.execution - INFO - [shard 53] Complete: 1 chunks produced
-2026-02-18 11:22:56,774 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-13] Task complete, reporting result for shard 53
-2026-02-18 11:22:56,913 - zephyr.execution - INFO - [stage0-Map] 113/160 tasks completed
-2026-02-18 11:22:57,015 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000017 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:57,016 - zephyr.execution - INFO - [shard 17] Complete: 1 chunks produced
-2026-02-18 11:22:57,016 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-8] Task complete, reporting result for shard 17
-2026-02-18 11:22:57,036 - zephyr.execution - INFO - [stage0-Map] 114/160 tasks completed
-2026-02-18 11:22:57,834 - zephyr.execution - INFO - [stage0-Map] 114/160 complete, 46 in-flight, 0 queued, 128 workers
-2026-02-18 11:22:58,669 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000098 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:58,670 - zephyr.execution - INFO - [shard 98] Complete: 1 chunks produced
-2026-02-18 11:22:58,670 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-31] Task complete, reporting result for shard 98
-2026-02-18 11:22:58,804 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000156 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:22:58,805 - zephyr.execution - INFO - [shard 156] Complete: 1 chunks produced
-2026-02-18 11:22:58,805 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-111] Task complete, reporting result for shard 156
-2026-02-18 11:22:59,464 - zephyr.execution - INFO - [stage0-Map] 116/160 tasks completed
-2026-02-18 11:23:00,223 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000136 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:00,224 - zephyr.execution - INFO - [shard 136] Complete: 1 chunks produced
-2026-02-18 11:23:00,224 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-121] Task complete, reporting result for shard 136
-2026-02-18 11:23:00,518 - zephyr.execution - INFO - [stage0-Map] 117/160 tasks completed
-2026-02-18 11:23:00,518 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000148 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:00,519 - zephyr.execution - INFO - [shard 148] Complete: 1 chunks produced
-2026-02-18 11:23:00,519 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-124] Task complete, reporting result for shard 148
-2026-02-18 11:23:00,568 - zephyr.execution - INFO - [stage0-Map] 118/160 tasks completed
-2026-02-18 11:23:02,365 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000139 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:02,367 - zephyr.execution - INFO - [shard 139] Complete: 1 chunks produced
-2026-02-18 11:23:02,367 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-41] Task complete, reporting result for shard 139
-2026-02-18 11:23:02,564 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000076 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:02,566 - zephyr.execution - INFO - [shard 76] Complete: 1 chunks produced
-2026-02-18 11:23:02,566 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-116] Task complete, reporting result for shard 76
-2026-02-18 11:23:02,835 - zephyr.execution - INFO - [stage0-Map] 120/160 complete, 40 in-flight, 0 queued, 128 workers
-2026-02-18 11:23:02,977 - zephyr.execution - INFO - [stage0-Map] 120/160 tasks completed
-2026-02-18 11:23:03,399 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000116 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:03,399 - zephyr.execution - INFO - [shard 116] Complete: 1 chunks produced
-2026-02-18 11:23:03,400 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-57] Task complete, reporting result for shard 116
-2026-02-18 11:23:03,416 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000128 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:03,417 - zephyr.execution - INFO - [shard 128] Complete: 1 chunks produced
-2026-02-18 11:23:03,417 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-16] Task complete, reporting result for shard 128
-2026-02-18 11:23:03,646 - zephyr.execution - INFO - [stage0-Map] 122/160 tasks completed
-2026-02-18 11:23:04,347 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000146 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:04,348 - zephyr.execution - INFO - [shard 146] Complete: 1 chunks produced
-2026-02-18 11:23:04,348 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-38] Task complete, reporting result for shard 146
-2026-02-18 11:23:04,697 - zephyr.execution - INFO - [stage0-Map] 123/160 tasks completed
-2026-02-18 11:23:04,705 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000008 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:04,706 - zephyr.execution - INFO - [shard 8] Complete: 1 chunks produced
-2026-02-18 11:23:04,706 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-71] Task complete, reporting result for shard 8
-2026-02-18 11:23:04,748 - zephyr.execution - INFO - [stage0-Map] 124/160 tasks completed
-2026-02-18 11:23:05,330 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000153 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:05,331 - zephyr.execution - INFO - [shard 153] Complete: 1 chunks produced
-2026-02-18 11:23:05,331 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-59] Task complete, reporting result for shard 153
-2026-02-18 11:23:05,386 - zephyr.execution - INFO - [stage0-Map] 125/160 tasks completed
-2026-02-18 11:23:05,572 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000043 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:05,573 - zephyr.execution - INFO - [shard 43] Complete: 1 chunks produced
-2026-02-18 11:23:05,573 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-97] Task complete, reporting result for shard 43
-2026-02-18 11:23:05,624 - zephyr.execution - INFO - [stage0-Map] 126/160 tasks completed
-2026-02-18 11:23:06,824 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000056 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:06,825 - zephyr.execution - INFO - [shard 56] Complete: 1 chunks produced
-2026-02-18 11:23:06,825 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-99] Task complete, reporting result for shard 56
-2026-02-18 11:23:07,171 - zephyr.execution - INFO - [stage0-Map] 127/160 tasks completed
-2026-02-18 11:23:07,219 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000027 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:07,220 - zephyr.execution - INFO - [shard 27] Complete: 1 chunks produced
-2026-02-18 11:23:07,220 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-92] Task complete, reporting result for shard 27
-2026-02-18 11:23:07,223 - zephyr.execution - INFO - [stage0-Map] 128/160 tasks completed
-2026-02-18 11:23:07,836 - zephyr.execution - INFO - [stage0-Map] 128/160 complete, 32 in-flight, 0 queued, 128 workers
-2026-02-18 11:23:08,211 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000137 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:08,212 - zephyr.execution - INFO - [shard 137] Complete: 1 chunks produced
-2026-02-18 11:23:08,212 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-66] Task complete, reporting result for shard 137
-2026-02-18 11:23:08,242 - zephyr.execution - INFO - [stage0-Map] 129/160 tasks completed
-2026-02-18 11:23:08,739 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000091 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:08,740 - zephyr.execution - INFO - [shard 91] Complete: 1 chunks produced
-2026-02-18 11:23:08,740 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-27] Task complete, reporting result for shard 91
-2026-02-18 11:23:08,936 - zephyr.execution - INFO - [stage0-Map] 130/160 tasks completed
-2026-02-18 11:23:10,027 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000158 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:10,028 - zephyr.execution - INFO - [shard 158] Complete: 1 chunks produced
-2026-02-18 11:23:10,028 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-2] Task complete, reporting result for shard 158
-2026-02-18 11:23:10,523 - zephyr.execution - INFO - [stage0-Map] 131/160 tasks completed
-2026-02-18 11:23:10,812 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000072 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:10,814 - zephyr.execution - INFO - [shard 72] Complete: 1 chunks produced
-2026-02-18 11:23:10,814 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-113] Task complete, reporting result for shard 72
-2026-02-18 11:23:10,944 - zephyr.execution - INFO - [stage0-Map] 132/160 tasks completed
-2026-02-18 11:23:10,946 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000150 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:10,947 - zephyr.execution - INFO - [shard 150] Complete: 1 chunks produced
-2026-02-18 11:23:10,947 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-19] Task complete, reporting result for shard 150
-2026-02-18 11:23:10,996 - zephyr.execution - INFO - [stage0-Map] 133/160 tasks completed
-2026-02-18 11:23:11,227 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000103 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:11,228 - zephyr.execution - INFO - [shard 103] Complete: 1 chunks produced
-2026-02-18 11:23:11,228 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-40] Task complete, reporting result for shard 103
-2026-02-18 11:23:11,242 - zephyr.execution - INFO - [stage0-Map] 134/160 tasks completed
-2026-02-18 11:23:11,286 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000067 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:11,287 - zephyr.execution - INFO - [shard 67] Complete: 1 chunks produced
-2026-02-18 11:23:11,287 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-125] Task complete, reporting result for shard 67
-2026-02-18 11:23:11,291 - zephyr.execution - INFO - [stage0-Map] 135/160 tasks completed
-2026-02-18 11:23:11,572 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000133 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:11,573 - zephyr.execution - INFO - [shard 133] Complete: 1 chunks produced
-2026-02-18 11:23:11,573 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-43] Task complete, reporting result for shard 133
-2026-02-18 11:23:11,674 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000041 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:11,675 - zephyr.execution - INFO - [shard 41] Complete: 1 chunks produced
-2026-02-18 11:23:11,675 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-88] Task complete, reporting result for shard 41
-2026-02-18 11:23:11,699 - zephyr.execution - INFO - [stage0-Map] 137/160 tasks completed
-2026-02-18 11:23:12,454 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000005 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:12,455 - zephyr.execution - INFO - [shard 5] Complete: 1 chunks produced
-2026-02-18 11:23:12,455 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-1] Task complete, reporting result for shard 5
-2026-02-18 11:23:12,727 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000141 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:12,728 - zephyr.execution - INFO - [shard 141] Complete: 1 chunks produced
-2026-02-18 11:23:12,728 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-68] Task complete, reporting result for shard 141
-2026-02-18 11:23:12,763 - zephyr.execution - INFO - [stage0-Map] 139/160 tasks completed
-2026-02-18 11:23:12,837 - zephyr.execution - INFO - [stage0-Map] 139/160 complete, 21 in-flight, 0 queued, 128 workers
-2026-02-18 11:23:13,222 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000154 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:13,223 - zephyr.execution - INFO - [shard 154] Complete: 1 chunks produced
-2026-02-18 11:23:13,223 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-44] Task complete, reporting result for shard 154
-2026-02-18 11:23:13,424 - zephyr.execution - INFO - [stage0-Map] 140/160 tasks completed
-2026-02-18 11:23:13,611 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000096 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:13,612 - zephyr.execution - INFO - [shard 96] Complete: 1 chunks produced
-2026-02-18 11:23:13,612 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-35] Task complete, reporting result for shard 96
-2026-02-18 11:23:13,659 - zephyr.execution - INFO - [stage0-Map] 141/160 tasks completed
-2026-02-18 11:23:15,584 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000074 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:15,585 - zephyr.execution - INFO - [shard 74] Complete: 1 chunks produced
-2026-02-18 11:23:15,585 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-110] Task complete, reporting result for shard 74
-2026-02-18 11:23:15,900 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000025 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:15,901 - zephyr.execution - INFO - [shard 25] Complete: 1 chunks produced
-2026-02-18 11:23:15,901 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-83] Task complete, reporting result for shard 25
-2026-02-18 11:23:16,196 - zephyr.execution - INFO - [stage0-Map] 143/160 tasks completed
-2026-02-18 11:23:16,929 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000135 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:16,930 - zephyr.execution - INFO - [shard 135] Complete: 1 chunks produced
-2026-02-18 11:23:16,930 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-36] Task complete, reporting result for shard 135
-2026-02-18 11:23:17,207 - zephyr.execution - INFO - [stage0-Map] 144/160 tasks completed
-2026-02-18 11:23:17,675 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000054 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:17,677 - zephyr.execution - INFO - [shard 54] Complete: 1 chunks produced
-2026-02-18 11:23:17,677 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-107] Task complete, reporting result for shard 54
-2026-02-18 11:23:17,839 - zephyr.execution - INFO - [stage0-Map] 145/160 complete, 15 in-flight, 0 queued, 128 workers
-2026-02-18 11:23:17,866 - zephyr.execution - INFO - [stage0-Map] 145/160 tasks completed
-2026-02-18 11:23:17,967 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000108 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:17,968 - zephyr.execution - INFO - [shard 108] Complete: 1 chunks produced
-2026-02-18 11:23:17,968 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-62] Task complete, reporting result for shard 108
-2026-02-18 11:23:17,984 - zephyr.execution - INFO - [stage0-Map] 146/160 tasks completed
-2026-02-18 11:23:18,205 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000035 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:18,206 - zephyr.execution - INFO - [shard 35] Complete: 1 chunks produced
-2026-02-18 11:23:18,206 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-91] Task complete, reporting result for shard 35
-2026-02-18 11:23:18,224 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000122 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:18,225 - zephyr.execution - INFO - [shard 122] Complete: 1 chunks produced
-2026-02-18 11:23:18,225 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-55] Task complete, reporting result for shard 122
-2026-02-18 11:23:18,230 - zephyr.execution - INFO - [stage0-Map] 148/160 tasks completed
-2026-02-18 11:23:19,362 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000088 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:19,363 - zephyr.execution - INFO - [shard 88] Complete: 1 chunks produced
-2026-02-18 11:23:19,363 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-39] Task complete, reporting result for shard 88
-2026-02-18 11:23:19,545 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000006 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:19,546 - zephyr.execution - INFO - [shard 6] Complete: 1 chunks produced
-2026-02-18 11:23:19,546 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-67] Task complete, reporting result for shard 6
-2026-02-18 11:23:19,819 - zephyr.execution - INFO - [stage0-Map] 150/160 tasks completed
-2026-02-18 11:23:22,063 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000149 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:22,064 - zephyr.execution - INFO - [shard 149] Complete: 1 chunks produced
-2026-02-18 11:23:22,064 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-12] Task complete, reporting result for shard 149
-2026-02-18 11:23:22,379 - zephyr.execution - INFO - [stage0-Map] 151/160 tasks completed
-2026-02-18 11:23:22,840 - zephyr.execution - INFO - [stage0-Map] 151/160 complete, 9 in-flight, 0 queued, 128 workers
-2026-02-18 11:23:23,815 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000033 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:23,816 - zephyr.execution - INFO - [shard 33] Complete: 1 chunks produced
-2026-02-18 11:23:23,816 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-79] Task complete, reporting result for shard 33
-2026-02-18 11:23:23,948 - zephyr.execution - INFO - [stage0-Map] 152/160 tasks completed
-2026-02-18 11:23:24,431 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000085 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:24,433 - zephyr.execution - INFO - [shard 85] Complete: 1 chunks produced
-2026-02-18 11:23:24,433 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-23] Task complete, reporting result for shard 85
-2026-02-18 11:23:24,603 - zephyr.execution - INFO - [stage0-Map] 153/160 tasks completed
-2026-02-18 11:23:25,167 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000129 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:25,168 - zephyr.execution - INFO - [shard 129] Complete: 1 chunks produced
-2026-02-18 11:23:25,168 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-30] Task complete, reporting result for shard 129
-2026-02-18 11:23:25,273 - zephyr.execution - INFO - [stage0-Map] 154/160 tasks completed
-2026-02-18 11:23:25,435 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000058 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:25,435 - zephyr.execution - INFO - [shard 58] Complete: 1 chunks produced
-2026-02-18 11:23:25,435 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-105] Task complete, reporting result for shard 58
-2026-02-18 11:23:25,515 - zephyr.execution - INFO - [stage0-Map] 155/160 tasks completed
-2026-02-18 11:23:26,027 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000134 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:26,028 - zephyr.execution - INFO - [shard 134] Complete: 1 chunks produced
-2026-02-18 11:23:26,029 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-48] Task complete, reporting result for shard 134
-2026-02-18 11:23:26,200 - zephyr.execution - INFO - [stage0-Map] 156/160 tasks completed
-2026-02-18 11:23:27,841 - zephyr.execution - INFO - [stage0-Map] 156/160 complete, 4 in-flight, 0 queued, 128 workers
-2026-02-18 11:23:31,246 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000144 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:31,247 - zephyr.execution - INFO - [shard 144] Complete: 1 chunks produced
-2026-02-18 11:23:31,247 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-26] Task complete, reporting result for shard 144
-2026-02-18 11:23:31,571 - zephyr.execution - INFO - [stage0-Map] 157/160 tasks completed
-2026-02-18 11:23:32,842 - zephyr.execution - INFO - [stage0-Map] 157/160 complete, 3 in-flight, 0 queued, 128 workers
-2026-02-18 11:23:34,416 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000145 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:34,418 - zephyr.execution - INFO - [shard 145] Complete: 1 chunks produced
-2026-02-18 11:23:34,418 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-63] Task complete, reporting result for shard 145
-2026-02-18 11:23:34,981 - zephyr.execution - INFO - [stage0-Map] 158/160 tasks completed
-2026-02-18 11:23:37,843 - zephyr.execution - INFO - [stage0-Map] 158/160 complete, 2 in-flight, 0 queued, 128 workers
-2026-02-18 11:23:41,764 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000147 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:41,766 - zephyr.execution - INFO - [shard 147] Complete: 1 chunks produced
-2026-02-18 11:23:41,766 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-61] Task complete, reporting result for shard 147
-2026-02-18 11:23:42,243 - zephyr.execution - INFO - [stage0-Map] 159/160 tasks completed
-2026-02-18 11:23:42,844 - zephyr.execution - INFO - [stage0-Map] 159/160 complete, 1 in-flight, 0 queued, 128 workers
-2026-02-18 11:23:46,472 - levanter.store.cache - INFO - Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard-000140 to gs://marin-vlm/hf_85m_levanter_cache_test/train.
-2026-02-18 11:23:46,473 - zephyr.execution - INFO - [shard 140] Complete: 1 chunks produced
-2026-02-18 11:23:46,473 - zephyr.execution - INFO - [zephyr-levanter-cache-copy-dd6e318f-workers-104] Task complete, reporting result for shard 140
-2026-02-18 11:24:16,350 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-0 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:17,351 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-1 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:17,351 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-2 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:17,351 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-3 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:17,851 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-4 failed to heartbeat within timeout (30.2s)
-2026-02-18 11:24:18,351 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-5 failed to heartbeat within timeout (30.4s)
-2026-02-18 11:24:19,351 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-6 failed to heartbeat within timeout (30.4s)
-2026-02-18 11:24:20,352 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-7 failed to heartbeat within timeout (30.5s)
-2026-02-18 11:24:20,352 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-8 failed to heartbeat within timeout (30.0s)
-2026-02-18 11:24:20,852 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-9 failed to heartbeat within timeout (30.2s)
-2026-02-18 11:24:20,852 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-10 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:21,352 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-11 failed to heartbeat within timeout (30.5s)
-2026-02-18 11:24:21,852 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-12 failed to heartbeat within timeout (30.5s)
-2026-02-18 11:24:22,352 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-13 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:22,853 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-14 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:23,353 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-15 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:23,353 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-16 failed to heartbeat within timeout (30.1s)
-2026-02-18 11:24:24,353 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-17 failed to heartbeat within timeout (30.5s)
-2026-02-18 11:24:24,353 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-19 failed to heartbeat within timeout (30.0s)
-2026-02-18 11:24:24,853 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-18 failed to heartbeat within timeout (30.5s)
-2026-02-18 11:24:24,853 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-20 failed to heartbeat within timeout (30.5s)
-c2026-02-18 11:24:25,353 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-21 failed to heartbeat within timeout (30.0s)
-2026-02-18 11:24:26,354 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-22 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:27,354 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-23 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:27,354 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-24 failed to heartbeat within timeout (30.2s)
-2026-02-18 11:24:27,854 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-25 failed to heartbeat within timeout (30.4s)
-2026-02-18 11:24:27,854 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-26 failed to heartbeat within timeout (30.3s)
-2026-02-18 11:24:28,354 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-27 failed to heartbeat within timeout (30.2s)
-2026-02-18 11:24:29,355 - zephyr.execution - WARNING - Zephyr worker zephyr-levanter-cache-copy-dd6e318f-workers-28 failed to heartbeat within timeout (30.2s)
+Resolved 535 packages in 5ms
+2026-02-18 16:48:54,405 INFO executor.py:835 -- tokenized/paloma/c4_en: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:54,405 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/c4_en-829377
+2026-02-18 16:48:54,405 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/c4_en/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:54,405 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:54,486 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/c4_en: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:54,486 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/c4_en: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:54,486 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/c4_en: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:54,794 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/c4_en: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:54,911 - INFO - Submitting job: tokenize-tokenized-paloma-c4_en
+2026-02-18 16:48:54,912 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-c4_en
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:48:55,024 INFO executor.py:835 -- tokenized/paloma/dolma-v1_5: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:55,024 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/dolma-v1_5-3c3a2b
+2026-02-18 16:48:55,024 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:55,024 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:55,093 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/dolma-v1_5: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:55,093 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/dolma-v1_5: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:55,093 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/dolma-v1_5: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:55,312 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/dolma-v1_5: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:55,428 - INFO - Submitting job: tokenize-tokenized-paloma-dolma-v1_5
+2026-02-18 16:48:55,429 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-dolma-v1_5
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:48:55,540 INFO executor.py:835 -- tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:55,541 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-83d04e
+2026-02-18 16:48:55,541 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:55,541 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:55,608 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:55,609 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:55,609 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:55,818 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/dolma_100_programing_languages: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:55,931 - INFO - Submitting job: tokenize-tokenized-paloma-dolma_100_programing_languages
+2026-02-18 16:48:55,931 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-dolma_100_programing_languages
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:48:56,045 INFO executor.py:835 -- tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:56,045 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/dolma_100_subreddits-fdbee1
+2026-02-18 16:48:56,045 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:56,045 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:56,146 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:56,147 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:56,147 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:56,350 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/dolma_100_subreddits: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:56,472 - INFO - Submitting job: tokenize-tokenized-paloma-dolma_100_subreddits
+2026-02-18 16:48:56,472 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-dolma_100_subreddits
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:48:56,586 INFO executor.py:835 -- tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:56,586 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/falcon-refinedweb-68dbf9
+2026-02-18 16:48:56,586 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:56,586 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:56,676 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:56,676 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:56,676 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:56,888 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/falcon-refinedweb: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:57,003 - INFO - Submitting job: tokenize-tokenized-paloma-falcon-refinedweb
+2026-02-18 16:48:57,003 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-falcon-refinedweb
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:48:57,116 INFO executor.py:835 -- tokenized/paloma/gab: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:57,116 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/gab-888750
+2026-02-18 16:48:57,116 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/gab/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:57,116 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:57,198 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/gab: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:57,200 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/gab: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:57,200 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/gab: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:57,418 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/gab: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:57,535 - INFO - Submitting job: tokenize-tokenized-paloma-gab
+2026-02-18 16:48:57,535 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-gab
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:48:57,649 INFO executor.py:835 -- tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:57,649 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-7b6075
+2026-02-18 16:48:57,649 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:57,649 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:57,701 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:57,701 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:57,701 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:57,912 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/m2d2_s2orc_unsplit: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:58,027 - INFO - Submitting job: tokenize-tokenized-paloma-m2d2_s2orc_unsplit
+2026-02-18 16:48:58,027 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-m2d2_s2orc_unsplit
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:48:58,146 INFO executor.py:835 -- tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:58,146 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-db49a1
+2026-02-18 16:48:58,146 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:58,146 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:58,217 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:58,217 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:58,217 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:58,438 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/m2d2_wikipedia_unsplit: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:58,545 - INFO - Submitting job: tokenize-tokenized-paloma-m2d2_wikipedia_unsplit
+2026-02-18 16:48:58,545 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-m2d2_wikipedia_unsplit
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 6ms
+2026-02-18 16:48:58,659 INFO executor.py:835 -- tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:58,660 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-be4fa9
+2026-02-18 16:48:58,660 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:58,660 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:58,768 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:58,769 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:58,769 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:59,018 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/manosphere_meta_sep: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:59,152 - INFO - Submitting job: tokenize-tokenized-paloma-manosphere_meta_sep
+2026-02-18 16:48:59,152 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-manosphere_meta_sep
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:48:59,266 INFO executor.py:835 -- tokenized/paloma/mc4: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:59,266 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/mc4-55eb08
+2026-02-18 16:48:59,266 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/mc4/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:59,266 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:59,323 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/mc4: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:59,323 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/mc4: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:59,323 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/mc4: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:59,555 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/mc4: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:59,664 - INFO - Submitting job: tokenize-tokenized-paloma-mc4
+2026-02-18 16:48:59,665 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-mc4
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 6ms
+2026-02-18 16:48:59,788 INFO executor.py:835 -- tokenized/paloma/ptb: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:48:59,788 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/ptb-ef3824
+2026-02-18 16:48:59,788 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/ptb/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:48:59,788 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:48:59,836 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/ptb: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:48:59,836 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/ptb: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:48:59,836 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/ptb: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:00,039 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/ptb: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:00,145 - INFO - Submitting job: tokenize-tokenized-paloma-ptb
+2026-02-18 16:49:00,146 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-ptb
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:49:00,267 INFO executor.py:835 -- tokenized/paloma/redpajama: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:00,268 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/redpajama-3a1546
+2026-02-18 16:49:00,268 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/redpajama/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:49:00,268 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:49:00,339 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/redpajama: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:49:00,339 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/redpajama: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:49:00,339 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/redpajama: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:00,583 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/redpajama: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:00,692 - INFO - Submitting job: tokenize-tokenized-paloma-redpajama
+2026-02-18 16:49:00,692 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-redpajama
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:49:00,809 INFO executor.py:835 -- tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:00,809 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-3dcc48
+2026-02-18 16:49:00,809 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:49:00,809 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:49:00,879 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:49:00,879 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:49:00,879 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:01,093 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/twitterAAE_HELM_fixed: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:01,208 - INFO - Submitting job: tokenize-tokenized-paloma-twitteraae_helm_fixed
+2026-02-18 16:49:01,209 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-twitteraae_helm_fixed
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:49:01,321 INFO executor.py:835 -- tokenized/paloma/wikitext_103: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:01,321 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/paloma/wikitext_103-31b938
+2026-02-18 16:49:01,321 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/65cd6fc/wikitext_103/val/val*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:49:01,321 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/paloma-fc6827
+2026-02-18 16:49:01,396 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/paloma/wikitext_103: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:49:01,396 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/paloma/wikitext_103: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:49:01,396 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/paloma/wikitext_103: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:01,654 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/paloma/wikitext_103: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:01,772 - INFO - Submitting job: tokenize-tokenized-paloma-wikitext_103
+2026-02-18 16:49:01,772 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-paloma-wikitext_103
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:49:01,886 INFO executor.py:835 -- tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:01,886 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/wikipedia_english-9cc7fd
+2026-02-18 16:49:01,886 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/wikipedia_english_*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:49:01,886 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
+2026-02-18 16:49:01,951 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:49:01,951 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:49:01,951 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:02,164 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/uncheatable_eval/wikipedia_english: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:02,320 - INFO - Submitting job: tokenize-tokenized-uncheatable_eval-wikipedia_english
+2026-02-18 16:49:02,320 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-uncheatable_eval-wikipedia_english
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:49:02,436 INFO executor.py:835 -- tokenized/uncheatable_eval/github_python: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:02,436 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/github_python-1e88aa
+2026-02-18 16:49:02,436 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/github_python_*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:49:02,437 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
+2026-02-18 16:49:02,520 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/uncheatable_eval/github_python: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:49:02,521 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/uncheatable_eval/github_python: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:49:02,521 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/uncheatable_eval/github_python: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:02,736 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/uncheatable_eval/github_python: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:02,848 - INFO - Submitting job: tokenize-tokenized-uncheatable_eval-github_python
+2026-02-18 16:49:02,849 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-uncheatable_eval-github_python
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+(_RayActorHost pid=130791, ip=10.130.0.99) 2026-02-18 16:49:02,846 INFO zephyr.execution:275 Coordinator initialized, expecting 4 workers to register
+Resolved 535 packages in 5ms
+2026-02-18 16:49:02,965 INFO executor.py:835 -- tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:02,965 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-e302e9
+2026-02-18 16:49:02,965 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/github_cpp_*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:49:02,965 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:02,954 INFO execution.py:759 [zephyr-tokenize-filescan-59d86796-workers-1] Executing task for shard 1 (attempt 0)
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:02,954 INFO execution.py:787 [shard 1/4] Starting stage=stage0-Map, 1 input chunks, 1 ops
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:02,955 INFO execution.py:759 [zephyr-tokenize-filescan-59d86796-workers-4] Executing task for shard 2 (attempt 0)
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:02,955 INFO execution.py:787 [shard 2/4] Starting stage=stage0-Map, 1 input chunks, 1 ops
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:02,956 INFO execution.py:759 [zephyr-tokenize-filescan-59d86796-workers-3] Executing task for shard 3 (attempt 0)
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:02,956 INFO execution.py:787 [shard 3/4] Starting stage=stage0-Map, 1 input chunks, 1 ops
+2026-02-18 16:49:03,013 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:49:03,013 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:49:03,013 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:03,211 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/uncheatable_eval/github_cpp: <function tokenize at 0x7cb1c53dfba0>
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:03,266 INFO execution.py:833 [shard 0] Complete: 1 chunks produced
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:03,267 INFO execution.py:762 [zephyr-tokenize-filescan-59d86796-workers-2] Task complete, reporting result for shard 0
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:03,291 INFO execution.py:833 [shard 2] Complete: 1 chunks produced
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:03,291 INFO execution.py:762 [zephyr-tokenize-filescan-59d86796-workers-4] Task complete, reporting result for shard 2
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:03,302 INFO execution.py:833 [shard 3] Complete: 1 chunks produced
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:03,302 INFO execution.py:762 [zephyr-tokenize-filescan-59d86796-workers-3] Task complete, reporting result for shard 3
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:03,303 INFO execution.py:833 [shard 1] Complete: 1 chunks produced
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:03,306 INFO execution.py:762 [zephyr-tokenize-filescan-59d86796-workers-1] Task complete, reporting result for shard 1
+2026-02-18 16:49:03,334 - INFO - Submitting job: tokenize-tokenized-uncheatable_eval-github_cpp
+2026-02-18 16:49:03,335 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-uncheatable_eval-github_cpp
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+2026-02-18 16:49:03,456 INFO executor.py:835 -- tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:03,456 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/bbc_news-e3c5f6
+2026-02-18 16:49:03,456 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/bbc_news_*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:49:03,456 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
+2026-02-18 16:49:03,525 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:49:03,525 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:49:03,525 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:03,764 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/uncheatable_eval/bbc_news: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:03,922 - INFO - Submitting job: tokenize-tokenized-uncheatable_eval-bbc_news
+2026-02-18 16:49:03,922 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-uncheatable_eval-bbc_news
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 6ms
+2026-02-18 16:49:04,051 INFO executor.py:835 -- tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:04,051 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_physics-361aa6
+2026-02-18 16:49:04,051 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/arxiv_physics_*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:49:04,051 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
+(_RayActorHost pid=10149, ip=10.130.15.235) 2026-02-18 16:49:04,028 INFO zephyr.execution:694 [zephyr-tokenize-67e807a7-workers-2] Starting polling loop
+(_RayActorHost pid=130791, ip=10.130.0.99) 2026-02-18 16:49:04,032 INFO zephyr.execution:302 Worker zephyr-tokenize-67e807a7-workers-2 registered, total: 1
+(_RayActorHost pid=130791, ip=10.130.0.99) 2026-02-18 16:49:04,050 INFO zephyr.execution:302 Worker zephyr-tokenize-67e807a7-workers-1 registered, total: 2
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:04,265 INFO execution.py:492 [stage0-Map] 6/99 tasks completed
+2026-02-18 16:49:04,275 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:49:04,275 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:49:04,275 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7cb1c53dfba0>
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:04,328 INFO execution.py:328 [stage0-Map] 6/99 complete, 8 in-flight, 85 queued, 8 workers
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:04,382 INFO execution.py:492 [stage0-Map] 8/99 tasks completed
+2026-02-18 16:49:04,480 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/uncheatable_eval/arxiv_physics: <function tokenize at 0x7cb1c53dfba0>
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:04,512 INFO execution.py:492 [stage0-Map] 10/99 tasks completed
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:04,559 INFO execution.py:492 [stage0-Map] 13/99 tasks completed
+2026-02-18 16:49:04,603 - INFO - Submitting job: tokenize-tokenized-uncheatable_eval-arxiv_physics
+2026-02-18 16:49:04,603 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-uncheatable_eval-arxiv_physics
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:04,622 INFO execution.py:599 [coordinator.shutdown] Starting shutdown
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:04,613 INFO execution.py:492 [stage0-Map] 14/99 tasks completed
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:04,665 INFO execution.py:492 [stage0-Map] 16/99 tasks completed
+Resolved 535 packages in 6ms
+2026-02-18 16:49:04,748 INFO executor.py:835 -- tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:04,748 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_computer_science-0d70e5
+2026-02-18 16:49:04,748 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/arxiv_computer_science_*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:49:04,748 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
+2026-02-18 16:49:04,834 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:49:04,835 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:49:04,835 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7cb1c53dfba0>
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:04,901 INFO execution.py:606 Coordinator shutdown complete
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:04,902 INFO tokenize.py:323 Grouped 4 files into 1 groups by size.
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:04,913 INFO execution.py:492 [stage0-Map] 23/99 tasks completed
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:04,961 INFO execution.py:492 [stage0-Map] 24/99 tasks completed
+2026-02-18 16:49:05,053 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/uncheatable_eval/arxiv_computer_science: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:05,186 - INFO - Submitting job: tokenize-tokenized-uncheatable_eval-arxiv_computer_science
+2026-02-18 16:49:05,186 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-uncheatable_eval-arxiv_computer_science
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:05,190 INFO execution.py:492 [stage0-Map] 29/99 tasks completed
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 7ms
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:05,242 INFO execution.py:492 [stage0-Map] 32/99 tasks completed
+2026-02-18 16:49:05,329 INFO executor.py:835 -- tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7cb1c53dfba0>
+2026-02-18 16:49:05,329 INFO executor.py:836 --   output_path = gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-6c8311
+2026-02-18 16:49:05,329 INFO executor.py:837 --   config = {"validation_paths.[0]": "DEP[0]/ao3_english_*.jsonl.gz", "tokenizer": "gs://marin-vlm/tokenizers/llama3-unified-144k"}
+2026-02-18 16:49:05,329 INFO executor.py:839 --   DEP[0] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
+2026-02-18 16:49:05,380 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Status tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7cb1c53dfba0>: FAILED
+2026-02-18 16:49:05,381 INFO executor.py:1182 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Force running tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7cb1c53dfba0>, previous status: FAILED
+2026-02-18 16:49:05,381 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Attempting to acquire lock for tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7cb1c53dfba0>
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:05,482 INFO execution.py:492 [stage0-Map] 38/99 tasks completed
+2026-02-18 16:49:05,601 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-137105409193792] Acquired lock for tokenized/uncheatable_eval/ao3_english: <function tokenize at 0x7cb1c53dfba0>
+(tokenize pid=9927, ip=10.130.15.235) 2026-02-18 16:49:05,533 INFO execution.py:492 [stage0-Map] 40/99 tasks completed
+2026-02-18 16:49:05,727 - INFO - Submitting job: tokenize-tokenized-uncheatable_eval-ao3_english
+2026-02-18 16:49:05,727 - INFO - Building environment with [], extras ['cpu'] for job: tokenize-tokenized-uncheatable_eval-ao3_english
+Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+Resolved 535 packages in 5ms
+(tokenize pid=12628, ip=10.130.15.229) 2026-02-18 16:49:06,548 INFO execution.py:943 Starting zephyr pipeline: 356c527556f3
+(_RayActorHost pid=23532, ip=10.130.0.222) 2026-02-18 16:49:05,465 INFO zephyr.execution:275 Coordinator initialized, expecting 6 workers to register [repeated 4x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)
+(tokenize pid=130535, ip=10.130.0.99) 2026-02-18 16:49:07,984 INFO execution.py:759 [zephyr-tokenize-filescan-3436e7ba-workers-3] Executing task for shard 81 (attempt 0) [repeated 255x across cluster]
+(tokenize pid=130535, ip=10.130.0.99) 2026-02-18 16:49:07,984 INFO execution.py:787 [shard 81/100] Starting stage=stage0-Map, 1 input chunks, 1 ops [repeated 255x across cluster]
+(tokenize pid=12694, ip=10.130.15.229) 2026-02-18 16:49:08,292 INFO execution.py:833 [shard 73] Complete: 1 chunks produced [repeated 260x across cluster]
+(tokenize pid=12694, ip=10.130.15.229) 2026-02-18 16:49:08,292 INFO execution.py:762 [zephyr-tokenize-filescan-f20a9d23-workers-1] Task complete, reporting result for shard 73 [repeated 260x across cluster]
+(_RayActorHost pid=130791, ip=10.130.0.99) 2026-02-18 16:49:08,370 INFO datasets:58 Disabling PyTorch because USE_TF is set
+(_RayActorHost pid=130791, ip=10.130.0.99) 2026-02-18 16:49:08,371 INFO datasets:125 JAX version 0.8.0 available.
+(_RayActorHost pid=22620, ip=10.130.1.187) 2026-02-18 16:49:06,696 INFO zephyr.execution:694 [zephyr-tokenize-620509da-workers-97] Starting polling loop [repeated 229x across cluster]
+(_RayActorHost pid=9801, ip=10.130.15.234) 2026-02-18 16:49:06,699 INFO zephyr.execution:302 Worker zephyr-tokenize-620509da-workers-97 registered, total: 74 [repeated 228x across cluster]
+(tokenize pid=12694, ip=10.130.15.229) 2026-02-18 16:49:09,188 INFO execution.py:492 [stage0-Map] 99/100 tasks completed [repeated 121x across cluster]
+(tokenize pid=12766, ip=10.130.15.229) 2026-02-18 16:49:09,105 INFO execution.py:328 [stage0-Map] 4/5 complete, 1 in-flight, 0 queued, 8 workers [repeated 3x across cluster]
+(tokenize pid=205876, ip=10.130.0.64) 2026-02-18 16:49:10,334 INFO execution.py:599 [coordinator.shutdown] Starting shutdown
+(tokenize pid=205876, ip=10.130.0.64) 2026-02-18 16:49:10,519 INFO execution.py:606 Coordinator shutdown complete
+(tokenize pid=205876, ip=10.130.0.64) 2026-02-18 16:49:10,520 INFO tokenize.py:323 Grouped 6 files into 1 groups by size.
+(tokenize pid=205876, ip=10.130.0.64) 2026-02-18 16:49:12,050 INFO execution.py:943 Starting zephyr pipeline: f5a698b6a35c
+(_RayActorHost pid=14374, ip=10.130.15.229) 2026-02-18 16:49:12,749 INFO zephyr.execution:275 Coordinator initialized, expecting 1 workers to register [repeated 11x across cluster]
+(tokenize pid=130596, ip=10.130.0.99) 2026-02-18 16:49:11,950 INFO execution.py:759 [zephyr-tokenize-filescan-9fea4fdc-workers-4] Executing task for shard 5 (attempt 0) [repeated 74x across cluster]
+(tokenize pid=130596, ip=10.130.0.99) 2026-02-18 16:49:11,950 INFO execution.py:787 [shard 5/6] Starting stage=stage0-Map, 1 input chunks, 1 ops [repeated 74x across cluster]
+(tokenize pid=10503, ip=10.130.15.235) 2026-02-18 16:49:13,054 INFO execution.py:833 [shard 0] Complete: 1 chunks produced [repeated 84x across cluster]
+(tokenize pid=10503, ip=10.130.15.235) 2026-02-18 16:49:13,054 INFO execution.py:762 [zephyr-tokenize-filescan-55b7331f-workers-7] Task complete, reporting result for shard 0 [repeated 84x across cluster]
+(_RayActorHost pid=130791, ip=10.130.0.99) 2026-02-18 16:49:13,621 INFO zephyr.execution:537 Starting stage stage0-Map → Write with 1 tasks
+(_RayActorHost pid=130791, ip=10.130.0.99) 2026-02-18 16:49:13,622 INFO zephyr.execution:492 [stage0-Map → Write] 0/1 tasks completed
+(_RayActorHost pid=26671, ip=10.130.0.145) 2026-02-18 16:49:13,894 INFO zephyr.execution:694 [zephyr-tokenize-dca6ca09-workers-0] Starting polling loop [repeated 118x across cluster]
+(_RayActorHost pid=130791, ip=10.130.0.99) 2026-02-18 16:49:14,122 INFO zephyr.execution:328 [stage0-Map → Write] 0/1 complete, 1 in-flight, 0 queued, 4 workers
+(_RayActorHost pid=14374, ip=10.130.15.229) 2026-02-18 16:49:13,899 INFO zephyr.execution:302 Worker zephyr-tokenize-dca6ca09-workers-0 registered, total: 1 [repeated 118x across cluster]
+(tokenize pid=25857, ip=10.130.0.219) 2026-02-18 16:49:14,246 INFO execution.py:492 [stage0-Map] 8/10 tasks completed
+(tokenize pid=25858, ip=10.130.0.219) 2026-02-18 16:49:14,317 INFO execution.py:492 [stage0-Map] 8/49 tasks completed
+(tokenize pid=25857, ip=10.130.0.219) 2026-02-18 16:49:14,324 INFO execution.py:328 [stage0-Map] 8/10 complete, 2 in-flight, 0 queued, 8 workers
+(tokenize pid=25858, ip=10.130.0.219) 2026-02-18 16:49:14,398 INFO execution.py:328 [stage0-Map] 8/49 complete, 8 in-flight, 33 queued, 8 workers
+(_RayActorHost pid=23532, ip=10.130.0.222) 2026-02-18 16:49:14,497 INFO datasets:58 Disabling PyTorch because USE_TF is set
+(_RayActorHost pid=23532, ip=10.130.0.222) 2026-02-18 16:49:14,498 INFO datasets:125 JAX version 0.8.0 available.
+(tokenize pid=10062, ip=10.130.15.235) 2026-02-18 16:49:15,006 INFO execution.py:599 [coordinator.shutdown] Starting shutdown [repeated 6x across cluster]
+(tokenize pid=10062, ip=10.130.15.235) 2026-02-18 16:49:15,261 INFO execution.py:606 Coordinator shutdown complete [repeated 6x across cluster]
+(tokenize pid=10062, ip=10.130.15.235) 2026-02-18 16:49:15,261 INFO tokenize.py:323 Grouped 2 files into 1 groups by size. [repeated 6x across cluster]
+2026-02-18 16:49:15,906 - ERROR - Job ray-callable-tokenize-tokenized-uncheatable_eval-bbc_news-930feb61 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JSONDecodeError): ray::tokenize() (pid=10503, ip=10.130.15.235)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 383, in tokenize
+    run_pipeline(ctx, validation_paths, "validation")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 341, in run_pipeline
+    ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1230, in load_tokenizer
+    return _hf_hub_retry(
+           ^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1199, in _hf_hub_retry
+    return fn()
+           ^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1231, in <lambda>
+    lambda: AutoTokenizer.from_pretrained(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1089, in from_pretrained
+    tokenizer_config = get_tokenizer_config(pretrained_model_name_or_path, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 943, in get_tokenizer_config
+    result = json.load(reader)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+2026-02-18 16:49:15,907 INFO executor.py:806 -- Waiting for ray-callable-tokenize-tokenized-uncheatable_eval-bbc_news-930feb61 to finish for step tokenized/uncheatable_eval/bbc_news
+2026-02-18 16:49:15,907 - ERROR - Job ray-callable-tokenize-tokenized-uncheatable_eval-bbc_news-930feb61 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JSONDecodeError): ray::tokenize() (pid=10503, ip=10.130.15.235)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 383, in tokenize
+    run_pipeline(ctx, validation_paths, "validation")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 341, in run_pipeline
+    ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1230, in load_tokenizer
+    return _hf_hub_retry(
+           ^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1199, in _hf_hub_retry
+    return fn()
+           ^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1231, in <lambda>
+    lambda: AutoTokenizer.from_pretrained(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1089, in from_pretrained
+    tokenizer_config = get_tokenizer_config(pretrained_model_name_or_path, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 943, in get_tokenizer_config
+    result = json.load(reader)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+2026-02-18 16:49:15,908 - ERROR - Job ray-callable-tokenize-tokenized-uncheatable_eval-bbc_news-930feb61 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JSONDecodeError): ray::tokenize() (pid=10503, ip=10.130.15.235)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 383, in tokenize
+    run_pipeline(ctx, validation_paths, "validation")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 341, in run_pipeline
+    ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1230, in load_tokenizer
+    return _hf_hub_retry(
+           ^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1199, in _hf_hub_retry
+    return fn()
+           ^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1231, in <lambda>
+    lambda: AutoTokenizer.from_pretrained(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1089, in from_pretrained
+    tokenizer_config = get_tokenizer_config(pretrained_model_name_or_path, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 943, in get_tokenizer_config
+    result = json.load(reader)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+2026-02-18 16:49:16,238 ERROR executor.py:810 -- Step tokenized/uncheatable_eval/bbc_news failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/execution/executor.py", line 192, in wait
+    raise RuntimeError(f"Job {self.job_id} failed")
+RuntimeError: Job ray-callable-tokenize-tokenized-uncheatable_eval-bbc_news-930feb61 failed
+(tokenize pid=10062, ip=10.130.15.235) 2026-02-18 16:49:16,732 INFO execution.py:943 Starting zephyr pipeline: 8fe8aeb32c83 [repeated 6x across cluster]
+2026-02-18 16:49:17,246 - ERROR - Job ray-callable-tokenize-tokenized-paloma-falcon-refinedweb-e98afb19 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JSONDecodeError): ray::tokenize() (pid=130596, ip=10.130.0.99)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 383, in tokenize
+    run_pipeline(ctx, validation_paths, "validation")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 341, in run_pipeline
+    ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1230, in load_tokenizer
+    return _hf_hub_retry(
+           ^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1199, in _hf_hub_retry
+    return fn()
+           ^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1231, in <lambda>
+    lambda: AutoTokenizer.from_pretrained(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1089, in from_pretrained
+    tokenizer_config = get_tokenizer_config(pretrained_model_name_or_path, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 943, in get_tokenizer_config
+    result = json.load(reader)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 79751 column 17 (char 1768243)
+2026-02-18 16:49:17,248 INFO executor.py:806 -- Waiting for ray-callable-tokenize-tokenized-paloma-falcon-refinedweb-e98afb19 to finish for step tokenized/paloma/falcon-refinedweb
+2026-02-18 16:49:17,251 - ERROR - Job ray-callable-tokenize-tokenized-paloma-falcon-refinedweb-e98afb19 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JSONDecodeError): ray::tokenize() (pid=130596, ip=10.130.0.99)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 383, in tokenize
+    run_pipeline(ctx, validation_paths, "validation")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 341, in run_pipeline
+    ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1230, in load_tokenizer
+    return _hf_hub_retry(
+           ^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1199, in _hf_hub_retry
+    return fn()
+           ^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1231, in <lambda>
+    lambda: AutoTokenizer.from_pretrained(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1089, in from_pretrained
+    tokenizer_config = get_tokenizer_config(pretrained_model_name_or_path, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 943, in get_tokenizer_config
+    result = json.load(reader)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 79751 column 17 (char 1768243)
+2026-02-18 16:49:17,255 - ERROR - Job ray-callable-tokenize-tokenized-paloma-falcon-refinedweb-e98afb19 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JSONDecodeError): ray::tokenize() (pid=130596, ip=10.130.0.99)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 383, in tokenize
+    run_pipeline(ctx, validation_paths, "validation")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 341, in run_pipeline
+    ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1230, in load_tokenizer
+    return _hf_hub_retry(
+           ^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1199, in _hf_hub_retry
+    return fn()
+           ^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1231, in <lambda>
+    lambda: AutoTokenizer.from_pretrained(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1089, in from_pretrained
+    tokenizer_config = get_tokenizer_config(pretrained_model_name_or_path, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 943, in get_tokenizer_config
+    result = json.load(reader)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 79751 column 17 (char 1768243)
+2026-02-18 16:49:17,549 ERROR executor.py:810 -- Step tokenized/paloma/falcon-refinedweb failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/execution/executor.py", line 192, in wait
+    raise RuntimeError(f"Job {self.job_id} failed")
+RuntimeError: Job ray-callable-tokenize-tokenized-paloma-falcon-refinedweb-e98afb19 failed
+(_RayActorHost pid=10583, ip=10.130.15.231) 2026-02-18 16:49:14,321 INFO zephyr.execution:275 Coordinator initialized, expecting 1 workers to register [repeated 6x across cluster]
+(tokenize pid=25859, ip=10.130.0.219) 2026-02-18 16:49:17,952 INFO execution.py:759 [zephyr-tokenize-filescan-157d493e-workers-4] Executing task for shard 121 (attempt 0) [repeated 178x across cluster]
+(tokenize pid=25859, ip=10.130.0.219) 2026-02-18 16:49:17,953 INFO execution.py:787 [shard 121/167] Starting stage=stage0-Map, 1 input chunks, 1 ops [repeated 178x across cluster]
+(tokenize pid=25859, ip=10.130.0.219) 2026-02-18 16:49:18,358 INFO execution.py:833 [shard 126] Complete: 1 chunks produced [repeated 189x across cluster]
+(tokenize pid=25859, ip=10.130.0.219) 2026-02-18 16:49:18,358 INFO execution.py:762 [zephyr-tokenize-filescan-157d493e-workers-3] Task complete, reporting result for shard 126 [repeated 189x across cluster]
+2026-02-18 16:49:18,555 - ERROR - Job ray-callable-tokenize-tokenized-paloma-c4_100_domains-5c616de9 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JSONDecodeError): ray::tokenize() (pid=9927, ip=10.130.15.235)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 383, in tokenize
+    run_pipeline(ctx, validation_paths, "validation")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 341, in run_pipeline
+    ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1230, in load_tokenizer
+    return _hf_hub_retry(
+           ^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1199, in _hf_hub_retry
+    return fn()
+           ^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1231, in <lambda>
+    lambda: AutoTokenizer.from_pretrained(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1156, in from_pretrained
+    return tokenizer_class.from_pretrained(pretrained_model_name_or_path, *inputs, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2113, in from_pretrained
+    return cls._from_pretrained(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2170, in _from_pretrained
+    init_kwargs = json.load(tokenizer_config_handle)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 353, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 80363 column 2 (char 1781760)
+2026-02-18 16:49:18,563 INFO executor.py:806 -- Waiting for ray-callable-tokenize-tokenized-paloma-c4_100_domains-5c616de9 to finish for step tokenized/paloma/c4_100_domains
+2026-02-18 16:49:18,566 - ERROR - Job ray-callable-tokenize-tokenized-paloma-c4_100_domains-5c616de9 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JSONDecodeError): ray::tokenize() (pid=9927, ip=10.130.15.235)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 383, in tokenize
+    run_pipeline(ctx, validation_paths, "validation")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 341, in run_pipeline
+    ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1230, in load_tokenizer
+    return _hf_hub_retry(
+           ^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1199, in _hf_hub_retry
+    return fn()
+           ^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1231, in <lambda>
+    lambda: AutoTokenizer.from_pretrained(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1156, in from_pretrained
+    return tokenizer_class.from_pretrained(pretrained_model_name_or_path, *inputs, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2113, in from_pretrained
+    return cls._from_pretrained(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2170, in _from_pretrained
+    init_kwargs = json.load(tokenizer_config_handle)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 353, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 80363 column 2 (char 1781760)
+2026-02-18 16:49:18,569 - ERROR - Job ray-callable-tokenize-tokenized-paloma-c4_100_domains-5c616de9 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JSONDecodeError): ray::tokenize() (pid=9927, ip=10.130.15.235)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 383, in tokenize
+    run_pipeline(ctx, validation_paths, "validation")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/processing/tokenize/tokenize.py", line 341, in run_pipeline
+    ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1230, in load_tokenizer
+    return _hf_hub_retry(
+           ^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1199, in _hf_hub_retry
+    return fn()
+           ^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1231, in <lambda>
+    lambda: AutoTokenizer.from_pretrained(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1156, in from_pretrained
+    return tokenizer_class.from_pretrained(pretrained_model_name_or_path, *inputs, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2113, in from_pretrained
+    return cls._from_pretrained(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/eac5c47c06d1da13df74b2f44587b2936540fe5c/virtualenv/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2170, in _from_pretrained
+    init_kwargs = json.load(tokenizer_config_handle)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/json/decoder.py", line 353, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 80363 column 2 (char 1781760)
+2026-02-18 16:49:18,991 ERROR executor.py:810 -- Step tokenized/paloma/c4_100_domains failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_51eaa5f87cece82c/lib/marin/src/marin/execution/executor.py", line 192, in wait
+    raise RuntimeError(f"Job {self.job_id} failed")
+RuntimeError: Job ray-callable-tokenize-tokenized-paloma-c4_100_domains-5c616de9 failed
+(_RayActorHost pid=24644, ip=10.130.1.182) 2026-02-18 16:49:18,605 INFO zephyr.execution:694 [zephyr-tokenize-6c6ce454-workers-118] Starting polling loop [repeated 190x across cluster]
+(_RayActorHost pid=130791, ip=10.130.0.99) 2026-02-18 16:49:19,123 INFO zephyr.execution:328 [stage0-Map → Write] 0/1 complete, 1 in-flight, 0 queued, 4 workers
+(_RayActorHost pid=132575, ip=10.130.0.99) 2026-02-18 16:49:18,618 INFO zephyr.execution:302 Worker zephyr-tokenize-6c6ce454-workers-87 registered, total: 128 [repeated 190x across cluster]
+(tokenize pid=25859, ip=10.130.0.219) 2026-02-18 16:49:19,317 INFO execution.py:492 [stage0-Map] 156/167 tasks completed [repeated 79x across cluster]
+(tokenize pid=25859, ip=10.130.0.219) 2026-02-18 16:49:14,574 INFO execution.py:328 [stage0-Map] 8/167 complete, 8 in-flight, 151 queued, 8 workers
+(_RayActorHost pid=23198, ip=10.130.1.116) 2026-02-18 16:49:19,385 INFO datasets:58 Disabling PyTorch because USE_TF is set [repeated 9x across cluster]
+(_RayActorHost pid=23198, ip=10.130.1.116) 2026-02-18 16:49:19,386 INFO datasets:125 JAX version 0.8.0 available. [repeated 9x across cluster]
+(tokenize pid=25859, ip=10.130.0.219) 2026-02-18 16:49:19,575 INFO execution.py:328 [stage0-Map] 164/167 complete, 3 in-flight, 0 queued, 8 workers
