@@ -51,10 +51,12 @@ from iris.cluster.platform.debug import (
     stream_docker_logs,
 )
 from iris.cluster.types import (
+    Constraint,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
+    region_constraint,
     tpu_device,
 )
 from iris.rpc import cluster_pb2, config_pb2
@@ -608,7 +610,7 @@ class SmokeTestRunner:
         client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
 
         # Test 1: Simple TPU job
-        self.logger.log(f"[Test 1/4] Simple TPU job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 1/6] Simple TPU job ({self.config.tpu_type})")
         result = self._run_simple_tpu_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
@@ -617,7 +619,7 @@ class SmokeTestRunner:
             return
 
         # Test 2: Concurrent TPU jobs
-        self.logger.log(f"[Test 2/4] Concurrent TPU jobs (3x {self.config.tpu_type})")
+        self.logger.log(f"[Test 2/6] Concurrent TPU jobs (3x {self.config.tpu_type})")
         result = self._run_concurrent_tpu_jobs(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
@@ -626,17 +628,35 @@ class SmokeTestRunner:
             return
 
         # Test 3: Coscheduled multi-task job
-        self.logger.log(f"[Test 3/4] Coscheduled multi-task job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 3/6] Coscheduled multi-task job ({self.config.tpu_type})")
         result = self._run_coscheduled_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
 
-        if self._interrupted:
+        if self._interrupted or self._check_deadline():
             return
 
         # Test 4: JAX TPU job - validates JAX can initialize and use TPU
-        self.logger.log(f"[Test 4/4] JAX TPU job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 4/6] JAX TPU job ({self.config.tpu_type})")
         result = self._run_jax_tpu_job(client)
+        self._results.append(result)
+        self._log_autoscaler_status(controller_url)
+
+        if self._interrupted or self._check_deadline():
+            return
+
+        # Test 5: Region-constrained job - validates constraint-based routing
+        self.logger.log(f"[Test 5/6] Region-constrained job ({self.config.tpu_type})")
+        result = self._run_region_constrained_job(client)
+        self._results.append(result)
+        self._log_autoscaler_status(controller_url)
+
+        if self._interrupted or self._check_deadline():
+            return
+
+        # Test 6: Nested constraint propagation - child inherits parent region
+        self.logger.log(f"[Test 6/6] Nested constraint propagation ({self.config.tpu_type})")
+        result = self._run_nested_constraint_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
 
@@ -682,6 +702,7 @@ class SmokeTestRunner:
         resources: ResourceSpec,
         coscheduling: CoschedulingConfig | None = None,
         environment: EnvironmentSpec | None = None,
+        constraints: list[Constraint] | None = None,
         replicas: int = 1,
         timeout: int | None = None,
     ) -> TestResult:
@@ -694,6 +715,7 @@ class SmokeTestRunner:
                 name=job_name,
                 resources=resources,
                 environment=environment or EnvironmentSpec(),
+                constraints=constraints,
                 coscheduling=coscheduling,
                 replicas=replicas,
             )
@@ -821,6 +843,72 @@ class SmokeTestRunner:
             replicas=4,
             timeout=300,
         )
+
+    def _run_region_constrained_job(self, client: IrisClient) -> TestResult:
+        """Run a job with an explicit region constraint.
+
+        Validates that constraint-based routing places the job on workers
+        whose attributes match the requested region.
+        """
+        return self._run_job_test(
+            client=client,
+            test_name="Region-constrained job",
+            entrypoint=Entrypoint.from_callable(_hello_tpu_job),
+            job_name=f"smoke-region-{self._run_id}",
+            resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
+            constraints=[region_constraint("europe-west4")],
+        )
+
+    def _run_nested_constraint_job(self, client: IrisClient) -> TestResult:
+        """Submit a parent job with a region constraint, then a child that inherits it.
+
+        The child job should inherit the parent's region constraint and be
+        routed to the same region.
+        """
+        start = time.monotonic()
+        test_name = "Nested constraint propagation"
+        job_timeout = self.config.job_timeout_seconds
+        try:
+            parent_job = client.submit(
+                entrypoint=Entrypoint.from_callable(_hello_tpu_job),
+                name=f"smoke-parent-{self._run_id}",
+                resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
+                constraints=[region_constraint("europe-west4")],
+            )
+            self.logger.log(f"  Parent job submitted: {parent_job.job_id}")
+
+            parent_status = parent_job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
+            if parent_status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
+                duration = time.monotonic() - start
+                state_name = cluster_pb2.JobState.Name(parent_status.state)
+                self.logger.log(f"  [FAIL] Parent job failed: {state_name}", level="ERROR")
+                return TestResult(test_name, False, f"Parent failed: {state_name}", duration)
+
+            # Child inherits parent constraint without specifying its own
+            child_job = client.submit(
+                entrypoint=Entrypoint.from_callable(_hello_tpu_job),
+                name=f"smoke-child-{self._run_id}",
+                resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
+            )
+            self.logger.log(f"  Child job submitted: {child_job.job_id}")
+
+            child_status = child_job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
+            duration = time.monotonic() - start
+            self._write_task_logs(parent_job, test_name)
+            self._write_task_logs(child_job, test_name)
+
+            if child_status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
+                self.logger.log(f"  [PASS] Parent + child completed in {duration:.1f}s")
+                return TestResult(test_name, True, f"Completed in {duration:.1f}s", duration)
+            else:
+                state_name = cluster_pb2.JobState.Name(child_status.state)
+                self.logger.log(f"  [FAIL] Child job failed: {state_name}", level="ERROR")
+                return TestResult(test_name, False, f"Child failed: {state_name}", duration)
+
+        except TimeoutError:
+            duration = time.monotonic() - start
+            self.logger.log(f"  [FAIL] Timed out after {job_timeout}s", level="ERROR")
+            return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
 
     def _log_autoscaler_status(self, controller_url: str):
         """Log current autoscaler state for observability."""
