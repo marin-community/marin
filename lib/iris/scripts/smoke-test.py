@@ -164,23 +164,41 @@ def _quick_task_job(task_id: int):
     return task_id
 
 
-def _assert_region_job(expected_region: str):
-    """Assert that this job's constraints include the expected region."""
-    from iris.cluster.client import get_job_info
-    from iris.cluster.types import REGION_ATTRIBUTE_KEY
+def _assert_region_child(expected_region: str):
+    """Parent job that submits a child and asserts the child inherits the region constraint.
 
-    info = get_job_info()
-    if info is None:
-        raise RuntimeError("Not running in an Iris job context")
+    Uses iris_ctx() to get the IrisClient and submit a child without explicit
+    constraints. The child reads its inherited constraints from JobInfo and
+    asserts the expected region is present.
+    """
+    from iris.client.client import iris_ctx
+    from iris.cluster.types import ResourceSpec as RS
 
-    region_constraints = [c for c in info.constraints if c.key == REGION_ATTRIBUTE_KEY]
-    if not region_constraints:
-        raise RuntimeError(f"No region constraint found in job info. constraints={info.constraints}")
-    actual = region_constraints[0].value
-    if actual != expected_region:
-        raise RuntimeError(f"Expected region {expected_region}, got {actual}")
-    print(f"Region constraint validated: {actual}")
-    return actual
+    ctx = iris_ctx()
+
+    def _child_check_region():
+        from iris.cluster.client import get_job_info
+        from iris.cluster.types import REGION_ATTRIBUTE_KEY as RK
+
+        info = get_job_info()
+        if info is None:
+            raise RuntimeError("Not running in an Iris job context")
+        region_constraints = [c for c in info.constraints if c.key == RK]
+        if not region_constraints:
+            raise RuntimeError(f"No region constraint found. constraints={info.constraints}")
+        actual = region_constraints[0].value
+        if actual != expected_region:
+            raise RuntimeError(f"Expected region {expected_region}, got {actual}")
+        print(f"Child validated inherited region: {actual}")
+        return actual
+
+    child = ctx.client.submit(
+        entrypoint=Entrypoint.from_callable(_child_check_region),
+        name="smoke-inherited-child",
+        resources=RS(device=tpu_device("v5litepod-16")),
+    )
+    child.wait(timeout=300, raise_on_failure=True)
+    print(f"Parent: child completed with inherited region={expected_region}")
 
 
 def _distributed_work_job():
@@ -879,56 +897,20 @@ class SmokeTestRunner:
         )
 
     def _run_nested_constraint_job(self, client: IrisClient) -> TestResult:
-        """Submit a parent job with a region constraint, then a child that inherits it.
+        """Submit a parent job with a region constraint whose body submits a child.
 
-        The child job should inherit the parent's region constraint and be
-        routed to the same region.
+        The parent uses IrisClient (via iris_ctx()) to submit a child without
+        explicit constraints. The child inherits the parent's region constraint
+        and asserts it via JobInfo.constraints.
         """
-        start = time.monotonic()
-        test_name = "Nested constraint propagation"
-        job_timeout = self.config.job_timeout_seconds
-        try:
-            parent_job = client.submit(
-                entrypoint=Entrypoint.from_callable(_hello_tpu_job),
-                name=f"smoke-parent-{self._run_id}",
-                resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
-                constraints=[region_constraint("europe-west4")],
-            )
-            self.logger.log(f"  Parent job submitted: {parent_job.job_id}")
-
-            parent_status = parent_job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
-            if parent_status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
-                duration = time.monotonic() - start
-                state_name = cluster_pb2.JobState.Name(parent_status.state)
-                self.logger.log(f"  [FAIL] Parent job failed: {state_name}", level="ERROR")
-                return TestResult(test_name, False, f"Parent failed: {state_name}", duration)
-
-            # Child inherits parent constraint without specifying its own.
-            # The child asserts it sees the inherited region constraint.
-            child_job = client.submit(
-                entrypoint=Entrypoint.from_callable(_assert_region_job, "europe-west4"),
-                name=f"smoke-child-{self._run_id}",
-                resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
-            )
-            self.logger.log(f"  Child job submitted: {child_job.job_id}")
-
-            child_status = child_job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
-            duration = time.monotonic() - start
-            self._write_task_logs(parent_job, test_name)
-            self._write_task_logs(child_job, test_name)
-
-            if child_status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
-                self.logger.log(f"  [PASS] Parent + child completed in {duration:.1f}s")
-                return TestResult(test_name, True, f"Completed in {duration:.1f}s", duration)
-            else:
-                state_name = cluster_pb2.JobState.Name(child_status.state)
-                self.logger.log(f"  [FAIL] Child job failed: {state_name}", level="ERROR")
-                return TestResult(test_name, False, f"Child failed: {state_name}", duration)
-
-        except TimeoutError:
-            duration = time.monotonic() - start
-            self.logger.log(f"  [FAIL] Timed out after {job_timeout}s", level="ERROR")
-            return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
+        return self._run_job_test(
+            client=client,
+            test_name="Nested constraint propagation",
+            entrypoint=Entrypoint.from_callable(_assert_region_child, "europe-west4"),
+            job_name=f"smoke-nested-{self._run_id}",
+            resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
+            constraints=[region_constraint("europe-west4")],
+        )
 
     def _log_autoscaler_status(self, controller_url: str):
         """Log current autoscaler state for observability."""
