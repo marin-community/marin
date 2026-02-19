@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+import os
 from typing import Optional
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -224,6 +226,11 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
     ),
 ]
 
+_HUGE_BATCH_BUCKET = "huge-batch-llama3-ish"
+_FAST_HUGE_BATCH_SOURCE_BUCKET = "llama3-ish"
+_SCOPED_VMEM_LIMIT_ARG = "xla_tpu_scoped_vmem_limit_kib="
+_WARNED_HUGE_BATCH_SAFE_FALLBACK = False
+
 
 def _device_key(device_kind: Optional[str]) -> Optional[str]:
     if device_kind is None and jax.devices():
@@ -255,6 +262,47 @@ def _shape_bucket(b: int, h: int, v: int) -> Optional[str]:
         if bucket.matches(b, h, v):
             return bucket.name
     return None
+
+
+def _has_scoped_vmem_limit_override() -> bool:
+    init_args = os.environ.get("LIBTPU_INIT_ARGS", "")
+    return _SCOPED_VMEM_LIMIT_ARG in init_args
+
+
+def _warn_huge_batch_safe_fallback() -> None:
+    global _WARNED_HUGE_BATCH_SAFE_FALLBACK
+    if _WARNED_HUGE_BATCH_SAFE_FALLBACK:
+        return
+    _WARNED_HUGE_BATCH_SAFE_FALLBACK = True
+    warnings.warn(
+        "Using safer fused CE huge-batch block sizes (v_block_size=256) because "
+        "LIBTPU_INIT_ARGS does not set xla_tpu_scoped_vmem_limit_kib. "
+        "Set --xla_tpu_scoped_vmem_limit_kib in LIBTPU_INIT_ARGS to use the faster tuning.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def _maybe_override_huge_batch_block_sizes(
+    *,
+    entry: BlockSizes,
+    dtype_name: str,
+    bucket: str,
+    device_key: Optional[str],
+) -> BlockSizes:
+    if bucket != _HUGE_BATCH_BUCKET:
+        return entry
+    if not _has_scoped_vmem_limit_override():
+        _warn_huge_batch_safe_fallback()
+        return entry
+
+    for key in (device_key, DEFAULT_DEVICE_KEY):
+        if not key:
+            continue
+        fast_entry = TUNED_BLOCK_SIZES.get(key, {}).get((dtype_name, _FAST_HUGE_BATCH_SOURCE_BUCKET))
+        if fast_entry is not None:
+            return fast_entry
+    return entry
 
 
 def _largest_divisor_multiple_of_128(dim: int, preferred: int) -> int:
@@ -319,6 +367,12 @@ def infer_block_sizes(
                 continue
             entry = TUNED_BLOCK_SIZES.get(key, {}).get((dtype_name, bucket))
             if entry is not None:
+                entry = _maybe_override_huge_batch_block_sizes(
+                    entry=entry,
+                    dtype_name=dtype_name,
+                    bucket=bucket,
+                    device_key=device_key,
+                )
                 return _sanitize_for_pallas(entry, b=b, h=h)
 
     return _sanitize_for_pallas(BlockSizes.get_default(), b=b, h=h)
