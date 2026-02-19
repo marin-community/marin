@@ -152,6 +152,7 @@ Notes:
 - Preset directives are stored as markdown docs under `scripts/gdn/session_directives/` (`triangular-inversion` maps to `scripts/gdn/session_directives/triangular-inversion.md`).
 - Prefer `--dirty-policy stash --no-commit-policy count-failure` for unattended long runs so failed attempts do not permanently block progress.
 - Add `--hold-dev-tpu --dev-tpu-name <name>` to make `codex-loop` allocate/hold/release a dev TPU allocation for the entire loop session.
+- In managed dev TPU mode, use `dev-tpu-test`/`dev-tpu-profile` (not Ray TPU test/profile commands) for loop validation/profiling.
 
 ## Logging Expectations
 After each meaningful iteration, append:

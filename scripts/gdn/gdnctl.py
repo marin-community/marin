@@ -366,6 +366,33 @@ def _load_session_directives(args: argparse.Namespace) -> list[str]:
     return directives
 
 
+def _managed_dev_tpu_session_directive(args: argparse.Namespace) -> str:
+    return (
+        "Managed dev TPU mode is active for this run.\n\n"
+        f"- Use only dev TPU commands for validation/profiling on `--cluster {args.dev_tpu_cluster}` "
+        f"and `--tpu-name {args.dev_tpu_name}`.\n"
+        "- Prefer:\n"
+        f"  - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster {args.dev_tpu_cluster} "
+        f"--tpu-name {args.dev_tpu_name} --tests both`\n"
+        f"  - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster {args.dev_tpu_cluster} "
+        f"--tpu-name {args.dev_tpu_name} --tpu {args.dev_tpu_type or 'v5p-8'} ...`\n"
+        "- Avoid `ray-test` and `ray-profile` while this managed dev TPU session is active."
+    )
+
+
+def _warn_if_hold_dev_tpu_with_ray_post_checks(args: argparse.Namespace) -> None:
+    if not args.hold_dev_tpu:
+        return
+    for command in args.post_check:
+        if "ray-test" in command or "ray-profile" in command:
+            print(
+                "[gdnctl] WARNING: --hold-dev-tpu is active but --post-check contains a Ray TPU command. "
+                "Prefer dev-tpu-test/dev-tpu-profile for this loop session.",
+                file=sys.stderr,
+            )
+            break
+
+
 def _codex_exec_supports_search(codex_bin: str) -> bool:
     """Return True when `codex exec` advertises a `--search` flag."""
     proc = _run([codex_bin, "exec", "--help"], capture_output=True, check=False)
@@ -807,6 +834,10 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
     if args.dev_tpu_stop_timeout <= 0:
         raise SystemExit("[gdnctl] --dev-tpu-stop-timeout must be > 0.")
+
+    if args.hold_dev_tpu:
+        session_directives.append(_managed_dev_tpu_session_directive(args))
+        _warn_if_hold_dev_tpu_with_ray_post_checks(args)
 
     codex_bin, supported_efforts = _resolve_codex_binary(
         explicit_binary=args.codex_bin,

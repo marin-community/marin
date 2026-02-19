@@ -68,6 +68,8 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --dev-tpu-type v5p-8
 ```
 
+When `--hold-dev-tpu` is enabled, `gdnctl` injects a session directive forcing dev TPU validation/profile commands (`dev-tpu-test` / `dev-tpu-profile`) and warning if `--post-check` includes `ray-test` or `ray-profile`.
+
 Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`
 - session directive presets:
