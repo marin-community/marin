@@ -141,7 +141,7 @@ vlm_config = LlavaOnevisionConfig(
 
 data_source = ConversationDatasetSourceConfig(
     # >>> EDIT THIS PATH to point to your training data <<<
-    train_urls=["gs://marin-vlm-eu/stage2_sharded/*.parquet"],
+    train_urls=["gs://marin-vlm-eu/stage2_sharded_full/*.parquet"],
     messages_key="messages",
     images_key="images",
 )
