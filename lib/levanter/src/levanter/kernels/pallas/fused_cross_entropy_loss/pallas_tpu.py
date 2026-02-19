@@ -326,6 +326,8 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
     xw_scratch_ref,
     x_grad_tile_ref,
     w_grad_tile_ref,
+    x_read_sem,
+    w_read_sem,
     x_write_sem,
     w_write_sem,
     *,
@@ -387,6 +389,17 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
 
     x_write_future = pltpu.make_async_copy(x_grad_tile_ref, x_grad_slice, sem=x_write_sem)
     w_write_future = pltpu.make_async_copy(w_grad_tile_slice, w_grad_slice, sem=w_write_sem)
+    x_read_future = pltpu.make_async_copy(x_grad_slice, x_grad_tile_ref, sem=x_read_sem)
+    w_read_future = pltpu.make_async_copy(w_grad_slice, w_grad_tile_slice, sem=w_read_sem)
+
+    # Stage 1: async DMA reads for gradient tiles.
+    @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
+    def x_read():
+        x_read_future.start()
+
+    @pl.when(jnp.logical_and(stage_index == 1, b_index != 0))
+    def w_read():
+        w_read_future.start()
 
     # Compute the softmax-gradient term for this V tile (once per H=0).
     @pl.when(jnp.logical_and(stage_index == 1, h_index == 0))
@@ -427,20 +440,23 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             preferred_element_type=jnp.float32,
             precision=precision,
         ).astype(x_grad_tile_ref.dtype)
+        x_write_future.start()
 
     @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
     def accumulate_x_grad():
-        x_grad_tile_ref[...] += jax.lax.dot_general(
+        res = jax.lax.dot_general(
             xw_scratch_ref[...],
             w_ref[...],
             (((1,), (1,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
         ).astype(x_grad_tile_ref.dtype)
-
-    @pl.when(jnp.logical_and(stage_index == 1, v_index == num_v_blocks - 1))
-    def write_x_grad():
+        x_read_future.wait()
+        x_grad_tile_ref[...] += res
         x_write_future.start()
+
+    @pl.when(stage_index == 1)
+    def wait_async_x_writes():
         x_write_future.wait()
 
     @pl.when(jnp.logical_and(stage_index == 1, b_index == 0))
@@ -452,6 +468,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             preferred_element_type=jnp.float32,
             precision=precision,
         ).astype(w_grad_tile_ref.dtype)
+        w_write_future.start()
 
     @pl.when(jnp.logical_and(stage_index == 1, b_index != 0))
     def accumulate_w_grad():
@@ -462,11 +479,12 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             preferred_element_type=jnp.float32,
             precision=precision,
         ).astype(w_grad_tile_ref.dtype)
+        w_read_future.wait()
         w_grad_tile_ref[...] += res
-
-    @pl.when(jnp.logical_and(stage_index == 1, b_index == num_b_blocks_per_core - 1))
-    def write_w_grad():
         w_write_future.start()
+
+    @pl.when(stage_index == 1)
+    def wait_async_writes():
         w_write_future.wait()
 
 
@@ -549,6 +567,8 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
             pltpu.VMEM((block_sizes.b_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # xw_scratch
             pltpu.VMEM((block_sizes.b_block_size, block_sizes.h_block_size), dtype=jnp.float32),  # x_grad_tile
             pltpu.VMEM((block_sizes.h_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # w_grad_tile
+            pltpu.SemaphoreType.DMA,  # x_read_sem
+            pltpu.SemaphoreType.DMA,  # w_read_sem
             pltpu.SemaphoreType.DMA,  # x_write_sem
             pltpu.SemaphoreType.DMA,  # w_write_sem
         ),

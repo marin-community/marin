@@ -315,7 +315,7 @@ class ResourceConfig:
     """
 
     cpu: int = 1
-    ram: str = "1g"
+    ram: str = "4g"
     disk: str = "16g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True

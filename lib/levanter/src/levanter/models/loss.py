@@ -10,7 +10,7 @@ import haliax as hax
 from haliax import NamedArray
 from haliax.core import flatten_all_axes_but
 from haliax.nn import cross_entropy_loss_and_log_normalizers
-from haliax.partitioning import _get_mesh, pspec_for_axis, shard_map
+from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
@@ -196,19 +196,20 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
     Contract = pred_embeddings.resolve_axis(Contract)
     Label = pred_lm_head.resolve_axis(Label)
-    batch_axes = hax.axis.without_axes(pred_embeddings.axes, Contract)
-    flat_embeddings, _ = flatten_all_axes_but(pred_embeddings, "__BATCH__", batch_axes, reorder_to_front=True)
-    batch_axis = flat_embeddings.resolve_axis("__BATCH__")
-    flat_embeddings = flat_embeddings.rearrange((batch_axis, Contract))
-
-    flat_labels = hax.flatten_axes(target_y, target_y.axes, batch_axis)
 
     lm_head = pred_lm_head.rearrange((Contract, Label))
 
     def fused_impl(shard_embeddings: NamedArray, shard_labels: NamedArray, shard_lm_head: NamedArray) -> jax.Array:
-        return fused_cross_entropy_loss_and_logsumexp_penalty_kernel(
-            shard_embeddings.array,
-            shard_labels.array.astype(jnp.int32),
+        batch_axes = hax.axis.without_axes(shard_embeddings.axes, Contract)
+        flat_embeddings, _ = flatten_all_axes_but(shard_embeddings, "__BATCH__", batch_axes, reorder_to_front=True)
+        batch_axis = flat_embeddings.resolve_axis("__BATCH__")
+        flat_embeddings = flat_embeddings.rearrange((batch_axis, Contract))
+
+        flat_labels = hax.flatten_axes(shard_labels, shard_labels.axes, batch_axis)
+
+        loss_flat = fused_cross_entropy_loss_and_logsumexp_penalty_kernel(
+            flat_embeddings.array,
+            flat_labels.array.astype(jnp.int32),
             shard_lm_head.array,
             reduction=None,
             weight=None,
@@ -218,23 +219,13 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             logit_soft_cap=logit_soft_cap,
             precision=precision,
         )
+        return hax.named(loss_flat, batch_axis).unflatten_axis(batch_axis, shard_labels.axes)
 
     mesh = _get_mesh()
     if mesh is None or getattr(mesh, "empty", False):
-        loss_flat = fused_impl(flat_embeddings, flat_labels, lm_head)
+        loss = fused_impl(pred_embeddings, target_y, lm_head)
     else:
-        in_specs = (
-            pspec_for_axis(flat_embeddings.axes),
-            pspec_for_axis(flat_labels.axes),
-            pspec_for_axis(lm_head.axes),
-        )
-        loss_flat = shard_map(
-            fused_impl,
-            in_specs=in_specs,
-            out_specs=pspec_for_axis((batch_axis,)),
-            check_rep=False,
-        )(flat_embeddings, flat_labels, lm_head)
+        axis_mapping = current_thread_local_mapping() or {}
+        loss = shard_map(fused_impl, axis_mapping=axis_mapping, check_rep=False)(pred_embeddings, target_y, lm_head)
 
-    loss_named = hax.named(loss_flat, batch_axis).unflatten_axis(batch_axis, target_y.axes)
-
-    return hax.nn.loss.maybe_reduce_loss(loss_named, reduction, reduction_axis, where=None, weight=weight)
+    return hax.nn.loss.maybe_reduce_loss(loss, reduction, reduction_axis, where=None, weight=weight)

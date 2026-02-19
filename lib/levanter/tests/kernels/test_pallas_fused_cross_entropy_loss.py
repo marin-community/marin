@@ -330,3 +330,45 @@ def test_fused_cross_entropy_default_non_divisible_vocab_matches_reference():
     assert jnp.allclose(loss_default_val, loss_ref_val, atol=1e-4, rtol=1e-4)
     assert jnp.allclose(gx_default, gx_ref, atol=1e-4, rtol=1e-4)
     assert jnp.allclose(gw_default, gw_ref, atol=1e-4, rtol=1e-4)
+
+
+def test_fused_cross_entropy_pallas_non_divisible_vocab_dx_matches_xla():
+    if jax.default_backend() != "tpu":
+        pytest.skip("requires TPU backend")
+
+    hidden, vocab, batch = 256, 130, 128
+    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    key = jax.random.PRNGKey(17)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+    x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
+
+    def loss_pallas(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation="pallas_tpu",
+        )
+
+    def loss_xla(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation="xla",
+        )
+
+    gx_pallas, gw_pallas = jax.grad(loss_pallas, argnums=(0, 1))(x, w)
+    gx_xla, gw_xla = jax.grad(loss_xla, argnums=(0, 1))(x, w)
+
+    assert jnp.allclose(gx_pallas, gx_xla, atol=1e-4, rtol=1e-4)
+    assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
