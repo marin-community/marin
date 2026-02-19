@@ -285,7 +285,10 @@ def default_train(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    wandb_project: str | None = None,
     override_output_path: str | None = None,
+    checkpointer_save_interval: timedelta | None = None,
+    checkpointer_keep: list[dict] | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -300,6 +303,10 @@ def default_train(
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
         wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
+        wandb_project: Optional W&B project name. Defaults to "marin" when unset.
+        checkpointer_save_interval: Optional override for the checkpointer time-based save interval.
+        checkpointer_keep: Optional override for the checkpointer step-based keep policies. Passing an empty list keeps
+            only time-based (temporary) checkpoints.
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -346,7 +353,7 @@ def default_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="marin",
+                project=wandb_project or "marin",
                 name=wandb_name,
                 tags=[*tags],
                 group=wandb_group,
@@ -358,8 +365,8 @@ def default_train(
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
-                save_interval=timedelta(minutes=10),
-                keep=[dict(every=steps_per_export)],
+                save_interval=checkpointer_save_interval or timedelta(minutes=10),
+                keep=checkpointer_keep if checkpointer_keep is not None else [dict(every=steps_per_export)],
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
