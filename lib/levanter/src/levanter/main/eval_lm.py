@@ -7,6 +7,7 @@ from typing import Optional
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import jmp
 
 import haliax
@@ -19,7 +20,7 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
 from levanter.data.text import LmDataConfig
-from levanter.eval import HaliaxTaggedEvaluator, eval_model
+from levanter.eval import TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
@@ -79,10 +80,6 @@ def main(config: EvalLmConfig):
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint, not both")
 
     with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
-        evaluator = HaliaxTaggedEvaluator(
-            Batch, datasets, tokenizer, max_examples_per_dataset=max_examples, axis_mapping=compute_axis_mapping
-        )
-
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
@@ -91,6 +88,24 @@ def main(config: EvalLmConfig):
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
         mp: jmp.Policy = config.trainer.mp
+
+        def eval_loss_fn(model: LmHeadModel, batch) -> tuple[jax.Array, jax.Array, jax.Array]:
+            model = inference_mode(model, True)
+            model = mp.cast_to_compute(model)
+            with hax.axis_mapping(compute_axis_mapping):
+                per_pos_loss = model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
+            per_pos_weight = batch.loss_weight.array
+            per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
+            return per_pos_loss, per_pos_weight, per_pos_token_id
+
+        evaluator = TaggedEvaluator(
+            EvalBatch=Batch,
+            tagged_eval_sets=datasets,
+            loss_fn=eval_loss_fn,
+            tokenizer=tokenizer,
+            axis_mapping=compute_axis_mapping,
+            max_examples_per_dataset=max_examples,
+        )
 
         @hax.named_jit
         def compute_loss(model: LmHeadModel, example: LmExample):

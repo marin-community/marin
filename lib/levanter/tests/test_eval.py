@@ -9,10 +9,11 @@ from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text.examples import GrugLmExample
-from levanter.eval import GrugTaggedEvaluator, HaliaxTaggedEvaluator
+from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+from levanter.eval import TaggedEvaluator
 from levanter.grug.model import GrugModelConfig
 from levanter.models.lm_model import LmExample
+from levanter.utils.tree_utils import inference_mode
 
 from .test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
 from .test_utils import use_test_mesh
@@ -34,9 +35,21 @@ def test_tagged_evaluator_accepts_grug_lm_examples():
     dataset = ListAsyncDataset(examples)
 
     with use_test_mesh(tensor_parallelism=1) as mesh:
-        evaluator = HaliaxTaggedEvaluator(
+
+        def loss_fn(model, batch) -> tuple[jax.Array, jax.Array, jax.Array]:
+            model = inference_mode(model, True)
+            if isinstance(batch, LmExample):
+                named_batch = batch
+            else:
+                named_batch = named_lm_example_from_grug(batch, Pos=model.Pos, batch_axis=EvalBatch)
+            with hax.axis_mapping({EvalBatch.name: ResourceAxis.DATA}):
+                per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+            return per_pos_loss, named_batch.loss_weight.array, jnp.roll(named_batch.tokens.array, -1, axis=-1)
+
+        evaluator = TaggedEvaluator(
             EvalBatch=EvalBatch,
             tagged_eval_sets=[(dataset, ["grug"])],
+            loss_fn=loss_fn,
             tokenizer=None,
             device_mesh=mesh,
             axis_mapping={EvalBatch.name: ResourceAxis.DATA},
@@ -58,21 +71,33 @@ def test_tagged_evaluator_accepts_mixed_lm_example_types():
 
     named_examples = []
     grug_examples = []
-    for i in range(batch_size // 2):
+    for i in range(batch_size):
         named_tokens = hax.named(jnp.mod(jnp.arange(cfg.max_seq_len, dtype=jnp.int32) + i, Vocab.size), Pos)
         named_examples.append(LmExample.causal(named_tokens))
 
-    for i in range(batch_size // 2, batch_size):
-        grug_tokens = jnp.mod(jnp.arange(cfg.max_seq_len, dtype=jnp.int32) + i, Vocab.size)
+    for i in range(batch_size):
+        grug_tokens = jnp.mod(jnp.arange(cfg.max_seq_len, dtype=jnp.int32) + (batch_size + i), Vocab.size)
         grug_examples.append(GrugLmExample.causal(grug_tokens))
 
     named_dataset = ListAsyncDataset(named_examples)
     grug_dataset = ListAsyncDataset(grug_examples)
 
     with use_test_mesh(tensor_parallelism=1) as mesh:
-        evaluator = HaliaxTaggedEvaluator(
+
+        def loss_fn(model, batch) -> tuple[jax.Array, jax.Array, jax.Array]:
+            model = inference_mode(model, True)
+            if isinstance(batch, LmExample):
+                named_batch = batch
+            else:
+                named_batch = named_lm_example_from_grug(batch, Pos=model.Pos, batch_axis=EvalBatch)
+            with hax.axis_mapping({EvalBatch.name: ResourceAxis.DATA}):
+                per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+            return per_pos_loss, named_batch.loss_weight.array, jnp.roll(named_batch.tokens.array, -1, axis=-1)
+
+        evaluator = TaggedEvaluator(
             EvalBatch=EvalBatch,
             tagged_eval_sets=[(named_dataset, ["named"]), (grug_dataset, ["grug"])],
+            loss_fn=loss_fn,
             tokenizer=None,
             device_mesh=mesh,
             axis_mapping={EvalBatch.name: ResourceAxis.DATA},
@@ -125,11 +150,23 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
         return jnp.mean(per_token)
 
     with use_test_mesh(tensor_parallelism=1) as mesh:
-        evaluator = GrugTaggedEvaluator(
+
+        def loss_fn(_model, batch: GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+            per_pos_loss = fake_grug_loss_fn(
+                _model,
+                batch.tokens,
+                batch.loss_weight,
+                grug_cfg,
+                mask=batch.attn_mask,
+                reduction="none",
+                logsumexp_weight=None,
+            )
+            return per_pos_loss, batch.loss_weight, jnp.roll(batch.tokens, -1, axis=-1)
+
+        evaluator = TaggedEvaluator(
             EvalBatch=EvalBatch,
             tagged_eval_sets=[(dataset, ["grug"])],
-            grug_model_config=grug_cfg,
-            grug_loss_fn=fake_grug_loss_fn,
+            loss_fn=loss_fn,
             tokenizer=None,
             device_mesh=mesh,
             axis_mapping={EvalBatch.name: ResourceAxis.DATA},
