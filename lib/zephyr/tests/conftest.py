@@ -3,6 +3,7 @@
 
 """Pytest fixtures for zephyr tests."""
 
+import atexit
 import logging
 import os
 import sys
@@ -188,4 +189,4 @@ def pytest_sessionfinish(session, exitstatus):
         tty.flush()
         tty.close()
         if exitstatus != 0:
-            os._exit(exitstatus)
+            atexit.register(os._exit, exitstatus)
