@@ -4,12 +4,15 @@
 
 """Iris cluster autoscaling smoke test.
 
-This script provides end-to-end validation of an Iris cluster:
-1. Starts the cluster (creates controller VM)
-2. Establishes SSH tunnel to controller
-3. Submits TPU jobs to exercise autoscaling
-4. Logs results to stdout and structured log directory
-5. Cleans up on success/failure/interrupt
+This script provides end-to-end validation of an Iris cluster by exercising
+the `iris` CLI for cluster lifecycle and `IrisClient` for job submission:
+
+1. Cleans up existing resources (`iris cluster debug cleanup`)
+2. Starts the cluster (`iris cluster start`)
+3. Establishes connection (`iris cluster dashboard` or local address)
+4. Submits TPU jobs to exercise autoscaling via IrisClient
+5. Logs results to stdout and structured log directory
+6. Cleans up on success/failure/interrupt (`iris cluster stop`, cleanup)
 
 Usage:
     # Basic smoke test (uses examples/smoke.yaml, logs to logs/smoke-test-{timestamp}/)
@@ -24,32 +27,27 @@ Usage:
 
     # Keep cluster running on failure for debugging
     uv run python scripts/smoke-test.py --mode keep
+
+    # Redeploy mode: reuse existing VMs (much faster for iteration)
+    uv run python scripts/smoke-test.py --mode redeploy
 """
 
 import logging
+import queue
+import re
 import signal
+import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, TextIO
 
 import click
-from iris.cli.cluster import _build_cluster_images
+
 from iris.client import IrisClient
-from iris.cluster.config import IrisConfig, load_config, make_local_config
-from iris.cluster.controller.lifecycle import start_controller, stop_controller
-from iris.cluster.controller.local import LocalController
-from iris.cluster.platform.debug import (
-    cleanup_iris_resources,
-    controller_tunnel,
-    discover_controller_vm,
-    list_docker_containers,
-    list_iris_tpus,
-    stream_docker_logs,
-)
 from iris.cluster.types import (
     Constraint,
     CoschedulingConfig,
@@ -59,42 +57,212 @@ from iris.cluster.types import (
     region_constraint,
     tpu_device,
 )
-from iris.rpc import cluster_pb2, config_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.rpc.proto_utils import format_accelerator_display
+from iris.rpc import cluster_pb2
 
 IRIS_ROOT = Path(__file__).parent.parent
 DEFAULT_CONFIG_PATH = IRIS_ROOT / "examples" / "smoke.yaml"
-DEFAULT_CONTROLLER_PORT = 10000
-
-
-def _extract_gcp_zone_project(config: config_pb2.IrisClusterConfig) -> tuple[str, str]:
-    """Extract zone and project from a GCP cluster config.
-
-    Zone is now per-slice in ScaleGroupConfig.slice_template.gcp, so we pick
-    the zone from the first GCP scale group.
-    """
-    project = config.platform.gcp.project_id
-    if not project:
-        raise RuntimeError("platform.gcp.project_id is required")
-
-    zone = ""
-    for sg in config.scale_groups.values():
-        if sg.HasField("slice_template") and sg.slice_template.HasField("gcp"):
-            gcp_slice = sg.slice_template.gcp
-            if gcp_slice.zone:
-                zone = gcp_slice.zone
-            if zone:
-                break
-
-    if not zone:
-        raise RuntimeError("No zone found in any scale group's slice_template.gcp")
-
-    return zone, project
-
 
 DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; TPU slices are pre-warmed by earlier tests
-WORKER_DISCOVERY_INTERVAL_SECONDS = 10.0
+
+
+# =============================================================================
+# CLI Helpers
+# =============================================================================
+
+
+def _run_iris(*args: str, config_path: Path) -> subprocess.CompletedProcess[str]:
+    """Run `uv run iris --config {config} ...` and return the result.
+
+    Raises subprocess.CalledProcessError on non-zero exit.
+    """
+    cmd = ["uv", "run", "iris", "--config", str(config_path), *args]
+    logging.info("Running: %s", " ".join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(IRIS_ROOT))
+    if result.returncode != 0:
+        logging.error(
+            "Command failed (exit %d): %s\nstdout: %s\nstderr: %s",
+            result.returncode,
+            " ".join(cmd),
+            result.stdout,
+            result.stderr,
+        )
+        result.check_returncode()
+    return result
+
+
+@dataclass
+class BackgroundProc:
+    """A background subprocess with its owned file handles.
+
+    Owns the file handles opened for stdout/stderr redirection so they are
+    closed when the process is terminated, preventing resource leaks.
+    Tracks daemon threads (reader/drain) so terminate() can join them.
+    """
+
+    name: str
+    proc: subprocess.Popen
+    owned_fds: list[TextIO]
+    _threads: list[threading.Thread] = field(default_factory=list)
+
+    def terminate(self, timeout: float = 10.0) -> None:
+        _terminate_process(self.proc, self.name, timeout)
+        for t in self._threads:
+            t.join(timeout=5.0)
+        for fh in self.owned_fds:
+            fh.close()
+
+
+def _run_iris_background(
+    *args: str,
+    config_path: Path,
+    stdout_path: Path | None = None,
+    stderr_path: Path | None = None,
+) -> BackgroundProc:
+    """Start `uv run iris --config {config} ...` as a background subprocess.
+
+    Returns a BackgroundProc that owns any opened file handles. Caller is
+    responsible for calling terminate() to stop the process and close handles.
+    """
+    cmd = ["uv", "run", "iris", "--config", str(config_path), *args]
+    logging.info("Starting background: %s", " ".join(cmd))
+
+    owned_fds: list[TextIO] = []
+    if stdout_path:
+        stdout_fh: TextIO | int = open(stdout_path, "w")
+        owned_fds.append(stdout_fh)  # type: ignore[arg-type]
+    else:
+        stdout_fh = subprocess.PIPE
+
+    if stderr_path:
+        stderr_fh: TextIO | int = open(stderr_path, "w")
+        owned_fds.append(stderr_fh)  # type: ignore[arg-type]
+    else:
+        stderr_fh = subprocess.DEVNULL
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=stdout_fh,
+            stderr=stderr_fh,
+            text=True,
+            cwd=str(IRIS_ROOT),
+        )
+    except Exception:
+        for fh in owned_fds:
+            fh.close()
+        raise
+    return BackgroundProc(name="", proc=proc, owned_fds=owned_fds)
+
+
+def _wait_for_line(bg: BackgroundProc, pattern: str, timeout: float = 300, drain_to: Path | None = None) -> str:
+    """Read stdout from a background subprocess until a line matches `pattern`.
+
+    Uses a reader thread so the timeout is enforced even if readline blocks on a
+    partial line.  After the match is found, a drain thread continues consuming
+    stdout to prevent the pipe buffer from filling and blocking the subprocess.
+
+    Args:
+        bg: Background process whose stdout is PIPE.
+        pattern: Regex pattern to search for in each line.
+        timeout: Maximum seconds to wait for a match.
+        drain_to: If set, remaining stdout (including pre-match lines) is written
+            to this file.  Otherwise drained and discarded.
+
+    Returns the full matching line. Raises TimeoutError or RuntimeError on failure.
+    """
+    proc = bg.proc
+    assert proc.stdout is not None, "subprocess stdout must be PIPE"
+
+    line_queue: queue.Queue[str | None] = queue.Queue()
+
+    def _reader():
+        assert proc.stdout is not None
+        for raw_line in proc.stdout:
+            line_queue.put(raw_line.rstrip("\n"))
+        line_queue.put(None)  # EOF sentinel
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+    bg._threads.append(reader_thread)
+
+    deadline = time.monotonic() + timeout
+    compiled = re.compile(pattern)
+    matched_line: str | None = None
+    pre_match_lines: list[str] = []
+
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        try:
+            line = line_queue.get(timeout=min(remaining, 1.0))
+        except queue.Empty:
+            if proc.poll() is not None:
+                raise RuntimeError(
+                    f"Subprocess exited with code {proc.returncode} before matching pattern: {pattern}"
+                ) from None
+            continue
+        if line is None:
+            raise RuntimeError(f"Subprocess EOF before matching pattern: {pattern}")
+        logging.info("  [bg] %s", line)
+        pre_match_lines.append(line)
+        if compiled.search(line):
+            matched_line = line
+            break
+
+    if matched_line is None:
+        raise TimeoutError(f"Timed out waiting for pattern '{pattern}' after {timeout}s")
+
+    # Drain remaining stdout so the pipe never fills and blocks the subprocess.
+    drain_file: TextIO | None = None
+    if drain_to is not None:
+        drain_file = open(drain_to, "w")
+        bg.owned_fds.append(drain_file)
+        for prev in pre_match_lines:
+            drain_file.write(prev + "\n")
+
+    def _drain():
+        while True:
+            try:
+                remaining_line = line_queue.get(timeout=1.0)
+            except queue.Empty:
+                if proc.poll() is not None:
+                    break
+                continue
+            if remaining_line is None:
+                break
+            if drain_file is not None:
+                drain_file.write(remaining_line + "\n")
+                drain_file.flush()
+
+    drain_thread = threading.Thread(target=_drain, daemon=True)
+    drain_thread.start()
+    bg._threads.append(drain_thread)
+
+    return matched_line
+
+
+def _parse_address_from_line(line: str, prefix: str) -> str:
+    """Extract the address/URL that follows `prefix` in a line."""
+    idx = line.index(prefix)
+    return line[idx + len(prefix) :].strip()
+
+
+def _terminate_process(proc: subprocess.Popen, name: str, timeout: float = 10.0) -> None:
+    """Send SIGTERM to a subprocess and wait for it to exit."""
+    if proc.poll() is not None:
+        return
+    logging.info("Terminating %s (pid=%d)...", name, proc.pid)
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logging.warning("Process %s did not exit after SIGTERM, sending SIGKILL", name)
+        proc.kill()
+        proc.wait(timeout=5.0)
+
+
+# =============================================================================
+# Log Infrastructure
+# =============================================================================
 
 
 @dataclass
@@ -298,7 +466,6 @@ class SmokeTestLogger:
         self._file.write(f"**Started:** {self._start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         self._file.write(f"**Config:** `{config.config_path}`\n\n")
         self._file.write(f"**TPU type:** `{config.tpu_type}`\n\n")
-        self._file.write(f"**Prefix:** `{config.prefix}`\n\n")
         self._file.write(f"**Log directory:** `{config.log_dir}`\n\n")
         self._file.write("---\n\n")
         self._file.flush()
@@ -329,105 +496,6 @@ class SmokeTestLogger:
         self.log("")
 
 
-class DockerLogStreamer:
-    """Background thread that streams docker logs from controller or workers.
-
-    Supports two modes:
-    - "controller": Streams logs from single controller VM
-    - "workers": Discovers TPU workers and streams from all
-    """
-
-    def __init__(
-        self,
-        mode: Literal["controller", "workers"],
-        zone: str,
-        project: str,
-        label_prefix: str,
-        log_tree: LogTree,
-        container_name: str = "iris-worker",
-    ):
-        self._mode = mode
-        self._zone = zone
-        self._project = project
-        self._log_tree = log_tree
-        self._container_name = container_name
-        self._label_prefix = label_prefix
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._streaming: set[tuple[str, str]] = set()  # (vm_name, container_name) pairs
-
-    def start(self):
-        """Start background streaming thread."""
-        self._stop_event.clear()
-        if self._mode == "controller":
-            self._thread = threading.Thread(target=self._stream_controller, daemon=True)
-        else:
-            self._thread = threading.Thread(target=self._discover_and_stream_workers, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        """Stop streaming and wait for thread to exit."""
-        self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=5.0)
-
-    def _stream_controller(self):
-        """Stream logs from controller VM."""
-        vm_name = discover_controller_vm(self._zone, self._project, self._label_prefix)
-        if not vm_name:
-            return
-        log_file = self._log_tree.get_writer("controller-logs.txt", "Controller docker logs")
-        stream_docker_logs(
-            vm_name,
-            self._container_name,
-            self._zone,
-            self._project,
-            log_file,
-            is_tpu=False,
-            stop_event=self._stop_event,
-        )
-
-    def _start_stream(self, vm_name: str, container_name: str, is_tpu: bool):
-        """Start streaming a container's logs if not already streaming."""
-        key = (vm_name, container_name)
-        if key in self._streaming:
-            return
-        self._streaming.add(key)
-        log_file = self._log_tree.get_writer(
-            f"workers/{vm_name}/{container_name}.txt",
-            f"Worker logs: {vm_name}/{container_name}",
-        )
-        threading.Thread(
-            target=stream_docker_logs,
-            args=(vm_name, container_name, self._zone, self._project, log_file),
-            kwargs={"is_tpu": is_tpu, "stop_event": self._stop_event},
-            daemon=True,
-        ).start()
-
-    def _discover_and_stream_workers(self):
-        """Discovery loop: find workers and stream logs from service + per-task containers."""
-        while not self._stop_event.is_set():
-            tpu_names = list_iris_tpus(self._zone, self._project, self._label_prefix)
-            for tpu_name in tpu_names:
-                # Stream the main worker service container
-                self._start_stream(tpu_name, self._container_name, is_tpu=True)
-
-                # Discover and stream per-task containers (labeled iris.managed=true)
-                try:
-                    task_containers = list_docker_containers(
-                        tpu_name,
-                        self._zone,
-                        self._project,
-                        label_filter="iris.managed=true",
-                        is_tpu=True,
-                    )
-                    for container in task_containers:
-                        self._start_stream(tpu_name, container, is_tpu=True)
-                except Exception:
-                    logging.debug("Failed to discover containers on %s", tpu_name, exc_info=True)
-            self._stop_event.wait(WORKER_DISCOVERY_INTERVAL_SECONDS)
-
-
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -442,19 +510,8 @@ class SmokeTestConfig:
     timeout_seconds: int = 1800  # 30 min total
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
     tpu_type: str = "v5litepod-16"
-    prefix: str = "smoke"  # Unique prefix for controller VM name (sets label_prefix in config)
     local: bool = False  # Run locally without GCP
     mode: Literal["full", "keep", "redeploy"] = "full"
-
-    @property
-    def label_prefix(self) -> str:
-        return self.prefix
-
-
-# =============================================================================
-# Image Building
-# TODO: Refactor to use iris.build module directly instead of shelling out to CLI
-# =============================================================================
 
 
 # =============================================================================
@@ -478,31 +535,28 @@ class TestResult:
 
 
 class SmokeTestRunner:
-    """Orchestrates the smoke test lifecycle."""
+    """Orchestrates the smoke test lifecycle.
+
+    Uses the `iris` CLI for cluster lifecycle (start, stop, cleanup, monitoring)
+    and `IrisClient` for job submission. Background subprocesses (dashboard tunnel,
+    controller log streaming) are tracked and cleaned up on exit.
+    """
 
     def __init__(self, config: SmokeTestConfig):
         self.config = config
         self.log_tree = LogTree(config.log_dir)
         self.logger = SmokeTestLogger(self.log_tree)
         self._task_logs_dir = self.log_tree.get_dir("task-logs", "Task logs from each job/task")
-        self._local_controller: LocalController | None = None
-        self._is_local: bool = False
         self._interrupted = False
         self._deadline: float | None = None
         self._results: list[TestResult] = []
         # Unique run ID to avoid job name collisions with previous runs
         self._run_id = datetime.now().strftime("%H%M%S")
-        # Store zone/project for use in cleanup
-        self._zone: str | None = None
-        self._project: str | None = None
-        self._cluster_config = None
-        # Background monitoring threads
-        self._controller_streamer: DockerLogStreamer | None = None
-        self._worker_streamer: DockerLogStreamer | None = None
+        # Background subprocesses to clean up
+        self._background_procs: list[BackgroundProc] = []
 
     def run(self) -> bool:
         """Run the smoke test. Returns True if all tests pass."""
-        # Configure logging to show subprocess output from iris modules
         _configure_logging()
 
         signal.signal(signal.SIGINT, self._handle_interrupt)
@@ -511,69 +565,36 @@ class SmokeTestRunner:
 
         try:
             self._print_header()
-            cluster_config = load_config(self.config.config_path)
 
-            # Apply --local override if requested
-            if self.config.local:
-                cluster_config = make_local_config(cluster_config)
-
-            # Apply prefix to cluster config for unique controller VM name
-            cluster_config.platform.label_prefix = self.config.prefix
-
-            self._is_local = cluster_config.controller.WhichOneof("controller") == "local"
-
-            platform_kind = cluster_config.platform.WhichOneof("platform")
-            if platform_kind == "gcp":
-                zone, project = _extract_gcp_zone_project(cluster_config)
-            else:
-                zone = ""
-                project = ""
-            # Store for use in cleanup
-            self._zone = zone
-            self._project = project
-
-            # GCP-only setup phases
-            self._cluster_config = cluster_config
-
-            if not self._is_local:
-                if platform_kind != "gcp":
-                    raise RuntimeError("Smoke test requires a gcp platform when not running locally")
-
-                # Phase 0a: Build and push images (always needed for code changes)
-                self.logger.section("PHASE 0a: Building Images")
-                if not self._build_images():
-                    self.logger.log("Image build failed!", level="ERROR")
-                    return False
-                if self._interrupted or self._check_deadline():
-                    return False
-
+            if not self.config.local:
                 if self.config.mode != "redeploy":
-                    # Normal mode: clean start + create VMs
                     if self.config.mode in ("full", "keep"):
-                        self.logger.section("PHASE 0b: Clean Start")
-                        self._cleanup_existing(zone, project)
+                        self.logger.section("PHASE 0: Clean Start")
+                        self._cleanup_existing()
                         if self._interrupted or self._check_deadline():
                             return False
 
-            # Start cluster and run tests. We handle cleanup ourselves
-            # to support --mode keep/redeploy.
-            address = ""
-            if self.config.mode != "redeploy":
-                self.logger.section("Starting Cluster")
-                if self._is_local:
-                    self._local_controller = LocalController(cluster_config)
-                    address = self._local_controller.start()
-                else:
-                    iris_config = IrisConfig(cluster_config)
-                    platform = iris_config.platform()
-                    address, _vm = start_controller(platform, cluster_config)
+                    self.logger.section("Starting Cluster")
+                    self._start_cluster_remote()
+                    if self._interrupted or self._check_deadline():
+                        return False
 
-            if self._is_local:
-                self._run_cluster_tests(address, zone, project)
-            else:
+                # Establish tunnel to get controller URL
                 self.logger.section("Connecting to Cluster")
-                with controller_tunnel(zone, project, label_prefix=self.config.label_prefix) as url:
-                    self._run_cluster_tests(url, zone, project)
+                controller_url = self._connect_remote()
+            else:
+                self.logger.section("Starting Local Cluster")
+                controller_url = self._start_cluster_local()
+                if self._interrupted or self._check_deadline():
+                    return False
+
+            # Start controller log streaming (remote GCP only)
+            if not self.config.local:
+                self._start_log_streaming()
+
+            # Run tests
+            self.logger.section("Running Tests")
+            self._run_tests(controller_url)
 
             # Results
             self.logger.section("Results Summary")
@@ -590,8 +611,8 @@ class SmokeTestRunner:
 
     def _handle_interrupt(self, _signum: int, _frame: object):
         self.logger.log("Interrupted! Cleaning up...", level="WARN")
-        signal.signal(signal.SIGINT, None)
-        signal.signal(signal.SIGTERM, None)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
         self._interrupted = True
 
     def _check_deadline(self) -> bool:
@@ -616,31 +637,95 @@ class SmokeTestRunner:
         self.logger.log(f"Timeout: {self.config.timeout_seconds}s")
         self.logger.log(f"TPU type: {self.config.tpu_type}")
         self.logger.log(f"Log directory: {self.config.log_dir}")
-        self.logger.log(f"Prefix: {self.config.prefix}")
+        self.logger.log(f"Local: {self.config.local}")
 
-    def _cleanup_existing(self, zone: str, project: str):
-        """Delete existing iris resources (controller VM, TPU slices) for clean start."""
-        label_prefix = self.config.label_prefix
-        self.logger.log(f"Cleaning up existing resources for prefix '{label_prefix}'...")
+    # ----- Cluster lifecycle via CLI -----
 
-        deleted = cleanup_iris_resources(zone, project, label_prefix=label_prefix, dry_run=False)
-
-        if not deleted:
-            self.logger.log("  No existing resources found")
-        else:
-            for resource in deleted:
-                self.logger.log(f"  Deleted: {resource}")
-            self.logger.log("Cleanup complete")
-
-    def _build_images(self) -> bool:
-        """Build and push controller, worker, and task images."""
+    def _cleanup_existing(self):
+        """Delete existing iris resources via `iris cluster debug cleanup --no-dry-run`."""
+        self.logger.log("Cleaning up existing resources...")
         try:
-            _build_cluster_images(self._cluster_config)
-            self.logger.log("All images built and pushed")
-            return True
+            result = _run_iris("cluster", "debug", "cleanup", "--no-dry-run", config_path=self.config.config_path)
+            for line in result.stdout.splitlines():
+                self.logger.log(f"  {line}")
+            self.logger.log("Cleanup complete")
+        except subprocess.CalledProcessError as e:
+            self.logger.log(f"Cleanup failed: {e.stderr}", level="ERROR")
+            raise
+
+    def _start_cluster_remote(self):
+        """Start remote cluster via `iris cluster start`.
+
+        This builds images and boots the controller VM. The command exits
+        after the controller is running.
+        """
+        self.logger.log("Starting cluster (this builds images and boots the controller)...")
+        result = _run_iris("cluster", "start", config_path=self.config.config_path)
+        for line in result.stdout.splitlines():
+            self.logger.log(f"  {line}")
+        self.logger.log("Cluster started")
+
+    def _connect_remote(self) -> str:
+        """Establish tunnel via `iris cluster dashboard` as background subprocess.
+
+        Parses the controller URL from the output line "Controller RPC: {url}".
+        The subprocess blocks to keep the tunnel alive.
+        """
+        self.logger.log("Starting dashboard tunnel...")
+        bg = _run_iris_background("cluster", "dashboard", config_path=self.config.config_path)
+        bg.name = "dashboard-tunnel"
+        self._background_procs.append(bg)
+
+        drain_path = self.log_tree.get_writer("dashboard-tunnel.log", "Dashboard tunnel stdout")
+        line = _wait_for_line(bg, r"Controller RPC:", timeout=120, drain_to=drain_path)
+        controller_url = _parse_address_from_line(line, "Controller RPC:")
+        self.logger.log(f"Controller URL: {controller_url}")
+        return controller_url
+
+    def _start_cluster_local(self) -> str:
+        """Start local cluster via `iris cluster start --local` as background subprocess.
+
+        Parses the controller address from stdout "Controller started at {address}".
+        The subprocess blocks until terminated.
+        """
+        self.logger.log("Starting local cluster...")
+        bg = _run_iris_background("cluster", "start", "--local", config_path=self.config.config_path)
+        bg.name = "local-controller"
+        self._background_procs.append(bg)
+
+        drain_path = self.log_tree.get_writer("local-controller.log", "Local controller stdout")
+        line = _wait_for_line(bg, r"Controller started at", timeout=60, drain_to=drain_path)
+        address = _parse_address_from_line(line, "Controller started at")
+        self.logger.log(f"Local controller at: {address}")
+        return address
+
+    def _start_log_streaming(self):
+        """Stream controller logs via `iris cluster debug logs --follow` as background subprocess."""
+        log_file = self.log_tree.get_writer("controller-logs.txt", "Controller docker logs")
+        bg = _run_iris_background(
+            "cluster",
+            "debug",
+            "logs",
+            "--follow",
+            config_path=self.config.config_path,
+            stdout_path=log_file,
+        )
+        bg.name = "controller-logs"
+        self._background_procs.append(bg)
+        self.logger.log("Started controller log streaming")
+
+    # ----- Monitoring via CLI -----
+
+    def _log_autoscaler_status(self):
+        """Log current autoscaler state via `iris cluster debug autoscaler-status`."""
+        try:
+            result = _run_iris("cluster", "debug", "autoscaler-status", config_path=self.config.config_path)
+            for line in result.stdout.splitlines():
+                self.logger.log(f"  {line}")
         except Exception as e:
-            self.logger.log(f"Image build failed: {e}", level="ERROR")
-            return False
+            self.logger.log(f"  (Could not fetch autoscaler status: {e})", level="WARN")
+
+    # ----- Test execution -----
 
     def _run_tests(self, controller_url: str):
         """Run test jobs against the cluster."""
@@ -650,7 +735,7 @@ class SmokeTestRunner:
         self.logger.log(f"[Test 1/6] Simple TPU job ({self.config.tpu_type})")
         result = self._run_simple_tpu_job(client)
         self._results.append(result)
-        self._log_autoscaler_status(controller_url)
+        self._log_autoscaler_status()
 
         if self._interrupted or self._check_deadline():
             return
@@ -659,7 +744,7 @@ class SmokeTestRunner:
         self.logger.log(f"[Test 2/6] Concurrent TPU jobs (3x {self.config.tpu_type})")
         result = self._run_concurrent_tpu_jobs(client)
         self._results.append(result)
-        self._log_autoscaler_status(controller_url)
+        self._log_autoscaler_status()
 
         if self._interrupted or self._check_deadline():
             return
@@ -668,7 +753,7 @@ class SmokeTestRunner:
         self.logger.log(f"[Test 3/6] Coscheduled multi-task job ({self.config.tpu_type})")
         result = self._run_coscheduled_job(client)
         self._results.append(result)
-        self._log_autoscaler_status(controller_url)
+        self._log_autoscaler_status()
 
         if self._interrupted or self._check_deadline():
             return
@@ -677,7 +762,7 @@ class SmokeTestRunner:
         self.logger.log(f"[Test 4/6] JAX TPU job ({self.config.tpu_type})")
         result = self._run_jax_tpu_job(client)
         self._results.append(result)
-        self._log_autoscaler_status(controller_url)
+        self._log_autoscaler_status()
 
         if self._interrupted or self._check_deadline():
             return
@@ -686,7 +771,7 @@ class SmokeTestRunner:
         self.logger.log(f"[Test 5/6] Region-constrained job ({self.config.tpu_type})")
         result = self._run_region_constrained_job(client)
         self._results.append(result)
-        self._log_autoscaler_status(controller_url)
+        self._log_autoscaler_status()
 
         if self._interrupted or self._check_deadline():
             return
@@ -695,7 +780,7 @@ class SmokeTestRunner:
         self.logger.log(f"[Test 6/6] Nested constraint propagation ({self.config.tpu_type})")
         result = self._run_nested_constraint_job(client)
         self._results.append(result)
-        self._log_autoscaler_status(controller_url)
+        self._log_autoscaler_status()
 
     def _print_task_logs_on_failure(self, job, max_lines: int = 50):
         """Print task logs when a job fails, to show build errors."""
@@ -912,66 +997,7 @@ class SmokeTestRunner:
             constraints=[region_constraint("europe-west4")],
         )
 
-    def _log_autoscaler_status(self, controller_url: str):
-        """Log current autoscaler state for observability."""
-        rpc_client = ControllerServiceClientSync(controller_url)
-        try:
-            request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
-            response = rpc_client.get_autoscaler_status(request)
-
-            status = response.status
-            if status.current_demand:
-                demand_str = ", ".join(f"{k}={v}" for k, v in status.current_demand.items())
-                self.logger.log(f"  Autoscaler demand: {demand_str}")
-
-            for group in status.groups:
-                cfg = group.config
-                accel = format_accelerator_display(cfg.accelerator_type, cfg.accelerator_variant)
-                self.logger.log(
-                    f"  Scale group {group.name}: demand={group.current_demand}, "
-                    f"slices={cfg.min_slices}-{cfg.max_slices}, "
-                    f"accelerator={accel}"
-                )
-        except Exception as e:
-            self.logger.log(f"  (Could not fetch autoscaler status: {e})")
-        finally:
-            rpc_client.close()
-
-    def _run_cluster_tests(self, url: str, zone: str, project: str) -> None:
-        """Run tests against the cluster."""
-        if self._interrupted or self._check_deadline():
-            return
-
-        self.logger.log(f"Connected to controller at {url}")
-
-        # GCP-only: start log streaming
-        if not self._is_local:
-            label_prefix = self.config.label_prefix
-            self._controller_streamer = DockerLogStreamer(
-                mode="controller",
-                zone=zone,
-                project=project,
-                log_tree=self.log_tree,
-                container_name="iris-controller",
-                label_prefix=label_prefix,
-            )
-            self._controller_streamer.start()
-            self.logger.log("Started controller log streaming")
-
-            self._worker_streamer = DockerLogStreamer(
-                mode="workers",
-                zone=zone,
-                project=project,
-                log_tree=self.log_tree,
-                container_name="iris-worker",
-                label_prefix=label_prefix,
-            )
-            self._worker_streamer.start()
-            self.logger.log("Started worker log streaming")
-
-        # Run tests
-        self.logger.section("Running Tests")
-        self._run_tests(url)
+    # ----- Results and cleanup -----
 
     def _print_results(self) -> bool:
         """Print final results and return True if all passed."""
@@ -998,15 +1024,14 @@ class SmokeTestRunner:
         return all_passed
 
     def _cleanup(self):
-        """Clean up cluster resources."""
+        """Clean up cluster resources and background subprocesses."""
         self.logger.section("CLEANUP")
 
-        # Stop background monitoring threads
-        if self._controller_streamer:
-            self._controller_streamer.stop()
-        if self._worker_streamer:
-            self._worker_streamer.stop()
-        self.logger.log("Stopped background monitoring")
+        # Terminate all background subprocesses and close their owned file handles
+        for bg in self._background_procs:
+            bg.terminate()
+        self._background_procs.clear()
+        self.logger.log("Stopped background processes")
 
         # In redeploy mode, skip VM cleanup to preserve VMs for next run
         if self.config.mode == "redeploy":
@@ -1018,29 +1043,25 @@ class SmokeTestRunner:
             self.logger.log("VMs left running for debugging or redeploy iteration")
             return
 
-        if self._local_controller:
-            self.logger.log("Stopping local controller...")
+        # Stop cluster via CLI
+        if not self.config.local:
+            self.logger.log("Stopping remote cluster...")
             try:
-                self._local_controller.stop()
-                self.logger.log("Local controller stopped")
+                result = _run_iris("cluster", "stop", config_path=self.config.config_path)
+                for line in result.stdout.splitlines():
+                    self.logger.log(f"  {line}")
+                self.logger.log("Remote cluster stopped")
             except Exception as e:
-                self.logger.log(f"Error stopping local controller: {e}", level="WARN")
-        elif self._cluster_config and not self._is_local:
-            self.logger.log("Stopping remote controller...")
-            try:
-                iris_config = IrisConfig(self._cluster_config)
-                platform = iris_config.platform()
-                stop_controller(platform, self._cluster_config)
-                self.logger.log("Remote controller stopped")
-            except Exception as e:
-                self.logger.log(f"Error stopping remote controller: {e}", level="WARN")
+                self.logger.log(f"Error stopping remote cluster: {e}", level="WARN")
 
-        # Delete any remaining TPU slices and controller VM (GCP only)
-        if self._zone and self._project and not self._is_local:
-            label_prefix = self.config.label_prefix
-            deleted = cleanup_iris_resources(self._zone, self._project, label_prefix=label_prefix, dry_run=False)
-            for resource in deleted:
-                self.logger.log(f"  Deleted: {resource}")
+            # Final resource cleanup
+            self.logger.log("Running final resource cleanup...")
+            try:
+                result = _run_iris("cluster", "debug", "cleanup", "--no-dry-run", config_path=self.config.config_path)
+                for line in result.stdout.splitlines():
+                    self.logger.log(f"  {line}")
+            except Exception as e:
+                self.logger.log(f"Error during final cleanup: {e}", level="WARN")
 
         self.logger.log("Done")
 
@@ -1092,12 +1113,6 @@ class SmokeTestRunner:
     help="Execution mode: 'full' (clean start + teardown), 'keep' (clean start + keep VMs), 'redeploy' (reuse VMs)",
 )
 @click.option(
-    "--prefix",
-    default="smoke",
-    show_default=True,
-    help="Unique prefix for controller VM name (e.g., 'smoke-123' creates 'iris-controller-smoke-123')",
-)
-@click.option(
     "--local",
     is_flag=True,
     help="Run locally without GCP (in-process controller and workers)",
@@ -1109,7 +1124,6 @@ def main(
     log_dir: Path | None,
     tpu_type: str,
     mode: str,
-    prefix: str,
     local: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
@@ -1130,12 +1144,9 @@ def main(
         uv run python scripts/smoke-test.py --mode redeploy
 
         # With custom config and log directory
-        uv run python scripts/smoke-test.py --config examples/marin.yaml \
+        uv run python scripts/smoke-test.py --config examples/marin.yaml \\
             --log-dir /path/to/logs
     """
-    from iris.logging import configure_logging
-
-    configure_logging()
     # Create default log directory with timestamp if not provided
     if log_dir is None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1148,7 +1159,6 @@ def main(
         log_dir=log_dir,
         tpu_type=tpu_type,
         mode=mode,  # type: ignore
-        prefix=prefix,
         local=local,
     )
 
