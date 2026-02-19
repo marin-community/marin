@@ -208,7 +208,27 @@ class MixtureDataset(AsyncDataset[T]):
         _, weights = self.weight_stages[stage_idx]
         metrics: dict[str, float] = {f"data/mixture/{name}": weight for name, weight in weights.items()}
         metrics["data/mixture_stage"] = float(stage_idx)
+
+        # Forward source dataset metrics (e.g., epoch/progress from PermutationDatasets).
+        # For each source, compute the approximate number of items consumed up to this
+        # global index and query the source's metrics at that count.
+        for dataset_id, (name, dataset) in enumerate(self.datasets.items()):
+            source_count = self._source_count_at_global_index(dataset_id, global_index)
+            source_metrics = dataset.metrics_for_global_index(source_count)
+            for key, value in source_metrics.items():
+                metrics[f"{key}/{name}"] = value
+
         return metrics
+
+    def _source_count_at_global_index(self, dataset_id: int, global_index: int) -> int:
+        """Approximate number of items consumed from a source dataset up to a global index."""
+        block_id = global_index // self.block_size
+        stage_idx = self._get_stage_for_block(block_id)
+        base_count = self._count_before_stage(dataset_id, stage_idx)
+        stage_start_block = int(self._stage_start_blocks[stage_idx])
+        blocks_into_stage = block_id - stage_start_block
+        count_per_block = int(self._counts_per_block_per_stage[stage_idx][dataset_id])
+        return base_count + blocks_into_stage * count_per_block
 
     def _get_stage_for_block(self, block_id: int) -> int:
         block_start = block_id * self.block_size
