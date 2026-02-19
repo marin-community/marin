@@ -1,294 +1,214 @@
-ated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 253, in _call_fn [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return self.fn(item, *self._extra_args, **kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 206, in _map [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return _create_lm_example(example[input_ids_key], loss_weight) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 209, in __call__ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return _call(self, False, args, kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 263, in _call [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     marker, _, _ = out = jit_wrapper._cached( [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                          ^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 192, in _create_lm_example [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     tokens = hax.named(tokens, self.Pos) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1643, in named [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     axes = check_shape(a.shape, axis) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1899, in check_shape [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     raise ValueError(f"Shape mismatch: jnp_shape={jnp_shape} hax_axes={hax_axes}") [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203) ValueError: Shape mismatch: jnp_shape=(803,) hax_axes=position(4096) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203) -------------------- [repeated 5x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these. [repeated 5x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203) Traceback (most recent call last): [repeated 2x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                                                  ^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
-(<lambda> pid=20804, ip=10.130.0.14) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-(<lambda> pid=20559, ip=10.130.0.60) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo3-4599de.
-(<lambda> pid=20559, ip=10.130.0.60) wandb: Tracking run with wandb version 0.24.0
-(<lambda> pid=20559, ip=10.130.0.60) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-(<lambda> pid=20559, ip=10.130.0.60) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/wandb/offline-run-20260218_233708-unified-qwen3-0.6b-demo3-4599de
-(<lambda> pid=20804, ip=10.130.0.14) wandb: Run `wandb offline` to turn off syncing.
-(<lambda> pid=20804, ip=10.130.0.14) wandb: Resuming run unified-qwen3-0.6b-demo3-4599de
-(<lambda> pid=20804, ip=10.130.0.14) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
-(<lambda> pid=20804, ip=10.130.0.14) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-qwen3-0.6b-demo3-4599de
-(<lambda> pid=21619, ip=10.130.0.51) 2026-02-18T23:37:09 - 1 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo3-4599de
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:09 - 0 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo3-4599de unified-qwen3-0.6b-demo3-4599de
-(<lambda> pid=20595, ip=10.130.0.8) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:11 - 0 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo3-4599de unified-qwen3-0.6b-demo3-4599de
-(<lambda> pid=21619, ip=10.130.0.51) 2026-02-18T23:37:11 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=20559, ip=10.130.0.60) 2026-02-18T23:37:11 - 3 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo3-4599de/checkpoints
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:13 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:13 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:11 - 0 - levanter.tracker.wandb - wandb.py:285 - INFO :: Setting wandb code_dir to . [repeated 7x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:13 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}}
-(<lambda> pid=20804, ip=10.130.0.14) I0218 23:37:13.478206   22399 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
-(<lambda> pid=20595, ip=10.130.0.8) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo3-4599de. [repeated 2x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) wandb: Tracking run with wandb version 0.24.0 [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 2x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/wandb/run-20260218_233708-unified-qwen3-0.6b-demo3-4599de [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:11 - 2 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo3-4599de [repeated 5x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 3x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:11 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:- [repeated 3x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:11 - 0 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo3-4599de/checkpoints [repeated 3x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:21 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train [repeated 12x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:21 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train/shard_ledger.json [repeated 12x across cluster]
-(<lambda> pid=21619, ip=10.130.0.51) 2026-02-18T23:37:16 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 11x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) I0218 23:37:13.555984   22197 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 3x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:24 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:24 - 0 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:24 - 0 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:24 - 0 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:24 - 0 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:24 - 0 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:24 - 0 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:24 - 0 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:24 - 0 - levanter.data.text - datasets.py:775 - WARNING :: No validation cache found for component multimodal_captions, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:24 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.data.text - datasets.py:775 - WARNING :: No validation cache found for component eval_textvqa, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.data.text - datasets.py:775 - WARNING :: No validation cache found for component eval_chartqa, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.data.text - datasets.py:775 - WARNING :: No validation cache found for component eval_ai2d, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.data.text - datasets.py:775 - WARNING :: No validation cache found for component eval_mmmu, skipping
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:25 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/cifar10_small/validation [repeated 41x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/cifar10_small/validation/shard_ledger.json [repeated 41x across cluster]
-(<lambda> pid=20559, ip=10.130.0.60) 2026-02-18T23:37:26 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 18x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}} [repeated 17x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:25 - 2 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:25 - 2 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:25 - 2 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.data.text - datasets.py:784 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.data.text - datasets.py:775 - WARNING :: No validation cache found for component multimodal_captions, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.data.text - datasets.py:775 - WARNING :: No validation cache found for component eval_textvqa, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.data.text - datasets.py:775 - WARNING :: No validation cache found for component eval_chartqa, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.data.text - datasets.py:775 - WARNING :: No validation cache found for component eval_ai2d, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.data.text - datasets.py:775 - WARNING :: No validation cache found for component eval_mmmu, skipping [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation [repeated 3x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:26 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:31 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23/validation [repeated 32x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:31 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23/validation/shard_ledger.json [repeated 32x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:31 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 32x across cluster]
-(<lambda> pid=20804, ip=10.130.0.14) 2026-02-18T23:37:36 - 0 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch.
-(run_on_pod_ray pid=18326, ip=10.130.1.203) Task error ray::<lambda>() (pid=21619, ip=10.130.0.51)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/main/train_lm.py", line 223, in main
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     cb = levanter.eval.cb_tagged_lm_evaluate(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 199, in cb_tagged_lm_evaluate
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     evaluator = TaggedEvaluator(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                 ^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 316, in __init__
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     self.loader = DataLoader(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                   ^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return asyncio.run(coro)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return runner.run(main)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return self._loop.run_until_complete(task)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 120, in getitem_async
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return await dataset.getitem_async(int(index - offset)), self._tag_arrays[dataset_index]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 245, in getitem_async
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return self._call_fn(index, await self.dataset.getitem_async(index))
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 253, in _call_fn
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return self.fn(item, *self._extra_args, **kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 206, in _map
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return _create_lm_example(example[input_ids_key], loss_weight)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 209, in __call__
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return _call(self, False, args, kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 263, in _call
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     marker, _, _ = out = jit_wrapper._cached(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                          ^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 192, in _create_lm_example
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     tokens = hax.named(tokens, self.Pos)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1643, in named
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     axes = check_shape(a.shape, axis)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1899, in check_shape
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     raise ValueError(f"Shape mismatch: jnp_shape={jnp_shape} hax_axes={hax_axes}")
-(run_on_pod_ray pid=18326, ip=10.130.1.203) ValueError: Shape mismatch: jnp_shape=(803,) hax_axes=position(4096)
-(run_on_pod_ray pid=18326, ip=10.130.1.203) --------------------
-(run_on_pod_ray pid=18326, ip=10.130.1.203) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-(run_on_pod_ray pid=18326, ip=10.130.1.203) Traceback (most recent call last):
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return func(*args, **kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=18326, ip=10.130.1.203) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=21619, ip=10.130.0.51)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/main/train_lm.py", line 223, in main
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     cb = levanter.eval.cb_tagged_lm_evaluate(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 199, in cb_tagged_lm_evaluate
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     evaluator = TaggedEvaluator(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                 ^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 316, in __init__
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     self.loader = DataLoader(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                   ^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return asyncio.run(coro)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return runner.run(main)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return self._loop.run_until_complete(task)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 120, in getitem_async
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return await dataset.getitem_async(int(index - offset)), self._tag_arrays[dataset_index]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 245, in getitem_async
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return self._call_fn(index, await self.dataset.getitem_async(index))
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 253, in _call_fn
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return self.fn(item, *self._extra_args, **kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 206, in _map
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return _create_lm_example(example[input_ids_key], loss_weight)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 209, in __call__
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return _call(self, False, args, kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 263, in _call
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     marker, _, _ = out = jit_wrapper._cached(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                          ^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 192, in _create_lm_example
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     tokens = hax.named(tokens, self.Pos)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1643, in named
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     axes = check_shape(a.shape, axis)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1899, in check_shape
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     raise ValueError(f"Shape mismatch: jnp_shape={jnp_shape} hax_axes={hax_axes}")
-(run_on_pod_ray pid=18326, ip=10.130.1.203) ValueError: Shape mismatch: jnp_shape=(803,) hax_axes=position(4096)
-(run_on_pod_ray pid=18326, ip=10.130.1.203) --------------------
-(run_on_pod_ray pid=18326, ip=10.130.1.203) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-(run_on_pod_ray pid=18326, ip=10.130.1.203) --------------------
-(run_on_pod_ray pid=18326, ip=10.130.1.203) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:35 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation [repeated 58x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:35 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation/shard_ledger.json [repeated 58x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:35 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 58x across cluster]
-(SliceActor pid=2846, ip=10.130.0.51) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=21619, ip=10.130.0.51)
-(<lambda> pid=21619, ip=10.130.0.51) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f7e802947c0>
-(<lambda> pid=21619, ip=10.130.0.51)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=21619, ip=10.130.0.51)     conn.teardown(hooks.exit_code)
-(<lambda> pid=21619, ip=10.130.0.51)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=21619, ip=10.130.0.51)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=21619, ip=10.130.0.51)     return future.result()
-(<lambda> pid=21619, ip=10.130.0.51)            ^^^^^^^^^^^^^^^
-(<lambda> pid=21619, ip=10.130.0.51)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=21619, ip=10.130.0.51)     return self.__get_result()
-(<lambda> pid=21619, ip=10.130.0.51)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=21619, ip=10.130.0.51)     raise self._exception
-(<lambda> pid=21619, ip=10.130.0.51)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=21619, ip=10.130.0.51)     return await fn()
-(<lambda> pid=21619, ip=10.130.0.51)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=21619, ip=10.130.0.51)     await self._client.close()
-(<lambda> pid=21619, ip=10.130.0.51)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=21619, ip=10.130.0.51)     await self._writer.wait_closed()
-(<lambda> pid=21619, ip=10.130.0.51)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=21619, ip=10.130.0.51)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=21619, ip=10.130.0.51) BrokenPipeError: [Errno 32] Broken pipe
-(run_on_pod_ray pid=18326, ip=10.130.1.203) Failed 11 times. Continuing to retry.
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return func(*args, **kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=18326, ip=10.130.1.203) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=21619, ip=10.130.0.51)
-(run_on_pod_ray pid=18326, ip=10.130.1.203) Failed too many times
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return func(*args, **kwargs)
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=18326, ip=10.130.1.203) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=21619, ip=10.130.0.51)
-2026-02-18 23:37:40,245 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo3-5c45342e failed:
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=86148, ip=10.130.0.222)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 541, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+    info = self.train_step(state, example)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 478, in train_step
+    result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 753, in _maybe_save_jaxpr
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/partitioning.py", line 392, in __call__
+    return self._call(False, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__
+    return self.__func__(self.__self__, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/partitioning.py", line 464, in _call
+    out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm. Used 39.74G of 30.75G hbm. Exceeded hbm capacity by 8.99G.
+
+Total hbm usage >= 40.99G:
+    reserved          1.25G 
+    program          39.74G 
+    arguments            0B 
+
+Output size 0B; shares 0B with arguments.
+
+Program hbm requirement 39.74G:
+    global           384.5K
+    HLO temp         39.74G (100.0% utilization: Unpadded (39.73G) Padded (39.73G), 0.0% fragmentation (11.56M))
+
+  Largest program allocations in hbm:
+
+  1. Size: 17.66G
+     Operator: op_name="broadcast.252"
+     Shape: f32[8,4096,144640]{2,1,0:T(8,128)}
+     Unpadded size: 17.66G
+     XLA label: broadcast.451 = broadcast(constant.1184), dimensions={}
+     Allocation type: HLO temp
+     ==========================
+
+  2. Size: 17.66G
+     Operator: op_name="jit(_train_step)/jvp(contract embed -> batch, position, vocab)/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: f32[8,4096,144640]{2,1,0:T(8,128)}
+     Unpadded size: 17.66G
+     XLA label: fusion.531 = fusion(fusion.463, all-gather.27), kind=kOutput, calls=fused_computation.856
+     Allocation type: HLO temp
+     ==========================
+
+  3. Size: 4.41G
+     Operator: op_name="jit(_train_step)/jvp(jit(_one_hot))/eq" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/nn/__init__.py" source_line=64 source_end_line=64
+     Shape: pred[8,4096,144640]{2,1,0:T(8,128)(4,1)}
+     Unpadded size: 4.41G
+     XLA label: iota_compare_fusion = fusion(copy-done.72), kind=kLoop, calls=fused_computation.656
+     Allocation type: HLO temp
+     ==========================
+
+  4. Size: 128.0K
+     Operator: op_name="jit(_train_step)/transpose(jvp())/mul" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/__init__.py" source_line=1076 source_end_line=1076
+     Shape: f32[8,4096]{1,0:T(8,128)}
+     Unpadded size: 128.0K
+     XLA label: broadcast_multiply_fusion.3 = fusion(div.269, copy-done.77, copy-done.94), kind=kLoop, calls=fused_computation.736
+     Allocation type: HLO temp
+     ==========================
+
+  5. Size: 128.0K
+     Operator: op_name="jit(_train_step)/jvp()/reduce_max" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64
+     Shape: f32[8,4096]{1,0:T(8,128)}
+     Unpadded size: 128.0K
+     XLA label: reduce_max.11 = convert(copy-done.82)
+     Allocation type: HLO temp
+     ==========================
+
+  6. Size: 128.0K
+     Operator: op_name="jit(_train_step)/transpose(jvp())/add_any" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64
+     Shape: f32[8,4096]{1,0:T(8,128)}
+     Unpadded size: 128.0K
+     XLA label: negate_add_fusion = fusion(select_reduce_fusion.1, fusion.448), kind=kLoop, calls=fused_computation.733
+     Allocation type: HLO temp
+     ==========================
+
+  7. Size: 16.0K
+     Shape: f32[4096]{0:T(1024)}
+     Unpadded size: 16.0K
+     XLA label: constant literal
+     Allocation type: global
+     ==========================
+
+  8. Size: 2.5K
+     Shape: (f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=5*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=10*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=15*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=20*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=25*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=30*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=35*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=40*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=45*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=50*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=55*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=60*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=65*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=70*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=75*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=80*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=85*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=90*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=95*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=100*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=105*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=110*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=115*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=120*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=125*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=130*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=135*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=140*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=145*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=150*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=155*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=160*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=165*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=170*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=175*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=180*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=185*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=190*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=195*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=200*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=205*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=210*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=215*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=220*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=225*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=230*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=235*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=240*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=245*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=250*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=255*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=260*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=265*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=270*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=275*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=280*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=285*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=290*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=295*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=300*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=305*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=310*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=315*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=320*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=325*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=330*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=335*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=340*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=345*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=350*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=355*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=360*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=365*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=370*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=375*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=380*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=385*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=390*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=395*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=400*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=405*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=410*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=415*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=420*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=425*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=430*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=435*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=440*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=445*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=450*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=455*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=460*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=465*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=470*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=475*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=480*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=485*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=490*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=495*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=500*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=505*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=510*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=515*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=520*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=525*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=530*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=535*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=540*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=545*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=550*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=555*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=560*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=565*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=570*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=575*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=580*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=585*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=590*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=595*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=600*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=605*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=610*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=615*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=620*/f32[]{:T(128)}, f32[]{:T(128)})
+     Unpadded size: 2.5K
+     XLA label: tuple.1273 = tuple(copy.2417, copy.1072, copy.1073, copy.1074, ...(+618))
+     Allocation type: HLO temp
+     ==========================
+
+  9. Size: 1.0K
+     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
+     Unpadded size: 64B
+     Extra memory due to padding: 960B (16.0x expansion)
+     XLA label: constant literal
+     Allocation type: global
+     ==========================
+
+  10. Size: 1.0K
+     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
+     Unpadded size: 64B
+     Extra memory due to padding: 960B (16.0x expansion)
+     XLA label: constant literal
+     Allocation type: global
+     ==========================
+
+  11. Size: 1.0K
+     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
+     Unpadded size: 64B
+     Extra memory due to padding: 960B (16.0x expansion)
+     XLA label: constant literal
+     Allocation type: global
+     ==========================
+
+  12. Size: 512B
+     Shape: ((f32[28,8,64,32]{2,3,1,0:T(8,128)}), f32[7,8,64,32]{2,3,1,0:T(8,128)S(3)}, s32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: slice-start.175 = slice-start(get-tuple-element.4344), slice={[21:28], [0:8], [0:64], [0:32]}
+     Allocation type: HLO temp
+     ==========================
+
+  13. Size: 512B
+     Shape: s32[32]{0:T(128)}
+     Unpadded size: 128B
+     Extra memory due to padding: 384B (4.0x expansion)
+     XLA label: deduplicated constant
+     Allocation type: global
+     ==========================
+
+  14. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, head_size/0 1 2 , 3 4 2 -> 0 1 3 4/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.10 = collective-permute-start(get-tuple-element.7005), channel_id=11, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
+     Allocation type: HLO temp
+     ==========================
+
+  15. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, head_size/0 1 2 , 3 4 2 -> 0 1 3 4/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.11 = collective-permute-start(collective-permute-done.10), channel_id=13, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
+     Allocation type: HLO temp
+     ==========================
+
+  16. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.22 = collective-permute-start(get-tuple-element.7095), channel_id=36, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
+     Allocation type: HLO temp
+     ==========================
+
+  17. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.21 = collective-permute-start(collective-permute-done.20), channel_id=37, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
+     Allocation type: HLO temp
+     ==========================
+
+  18. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, q_heads_per_group, head_size/0 1 2 , 3 4 5 2 -> 0 1 3 4 5/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.4 = collective-permute-start(get-tuple-element.6973), channel_id=4, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
+     Allocation type: HLO temp
+     ==========================
+
+  19. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, q_heads_per_group, head_size/0 1 2 , 3 4 5 2 -> 0 1 3 4 5/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.5 = collective-permute-start(collective-permute-done.4), channel_id=6, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
+     Allocation type: HLO temp
+     ==========================
+
+  20. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.20 = collective-permute-start(get-tuple-element.7093), channel_id=35, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
+     Allocation type: HLO temp
+     ==========================
+
+
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+2026-02-19 03:40:38,827 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo-14c5067e failed:
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
     ray.get(self._ref)
   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
     return fn(*args, **kwargs)
@@ -301,176 +221,225 @@ Traceback (most recent call last):
                                   ^^^^^^^^^^^^^^^^^^^
   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
     raise value.as_instanceof_cause()
-ray.exceptions.RayTaskError(ValueError): ray::run_levanter_train_lm() (pid=18255, ip=10.130.1.203)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::run_levanter_train_lm() (pid=18883, ip=10.130.0.45)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
     job.wait(raise_on_failure=True)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
     return self._wait_ref(timeout, raise_on_failure)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
     ray.get(self._ref, timeout=timeout)
            ^^^^^^^^^^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^^^
                                   ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::run_on_pod_ray() (pid=18326, ip=10.130.1.203)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::run_on_pod_ray() (pid=18884, ip=10.130.0.45)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
     raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
                                                  ^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^^^
                                   ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=21619, ip=10.130.0.51)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=86148, ip=10.130.0.222)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/main/train_lm.py", line 223, in main
-    cb = levanter.eval.cb_tagged_lm_evaluate(
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 199, in cb_tagged_lm_evaluate
-    evaluator = TaggedEvaluator(
-                ^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 316, in __init__
-    self.loader = DataLoader(
-                  ^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
-    initial_example = blocking_wait(self.data_store.getitem_async(0))
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-    return asyncio.run(coro)
-           ^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 120, in getitem_async
-    return await dataset.getitem_async(int(index - offset)), self._tag_arrays[dataset_index]
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 245, in getitem_async
-    return self._call_fn(index, await self.dataset.getitem_async(index))
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 253, in _call_fn
-    return self.fn(item, *self._extra_args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 206, in _map
-    return _create_lm_example(example[input_ids_key], loss_weight)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 209, in __call__
-    return _call(self, False, args, kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 263, in _call
-    marker, _, _ = out = jit_wrapper._cached(
-                         ^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 192, in _create_lm_example
-    tokens = hax.named(tokens, self.Pos)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1643, in named
-    axes = check_shape(a.shape, axis)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1899, in check_shape
-    raise ValueError(f"Shape mismatch: jnp_shape={jnp_shape} hax_axes={hax_axes}")
-ValueError: Shape mismatch: jnp_shape=(803,) hax_axes=position(4096)
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-2026-02-18 23:37:40,246 INFO executor.py:806 -- Waiting for ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo3-5c45342e to finish for step checkpoints/unified-qwen3-0.6b-demo3
-2026-02-18 23:37:40,246 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo3-5c45342e failed:
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
-    ray.get(self._ref, timeout=timeout)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 541, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+    info = self.train_step(state, example)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 478, in train_step
+    result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 753, in _maybe_save_jaxpr
     return fn(*args, **kwargs)
            ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-    values, debugger_breakpoint = worker.get_objects(
-                                  ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-    raise value.as_instanceof_cause()
-ray.exceptions.RayTaskError(ValueError): ray::run_levanter_train_lm() (pid=18255, ip=10.130.1.203)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
-    job.wait(raise_on_failure=True)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
-    return self._wait_ref(timeout, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
-    ray.get(self._ref, timeout=timeout)
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::run_on_pod_ray() (pid=18326, ip=10.130.1.203)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=21619, ip=10.130.0.51)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/main/train_lm.py", line 223, in main
-    cb = levanter.eval.cb_tagged_lm_evaluate(
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 199, in cb_tagged_lm_evaluate
-    evaluator = TaggedEvaluator(
-                ^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 316, in __init__
-    self.loader = DataLoader(
-                  ^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
-    initial_example = blocking_wait(self.data_store.getitem_async(0))
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-    return asyncio.run(coro)
-           ^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 120, in getitem_async
-    return await dataset.getitem_async(int(index - offset)), self._tag_arrays[dataset_index]
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 245, in getitem_async
-    return self._call_fn(index, await self.dataset.getitem_async(index))
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 253, in _call_fn
-    return self.fn(item, *self._extra_args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 206, in _map
-    return _create_lm_example(example[input_ids_key], loss_weight)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 209, in __call__
-    return _call(self, False, args, kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 263, in _call
-    marker, _, _ = out = jit_wrapper._cached(
-                         ^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 192, in _create_lm_example
-    tokens = hax.named(tokens, self.Pos)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1643, in named
-    axes = check_shape(a.shape, axis)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1899, in check_shape
-    raise ValueError(f"Shape mismatch: jnp_shape={jnp_shape} hax_axes={hax_axes}")
-ValueError: Shape mismatch: jnp_shape=(803,) hax_axes=position(4096)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/partitioning.py", line 392, in __call__
+    return self._call(False, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__
+    return self.__func__(self.__self__, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/partitioning.py", line 464, in _call
+    out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm. Used 39.74G of 30.75G hbm. Exceeded hbm capacity by 8.99G.
+
+Total hbm usage >= 40.99G:
+    reserved          1.25G 
+    program          39.74G 
+    arguments            0B 
+
+Output size 0B; shares 0B with arguments.
+
+Program hbm requirement 39.74G:
+    global           384.5K
+    HLO temp         39.74G (100.0% utilization: Unpadded (39.73G) Padded (39.73G), 0.0% fragmentation (11.56M))
+
+  Largest program allocations in hbm:
+
+  1. Size: 17.66G
+     Operator: op_name="broadcast.252"
+     Shape: f32[8,4096,144640]{2,1,0:T(8,128)}
+     Unpadded size: 17.66G
+     XLA label: broadcast.451 = broadcast(constant.1184), dimensions={}
+     Allocation type: HLO temp
+     ==========================
+
+  2. Size: 17.66G
+     Operator: op_name="jit(_train_step)/jvp(contract embed -> batch, position, vocab)/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: f32[8,4096,144640]{2,1,0:T(8,128)}
+     Unpadded size: 17.66G
+     XLA label: fusion.531 = fusion(fusion.463, all-gather.27), kind=kOutput, calls=fused_computation.856
+     Allocation type: HLO temp
+     ==========================
+
+  3. Size: 4.41G
+     Operator: op_name="jit(_train_step)/jvp(jit(_one_hot))/eq" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/nn/__init__.py" source_line=64 source_end_line=64
+     Shape: pred[8,4096,144640]{2,1,0:T(8,128)(4,1)}
+     Unpadded size: 4.41G
+     XLA label: iota_compare_fusion = fusion(copy-done.72), kind=kLoop, calls=fused_computation.656
+     Allocation type: HLO temp
+     ==========================
+
+  4. Size: 128.0K
+     Operator: op_name="jit(_train_step)/transpose(jvp())/mul" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/__init__.py" source_line=1076 source_end_line=1076
+     Shape: f32[8,4096]{1,0:T(8,128)}
+     Unpadded size: 128.0K
+     XLA label: broadcast_multiply_fusion.3 = fusion(div.269, copy-done.77, copy-done.94), kind=kLoop, calls=fused_computation.736
+     Allocation type: HLO temp
+     ==========================
+
+  5. Size: 128.0K
+     Operator: op_name="jit(_train_step)/jvp()/reduce_max" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64
+     Shape: f32[8,4096]{1,0:T(8,128)}
+     Unpadded size: 128.0K
+     XLA label: reduce_max.11 = convert(copy-done.82)
+     Allocation type: HLO temp
+     ==========================
+
+  6. Size: 128.0K
+     Operator: op_name="jit(_train_step)/transpose(jvp())/add_any" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64
+     Shape: f32[8,4096]{1,0:T(8,128)}
+     Unpadded size: 128.0K
+     XLA label: negate_add_fusion = fusion(select_reduce_fusion.1, fusion.448), kind=kLoop, calls=fused_computation.733
+     Allocation type: HLO temp
+     ==========================
+
+  7. Size: 16.0K
+     Shape: f32[4096]{0:T(1024)}
+     Unpadded size: 16.0K
+     XLA label: constant literal
+     Allocation type: global
+     ==========================
+
+  8. Size: 2.5K
+     Shape: (f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=5*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=10*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=15*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=20*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=25*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=30*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=35*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=40*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=45*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=50*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=55*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=60*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=65*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=70*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=75*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=80*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=85*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=90*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=95*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=100*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=105*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=110*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=115*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=120*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=125*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=130*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=135*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=140*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=145*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=150*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=155*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=160*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=165*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=170*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=175*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=180*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=185*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=190*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=195*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=200*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=205*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=210*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=215*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=220*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=225*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=230*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=235*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=240*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=245*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=250*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=255*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=260*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=265*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=270*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=275*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=280*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=285*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=290*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=295*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=300*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=305*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=310*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=315*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=320*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=325*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=330*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=335*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=340*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=345*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=350*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=355*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=360*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=365*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=370*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=375*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=380*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=385*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=390*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=395*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=400*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=405*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=410*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=415*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=420*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=425*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=430*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=435*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=440*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=445*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=450*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=455*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=460*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=465*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=470*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=475*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=480*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=485*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=490*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=495*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=500*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=505*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=510*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=515*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=520*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=525*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=530*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=535*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=540*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=545*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=550*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=555*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=560*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=565*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=570*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=575*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=580*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=585*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=590*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=595*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=600*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=605*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=610*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=615*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=620*/f32[]{:T(128)}, f32[]{:T(128)})
+     Unpadded size: 2.5K
+     XLA label: tuple.1273 = tuple(copy.2417, copy.1072, copy.1073, copy.1074, ...(+618))
+     Allocation type: HLO temp
+     ==========================
+
+  9. Size: 1.0K
+     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
+     Unpadded size: 64B
+     Extra memory due to padding: 960B (16.0x expansion)
+     XLA label: constant literal
+     Allocation type: global
+     ==========================
+
+  10. Size: 1.0K
+     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
+     Unpadded size: 64B
+     Extra memory due to padding: 960B (16.0x expansion)
+     XLA label: constant literal
+     Allocation type: global
+     ==========================
+
+  11. Size: 1.0K
+     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
+     Unpadded size: 64B
+     Extra memory due to padding: 960B (16.0x expansion)
+     XLA label: constant literal
+     Allocation type: global
+     ==========================
+
+  12. Size: 512B
+     Shape: ((f32[28,8,64,32]{2,3,1,0:T(8,128)}), f32[7,8,64,32]{2,3,1,0:T(8,128)S(3)}, s32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: slice-start.175 = slice-start(get-tuple-element.4344), slice={[21:28], [0:8], [0:64], [0:32]}
+     Allocation type: HLO temp
+     ==========================
+
+  13. Size: 512B
+     Shape: s32[32]{0:T(128)}
+     Unpadded size: 128B
+     Extra memory due to padding: 384B (4.0x expansion)
+     XLA label: deduplicated constant
+     Allocation type: global
+     ==========================
+
+  14. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, head_size/0 1 2 , 3 4 2 -> 0 1 3 4/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.10 = collective-permute-start(get-tuple-element.7005), channel_id=11, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
+     Allocation type: HLO temp
+     ==========================
+
+  15. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, head_size/0 1 2 , 3 4 2 -> 0 1 3 4/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.11 = collective-permute-start(collective-permute-done.10), channel_id=13, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
+     Allocation type: HLO temp
+     ==========================
+
+  16. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.22 = collective-permute-start(get-tuple-element.7095), channel_id=36, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
+     Allocation type: HLO temp
+     ==========================
+
+  17. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.21 = collective-permute-start(collective-permute-done.20), channel_id=37, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
+     Allocation type: HLO temp
+     ==========================
+
+  18. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, q_heads_per_group, head_size/0 1 2 , 3 4 5 2 -> 0 1 3 4 5/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.4 = collective-permute-start(get-tuple-element.6973), channel_id=4, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
+     Allocation type: HLO temp
+     ==========================
+
+  19. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, q_heads_per_group, head_size/0 1 2 , 3 4 5 2 -> 0 1 3 4 5/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.5 = collective-permute-start(collective-permute-done.4), channel_id=6, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
+     Allocation type: HLO temp
+     ==========================
+
+  20. Size: 512B
+     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
+     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
+     Unpadded size: 512B
+     XLA label: collective-permute-start.20 = collective-permute-start(get-tuple-element.7093), channel_id=35, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
+     Allocation type: HLO temp
+     ==========================
+
+
 --------------------
 For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
 --------------------
@@ -479,184 +448,120 @@ For simplicity, JAX has removed its internal frames from the traceback of the fo
 For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
 --------------------
 For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-2026-02-18 23:37:40,247 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo3-5c45342e failed:
+2026-02-19 03:40:39,363 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-0.6b-demo failed
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
-    ray.get(self._ref)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-    values, debugger_breakpoint = worker.get_objects(
-                                  ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-    raise value.as_instanceof_cause()
-ray.exceptions.RayTaskError(ValueError): ray::run_levanter_train_lm() (pid=18255, ip=10.130.1.203)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
-    job.wait(raise_on_failure=True)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
-    return self._wait_ref(timeout, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
-    ray.get(self._ref, timeout=timeout)
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::run_on_pod_ray() (pid=18326, ip=10.130.1.203)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=21619, ip=10.130.0.51)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/main/train_lm.py", line 223, in main
-    cb = levanter.eval.cb_tagged_lm_evaluate(
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 199, in cb_tagged_lm_evaluate
-    evaluator = TaggedEvaluator(
-                ^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 316, in __init__
-    self.loader = DataLoader(
-                  ^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
-    initial_example = blocking_wait(self.data_store.getitem_async(0))
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-    return asyncio.run(coro)
-           ^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 120, in getitem_async
-    return await dataset.getitem_async(int(index - offset)), self._tag_arrays[dataset_index]
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 245, in getitem_async
-    return self._call_fn(index, await self.dataset.getitem_async(index))
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 253, in _call_fn
-    return self.fn(item, *self._extra_args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 206, in _map
-    return _create_lm_example(example[input_ids_key], loss_weight)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 209, in __call__
-    return _call(self, False, args, kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 263, in _call
-    marker, _, _ = out = jit_wrapper._cached(
-                         ^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 192, in _create_lm_example
-    tokens = hax.named(tokens, self.Pos)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1643, in named
-    axes = check_shape(a.shape, axis)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1899, in check_shape
-    raise ValueError(f"Shape mismatch: jnp_shape={jnp_shape} hax_axes={hax_axes}")
-ValueError: Shape mismatch: jnp_shape=(803,) hax_axes=position(4096)
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-2026-02-18 23:37:40,727 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-0.6b-demo3 failed
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
     runner.wait()
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/marin/src/marin/execution/executor.py", line 192, in wait
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 192, in wait
     raise RuntimeError(f"Job {self.job_id} failed")
-RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo3-5c45342e failed
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo-14c5067e failed
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
     runner.wait()
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/marin/src/marin/execution/executor.py", line 192, in wait
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 192, in wait
     raise RuntimeError(f"Job {self.job_id} failed")
-RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo3-5c45342e failed
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo-14c5067e failed
 
 The above exception was the direct cause of the following exception:
 
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/experiments/unified/unified_pretrain_demo.py", line 329, in <module>
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/experiments/unified/unified_pretrain_demo.py", line 329, in <module>
     executor_main(
   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
     response = fn(cfg, *args, **kwargs)
                ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
     executor.run(
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/marin/src/marin/execution/executor.py", line 747, in run
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 747, in run
     self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed, max_concurrent=max_concurrent)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
     raise RuntimeError(message) from failure_exceptions[0]
-RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-0.6b-demo3']
-(raylet) A worker died or was killed while executing a task by an unexpected system error. To troubleshoot the problem, check the logs for the dead worker. Lease ID: 010000006e336acffcf17bc0525a6fb743fda56a54ce61ac159327b7fa51dcba Worker ID: fe25f844499a7141f67764e061af1f357333e05347106095c92a573c Node ID: 2dcbeb6c0990d5708a8431dc19026ae2d2268d34b96bbbe0ec838fee Worker IP address: 10.130.0.8 Worker port: 10004 Worker PID: 3633 Worker exit type: SYSTEM_ERROR Worker exit detail: Worker unexpectedly exits with a connection error code 2. End of file. Some common causes include: (1) the process was killed by the OOM killer due to high memory usage, (2) ray stop --force was called, or (3) the worker crashed unexpectedly due to SIGSEGV or another unexpected error. [repeated 2x across cluster]
-(raylet) Task <lambda> failed. There are 2 retries remaining, so the task will be retried. Error:  [repeated 2x across cluster]
-(<lambda> pid=20595, ip=10.130.0.8) 2026-02-18T23:37:36 - 2 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch. [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/main/train_lm.py", line 223, in main [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     cb = levanter.eval.cb_tagged_lm_evaluate( [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/eval.py", line 199, in cb_tagged_lm_evaluate [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     evaluator = TaggedEvaluator( [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/loader.py", line 141, in __init__ [repeated 6x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     self.loader = DataLoader( [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                   ^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     initial_example = blocking_wait(self.data_store.getitem_async(0)) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return asyncio.run(coro) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run [repeated 7x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return runner.run(main) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return self._loop.run_until_complete(task) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 245, in getitem_async [repeated 6x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return await dataset.getitem_async(int(index - offset)), self._tag_arrays[dataset_index] [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return self._call_fn(index, await self.dataset.getitem_async(index)) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/dataset.py", line 253, in _call_fn [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return self.fn(item, *self._extra_args, **kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 206, in _map [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return _create_lm_example(example[input_ids_key], loss_weight) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 209, in __call__ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     return _call(self, False, args, kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py", line 263, in _call [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     marker, _, _ = out = jit_wrapper._cached( [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                          ^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/levanter/src/levanter/data/text/datasets.py", line 192, in _create_lm_example [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     tokens = hax.named(tokens, self.Pos) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1643, in named [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     axes = check_shape(a.shape, axis) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)            ^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_b61a60530f873943/lib/haliax/src/haliax/core.py", line 1899, in check_shape [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)     raise ValueError(f"Shape mismatch: jnp_shape={jnp_shape} hax_axes={hax_axes}") [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203) ValueError: Shape mismatch: jnp_shape=(803,) hax_axes=position(4096) [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203) -------------------- [repeated 5x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these. [repeated 5x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203) Traceback (most recent call last): [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                                                  ^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=18326, ip=10.130.1.203)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-0.6b-demo']
+(raylet) The node with node id: 30ca82a271e70fd323cbdcb009b7581340c92b4c0fb8ab6c33dbb1a9 and address: 10.130.0.58 and node name: 10.130.0.58 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a       (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 3x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45) Program hbm requirement 39.74G: [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     global           384.5K [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     HLO temp         39.74G (100.0% utilization: Unpadded (39.73G) Padded (39.73G), 0.0% fragmentation (11.56M)) [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)   Largest program allocations in hbm: [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)   20. Size: 512B [repeated 240x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="broadcast.252" [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)}) [repeated 240x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Unpadded size: 512B [repeated 240x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: broadcast.451 = broadcast(constant.1184), dimensions={} [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Allocation type: HLO temp [repeated 180x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      ========================== [repeated 240x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp(contract embed -> batch, position, vocab)/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263 [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: fusion.531 = fusion(fusion.463, all-gather.27), kind=kOutput, calls=fused_computation.856 [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp(jit(_one_hot))/eq" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/nn/__init__.py" source_line=64 source_end_line=64 [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: iota_compare_fusion = fusion(copy-done.72), kind=kLoop, calls=fused_computation.656 [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/transpose(jvp())/mul" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/__init__.py" source_line=1076 source_end_line=1076 [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: broadcast_multiply_fusion.3 = fusion(div.269, copy-done.77, copy-done.94), kind=kLoop, calls=fused_computation.736 [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp()/reduce_max" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64 [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: collective-permute-start.20 = collective-permute-start(get-tuple-element.7093), channel_id=35, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}} [repeated 120x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/transpose(jvp())/add_any" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64 [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: negate_add_fusion = fusion(select_reduce_fusion.1, fusion.448), kind=kLoop, calls=fused_computation.733 [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: constant literal [repeated 48x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Allocation type: global [repeated 60x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Extra memory due to padding: 384B (4.0x expansion) [repeated 48x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: deduplicated constant [repeated 12x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, head_size/0 1 2 , 3 4 2 -> 0 1 3 4/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263 [repeated 24x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263 [repeated 36x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, q_heads_per_group, head_size/0 1 2 , 3 4 5 2 -> 0 1 3 4 5/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263 [repeated 24x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.731220   87011 2a886c8_compiler_base.cc:2613] add.4759 = u32[]{:T(128)S(6)} add(get-tuple-element.7126, partition-id.108) [repeated 6146x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.718126   87011 2a886c8_compiler_base.cc:2613] all-gather.27 = bf16[144640,1024]{0,1:T(8,128)(2,1)} all-gather(custom-call.96), channel_id=160, replica_groups=[1,32]<=[32], dimensions={1}, use_global_device_ids=true [repeated 14x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717272   87011 2a886c8_compiler_base.cc:2613] get-tuple-element.5787 = f32[8,4096]{1,0:T(8,128)S(3)} get-tuple-element(negate_add_fusion), index=0 [repeated 14x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.730653   87011 2a886c8_compiler_base.cc:2613] broadcast.819 = pred[8,4096,3072]{2,1,0:T(8,128)(4,1)} broadcast(param_2.2240), dimensions={} [repeated 147x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.723647   87011 2a886c8_compiler_base.cc:2613] all-reduce.96 = (bf16[1024]{0:T(1024)(128)(2,1)}, bf16[1024]{0:T(1024)(128)(2,1)}) all-reduce(dynamic-update-slice.77, dynamic-update-slice.78), channel_id=186, replica_groups=[1,32]<=[32], use_global_device_ids=true, to_apply=add.8 [repeated 14x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.730575   87011 2a886c8_compiler_base.cc:2613] fusion.801 = bf16[8,4096,2,32]{1,3,0,2:T(8,128)(2,1)} fusion(param_3.1703, param_4.1237, param_5.1120), kind=kLoop, calls=fused_computation.175.clone.clone.clone [repeated 455x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.731086   87011 2a886c8_compiler_base.cc:2613] fusion.802 = bf16[8,4096,3072,1]{2,1,0,3:T(8,128)(2,1)} fusion(multiply.497, bitcast.2019, multiply.498, get-tuple-element.7125, get-tuple-element.7123), kind=kOutput, calls=fused_computation.174.clone.clone [repeated 84x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717475   87011 2a886c8_compiler_base.cc:2613] pad_add_fusion = s32[8,4096]{1,0:T(8,128)S(3)} fusion(slice-done.204, slice.1957), kind=kLoop, calls=fused_computation.731 [repeated 7x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717525   87011 2a886c8_compiler_base.cc:2613] select_reduce_fusion.1 = f32[8,4096]{1,0:T(8,128)S(3)} fusion(get-tuple-element.5785, pad_add_fusion), kind=kLoop, calls=fused_computation.652 [repeated 7x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717539   87011 2a886c8_compiler_base.cc:2613] negate_add_fusion = (f32[8,4096]{1,0:T(8,128)S(3)}, f32[8,4096]{1,0:T(8,128)}) fusion(select_reduce_fusion.1, fusion.448), kind=kLoop, calls=fused_computation.733 [repeated 7x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717547   87011 2a886c8_compiler_base.cc:2613] copy-start.71 = (s32[8,4096]{1,0:T(8,128)}, s32[8,4096]{1,0:T(8,128)S(3)}, u32[]{:S(2)}) copy-start(pad_add_fusion) [repeated 7x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717580   87011 2a886c8_compiler_base.cc:2613] iota_compare_fusion = pred[8,4096,144640]{2,1,0:T(8,128)(4,1)} fusion(copy-done.72), kind=kLoop, calls=fused_computation.656 [repeated 7x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717684   87011 2a886c8_compiler_base.cc:2613] constant.3203 = s8[1,8,8]{2,1,0:T(8,128)(4,1)} constant({ { { 0, 0, 0, 0, 0, 0, 0, 0 }, { 0, 1, 0, 0, 0, 0, 0, 0 }, { 0, 1, 2, 0, 0, 0, 0, 0 }, { 0, 1, 2, 3, 0, 0, 0, 0 }, { 0, 1, 2, 3, 4, 0, 0, 0 }, { 0, 1, 2, 3, 4, 5, 0, 0 }, { 0, 1, 2, 3, 4, 5, 6, 0 }, { 0, 1, 2, 3, 4, 5, 6, 7 } } }) [repeated 14x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.723636   87011 2a886c8_compiler_base.cc:2613] custom-call.75 = bf16[8,4096,8,2,64]{1,4,3,2,0:T(8,128)(2,1)} custom-call(), custom_call_target="AllocateBuffer" [repeated 35x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.718116   87011 2a886c8_compiler_base.cc:2613] custom-call.96 = bf16[144640,32]{0,1:T(8,128)(2,1)S(3)} custom-call(slice-done.64, slice-done.65, slice-done.66, slice-done.67), custom_call_target="ConcatBitcast" [repeated 7x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.718577   87011 2a886c8_compiler_base.cc:2613] iota.71 = s32[8,4096,144640]{2,1,0:T(8,128)} iota(), iota_dimension=2 [repeated 42x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.730927   87011 2a886c8_compiler_base.cc:2613] compare.112 = pred[]{:T(512)S(6)} compare(get-tuple-element.7126, constant.1240..sunk.17..sunk), direction=EQ [repeated 63x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.719085   87011 2a886c8_compiler_base.cc:2613] ge.3 = pred[8,4096]{1,0:T(8,128)(4,1)} compare(param_1.2531, broadcast.696), direction=GE [repeated 7x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.730408   87011 2a886c8_compiler_base.cc:2613] constant.3646 = bf16[]{:T(256)} constant(-inf) [repeated 245x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.720498   87011 2a886c8_compiler_base.cc:2608] wide.windowed_dot_general_cond_ag.clone [repeated 7x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.720729   87011 2a886c8_compiler_base.cc:2613] compare.87 = pred[]{:T(512)} compare(get-tuple-element.6053, constant.3029), direction=LT [repeated 35x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.723717   87011 2a886c8_compiler_base.cc:2613] while.122 = (bf16[8,4096,1024]{1,2,0:T(8,128)(2,1)S(3)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, bf16[8,4096,8,2,64]{1,4,3,2,0:T(8,128)(2,1)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, u32[]{:T(128)}, /*index=5*/u32[]{:T(128)}, u32[]{:T(128)}, u32[]{:T(128)}, s32[]{:T(128)}, u32[]{:T(128)}) while(tuple.1219), condition=wide.windowed_dot_general_cond_ag.clone, body=wide.windowed_dot_general_body_ag.sunk.clone.sunk [repeated 7x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.724865   87011 2a886c8_compiler_base.cc:2608] wide.windowed_dot_general_body_ag.sunk.clone.sunk [repeated 7x across cluster]
+(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.731233   87011 2a886c8_compiler_base.cc:2613] partition-id.108 = u32[]{:T(128)S(6)} partition-id() [repeated 35x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 8x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/main/train_lm.py", line 335, in main [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     trainer.train(state, train_loader) [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 541, in train [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     for info in self.training_steps(state, train_loader): [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 519, in training_steps [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     info = self.train_step(state, example) [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 478, in train_step [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs) [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 753, in _maybe_save_jaxpr [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     return fn(*args, **kwargs) [repeated 7x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)            ^^^^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__ [repeated 8x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     return self._call(False, *args, **kwargs) [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     return self.__func__(self.__self__, *args, **kwargs) [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/partitioning.py", line 464, in _call [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static) [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45) jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm. Used 39.74G of 30.75G hbm. Exceeded hbm capacity by 8.99G. [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45) Total hbm usage >= 40.99G: [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     reserved          1.25G  [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     program          39.74G  [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)     arguments            0B  [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45) Output size 0B; shares 0B with arguments. [repeated 4x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45) -------------------- [repeated 7x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these. [repeated 7x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45) Traceback (most recent call last): [repeated 3x across cluster]
+(run_on_pod_ray pid=18884, ip=10.130.0.45)                                                  ^^^^^^^^^^ [repeated 3x across cluster]
 (base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ 
