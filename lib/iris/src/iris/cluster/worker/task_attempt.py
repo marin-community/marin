@@ -402,6 +402,10 @@ class TaskAttempt:
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             if is_task_finished(self.status):
+                # Flush logs to storage before notifying controller, so that
+                # clients who fetch logs immediately after seeing the terminal
+                # state will find complete data on disk.
+                self._log_sink.sync()
                 self._report_state()
             self._cleanup()
             logger.info(
