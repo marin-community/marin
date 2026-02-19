@@ -245,6 +245,18 @@ Effective large batch (`16 x 8192` chunks, `B=131072`, `H=1024`, `V=128256`):
 - `xla/pallas`: `~1.49x`
 - aggregate loss/checksum diffs remained small (loss diff on order `1e-5`).
 
+Additional validation at larger chunk size:
+- Single chunk `B=16384, H=1024, V=128256` (`fwd+bwd`):
+  - `xla`: `~615.30 ms`
+  - `pallas_gpu`: `~419.70 ms`
+  - `xla/pallas`: `~1.47x`
+  - sampled loss/checksum diffs: `0.0`
+- Effective `B=131072` as `8 x 16384` chunks:
+  - `xla_ms`: `~4953.00`
+  - `pallas_ms`: `~3367.07`
+  - `xla/pallas`: `~1.47x`
+  - aggregate diffs remained small (`loss_diff ~3.05e-5`).
+
 ### Forward-only check (unchanged objective sanity)
 - `B=8192, H=1024, V=128256`:
   - `xla`: `~71.88 ms`
