@@ -268,3 +268,132 @@ Custom-backward `logit_soft_cap` check:
   - `xla`: `~71.88 ms`
   - `pallas_gpu`: `~46.71 ms`
   - `xla/pallas`: `~1.54x`
+
+## 2026-02-19 follow-up: BF16 tensor-core backward matmul path
+
+### Change
+- Updated custom GB10 streaming backward in
+  `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
+  - Keep probability/softmax math in `float32`.
+  - Cast `dlogits` to activation dtype (`bf16` on target path) before the two backward GEMMs:
+    - `grad_x`: `dlogits @ W^T`
+    - `grad_w`: `X^T @ dlogits`
+- Rationale:
+  - Prior path used mixed-input GEMMs (`bf16 x float32`), which underutilized fast tensor-core kernels on GB10.
+  - New path restores tensor-core-friendly GEMMs while preserving stable softmax math in `float32`.
+
+### Target performance impact (`precision=None`)
+- Single chunk `fwd+bwd` (`B=8192, H=1024, V=128256`):
+  - `xla`: `~320.91 ms`
+  - `pallas_gpu`: `~188.22 ms`
+  - `xla/pallas`: `~1.70x`
+- Effective large batch (`16 x 8192` chunks, `B=131072`):
+  - `xla_ms`: `~5225.48`
+  - `pallas_ms`: `~3036.75`
+  - `xla/pallas`: `~1.72x`
+  - `loss_diff`: `0.0`
+  - checksum diff remained small (`~7.30e-2` aggregate over all chunks).
+
+### Backward kernel microbenchmark (`B=8192, H=1024, V=128256, v_block=7168`)
+- Old custom backward: `~179.81 ms`
+- New custom backward: `~149.93 ms`
+- Relative: `~1.20x` faster (`~16.6%` lower time).
+
+### Post-change backward block retune check
+- `B=8192`: `v_block=7168` remains best among `{6144, 7168, 8192}`.
+- `B=2048`: `v_block=7168` slightly better than `{6144, 8192}`.
+- `B=1024`: `v_block=6144` remains marginally best.
+- Kept current piecewise policy (`>=8192 -> 7168`, `>=1024 -> 6144`) to preserve best behavior across sampled regimes.
+
+### Numerical parity checks after change
+- Shape: `B=512, H=1024, V=65536`, `fwd+bwd`, `precision=None`
+- `logit_soft_cap=None`:
+  - `loss_diff`: `~1.53e-5`
+  - `gx` diff: mean `~1.90e-6`, max `~6.10e-5`
+  - `gw` diff: mean `~1.82e-14`, max `~3.73e-9`
+- `logit_soft_cap=2.0`:
+  - `loss_diff`: `~9.54e-7`
+  - `gx` diff: mean `~4.01e-8`, max `~3.05e-5`
+  - `gw` diff: mean `~1.16e-13`, max `~7.45e-9`
+- Target shape parity sample (`B=8192, H=1024, V=128256`, `logit_soft_cap=None`):
+  - `loss_diff`: `0.0`
+  - `gx` diff: mean `~1.54e-7`, max `~7.63e-6`
+  - sampled `gw` diff (`64x64` random indices): `0.0`
+
+### Note on precision mode
+- With `precision=jax.lax.Precision.HIGHEST`, this workload can still be slower than XLA.
+- Current tuning target and wins are for the default dispatch regime (`precision=None`), which is the practical training path used in these benchmarks.
+
+## 2026-02-19 follow-up: replace scatter label update with dense one-hot path
+
+### Change
+- Updated the custom backward label subtraction in
+  `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
+  - Old: per-row indexed scatter (`dlogits.at[row_ids, safe_idx].add(...)`).
+  - New: dense one-hot mask (`jax.nn.one_hot`) with masked subtraction.
+- Kept all softmax/logsumexp math and gradient flow unchanged; only the label update primitive changed.
+
+### Why this helps on GB10
+- The scatter path was introducing a major non-matmul hotspot in each vocab tile.
+- The dense one-hot formulation maps better to vectorized fused kernels on this workload, and avoids indexed update overhead.
+
+### Backward-only microbenchmark impact (`logit_soft_cap=None`, `precision=None`)
+- `B=8192, H=1024, V=128256, v_block=7168`:
+  - scatter path: `~146.97 ms`
+  - one-hot path: `~111.62 ms`
+  - relative: `~1.32x` faster.
+- Additional shapes (same `H,V`, tuned `v_block` per shape) showed consistent wins:
+  - `B=1024`: `~1.20x`
+  - `B=2048`: `~1.19x`
+  - `B=4096`: `~1.24x`
+  - `B=8192`: `~1.34x`
+
+### End-to-end `fwd+bwd` impact after one-hot change
+- Single-chunk:
+  - `B=2048`: `xla ~95.52 ms`, `pallas ~51.48 ms`, `~1.86x`
+  - `B=4096`: `xla ~170.12 ms`, `pallas ~84.52 ms`, `~2.01x`
+  - `B=8192`: `xla ~322.52 ms`, `pallas ~153.31 ms`, `~2.10x`
+- Effective large batch (`16 x 8192` chunks, `B=131072`):
+  - `xla_ms`: `~5214.08`
+  - `pallas_ms`: `~2634.95`
+  - `xla/pallas`: `~1.98x`
+  - `loss_diff`: `0.0`
+
+### Tuning update
+- Added an explicit mid-batch backward tile tier:
+  - `B >= 8192 -> 7168`
+  - `B >= 2048 -> 7168`
+  - `B >= 1024 -> 6144`
+- This preserves `B=1024` behavior while improving `B=2048/4096` in sampled runs.
+
+## 2026-02-19 final retune pass (current best)
+
+### Parameter adjustments
+- Forward fallback retuned for large batch:
+  - `GB10_XLA_STREAMING_V_BLOCK_BATCH_8K`: `3584 -> 3072`.
+- Backward policy now includes explicit `>=2048` tier (same tile as `>=8192`):
+  - `B >= 8192 -> 7168`
+  - `B >= 2048 -> 7168`
+  - `B >= 1024 -> 6144`
+
+### End-to-end results (`fwd+bwd`, `precision=None`, current code)
+- `B=2048, H=1024, V=128256`:
+  - `xla`: `~96.54 ms`
+  - `pallas_gpu`: `~49.15 ms`
+  - `xla/pallas`: `~1.96x`
+- `B=4096, H=1024, V=128256`:
+  - `xla`: `~170.62 ms`
+  - `pallas_gpu`: `~86.13 ms`
+  - `xla/pallas`: `~1.98x`
+- `B=8192, H=1024, V=128256`:
+  - `xla`: `~321.67 ms`
+  - `pallas_gpu`: `~156.03 ms`
+  - `xla/pallas`: `~2.06x`
+- Effective `B=131072` as `16 x 8192` chunks:
+  - `xla_ms`: `~5223.43`
+  - `pallas_ms`: `~2519.79`
+  - `xla/pallas`: `~2.07x`
+  - `loss_diff`: `0.0`
+  - Note: `loss_diff=0.0` is expected in this GB10 BF16 configuration because
+    the pallas-gpu route intentionally reuses the same XLA forward implementation
+    and only overrides backward via `custom_vjp`.

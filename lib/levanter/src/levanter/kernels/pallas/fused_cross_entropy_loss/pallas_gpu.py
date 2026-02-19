@@ -21,9 +21,9 @@ _GB10_MAX_H_TILES = 512
 _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_1K = 2048
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_4K = 3072
-_GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3584
+_GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
-_GB10_CUSTOM_BWD_V_BLOCK_BATCH_8K = 8192
+_GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -356,6 +356,9 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
             precision=precision,
         )
     if is_gb10_bf16:
+        # On GB10 BF16 we intentionally keep forward on the XLA streaming path and attach
+        # the custom backward via custom_vjp. This means forward loss/lse parity against
+        # explicit XLA calls is expected to be exact by construction.
         xla_block_sizes = _gb10_xla_fallback_block_sizes(
             b_dim=x.shape[0],
             v_dim=w.shape[1],
@@ -439,7 +442,9 @@ def _gb10_custom_backward_v_block_size(
     if w.shape[1] < 65536:
         return None
     if x.shape[0] >= 8192:
-        return _GB10_CUSTOM_BWD_V_BLOCK_BATCH_8K
+        return _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS
+    if x.shape[0] >= 2048:
+        return _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS
     if x.shape[0] >= 1024:
         return _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K
     return None
@@ -469,13 +474,11 @@ def _backward_streaming_from_lse(
         w_pad = _zero_pad(w, axis=1, multiple=v_block_size, pad_value=0.0)
     num_v_blocks = v_pad // v_block_size
 
-    x_f32 = x.astype(jnp.float32)
     labels_i32 = labels.astype(jnp.int32)
     lse_f32 = lse.astype(jnp.float32)
     g_loss_f32 = g_loss.astype(jnp.float32)
     g_lse_f32 = g_lse.astype(jnp.float32)
     g_softmax = g_loss_f32 + g_lse_f32
-    row_ids = jnp.arange(b_dim, dtype=jnp.int32)
     v_offsets = jnp.arange(v_block_size, dtype=jnp.int32)
 
     grad_x_init = jnp.zeros((b_dim, h_dim), dtype=jnp.float32)
@@ -500,23 +503,25 @@ def _backward_streaming_from_lse(
 
         in_block = (labels_i32 >= v_start) & (labels_i32 < v_start + v_block_size)
         safe_idx = jnp.clip(labels_i32 - v_start, 0, v_block_size - 1)
-        label_updates = jnp.where(in_block, g_loss_f32, 0.0)
-        dlogits = dlogits.at[row_ids, safe_idx].add(-label_updates)
+        label_one_hot = jax.nn.one_hot(safe_idx, v_block_size, dtype=jnp.float32)
+        label_one_hot = label_one_hot * in_block[:, None].astype(jnp.float32)
+        dlogits = dlogits - label_one_hot * g_loss_f32[:, None]
 
         if logit_soft_cap is not None:
             cap = jnp.asarray(logit_soft_cap, dtype=jnp.float32)
             soft_cap_grad = 1.0 - jnp.square(logits / cap)
             dlogits = dlogits * soft_cap_grad
 
+        dlogits_for_matmul = dlogits.astype(x.dtype)
         grad_x_block = jax.lax.dot_general(
-            dlogits,
+            dlogits_for_matmul,
             w_block,
             (((1,), (1,)), ((), ())),
             precision=precision,
         ).astype(jnp.float32)
         grad_w_block = jax.lax.dot_general(
-            x_f32,
-            dlogits,
+            x,
+            dlogits_for_matmul,
             (((0,), (0,)), ((), ())),
             precision=precision,
         ).astype(jnp.float32)
