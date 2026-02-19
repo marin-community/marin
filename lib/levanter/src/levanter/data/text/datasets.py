@@ -104,6 +104,59 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         return out
 
 
+class PrebuiltTokenSeqDataset(AsyncDataset[dict]):
+    """Reads fixed-length chunks from a prebuilt cache's flat JaggedArrayStore arrays.
+
+    Like TokenSeqDataset but returns dicts with both input_ids and (optionally)
+    loss_weights, for use with PrebuiltLmDatasetFormat caches that store
+    variable-length documents.
+    """
+
+    def __init__(
+        self,
+        doc_cache: TreeCache[dict],
+        seq_len: int,
+        input_ids_key: str,
+        loss_weights_key: str | None,
+    ):
+        self.seq_len = seq_len
+        self.input_ids_key = input_ids_key
+        self.loss_weights_key = loss_weights_key
+        self._store: TreeStore | None = doc_cache.store
+
+    async def async_len(self) -> int:
+        store = self._store
+        return store.tree[self.input_ids_key].data_size // self.seq_len
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[dict]:
+        if not indices:
+            return []
+
+        store = self._store
+        seq_len = self.seq_len
+        ids_store = store.tree[self.input_ids_key]
+        offsets = np.array(indices, dtype=np.int64) * seq_len
+
+        with ts.Batch():
+            id_reads = [ids_store.data[off : off + seq_len].read() for off in offsets]
+            if self.loss_weights_key is not None:
+                lw_store = store.tree[self.loss_weights_key]
+                lw_reads = [lw_store.data[off : off + seq_len].read() for off in offsets]
+
+        ids_out = await asyncio.gather(*id_reads)
+        if self.loss_weights_key is not None:
+            lw_out = await asyncio.gather(*lw_reads)
+            return [
+                {self.input_ids_key: ids, self.loss_weights_key: lw}
+                for ids, lw in zip(ids_out, lw_out)
+            ]
+        else:
+            return [{self.input_ids_key: ids} for ids in ids_out]
+
+
 class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
     def __init__(
         self,
@@ -471,8 +524,13 @@ def dataset_for_component(
             block_cross_document_attention=block_cross_document_attention,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
+        if pack and pack != "pad":
+            # Concatenation-chunking like text: read flat arrays at seq_len intervals
+            dataset = PrebuiltTokenSeqDataset(cache, Pos.size, fmt.input_ids_key, fmt.loss_weights_key)
+        else:
+            dataset = cache
         return PrebuiltLmDataset(
-            cache,
+            dataset,
             Pos,
             input_ids_key=fmt.input_ids_key,
             loss_weights_key=fmt.loss_weights_key,
