@@ -19,7 +19,9 @@ from .xla import linear_softmax_cross_entropy_loss_xla
 _GB10_WEIGHT_TILE_BYTES_LIMIT = 101_376
 _GB10_MAX_H_TILES = 512
 _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
-_GB10_XLA_STREAMING_V_BLOCK_LARGE_BATCH = 3072
+_GB10_XLA_STREAMING_V_BLOCK_BATCH_1K = 2048
+_GB10_XLA_STREAMING_V_BLOCK_BATCH_4K = 3072
+_GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3584
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -74,8 +76,14 @@ def _gb10_xla_fallback_block_sizes(
     b_dim: int,
     v_dim: int,
 ) -> BlockSizes | None:
-    if b_dim >= 1024 and v_dim >= 65536:
-        return BlockSizes(v_block_size=_GB10_XLA_STREAMING_V_BLOCK_LARGE_BATCH)
+    if v_dim < 65536:
+        return None
+    if b_dim >= 8192:
+        return BlockSizes(v_block_size=_GB10_XLA_STREAMING_V_BLOCK_BATCH_8K)
+    if b_dim >= 4096:
+        return BlockSizes(v_block_size=_GB10_XLA_STREAMING_V_BLOCK_BATCH_4K)
+    if b_dim >= 1024:
+        return BlockSizes(v_block_size=_GB10_XLA_STREAMING_V_BLOCK_BATCH_1K)
     return None
 
 
