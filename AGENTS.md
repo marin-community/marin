@@ -108,3 +108,10 @@ DO NOT:
 ## Environment
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
+
+## Ray Run Notes
+
+- In shared clusters, `OwnerDiedError`, raylet "missed too many heartbeats" messages, and autoscaler resize logs can be noise from other workloads. Prefer judging health by your *job's* step logs/status and whether `run_on_pod_ray` is retrying preemptions.
+- If a job appears stuck before logging metrics, it is often waiting on TPU slice scheduling (e.g. `SliceActor`/`TPUHostActor` pending creation). Use `uv run python scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs` and `... job-logs <submission_id>` to confirm.
+- Grugformer MoE smoke runs: prefer `--smoke --dataset nemotron_cc --tpu-type v5p-16 --seq-len 1024 --global-batch-size 32 --num-train-steps 20 --dataset-tokenizer meta-llama/Meta-Llama-3.1-8B --legacy-axis-resources`. The launcher defaults to fused (Pallas) CE; `xla` CE will materialize full logits and can OOM at realistic token counts.
+- Grugformer MoE experts: default to the Megablox GMM pathway (`--use-gmm`). The ragged-dot pathway can trigger huge HBM temporaries during compile (e.g. expert-linear shapes like `bf16[64,262144,1024]`) and crash TPU workers; use `--no-use-gmm` only for debugging/ablations.

@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+
 import dataclasses
 from abc import abstractmethod
 from typing import TypeVar
@@ -105,18 +106,18 @@ class LayerNorm(LayerNormBase):
     dtype: jnp.dtype | None = eqx.field(default=None, static=True)
 
     def __call__(self, x: NamedArray) -> NamedArray:
-        dtype = x.dtype
+        in_dtype = x.dtype
         mean = x.mean(self.axis)
         var = x.var(self.axis)
         inv = hax.rsqrt(var + self.eps)
         out = (x - mean) * inv
-        out = out.astype(dtype)
+        out = out.astype(jnp.float32)
 
         if self.weight is not None:
-            out = self.weight * out
+            out = hax.auto_sharded(self.weight).astype(jnp.float32) * out
         if self.bias is not None:
-            out = out + self.bias
-        return out
+            out = out + hax.auto_sharded(self.bias).astype(jnp.float32)
+        return out.astype(in_dtype)
 
 
 class RmsNorm(LayerNormBase):
@@ -130,13 +131,13 @@ class RmsNorm(LayerNormBase):
         var = hax.mean(hax.square(x), axis=self.axis)
         inv = hax.rsqrt(var + self.eps)
         out = x * inv
-        out = out.astype(in_dtype)
+        out = out.astype(jnp.float32)
 
         if self.weight is not None:
-            out = self.weight * out
+            out = hax.auto_sharded(self.weight).astype(jnp.float32) * out
         if self.bias is not None:
-            out = out + self.bias
-        return out
+            out = out + hax.auto_sharded(self.bias).astype(jnp.float32)
+        return out.astype(in_dtype)
 
 
 def logsumexp(a: A, axis: AxisSelection | None = None) -> A:

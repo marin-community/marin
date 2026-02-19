@@ -3,11 +3,9 @@
 
 # nodryrun
 import dataclasses
-import logging
-import os
 from dataclasses import dataclass
-from functools import partial
 from collections.abc import Callable
+from functools import partial
 
 import equinox as eqx
 import jax
@@ -27,38 +25,29 @@ from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 import levanter.tracker
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
+from levanter.layers.normalization import LayerNormConfigBase, RmsNormConfig
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.loss import maybe_fused_next_token_loss
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.mistral import MistralConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.types import BlockFoldable
+from transformers import MixtralConfig as HfMixtralConfig
+from transformers import PretrainedConfig as HfConfig
 
 silence_transformer_nag()
-from transformers import MixtralConfig as HfMixtralConfig  # noqa: E402
-from transformers import PretrainedConfig as HfConfig  # noqa: E402
-
-_logger = logging.getLogger(__name__)
-_LOGGED_LIBTPU_ARGS = False
-
-
-def _log_libtpu_args_once():
-    global _LOGGED_LIBTPU_ARGS
-    if not _LOGGED_LIBTPU_ARGS:
-        args = os.environ.get("LIBTPU_INIT_ARGS", "<unset>")
-        _logger.info("LIBTPU_INIT_ARGS (worker): %s", args)
-        _LOGGED_LIBTPU_ARGS = True
 
 
 @LmConfig.register_subclass("custom_mixtral")
 @dataclass(frozen=True)
-class MixtralConfig(MistralConfig):
+class CustomMixtralConfig(MistralConfig):
     """Config for MistralModel
 
     Args:
-        seq_len (int, optional): maximum length of the input sequence. Defaults to 8192.
+        seq_len (int, optional): model context length / attention window. Defaults to 4096.
         hidden_dim (int, optional): dimension of the hidden state. Defaults to 4096.
         intermediate_dim (int, optional): dimension of the intermediate state. Defaults to 14336.
         num_layers (int, optional): number of hidden layers in the Transformer encoder. Defaults to 32.
@@ -74,7 +63,10 @@ class MixtralConfig(MistralConfig):
         rzl_coef (`float`, optional): aux loss factor for router z-loss. Defaults to 0.001
     """
 
-    seq_len: int = 8192
+    # The base `MistralConfig.max_seq_len` is used by some training codepaths for sanity checks.
+    # We override the default here to match our typical Mixtral runs (seq_len=4096).
+    max_seq_len: int = 4096
+    seq_len: int = 4096
     hidden_dim: int = 4096
     intermediate_dim: int = 14336
     num_layers: int = 32
@@ -93,13 +85,53 @@ class MixtralConfig(MistralConfig):
     rzl_coef: float | None = 0.001
 
     # MoE optimization config
-    use_gmm: bool = False
+    use_gmm: bool = True
+
+    # Expert parallelism (experimental)
+    expert_parallelism: int | None = None
+    # Which mesh axis to use for expert-parallel all-to-all. Defaults to the standard DP axis.
+    expert_mesh_axis: str = "data"
+    expert_logical_axis: str = "experts"
+    enable_expert_dispatch: bool = False
 
     # Attention-related config
     upcast_attn: bool = False
     use_flash_attention: bool | None = True
     attn_backend: AttentionBackend | None = None
     flash_attention_block_size: int | None = None
+
+    # Cross-entropy (next-token loss) optimization config.
+    cross_entropy_block_size: int | None = 1024
+    cross_entropy_b_block_size: int | None = None
+    cross_entropy_h_block_size: int | None = None
+    cross_entropy_implementation: str | None = "legacy"
+    log_moe_metrics: bool = True
+
+    # QK normalization (applies LayerNorm/RMSNorm in attention on q and k vectors).
+    use_qk_norm: bool = False
+    qk_norm: LayerNormConfigBase | None = None
+    qk_norm_eps: float = 1e-6
+
+    # Router/routing knobs.
+    #
+    # If False (default): compute full softmax(router_logits) and renormalize top-k probs.
+    # If True: select top-k experts, then compute a softmax over the selected logits only.
+    router_topk_then_softmax: bool = False
+    # If True: compute router/gating math (logits, selection logits, top-k, softmax, aux terms) in fp32.
+    # This is intended as a stability knob for MoE sweeps; the rest of the model stays in its normal dtype.
+    router_fp32: bool = False
+
+    # DeepSeek-style "auxiliary-free load balancing" (ALF-LB).
+    #
+    # We add a per-layer `router_bias` used only for expert selection, and optionally add an aux term
+    # that produces gradients only for `router_bias` (via stop_gradient), approximating the paper's
+    # bias updates without coupling the main model parameters to an auxiliary loss.
+    alf_lb_loss_scale: float = 0.0
+    alf_lb_use_sign: bool = True
+    alf_lb_center_bias: bool = True
+
+    # Use dense (single-expert) routing for the first N transformer layers.
+    dense_first_n_layers: int = 0
 
     gradient_checkpointing: ScanCheckpointSpec = True
     scan_layers: bool = True
@@ -126,14 +158,15 @@ class MixtralConfig(MistralConfig):
     HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
     def __post_init__(self):
+        # Keep `max_seq_len` >= `seq_len` so `default_train` checks (train_seq_len <= max_seq_len) work,
+        # while still allowing packed sequences longer than the attention window for sliding-window attention.
+        object.__setattr__(self, "max_seq_len", max(self.max_seq_len, self.seq_len))
         super().__post_init__()
         assert (
             self.num_experts_per_tok <= self.n_routed_experts
         ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
 
-    def hf_checkpoint_converter(
-        self, ref_checkpoint: str | None = None
-    ) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
@@ -207,7 +240,7 @@ class MixtralConfig(MistralConfig):
             axis, eps=self.layer_norm_epsilon, use_weight=self.use_layer_norm_weight, use_bias=self.use_bias
         )
 
-    def flops_per_token(self, vocab_size: int, context_length: int):
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
@@ -243,6 +276,9 @@ class MixtralConfig(MistralConfig):
 
     def attention_config(self) -> AttentionConfig:
         """Convert this MixtralConfig to an AttentionConfig for use with Attention."""
+        qk_norm = self.qk_norm
+        if qk_norm is None and self.use_qk_norm:
+            qk_norm = RmsNormConfig(eps=self.qk_norm_eps, use_weight=True, use_bias=False)
         return AttentionConfig(
             Embed=self.Embed,
             num_heads=self.num_heads,
@@ -252,6 +288,7 @@ class MixtralConfig(MistralConfig):
             attn_backend=self.attn_backend,
             flash_attention_block_size=self.flash_attention_block_size,
             rope=self.rope,
+            qk_norm=qk_norm,
         )
 
 
@@ -286,18 +323,33 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
 
     @named_call
     def __call__(self, x: NamedArray, group_sizes: NamedArray, *, key=None) -> NamedArray:
+        """
+        Apply a gated linear unit (GLU) transformation with grouped operations.
+
+        This method implements a feed-forward network layer with gating mechanism,
+        commonly used in transformer-based models like Mixtral. The computation follows
+        the pattern: (W1(x) * activation) * W3(x) -> W2(gated_output).
+
+        Args:
+            x (NamedArray): Input tensor with named dimensions.
+            group_sizes (NamedArray): Array specifying the size of groups for grouped
+                linear transformations. Used to partition the input/output dimensions
+                into groups, enabling efficient computation or mixture-of-experts style
+                processing where different groups are processed separately.
+            key (optional): Random number generator key for reproducibility in
+                stochastic operations. Split into 3 keys for the three linear layers.
+
+        Returns:
+            NamedArray: Output tensor after applying the gated feed-forward
+                transformation, with the same named dimensions as the input.
+        """
         k1, k2, k3 = maybe_rng_split(key, 3)
 
         w1_output = self.w1(x, group_sizes, key=k1)
-
         activated = self.act(w1_output)
-
         w3_output = self.w3(x, group_sizes, key=k3)
-
         gated = activated * w3_output
-
         final_output = self.w2(gated, group_sizes, key=k2)
-
         return final_output
 
     def to_state_dict(self, prefix: str | None = None) -> StateDict:
@@ -313,6 +365,20 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
 
         return out
 
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> "MixtralMoEMlp":
+        w: list[list[Array]] = [[], [], []]
+        num_experts = self.w1.Experts.size
+        for i in range(num_experts):
+            for j in range(3):
+                key = f"{prefix}.{i}.w{j + 1}.weight"
+                val = jnp.swapaxes(state_dict[key], -1, -2)[..., None, :, :]
+                w[j].append(val)
+
+        for j in range(3):
+            w[j] = jnp.concat(w[j], axis=1)
+
+        return eqx.tree_at(lambda m: [m.w1.weight.array, m.w2.weight.array, m.w3.weight.array], self, w)
+
 
 class MixtralSparseMoeBlock(eqx.Module):
     """Mixture-of-Experts"""
@@ -320,6 +386,7 @@ class MixtralSparseMoeBlock(eqx.Module):
     config: MistralConfig = eqx.field(static=True)
     gate: hnn.Linear  # projection from Embed to Experts
     experts: MixtralMoEMlp
+    router_bias: NamedArray
 
     @staticmethod
     def init(config: MistralConfig, *, key) -> "MixtralSparseMoeBlock":
@@ -336,36 +403,54 @@ class MixtralSparseMoeBlock(eqx.Module):
             use_gmm=config.use_gmm,
         )
 
-        return MixtralSparseMoeBlock(config, gate, experts)
+        router_bias = hax.zeros(config.Experts)
 
-    def _route(self, router_probs: NamedArray, Token: Axis, TopExperts: Axis):
+        return MixtralSparseMoeBlock(config, gate, experts, router_bias)
+
+    def _route(
+        self,
+        selection_logits: NamedArray,
+        router_logits: NamedArray,
+        Token: Axis,
+        TopExperts: Axis,
+        *,
+        topk_then_softmax: bool,
+    ):
         @partial(
             shard_map,
             mesh=hax.partitioning._get_mesh(),
-            in_specs=hax.partitioning.pspec_for_axis(router_probs.axes),
+            in_specs=(
+                hax.partitioning.pspec_for_axis(selection_logits.axes),
+                hax.partitioning.pspec_for_axis(router_logits.axes),
+            ),
             out_specs=(
                 hax.partitioning.pspec_for_axis((Token, TopExperts)),
                 hax.partitioning.pspec_for_axis((Token, TopExperts)),
             ),
             check_rep=False,
         )
-        def sharded_route(router_probs_):
-            selected_weights_, selected_experts_ = jax.lax.top_k(router_probs_, TopExperts.size)
-            selected_weights_ = selected_weights_ / selected_weights_.sum(-1, keepdims=True)
+        def sharded_route(selection_logits_: Array, router_logits_: Array):
+            _selected_scores, selected_experts_ = jax.lax.top_k(selection_logits_, TopExperts.size)
+
+            if topk_then_softmax:
+                selected_logits_ = jnp.take_along_axis(router_logits_, selected_experts_, axis=-1)
+                selected_weights_ = jax.nn.softmax(selected_logits_, axis=-1)
+            else:
+                router_probs_ = jax.nn.softmax(router_logits_, axis=-1)
+                selected_weights_ = jnp.take_along_axis(router_probs_, selected_experts_, axis=-1)
+                selected_weights_ = selected_weights_ / selected_weights_.sum(-1, keepdims=True)
 
             return selected_weights_, selected_experts_
 
         with jax.named_scope("route"):
-            selected_weights_, selected_experts_ = sharded_route(router_probs.array)
+            selected_weights_, selected_experts_ = sharded_route(selection_logits.array, router_logits.array)
 
-            selected_weights = NamedArray(selected_weights_, (Token, TopExperts))
-            selected_experts = NamedArray(selected_experts_, (Token, TopExperts))
+            selected_weights = hax.named(selected_weights_, (Token, TopExperts))
+            selected_experts = hax.named(selected_experts_, (Token, TopExperts))
 
         return selected_weights, selected_experts
 
-    def _permute(
-        self, x_flat: NamedArray, topk_idx_flat: NamedArray, TokenRepeat: Axis
-    ) -> tuple[NamedArray, NamedArray, NamedArray, Axis]:
+    def _permute(self, x_flat: NamedArray, topk_idx_flat: NamedArray, TokenRepeat: Axis):
         Experts = self.config.Experts
 
         @partial(
@@ -391,15 +476,11 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         with jax.named_scope("permute"):
             x_repeat_sort_, group_sizes_, sort_idx_ = permute_sharded(x_flat.array, topk_idx_flat.array)
-            # tensor shapes reported inside shard_map are per-shard. Using that raw length to size the axis causes
-            # mismatches once the full global array is materialized (e.g., when calling the GMM kernel).
-            # Instead, keep the original TokenRepeat axis length, which already encodes the global token-repeat count.
-            token_repeat_axis = Axis(TokenRepeat.name, TokenRepeat.size)
-            x_repeat_sort = NamedArray(x_repeat_sort_, (token_repeat_axis, self.config.Embed))
-            group_sizes = NamedArray(group_sizes_, (Experts,))
-            sort_idx = NamedArray(sort_idx_, (token_repeat_axis,))
+            x_repeat_sort = hax.named(x_repeat_sort_, (TokenRepeat, self.config.Embed))
+            group_sizes = hax.named(group_sizes_, (Experts,))
+            sort_idx = hax.named(sort_idx_, (TokenRepeat,))
 
-        return x_repeat_sort, group_sizes, sort_idx, token_repeat_axis
+        return x_repeat_sort, group_sizes, sort_idx
 
     def _unpermute(
         self,
@@ -429,12 +510,12 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         with jax.named_scope("unpermute"):
             out_repeat_unflat_ = unpermute_sharded(out_repeat_sort.array, sort_idx.array)
-            out_repeat_unflat = NamedArray(out_repeat_unflat_, (Token, TopExperts, self.config.Embed))
+            out_repeat_unflat = hax.named(out_repeat_unflat_, (Token, TopExperts, self.config.Embed))
 
         return out_repeat_unflat
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, x: NamedArray, *, key=None, force_dense: bool = False) -> NamedArray:
         if x.has_axis("batch"):
             squash_axes = [x.resolve_axis("batch"), x.resolve_axis(self.config.Pos.name)]
         else:
@@ -447,17 +528,83 @@ class MixtralSparseMoeBlock(eqx.Module):
         x_flat = hax.flatten_axes(x, old_axes=squash_axes, new_axis="token")  # [Batch, Pos, Embed] -> [Token, Embed]
         Token = x_flat.resolve_axis("token")
 
-        router_logits = self.gate(x_flat, key=k_gate)
-
+        # Optionally compute router math in fp32 for numerical stability.
+        router_fp32 = getattr(self.config, "router_fp32", False)
+        x_for_gate = x_flat.astype(jnp.float32) if router_fp32 else x_flat
+        router_logits = self.gate(x_for_gate, key=k_gate)
+        if router_fp32 and router_logits.array.dtype != jnp.float32:
+            router_logits = router_logits.astype(jnp.float32)
         router_probs = hnn.softmax(router_logits, axis=Experts)
 
-        topk_weights, topk_idx = self._route(router_probs, Token, TopExperts)
+        selection_logits = router_logits
+        if getattr(self.config, "alf_lb_loss_scale", 0.0) > 0:
+            bias = self.router_bias
+            if getattr(self.config, "alf_lb_center_bias", True):
+                bias = bias - hax.mean(bias, axis=Experts)
+            if router_fp32 and bias.array.dtype != jnp.float32:
+                bias = bias.astype(jnp.float32)
+            selection_logits = selection_logits + bias
+
+        topk_weights, topk_idx = self._route(
+            selection_logits,
+            router_logits,
+            Token,
+            TopExperts,
+            topk_then_softmax=getattr(self.config, "router_topk_then_softmax", False),
+        )
+        if router_fp32 and topk_weights.array.dtype != x_flat.array.dtype:
+            # Keep routing decisions in fp32, but cast weights back to the model activation dtype to
+            # avoid upcasting the expert weighted-sum (bandwidth/memory).
+            topk_weights = topk_weights.astype(x_flat.array.dtype)
+
+        if force_dense:
+            idx_arr = jnp.zeros_like(topk_idx.array)
+            w_arr = jnp.zeros_like(topk_weights.array)
+            w_arr = w_arr.at[:, 0].set(1.0)
+            topk_weights = hax.named(w_arr, (Token, TopExperts))
+            topk_idx = hax.named(idx_arr, (Token, TopExperts))
 
         topk_idx_flat = hax.flatten_axes(topk_idx, old_axes=[Token, TopExperts], new_axis="token_repeat")
         TokenRepeat = topk_idx_flat.resolve_axis("token_repeat")
-        x_repeat_sort, group_sizes, sort_idx, TokenRepeat = self._permute(x_flat, topk_idx_flat, TokenRepeat)
+        x_repeat_sort, group_sizes, sort_idx = self._permute(x_flat, topk_idx_flat, TokenRepeat)
 
-        out_repeat_sort = self.experts(x_repeat_sort, group_sizes, key=k_experts)
+        if self.config.expert_parallelism is not None:
+            if not self.config.enable_expert_dispatch:
+                raise NotImplementedError(
+                    "expert_parallelism is set, but expert dispatch is disabled. "
+                    "Sharding the 'experts' axis without cross-device token dispatch (e.g. all-to-all) "
+                    "does not implement true expert-parallel MoE."
+                )
+
+            ep_axis = self.config.expert_mesh_axis
+            mesh = hax.partitioning._get_mesh()
+            if mesh is None:
+                raise ValueError("expert_parallelism is set but no JAX mesh is active.")
+            if ep_axis not in mesh.shape:
+                raise ValueError(
+                    f"expert_mesh_axis={ep_axis!r} is not a mesh axis. Available axes: {sorted(mesh.shape.keys())}"
+                )
+
+            ep_size = self.config.expert_parallelism
+            mesh_ep_size = mesh.shape[ep_axis]
+            if mesh_ep_size != ep_size:
+                raise ValueError(
+                    f"expert_parallelism={ep_size} does not match mesh[{ep_axis!r}]={mesh_ep_size}. "
+                    "Adjust your MeshConfig axes or disable expert_parallelism."
+                )
+            if ep_size != self.config.n_routed_experts:
+                raise NotImplementedError(
+                    "Expert dispatch currently requires expert_parallelism == n_routed_experts "
+                    f"({ep_size} != {self.config.n_routed_experts})."
+                )
+
+            raise NotImplementedError(
+                "Expert-parallel dispatch is not implemented yet. "
+                "Set expert_parallelism=None (default) to run with replicated experts, "
+                "or contribute an all-to-all token dispatch implementation here."
+            )
+        else:
+            out_repeat_sort = self.experts(x_repeat_sort, group_sizes, key=k_experts)
 
         out_repeat_unflat = self._unpermute(
             out_repeat_sort, sort_idx, topk_weights, Token, TokenRepeat, TopExperts
@@ -468,20 +615,38 @@ class MixtralSparseMoeBlock(eqx.Module):
         # aux loss
         extras = {}
         expert_loads = group_sizes / hax.sum(group_sizes, axis=Experts)
-
         extras = {
             "expert_loads": expert_loads,
         }
-        if self.config.lbl_coef is not None:
+        if self.config.lbl_coef is not None and getattr(self.config, "alf_lb_loss_scale", 0.0) <= 0:
+            # Shapes:
+            # - expert_loads: [Experts] where Experts.size == n_routed_experts
+            # - router_probs: [Token, Experts] where Token is the flattened token axis (T = B*S)
             f = expert_loads * self.config.n_routed_experts / self.config.num_experts_per_tok
-            p = hax.mean(router_probs, axis=Token)
-            extras["load_balancing_loss"] = self.config.lbl_coef * hax.sum(f * p, axis=Experts)
+            # - f: [Experts]
+            p = hax.mean(router_probs, axis=Token)  # [Token, Experts] -> [Experts]
+            extras["load_balancing_loss"] = self.config.lbl_coef * hax.sum(f * p, axis=Experts)  # [] (scalar)
         if self.config.rzl_coef is not None:
             extras["router_z_loss"] = self.config.rzl_coef * hax.mean(
-                hnn.logsumexp(router_logits, axis=Experts) ** 2, axis=Token
+                # router_logits: [Token, Experts] -> logsumexp: [Token] -> mean over Token: [] (scalar)
+                hnn.logsumexp(router_logits, axis=Experts) ** 2,
+                axis=Token,
             )
 
+        alf_scale = float(getattr(self.config, "alf_lb_loss_scale", 0.0))
+        if alf_scale > 0:
+            target = TokenRepeat.size / Experts.size
+            delta_arr = group_sizes.array - target
+            if getattr(self.config, "alf_lb_use_sign", True):
+                delta_arr = jnp.sign(delta_arr)
+            delta_arr = jax.lax.stop_gradient(delta_arr)
+            delta = hax.named(delta_arr, Experts)
+            extras["alf_lb_bias_loss"] = alf_scale * hax.sum(self.router_bias * delta, axis=Experts)
+
         return hax.unflatten_axis(out, axis=Token, new_axes=squash_axes), extras  # [Batch, Pos, Embed]
+
+
+MixtralConfig = CustomMixtralConfig
 
 
 class MixtralDecoderLayer(eqx.Module):
@@ -491,9 +656,10 @@ class MixtralDecoderLayer(eqx.Module):
     input_layernorm: hnn.RmsNorm
     post_attention_layernorm: hnn.RmsNorm
     shared_mlp: LlamaMlp | None
+    force_dense_moe: bool
 
     @staticmethod
-    def init(config: MistralConfig, *, key) -> "MixtralDecoderLayer":
+    def init(config: MistralConfig, force_dense_moe: bool = False, *, key) -> "MixtralDecoderLayer":
         k_attn, k_moe, k_mlp = jrandom.split(key, 3)
 
         attn_config = config.attention_config()
@@ -510,7 +676,15 @@ class MixtralDecoderLayer(eqx.Module):
                 key=k_mlp,
                 use_bias=config.use_bias,
             )
-        return MixtralDecoderLayer(config, attn, block_sparse_moe, ln_1, ln_2, shared_mlp)
+        return MixtralDecoderLayer(
+            config,
+            attn,
+            block_sparse_moe,
+            ln_1,
+            ln_2,
+            shared_mlp,
+            bool(force_dense_moe),
+        )
 
     @named_call
     def __call__(self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None) -> NamedArray:
@@ -525,7 +699,7 @@ class MixtralDecoderLayer(eqx.Module):
         residual = x
         x = self.post_attention_layernorm(x)
         mlp_output = self.shared_mlp(x, key=k_mlp) if self.shared_mlp is not None else 0
-        moe_output, extras = self.block_sparse_moe(x, key=k_mlp)
+        moe_output, extras = self.block_sparse_moe(x, key=k_mlp, force_dense=self.force_dense_moe)
         output = residual + mlp_output + moe_output
         return output, extras
 
@@ -545,6 +719,7 @@ class MixtralTransformer(eqx.Module):
 
         layers = S.init(config.Layers, MixtralDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
             config,
+            force_dense_moe=False,
             key=shaped_rng_split(key, config.num_layers),
         )
         ln_f = config.mk_LayerNorm(config.Embed)
@@ -555,31 +730,44 @@ class MixtralTransformer(eqx.Module):
     def __call__(
         self, x: NamedArray, attn_mask: NamedArray | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
-        _log_libtpu_args_once()
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x, extras = self.layers.scan(x, mask=attn_mask, key=keys)
         x = self.norm(x)
 
-        # moe logging
-        expert_loads = extras["expert_loads"]
-        entropy = -hax.sum(expert_loads * hax.log(expert_loads + 1e-6), axis=self.config.Experts)
-
-        stats = {}
-        for i in range(self.config.num_layers):
-            stats[f"moe/layer{i}/routing_entropy"] = jax.lax.stop_gradient(entropy.array[i])
-            for j in range(self.config.n_routed_experts):
-                stats[f"moe/layer{i}/expert{j}_load"] = jax.lax.stop_gradient(expert_loads.array[i, j])
-
-        if self.config.lbl_coef is not None:
+        if "load_balancing_loss" in extras:
             extras["load_balancing_loss"] = hax.sum(extras["load_balancing_loss"], axis=self.config.Layers)
-            # Use stop_gradient to ensure concrete values are logged, not tracers
-            stats["train/load_balancing_loss"] = jax.lax.stop_gradient(extras["load_balancing_loss"].array)
-        if self.config.rzl_coef is not None:
+        if "router_z_loss" in extras:
             extras["router_z_loss"] = hax.sum(extras["router_z_loss"], axis=self.config.Layers)
-            # Use stop_gradient to ensure concrete values are logged, not tracers
+        if "alf_lb_bias_loss" in extras:
+            extras["alf_lb_bias_loss"] = hax.sum(extras["alf_lb_bias_loss"], axis=self.config.Layers)
+        stats: dict[str, Array] = {}
+        if "load_balancing_loss" in extras:
+            stats["train/load_balancing_loss"] = jax.lax.stop_gradient(extras["load_balancing_loss"].array)
+        if "router_z_loss" in extras:
             stats["train/router_z_loss"] = jax.lax.stop_gradient(extras["router_z_loss"].array)
+        if "alf_lb_bias_loss" in extras:
+            stats["train/alf_lb_bias_loss"] = jax.lax.stop_gradient(extras["alf_lb_bias_loss"].array)
 
-        levanter.tracker.jit_log(stats)
+        if self.config.log_moe_metrics:
+            expert_loads = extras["expert_loads"]
+            entropy = -hax.sum(expert_loads * hax.log(expert_loads + 1e-6), axis=self.config.Experts)
+            load_violation = expert_loads * self.config.n_routed_experts - 1.0
+            load_violation_max = hax.max(load_violation, axis=self.config.Experts)
+            global_load_violation_max = hax.max(load_violation_max, axis=self.config.Layers)
+
+            for i in range(self.config.num_layers):
+                stats[f"moe/layer{i}/routing_entropy"] = jax.lax.stop_gradient(entropy.array[i])
+                stats[f"moe/layer{i}/load_violation_max"] = jax.lax.stop_gradient(load_violation_max.array[i])
+                for j in range(self.config.n_routed_experts):
+                    stats[f"moe/layer{i}/expert{j}_load"] = jax.lax.stop_gradient(expert_loads.array[i, j])
+            stats["moe/load_violation_max"] = jax.lax.stop_gradient(global_load_violation_max.array)
+            dense_first_n_layers = int(getattr(self.config, "dense_first_n_layers", 0) or 0)
+            if 0 < dense_first_n_layers < self.config.num_layers:
+                sparse_layers = jnp.arange(self.config.num_layers) >= dense_first_n_layers
+                sparse_load_violation_max = jnp.where(sparse_layers, load_violation_max.array, -jnp.inf)
+                stats["moe/load_violation_max_sparse_layers"] = jax.lax.stop_gradient(jnp.max(sparse_load_violation_max))
+        if stats:
+            levanter.tracker.jit_log(stats)
 
         return x, extras
 
@@ -661,10 +849,12 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
         x, extras = self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids)
 
         aux_loss = 0
-        if self.config.lbl_coef is not None:
+        if "load_balancing_loss" in extras:
             aux_loss += extras["load_balancing_loss"]
-        if self.config.rzl_coef is not None:
+        if "router_z_loss" in extras:
             aux_loss += extras["router_z_loss"]
+        if "alf_lb_bias_loss" in extras:
+            aux_loss += extras["alf_lb_bias_loss"]
         return x, aux_loss
 
     def get_lm_head(self) -> hax.NamedArray:
@@ -672,6 +862,50 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
             return self.embeddings.token_embeddings.weight
         else:
             return self.lm_head.weight
+
+    def compute_next_token_loss(  # type: ignore[override]
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: hax.ReductionFunction | None = hax.mean,
+        reduction_axis: hax.AxisSelection | None = None,
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype | None = jnp.float32,
+        logit_soft_cap: float | None = None,
+    ) -> jnp.ndarray | NamedArray:
+        activations = self.activations(example.tokens, example.attn_mask, key=key)
+
+        aux_loss = 0
+        if isinstance(activations, tuple):
+            activations, aux_loss = activations
+
+        implementation = self.config.cross_entropy_implementation or "auto"
+        if implementation in ("auto", "pallas_tpu", "legacy"):
+            block_size = self.config.cross_entropy_block_size
+            if block_size is None:
+                raise ValueError("cross_entropy_block_size must be set for fused cross-entropy")
+        elif implementation in ("xla", "reference"):
+            block_size = None
+        else:
+            raise ValueError(f"Unknown cross_entropy_implementation: {implementation!r}")
+
+        loss = maybe_fused_next_token_loss(
+            self.Pos,
+            self.Embed,
+            self.Vocab,
+            activations,
+            self.get_lm_head(),
+            example.tokens,
+            loss_weight=example.loss_weight,
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            block_size=block_size,
+            dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
+        )
+        return loss + aux_loss
 
     def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[MixtralConfig]":
         new_Vocab = self.Vocab.resize(new_size)

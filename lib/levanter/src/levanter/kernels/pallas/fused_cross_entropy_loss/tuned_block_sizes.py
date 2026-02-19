@@ -58,6 +58,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             h_block_size=512,
             v_block_size=1024,
         ),
+        ("bfloat16", "large-batch-h4096"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=512,
+        ),
         ("bfloat16", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
@@ -77,6 +82,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             b_block_size=1024,
             h_block_size=512,
             v_block_size=1024,
+        ),
+        ("float32", "large-batch-h4096"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=512,
         ),
         ("float32", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
@@ -176,6 +186,15 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         v_max=131072,
     ),
     ShapeBucket(
+        name="large-batch-h4096",
+        b_min=32768,
+        b_max=131072,
+        h_min=4096,
+        h_max=4096,
+        v_min=120000,
+        v_max=131072,
+    ),
+    ShapeBucket(
         name="large-batch-small-h",
         b_min=32768,
         b_max=131072,
@@ -252,15 +271,47 @@ def infer_block_sizes(
     device_key = _device_key(device_kind)
     bucket = _shape_bucket(b, h, v)
 
+    # The Pallas TPU fused CE kernel materializes multiple [b_block, v_block] buffers in VMEM.
+    # Choosing too-large v-blocks can exceed the default scoped VMEM limit (commonly 16MiB) and
+    # crash with `RESOURCE_EXHAUSTED: Ran out of memory in memory space vmem`.
+    #
+    # We cap v_block_size conservatively based on the chosen b_block_size and dtype to keep runs
+    # robust, even when the tuned table is missing a specific device key.
+    def _cap_v_block_size(block_sizes: BlockSizes) -> BlockSizes:
+        if dtype is None:
+            return block_sizes
+        b_block_size = int(block_sizes.b_block_size)
+        if b_block_size <= 0:
+            return block_sizes
+
+        bytes_per_element = int(jnp.dtype(dtype).itemsize)
+        # Empirically, the forward kernel tends to need a few [B,V] buffers at once (logits, exp, etc.).
+        # Target ~12MiB for those buffers to leave headroom for inputs/outputs/scratch under a 16MiB cap.
+        vmem_target_bytes = 12 * 1024 * 1024
+        vmem_buffers = 3
+        v_max = vmem_target_bytes // (vmem_buffers * b_block_size * bytes_per_element)
+        v_max = max(128, 128 * (int(v_max) // 128))
+        if v_max <= 0:
+            return block_sizes
+
+        v_capped = min(int(block_sizes.v_block_size), v_max)
+        if v_capped == int(block_sizes.v_block_size):
+            return block_sizes
+        return BlockSizes(
+            b_block_size=block_sizes.b_block_size,
+            h_block_size=block_sizes.h_block_size,
+            v_block_size=v_capped,
+        )
+
     if dtype_name and bucket:
         for key in (device_key, DEFAULT_DEVICE_KEY):
             if not key:
                 continue
             entry = TUNED_BLOCK_SIZES.get(key, {}).get((dtype_name, bucket))
             if entry is not None:
-                return entry
+                return _cap_v_block_size(entry)
 
-    return BlockSizes.get_default()
+    return _cap_v_block_size(BlockSizes.get_default())
 
 
 def infer_xla_v_block_size(

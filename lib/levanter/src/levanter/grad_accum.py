@@ -13,7 +13,7 @@ from haliax import Axis
 from haliax.partitioning import ResourceAxis
 from haliax.util import is_named_array
 from jax.lax import with_sharding_constraint
-from jax.sharding import PartitionSpec
+from jax.sharding import NamedSharding, PartitionSpec
 
 from levanter.metrics import Metric
 from levanter.metrics import fold as fold_metric
@@ -171,14 +171,35 @@ def microbatched(
 
 
 def _reshape_for_microbatch(Batch: Axis, Microbatch: Axis, AccumStep: Axis, inputs, axis_mapping):
+    def _reshape_with_out_sharding(array, *, batch_dim: int):
+        new_shape = array.shape[:batch_dim] + (AccumStep.size, Microbatch.size) + array.shape[batch_dim + 1 :]
+        sharding = getattr(array, "sharding", None)
+        if sharding is None:
+            aval = getattr(array, "aval", None)
+            sharding = getattr(aval, "sharding", None) if aval is not None else None
+
+        if isinstance(sharding, NamedSharding):
+            in_spec = tuple(sharding.spec)
+            out_spec = (*in_spec[:batch_dim], None, in_spec[batch_dim], *in_spec[batch_dim + 1 :])
+            out_sharding = NamedSharding(sharding.mesh, PartitionSpec(*out_spec))
+            return jax.lax.reshape(array, new_sizes=new_shape, out_sharding=out_sharding)
+
+        return array.reshape(new_shape)
+
     def _reshape(x):
         if isinstance(x, hax.NamedArray):
-            if not x.has_axis(Batch.name):
+            batch_dim = x.axis_indices(Batch)
+            if batch_dim is None:
                 return x
-            x = x.unflatten_axis(Batch, (AccumStep, Microbatch))
+            new_array = _reshape_with_out_sharding(x.array, batch_dim=batch_dim)
+            new_axes = list(x.axes)
+            new_axes[batch_dim : batch_dim + 1] = [AccumStep, Microbatch]
+            x = hax.NamedArray(new_array, tuple(new_axes))
             return hax.shard(x, axis_mapping)
         elif isinstance(x, jnp.ndarray):
-            x = x.reshape((AccumStep.size, Microbatch.size) + x.shape[1:])
+            if not x.shape or x.shape[0] != Batch.size:
+                return x
+            x = _reshape_with_out_sharding(x, batch_dim=0)
             return with_sharding_constraint(x, PartitionSpec(None, ResourceAxis.DATA, *(None,) * (len(x.shape) - 2)))
         else:
             # assert jnp.isscalar(x)

@@ -8,16 +8,31 @@ import logging
 import math
 import os
 import sys
+import json
+
+import fsspec
+import jmp
 from collections.abc import Sequence
 
 from experiments.defaults import default_train
+from experiments.evals.task_configs import convert_to_levanter_task_config
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
-from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
+from experiments.pretraining_datasets.dclm import (
+    DCLM_MIXTURE_WEIGHTS,
+    dclm_components_llama3,
+    dclm_mixture_config_llama3,
+)
 from experiments.llama import llama3_tokenizer
 from experiments.speedrun.custom_mixtral import MixtralConfig
+from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from levanter.infra.cli_helpers import load_config
+from levanter.checkpoint import discover_latest_checkpoint
+from levanter.distributed import RayConfig
+from levanter.eval_harness import EvalHarnessMainConfig, LmEvalHarnessConfig, run_eval_harness_main
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main, output_path_of
 from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results
@@ -26,11 +41,77 @@ from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 logger = logging.getLogger("ray")
 
 # ---------------------------------------------------------------------------
+# Levanter eval-harness helper (shared by multiple launchers).
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class LevanterEvalHarnessStepConfig:
+    """Config for running Levanter's eval-harness on a Levanter (non-HF) checkpoint."""
+
+    model_name: str
+    model_config: object
+    tokenizer: str
+    checkpoint_root: str
+    evals: tuple
+    max_eval_instances: int | None
+    output_path: str
+    wandb_project: str
+    apply_chat_template: bool = False
+    wandb_group: str | None = None
+
+
+def run_levanter_checkpoint_eval_harness(config: LevanterEvalHarnessStepConfig) -> None:
+    checkpoint_path = discover_latest_checkpoint(config.checkpoint_root)
+    if checkpoint_path is None:
+        raise ValueError(f"No checkpoints found under {config.checkpoint_root}")
+
+    trainer_config = TrainerConfig(
+        tracker=WandbConfig(
+            entity=os.environ.get("WANDB_ENTITY"),
+            project=config.wandb_project,
+            tags=["eval_harness"],
+            name=config.model_name,
+            group=config.wandb_group,
+            mode=os.environ.get("WANDB_MODE"),
+        ),
+        mp=jmp.get_policy("p=f32,c=bfloat16"),
+        per_device_eval_parallelism=1,
+        ray=RayConfig(auto_start_cluster=False),
+    )
+
+    eval_config = EvalHarnessMainConfig(
+        eval_harness=LmEvalHarnessConfig(
+            task_spec=convert_to_levanter_task_config(config.evals),
+            max_examples=config.max_eval_instances,
+            log_samples=False,
+            confirm_run_unsafe_code=True,
+        ),
+        tokenizer=config.tokenizer,
+        checkpoint_path=checkpoint_path,
+        checkpoint_is_hf=False,
+        apply_chat_template=config.apply_chat_template,
+        trainer=trainer_config,
+        model=config.model_config,  # type: ignore[arg-type]
+    )
+
+    results = run_eval_harness_main(eval_config)
+
+    fs = fsspec.filesystem("gcs") if config.output_path.startswith("gs://") else fsspec.filesystem("file")
+    output_path = config.output_path.rstrip("/") + "/results.json"
+    with fs.open(output_path, "w") as f:
+        json.dump(results, f, indent=2, default=str)
+
+
+# ---------------------------------------------------------------------------
 # Shared experiment knobs (mirrors the dense baseline for flop matching)
 # ---------------------------------------------------------------------------
 SEQ_LEN = 2048
 DEFAULT_GLOBAL_BATCH_SIZE = 64
 TOKEN_TARGET = 40_000_000_000  # 40B tokens
+DEFAULT_TOKEN_TARGET = TOKEN_TARGET
+# Composite Nemotron+DCLM+FineWeb mixture budget (used by other launchers).
+COMPOSITE_TOKEN_TARGET = 100_000_000_000  # 100B tokens
 NUM_TRAIN_STEPS = math.ceil(TOKEN_TARGET / (DEFAULT_GLOBAL_BATCH_SIZE * SEQ_LEN))
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.1
@@ -104,9 +185,28 @@ nemotron_cc_mixture = lm_mixture_data_config(
     weights=NEMOTRON_WEIGHTS,
 )
 
+
+# Composite mixture: Nemotron CC + DCLM + FineWeb-Edu 10B subcache.
+# Weights are expressed in approximate corpus TiB sizes (mirrors existing per-corpus weights).
+nemotron_dclm_fineweb_10b_components = {
+    **nemotron_cc_steps,
+    **dclm_components_llama3,
+    "fineweb_edu/10b": fineweb_edu_subcache_10B,
+}
+nemotron_dclm_fineweb_10b_weights = {
+    **NEMOTRON_WEIGHTS,
+    **DCLM_MIXTURE_WEIGHTS,
+    "fineweb_edu/10b": 0.01,
+}
+nemotron_dclm_fineweb_10b_mixture = lm_mixture_data_config(
+    components=nemotron_dclm_fineweb_10b_components,
+    weights=nemotron_dclm_fineweb_10b_weights,
+)
+
 DATASET_OPTIONS = {
     "nemotron_cc": nemotron_cc_mixture,
     "dclm": dclm_mixture_config_llama3,
+    "nemotron_dclm_fineweb_10b": nemotron_dclm_fineweb_10b_mixture,
 }
 DEFAULT_DATASET = "nemotron_cc"
 

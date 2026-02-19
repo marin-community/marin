@@ -11,5 +11,14 @@ Pbatch = P(("data",))
 Pvocab = P(None, None)
 
 
+def Pbatch_moe() -> P:
+    """PartitionSpec for batch/token axes in MoE experiments.
+
+    Shards the leading (batch or token) dimension over (`replica`, `data`) so it matches
+    the legacy axis_resources mapping used by high-MFU MoE runs.
+    """
+    return P(("replica", "data"))
+
+
 def unshard(x: jax.Array) -> jax.Array:
     return reshard(x, P((None,)))
