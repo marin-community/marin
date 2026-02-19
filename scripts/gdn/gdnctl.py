@@ -53,6 +53,11 @@ CODEX_REASONING_VARIANT_RE = re.compile(
     r"unknown variant `(?P<requested>[^`]+)`, expected one of (?P<expected>.+?)\s+in `model_reasoning_effort`",
     re.DOTALL,
 )
+CODEX_FILE_UPDATE_HEADER_RE = re.compile(r"^file (update|create|add|delete|rename):")
+CODEX_DIFF_LINE_RE = re.compile(
+    r"^(diff --git |index [0-9a-f]+\.\.[0-9a-f]+|--- |\+\+\+ |@@ |\\ No newline at end of file$|"
+    r"new file mode |deleted file mode |similarity index |rename from |rename to |old mode |new mode |Binary files |[ +-].*)"
+)
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -82,6 +87,58 @@ def _run(
         capture_output=capture_output,
         check=check,
     )
+
+
+def _run_streaming(
+    cmd: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    input_text: str | None = None,
+    check: bool = True,
+    extra_env: dict[str, str] | None = None,
+    hide_codex_file_updates: bool = False,
+) -> int:
+    _echo_cmd(cmd)
+    env = None
+    if extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
+
+    proc = subprocess.Popen(
+        list(cmd),
+        cwd=str(cwd or REPO_ROOT),
+        env=env,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    if input_text is not None and proc.stdin is not None:
+        proc.stdin.write(input_text)
+        proc.stdin.close()
+
+    suppressing_diff = False
+    if proc.stdout is not None:
+        for line in proc.stdout:
+            line_text = line.rstrip("\n")
+            stripped = line_text.strip()
+            if hide_codex_file_updates:
+                if CODEX_FILE_UPDATE_HEADER_RE.match(stripped):
+                    suppressing_diff = True
+                    continue
+                if suppressing_diff:
+                    if stripped == "" or CODEX_DIFF_LINE_RE.match(line_text):
+                        continue
+                    suppressing_diff = False
+            sys.stdout.write(line)
+            sys.stdout.flush()
+
+    return_code = proc.wait()
+    if check and return_code != 0:
+        raise subprocess.CalledProcessError(return_code, list(cmd))
+    return return_code
 
 
 def _git_head(cwd: Path) -> str:
@@ -666,7 +723,13 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
         cmd.append("-")
 
-        rc = _run(cmd, cwd=workdir, input_text=prompt, check=False).returncode
+        rc = _run_streaming(
+            cmd,
+            cwd=workdir,
+            input_text=prompt,
+            check=False,
+            hide_codex_file_updates=not args.show_file_updates,
+        )
 
         if rc != 0:
             failures += 1
@@ -836,6 +899,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     codex_loop.add_argument("--codex-profile", default=None, help="Codex CLI profile")
     codex_loop.add_argument("--search", action="store_true", help="Enable Codex web search tool")
+    codex_loop.add_argument(
+        "--show-file-updates",
+        action="store_true",
+        help="Show Codex `file update:` diff blocks in loop output.",
+    )
     codex_loop.add_argument(
         "--directive",
         action="append",

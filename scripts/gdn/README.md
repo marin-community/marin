@@ -54,6 +54,8 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --no-commit-policy count-failure
 ```
 
+By default, `codex-loop` hides noisy `file update:` / `diff --git` blocks from Codex output. Use `--show-file-updates` to display them.
+
 Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`
 - session directive presets:
