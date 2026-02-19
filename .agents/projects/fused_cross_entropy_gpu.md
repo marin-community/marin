@@ -148,3 +148,54 @@ Forward+backward aggregate (loss mean, grads wrt `x` and `w`):
 - `pre-commit` passing after each tuning step.
 - On GB10 for the measured regimes, current `pallas_gpu` route is faster than `xla` with acceptable numerics, including `fwd+bwd`.
 - Remaining gap: speedup in `fwd+bwd` is real but smaller than forward-only; further gains likely require deeper backward-path work (or more direct fused backward kernels) rather than only fallback block retuning.
+
+## 2026-02-19 custom backward implementation update
+
+### What was implemented
+- Added a custom VJP path for:
+  - `linear_softmax_cross_entropy_loss_pallas_gpu` in
+    `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`.
+- Structure:
+  - Forward path remains routed by existing GB10 policy (reference / XLA-streaming / tiled Pallas).
+  - Backward now has a GB10-specialized streaming kernel (`_backward_streaming_from_lse`) for the large-batch BF16 fallback regime.
+  - For other regimes/devices, backward falls back to `jax.vjp` of the implementation path.
+- New backward math:
+  - Uses saved per-row `lse` from forward.
+  - Streams over vocab blocks, computes `probs = exp(logits - lse)`, applies cotangents for `(loss, lse)`, subtracts label contribution, applies optional soft-cap derivative, accumulates `grad_x` and per-block `grad_w`.
+  - Accumulates in `float32`, returns gradients in primal dtypes (`x.dtype`, `w.dtype`) to match existing behavior.
+
+### Why this aligns with Blackwell-inspired learnings (within current constraints)
+- Could not use direct `tcgen05` Blackwell path on this GB10 stack due toolchain instruction support limits.
+- Applied the transferable principles anyway:
+  - streaming/reduction over V (avoid giant intermediates),
+  - stable normalization with saved `lse`,
+  - block-wise accumulation and explicit epilogue-style gradient updates,
+  - route-specific tuning (`v_block`) by workload regime.
+
+### Benchmarks after custom backward
+
+#### Single chunk `fwd+bwd`
+- Shape: `B=8192, H=1024, V=128256`
+- `xla`: `~319.17 ms`
+- `pallas_gpu`: `~226.27 ms`
+- speedup: `xla/pallas ~1.41x`
+- `loss_diff`: `0.0` in sampled run
+
+#### Effective large batch `fwd+bwd` (chunked)
+- Effective `B=131072` as `16 x B=8192`, `H=1024`, `V=128256`
+- `xla_ms`: `~5180.49`
+- `pallas_ms`: `~3663.89`
+- speedup: `xla/pallas ~1.414x`
+- aggregate diffs stayed small:
+  - `loss_abs_diff ~3.05e-05`
+  - checksum diff in low `1e-06` range
+
+#### Additional sampled numerical checks (smaller shape)
+- Shape: `B=256, H=1024, V=65536` (`fwd+bwd`)
+- `loss_diff`: `0.0`
+- `gx` diff: mean `~3.8e-06`, max `~1.22e-04`
+- sampled `gw` diff: `0.0` in tested slice
+
+### Notes
+- This pass materially improves backward throughput for the target GB10 large-batch regime.
+- Next optimization frontier is likely deeper kernel-level scheduling/fusion (once toolchain supports the relevant Blackwell instruction path), not just fallback block retuning.
