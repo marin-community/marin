@@ -21,7 +21,6 @@ from pathlib import Path
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
-from iris.cluster.platform.bootstrap import WorkerBootstrap
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
@@ -722,7 +721,7 @@ def create_autoscaler(
     autoscaler_config: config_pb2.AutoscalerConfig,
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     label_prefix: str,
-    worker_bootstrap: WorkerBootstrap | None = None,
+    bootstrap_config: config_pb2.BootstrapConfig | None = None,
     threads: ThreadContainer | None = None,
 ):
     """Create autoscaler from Platform and explicit config.
@@ -732,7 +731,8 @@ def create_autoscaler(
         autoscaler_config: Autoscaler settings (already resolved with defaults)
         scale_groups: Map of scale group name to config
         label_prefix: Prefix for labels on managed resources
-        worker_bootstrap: WorkerBootstrap for initializing new VMs (None disables bootstrap)
+        bootstrap_config: Worker bootstrap settings passed through to platform.create_slice().
+            None disables bootstrap (test/local mode).
         threads: Thread container for background threads. Uses global default if not provided.
 
     Returns:
@@ -767,5 +767,5 @@ def create_autoscaler(
         scale_groups=scaling_groups,
         config=autoscaler_config,
         platform=platform,
-        worker_bootstrap=worker_bootstrap,
+        bootstrap_config=bootstrap_config,
     )
