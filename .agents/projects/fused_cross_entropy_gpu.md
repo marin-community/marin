@@ -255,7 +255,13 @@ Additional validation at larger chunk size:
   - `xla_ms`: `~4953.00`
   - `pallas_ms`: `~3367.07`
   - `xla/pallas`: `~1.47x`
-  - aggregate diffs remained small (`loss_diff ~3.05e-5`).
+- aggregate diffs remained small (`loss_diff ~3.05e-5`).
+
+Custom-backward `logit_soft_cap` check:
+- Shape: `B=512, H=1024, V=65536`, `logit_soft_cap=2.0`, `fwd+bwd`
+- `loss_diff`: `0.0`
+- `gx` diff: mean `~3.66e-08`, max `~3.05e-05`
+- sampled `gw` diff: mean `~9.33e-14`, max `~1.86e-09`
 
 ### Forward-only check (unchanged objective sanity)
 - `B=8192, H=1024, V=128256`:
