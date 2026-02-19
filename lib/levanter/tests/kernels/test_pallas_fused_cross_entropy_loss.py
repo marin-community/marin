@@ -290,6 +290,19 @@ def test_infer_block_sizes_respects_local_batch_and_hidden_divisibility():
     assert 768 % block_sizes.h_block_size == 0
 
 
+def test_infer_block_sizes_huge_batch_llama3_uses_small_v_block():
+    block_sizes = infer_block_sizes(
+        b=262_144,
+        h=4096,
+        v=128_256,
+        dtype=jnp.bfloat16,
+        device_kind="TPU v5p",
+    )
+    assert block_sizes.b_block_size == 1024
+    assert block_sizes.h_block_size == 512
+    assert block_sizes.v_block_size == 256
+
+
 def test_fused_cross_entropy_default_non_divisible_vocab_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")

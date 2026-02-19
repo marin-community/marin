@@ -68,6 +68,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             h_block_size=256,
             v_block_size=2048,
         ),
+        ("bfloat16", "huge-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=256,
+        ),
         ("float32", "small-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
@@ -87,6 +92,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             b_block_size=1024,
             h_block_size=256,
             v_block_size=2048,
+        ),
+        ("float32", "huge-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=256,
         ),
     },
     "TPU v5": {
@@ -110,6 +120,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             h_block_size=256,
             v_block_size=2048,
         ),
+        ("bfloat16", "huge-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=256,
+        ),
         ("float32", "small-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
@@ -129,6 +144,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             b_block_size=1024,
             h_block_size=256,
             v_block_size=2048,
+        ),
+        ("float32", "huge-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=256,
         ),
     },
     "TPU v4": {
@@ -170,6 +190,15 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         name="llama3-ish",
         b_min=4096,
         b_max=16384,
+        h_min=4096,
+        h_max=4096,
+        v_min=120000,
+        v_max=131072,
+    ),
+    ShapeBucket(
+        name="huge-batch-llama3-ish",
+        b_min=65536,
+        b_max=1048576,
         h_min=4096,
         h_max=4096,
         v_min=120000,
