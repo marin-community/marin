@@ -58,7 +58,7 @@ def test_multiple_jobs_complete(cluster):
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(60)
 def test_command_parent_callable_child(cluster):
     """Command entrypoint parent submits a callable child job via iris_ctx().
 
@@ -76,7 +76,7 @@ def test_command_parent_callable_child(cluster):
         "ep = Entrypoint.from_callable(lambda: 'ok'); "
         "job = ctx.client.submit(ep, 'child-callable', "
         "ResourceSpec(cpu=1, memory='1g'), environment=EnvironmentSpec()); "
-        "job.wait(timeout=120, raise_on_failure=True)"
+        "job.wait(timeout=60, raise_on_failure=True)"
     )
 
     entrypoint = Entrypoint.from_command("python", "-c", parent_script)
@@ -86,7 +86,7 @@ def test_command_parent_callable_child(cluster):
         resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),
     )
-    job.wait(timeout=90, raise_on_failure=True, stream_logs=True)
+    job.wait(timeout=60, raise_on_failure=True, stream_logs=True)
 
 
 # ---------------------------------------------------------------------------

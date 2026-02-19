@@ -26,14 +26,14 @@ def test_bundle_download_intermittent(cluster):
         "worker.bundle_download", failure_rate=0.5, max_failures=2, error=RuntimeError("chaos: download failed")
     )
     job = cluster.submit(_quick, "bundle-fail", max_retries_failure=3)
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_task_timeout(cluster, sentinel):
     """Task times out, marked FAILED."""
-    job = cluster.submit(_block, "timeout-test", sentinel, timeout=Duration.from_seconds(5))
-    status = cluster.wait(job, timeout=30)
+    job = cluster.submit(_block, "timeout-test", sentinel, timeout=Duration.from_seconds(2))
+    status = cluster.wait(job, timeout=15)
     assert status.state == cluster_pb2.JOB_STATE_FAILED
 
 
@@ -49,9 +49,9 @@ def test_coscheduled_sibling_failure(cluster):
         "cosched-fail",
         coscheduling=CoschedulingConfig(group_by="tpu-name"),
         replicas=2,
-        scheduling_timeout=Duration.from_seconds(30),
+        scheduling_timeout=Duration.from_seconds(5),
     )
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
@@ -59,7 +59,7 @@ def test_retry_budget_exact(cluster):
     """Task fails exactly N-1 times, succeeds on last attempt."""
     enable_chaos("worker.create_container", failure_rate=1.0, max_failures=2, error=RuntimeError("chaos: transient"))
     job = cluster.submit(_quick, "exact-retry", max_retries_failure=2)
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -105,7 +105,7 @@ def test_scheduling_timeout(cluster):
 
 def test_dispatch_delayed(cluster):
     """Dispatch delayed by chaos (via heartbeat), but eventually goes through."""
-    enable_chaos("controller.heartbeat", delay_seconds=3.0, failure_rate=1.0, max_failures=2)
+    enable_chaos("controller.heartbeat", delay_seconds=1.0, failure_rate=1.0, max_failures=2)
     job = cluster.submit(_quick, "delayed-dispatch")
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
