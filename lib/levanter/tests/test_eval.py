@@ -10,7 +10,7 @@ from haliax.partitioning import ResourceAxis
 
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
-from levanter.eval import TaggedEvaluator
+from levanter.eval import LossFnOutput, TaggedEvaluator
 from levanter.grug.model import GrugModelConfig
 from levanter.models.lm_model import LmExample
 from levanter.utils.tree_utils import inference_mode
@@ -36,7 +36,7 @@ def test_tagged_evaluator_accepts_grug_lm_examples():
 
     with use_test_mesh(tensor_parallelism=1) as mesh:
 
-        def loss_fn(model, batch) -> tuple[jax.Array, jax.Array, jax.Array]:
+        def loss_fn(model, batch) -> LossFnOutput:
             model = inference_mode(model, True)
             if isinstance(batch, LmExample):
                 named_batch = batch
@@ -84,7 +84,7 @@ def test_tagged_evaluator_accepts_mixed_lm_example_types():
 
     with use_test_mesh(tensor_parallelism=1) as mesh:
 
-        def loss_fn(model, batch) -> tuple[jax.Array, jax.Array, jax.Array]:
+        def loss_fn(model, batch) -> LossFnOutput:
             model = inference_mode(model, True)
             if isinstance(batch, LmExample):
                 named_batch = batch
@@ -151,7 +151,7 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
 
     with use_test_mesh(tensor_parallelism=1) as mesh:
 
-        def loss_fn(_model, batch: GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+        def loss_fn(_model, batch: GrugLmExample) -> LossFnOutput:
             per_pos_loss = fake_grug_loss_fn(
                 _model,
                 batch.tokens,

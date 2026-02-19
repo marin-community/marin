@@ -41,7 +41,6 @@ T = TypeVar("T")
 M = TypeVar("M")
 Ex = TypeVar("Ex")
 LmEvalExample = LmExample | GrugLmExample
-GrugLossFn = Callable[..., jax.Array]
 LossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
@@ -178,6 +177,28 @@ def _ensure_named_lm_example(batch: LmEvalExample, *, EvalBatch: hax.Axis, model
     raise ValueError(f"GrugLmExample tokens must be rank-1 or rank-2 for eval, got rank={batch.tokens.ndim}")
 
 
+def _default_lm_eval_loss_fn(
+    model: LmHeadModel,
+    batch: LmEvalExample,
+    *,
+    EvalBatch: hax.Axis,
+    mp: jmp.Policy | None,
+    axis_mapping: ResourceMapping | None,
+) -> LossFnOutput:
+    model = inference_mode(model, True)
+    named_batch = _ensure_named_lm_example(batch, EvalBatch=EvalBatch, model_pos=model.Pos)
+    if mp is not None:
+        model = mp.cast_to_compute(model)
+    if axis_mapping is not None:
+        with hax.axis_mapping(axis_mapping):
+            per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+    else:
+        per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+    per_pos_weight = named_batch.loss_weight.array
+    per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+    return per_pos_loss, per_pos_weight, per_pos_token_id
+
+
 def cb_tagged_lm_evaluate(
     EvalBatch: hax.Axis,
     tagged_eval_sets: Sequence[tuple[AsyncDataset[LmEvalExample], Sequence[str]]],
@@ -190,6 +211,7 @@ def cb_tagged_lm_evaluate(
     prefix: str = "eval",
     mp: jmp.Policy = None,
     checkpoint_path: Optional[str] = None,
+    loss_fn: Callable[[LmHeadModel, LmEvalExample], LossFnOutput] | None = None,
 ) -> Callable[[StepInfo], None]:
     """
     Evaluates multiple tagged datasets using a given evaluation function.
@@ -217,24 +239,15 @@ def cb_tagged_lm_evaluate(
         checkpoint_path: If provided, write eval metrics to a JSONL file in this directory
     """
 
-    def lm_loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
-        model = inference_mode(model, True)
-        named_batch = _ensure_named_lm_example(batch, EvalBatch=EvalBatch, model_pos=model.Pos)
-        if mp is not None:
-            model = mp.cast_to_compute(model)
-        if axis_mapping is not None:
-            with hax.axis_mapping(axis_mapping):
-                per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
-        else:
-            per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
-        per_pos_weight = named_batch.loss_weight.array
-        per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
-        return per_pos_loss, per_pos_weight, per_pos_token_id
+    if loss_fn is None:
+
+        def loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
+            return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp, axis_mapping=axis_mapping)
 
     evaluator = TaggedEvaluator(
         EvalBatch=EvalBatch,
         tagged_eval_sets=tagged_eval_sets,
-        loss_fn=lm_loss_fn,
+        loss_fn=loss_fn,
         tokenizer=tokenizer,
         device_mesh=device_mesh,
         axis_mapping=axis_mapping,
@@ -357,18 +370,15 @@ class TaggedEvaluator(Generic[Ex, M]):
 
         self.bytes_per_token = self._calculate_bytes_per_token_type(tokenizer)
         self.hierarchy = self._construct_tag_hierarchy()
-        self.accum_for_batch = self._make_accum_for_batch(loss_fn)
+        self.accum_for_batch = self._make_accum_for_batch()
 
-    def _make_accum_for_batch(
-        self,
-        loss_fn: Callable[[M, Ex], LossFnOutput],
-    ) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
+    def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
         bytes_per_token = self.bytes_per_token
         log2e = jnp.log2(jnp.e)
 
         @hax.named_jit
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
-            losses, weights, token_ids = loss_fn(model, batch)
+            losses, weights, token_ids = self.loss_fn(model, batch)
             weighted_loss = losses * weights  # b t
             this_loss = jnp.sum(weighted_loss)  # scalar
             this_weights = jnp.sum(weights)  # scalar
