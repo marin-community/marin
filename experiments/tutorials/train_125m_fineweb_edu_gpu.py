@@ -10,8 +10,6 @@ This script demonstrates how to:
 3. Pin outputs to a local Marin prefix for the run
 """
 
-import os
-
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 
@@ -39,5 +37,4 @@ llama_150m_fineweb_edu_model = default_train(
 )
 
 if __name__ == "__main__":
-    os.environ.setdefault("MARIN_PREFIX", os.path.expanduser("~/marin-data/"))
     executor_main(steps=[llama_150m_fineweb_edu_model])
