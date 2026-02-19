@@ -148,6 +148,25 @@ def unified_data_config(
     components = {**text_components, "multimodal_captions": multimodal_component}
     weights = {**text_weights, "multimodal_captions": multimodal_weight}
 
+    # Multimodal validation: separate understanding and generation val loss.
+    # These are produced by vlm_tokenize_captions.py with val_fraction > 0.
+    prebuilt_format = PrebuiltLmDatasetFormat(input_ids_key="input_ids", loss_weights_key="loss_weights")
+    components["val_understanding"] = DatasetComponent(
+        cache_dir=f"{multimodal_cache_path}/val_understanding",
+        format=prebuilt_format,
+        pack=True,
+        tags=["multimodal", "understanding"],
+    )
+    weights["val_understanding"] = 0.0
+
+    components["val_generation"] = DatasetComponent(
+        cache_dir=f"{multimodal_cache_path}/val_generation",
+        format=prebuilt_format,
+        pack=True,
+        tags=["multimodal", "generation"],
+    )
+    weights["val_generation"] = 0.0
+
     # Eval benchmarks: weight 0.0 → eval-only (not used in training data).
     # Levanter's validation_sets() loads these for periodic eval during training.
     if eval_benchmarks is not None:
@@ -250,7 +269,7 @@ def make_unified_0_6b(
         train_config=unified_0_6b_train,
         tags=["unified", "scaling", "qwen3", "0.6b"],
         eval_harness_tasks=[],
-        use_default_validation=False,
+        use_default_validation=True,
     )
 
 
@@ -270,7 +289,7 @@ def make_unified_1_7b(
         train_config=unified_1_7b_train,
         tags=["unified", "scaling", "qwen3", "1.7b"],
         eval_harness_tasks=[],
-        use_default_validation=False,
+        use_default_validation=True,
     )
 
 
@@ -290,7 +309,7 @@ def make_unified_4b(
         train_config=unified_4b_train,
         tags=["unified", "scaling", "qwen3", "4b"],
         eval_harness_tasks=[],
-        use_default_validation=False,
+        use_default_validation=True,
     )
 
 

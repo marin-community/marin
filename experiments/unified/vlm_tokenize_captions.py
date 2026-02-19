@@ -56,6 +56,7 @@ Usage:
 """
 
 import dataclasses
+import json
 import logging
 import math
 import os
@@ -198,51 +199,26 @@ def build_text_first_sequence(
     return {"input_ids": input_ids, "loss_weights": loss_weights}
 
 
-def process_parquet_rows(
-    table,
-    tokenizer: transformers.PreTrainedTokenizer,
-    w_visual: float,
-    dual_ordering: bool,
-    generation_ratio: float,
-) -> Iterator[dict[str, np.ndarray]]:
-    """Process all rows in a PyArrow table, yielding token sequences.
+def _collect_valid_indices(table) -> tuple[list[int], int]:
+    """First pass over a parquet table: collect valid row indices.
 
-    Supports two parquet schemas:
-    - **Messages format**: columns ``messages`` (chat-format) + ``image_tokens`` (nested list).
-    - **Caption format**: columns ``caption`` (plain string) + ``image_tokens`` (flat list).
-
-    When dual_ordering is True, every valid row produces both an image-first
-    (understanding) and a text-first (generation) sequence.
-
-    When dual_ordering is False, each row produces a single sequence. The first
-    (1 - generation_ratio) fraction of valid rows yield image-first sequences;
-    the remaining generation_ratio fraction yield text-first sequences.
+    Returns (valid_indices, mismatched_count).
     """
-    # Auto-detect parquet schema
     has_caption_col = "caption" in table.column_names
-    has_messages_col = "messages" in table.column_names
-
-    if not has_caption_col and not has_messages_col:
-        raise ValueError(f"Parquet must have either 'caption' or 'messages' column, got: {table.column_names}")
-
     image_tokens_col = table.column("image_tokens")
-    if has_caption_col:
-        caption_col = table.column("caption")
-    else:
-        messages_col = table.column("messages")
 
-    # First pass: collect valid row indices
     valid_indices = []
     mismatched = 0
+
     for i in range(len(table)):
         image_tokens_raw = image_tokens_col[i].as_py()
 
         if has_caption_col:
-            caption = caption_col[i].as_py()
+            caption = table.column("caption")[i].as_py()
             if not caption or not image_tokens_raw:
                 continue
         else:
-            messages = messages_col[i].as_py()
+            messages = table.column("messages")[i].as_py()
             image_token_lists = image_tokens_raw
             caption = extract_caption(messages)
             if caption is None or not image_token_lists:
@@ -255,35 +231,96 @@ def process_parquet_rows(
 
         valid_indices.append(i)
 
-    skipped = len(table) - len(valid_indices) - mismatched
-    n_valid = len(valid_indices)
+    return valid_indices, mismatched
 
+
+def _split_train_val_indices(valid_indices: list[int], val_fraction: float) -> tuple[list[int], list[int]]:
+    """Deterministically split valid indices into train and val sets.
+
+    Every ``val_step``-th valid row goes to val. This is reproducible and
+    independent of shard ordering or shuffle state.
+    """
+    if val_fraction <= 0.0:
+        return valid_indices, []
+
+    val_step = max(int(1.0 / val_fraction), 1)
+    val_indices = [valid_indices[j] for j in range(0, len(valid_indices), val_step)]
+    val_set = set(val_indices)
+    train_indices = [i for i in valid_indices if i not in val_set]
+    return train_indices, val_indices
+
+
+def process_parquet_rows(
+    table,
+    tokenizer: transformers.PreTrainedTokenizer,
+    w_visual: float,
+    dual_ordering: bool,
+    generation_ratio: float,
+    val_fraction: float = 0.0,
+    split: str = "train",
+) -> Iterator[dict[str, np.ndarray]]:
+    """Process rows in a PyArrow table, yielding token sequences.
+
+    Supports two parquet schemas:
+    - **Messages format**: columns ``messages`` (chat-format) + ``image_tokens`` (nested list).
+    - **Caption format**: columns ``caption`` (plain string) + ``image_tokens`` (flat list).
+
+    Args:
+        split: Which rows and ordering to produce:
+            - ``"train"``: train rows with dual_ordering / generation_ratio logic.
+            - ``"val_understanding"``: val rows, image-first sequences only.
+            - ``"val_generation"``: val rows, text-first sequences only.
+        val_fraction: Fraction of valid rows to hold out for validation (0.0 to disable).
+    """
+    has_caption_col = "caption" in table.column_names
+    has_messages_col = "messages" in table.column_names
+
+    if not has_caption_col and not has_messages_col:
+        raise ValueError(f"Parquet must have either 'caption' or 'messages' column, got: {table.column_names}")
+
+    image_tokens_col = table.column("image_tokens")
+
+    valid_indices, mismatched = _collect_valid_indices(table)
+    train_indices, val_indices = _split_train_val_indices(valid_indices, val_fraction)
+
+    if split == "train":
+        row_indices = train_indices
+    elif split in ("val_understanding", "val_generation"):
+        row_indices = val_indices
+    else:
+        raise ValueError(f"Unknown split: {split!r}")
+
+    skipped = len(table) - len(valid_indices) - mismatched
     logger.info(
-        "Processing %d valid rows (%d skipped, %d mismatched image/token count, generation_ratio=%.2f)",
-        n_valid,
+        "Processing %d %s rows (%d total valid, %d train, %d val, %d skipped, %d mismatched)",
+        len(row_indices),
+        split,
+        len(valid_indices),
+        len(train_indices),
+        len(val_indices),
         skipped,
         mismatched,
-        generation_ratio,
     )
 
     rng = random.Random(42)
 
-    for rank, i in enumerate(valid_indices):
+    for rank, i in enumerate(row_indices):
         if has_caption_col:
-            caption = caption_col[i].as_py()
+            caption = table.column("caption")[i].as_py()
             raw_image_tokens = image_tokens_col[i].as_py()
         else:
-            messages = messages_col[i].as_py()
+            messages = table.column("messages")[i].as_py()
             caption = extract_caption(messages)
-            # Use the first image's tokens (all examples in this dataset are single-image)
             raw_image_tokens = image_tokens_col[i].as_py()[0]
 
         shifted_image_tokens = [t + VISUAL_TOKEN_OFFSET for t in raw_image_tokens]
-
-        # Tokenize caption (no BOS per doc spec)
         caption_ids = tokenizer.encode(caption, add_special_tokens=False)
 
-        if dual_ordering:
+        if split == "val_understanding":
+            yield build_image_first_sequence(caption_ids, shifted_image_tokens, w_visual)
+        elif split == "val_generation":
+            yield build_text_first_sequence(caption_ids, shifted_image_tokens, w_visual)
+        elif dual_ordering:
             yield build_image_first_sequence(caption_ids, shifted_image_tokens, w_visual)
             yield build_text_first_sequence(caption_ids, shifted_image_tokens, w_visual)
         elif rng.random() < generation_ratio:
@@ -292,7 +329,7 @@ def process_parquet_rows(
             yield build_image_first_sequence(caption_ids, shifted_image_tokens, w_visual)
 
         if (rank + 1) % 1000 == 0:
-            logger.info("  ... processed %d/%d rows", rank + 1, n_valid)
+            logger.info("  ... processed %d/%d %s rows", rank + 1, len(row_indices), split)
 
 
 # --- Shard processing (local files only, no GCS in workers) ---
@@ -306,8 +343,14 @@ def process_shard(
     dual_ordering: bool,
     generation_ratio: float,
     source_shard: str,
+    val_fraction: float = 0.0,
 ) -> dict:
-    """Process a single parquet shard from local disk and write cache to local disk.
+    """Process a single parquet shard from local disk and write cache(s) to local disk.
+
+    Writes up to 3 caches:
+    - ``{local_output_path}`` — training records
+    - ``{local_output_path}_val_und`` — val understanding (image-first) records
+    - ``{local_output_path}_val_gen`` — val generation (text-first) records
 
     This function is designed to run in a worker process. It only touches local files.
     """
@@ -318,7 +361,6 @@ def process_shard(
     tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_path)
     table = pq.read_table(local_parquet_path)
 
-    records = process_parquet_rows(table, tokenizer, w_visual, dual_ordering, generation_ratio)
     metadata = {
         "source_shard": source_shard,
         "tokenizer": tokenizer_path,
@@ -329,8 +371,49 @@ def process_shard(
         "format": "dual_ordering_pretraining",
     }
 
-    result = write_levanter_cache(records, local_output_path, metadata)
-    logger.info("Shard %s: %d records, %d tokens", source_shard, result["count"], result["token_count"])
+    # Train cache
+    train_records = process_parquet_rows(
+        table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "train"
+    )
+    train_result = write_levanter_cache(train_records, local_output_path, metadata)
+    logger.info(
+        "Shard %s train: %d records, %d tokens", source_shard, train_result["count"], train_result["token_count"]
+    )
+
+    result = {**train_result, "val_und_path": None, "val_gen_path": None, "val_und_count": 0, "val_gen_count": 0}
+
+    # Val caches (if val_fraction > 0)
+    if val_fraction > 0:
+        val_und_path = f"{local_output_path}_val_und"
+        val_und_records = process_parquet_rows(
+            table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_understanding"
+        )
+        val_und_result = write_levanter_cache(val_und_records, val_und_path, {**metadata, "split": "val_understanding"})
+        result["val_und_count"] = val_und_result["count"]
+        if val_und_result["count"] > 0:
+            result["val_und_path"] = val_und_path
+            logger.info(
+                "Shard %s val_understanding: %d records, %d tokens",
+                source_shard,
+                val_und_result["count"],
+                val_und_result["token_count"],
+            )
+
+        val_gen_path = f"{local_output_path}_val_gen"
+        val_gen_records = process_parquet_rows(
+            table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_generation"
+        )
+        val_gen_result = write_levanter_cache(val_gen_records, val_gen_path, {**metadata, "split": "val_generation"})
+        result["val_gen_count"] = val_gen_result["count"]
+        if val_gen_result["count"] > 0:
+            result["val_gen_path"] = val_gen_path
+            logger.info(
+                "Shard %s val_generation: %d records, %d tokens",
+                source_shard,
+                val_gen_result["count"],
+                val_gen_result["token_count"],
+            )
+
     return result
 
 
@@ -340,17 +423,40 @@ def tokenize_shard(
     w_visual: float,
     dual_ordering: bool,
     generation_ratio: float,
-) -> list[dict[str, np.ndarray]]:
+    val_fraction: float = 0.0,
+) -> tuple[list[dict[str, np.ndarray]], list[dict[str, np.ndarray]], list[dict[str, np.ndarray]]]:
     """Tokenize a single parquet shard and return records without writing a cache.
 
     Used by the shuffle path: workers tokenize in parallel, main process
     collects results into a shared buffer for cross-source mixing.
+
+    Returns:
+        (train_records, val_understanding_records, val_generation_records)
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_path)
     table = pq.read_table(local_parquet_path)
-    return list(process_parquet_rows(table, tokenizer, w_visual, dual_ordering, generation_ratio))
+
+    train_records = list(
+        process_parquet_rows(table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "train")
+    )
+    val_und_records: list[dict[str, np.ndarray]] = []
+    val_gen_records: list[dict[str, np.ndarray]] = []
+
+    if val_fraction > 0:
+        val_und_records = list(
+            process_parquet_rows(
+                table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_understanding"
+            )
+        )
+        val_gen_records = list(
+            process_parquet_rows(
+                table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_generation"
+            )
+        )
+
+    return train_records, val_und_records, val_gen_records
 
 
 # --- Shard listing ---
@@ -401,6 +507,11 @@ class TokenizeVLMConfig:
     """Directory for temporary parquet downloads (default: /dev/shm for faster I/O)."""
     staging_dir: str = "/run/shards"
     """Directory for staging output shard caches before uploading to GCS."""
+    val_fraction: float = 0.005
+    """Fraction of valid rows to hold out for validation (0.0 to disable).
+    Val rows produce separate understanding (image-first) and generation (text-first)
+    caches at {output_path}/val_understanding/validation/ and
+    {output_path}/val_generation/validation/."""
 
 
 def _cache_tokenizer_locally(tokenizer_path: str, download_dir: str = "/dev/shm") -> str:
@@ -430,6 +541,47 @@ def main(config: TokenizeVLMConfig):
         _main_sequential(config, shard_paths)
 
 
+def _write_metadata(config: "TokenizeVLMConfig", stats: dict) -> None:
+    """Write a JSON metadata summary to {output_path}/metadata.json."""
+    meta = {
+        "input_path": config.input_path,
+        "output_path": config.output_path,
+        "shuffle": config.shuffle,
+        "dual_ordering": config.dual_ordering,
+        "generation_ratio": config.generation_ratio,
+        "w_visual": config.w_visual,
+        "val_fraction": config.val_fraction,
+        **stats,
+    }
+    logger.info("=== Processing Summary ===")
+    for key, val in stats.items():
+        logger.info("  %-30s %s", key, val)
+
+    meta_path = f"{config.output_path}/metadata.json"
+    staging = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+    try:
+        json.dump(meta, staging, indent=2)
+        staging.close()
+        gcs_upload(staging.name, meta_path if meta_path.startswith("gs://") else f"gs://{meta_path}")
+        logger.info("Metadata written to %s", meta_path)
+    finally:
+        os.unlink(staging.name)
+
+
+def _consolidate(paths: list[str], output_path: str, label: str) -> None:
+    """Consolidate shard caches into a single output path."""
+    from levanter.store.cache import consolidate_shard_caches
+
+    existing = [p for p in paths if fsspec_exists(f"{p}/.success")]
+    if not existing:
+        logger.info("No %s shard caches to consolidate.", label)
+        return
+    logger.info("Consolidating %d %s shard caches into %s", len(existing), label, output_path)
+    exemplar = {"input_ids": np.zeros((0,), dtype=np.int32), "loss_weights": np.zeros((0,), dtype=np.float32)}
+    consolidate_shard_caches(shard_cache_paths=existing, output_path=output_path, exemplar=exemplar)
+    logger.info("%s consolidation complete.", label.capitalize())
+
+
 def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
     """Original 1:1 processing: each input parquet → one output shard cache."""
     # Build per-shard output paths
@@ -447,6 +599,14 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
 
     logger.info("%d shards pending (%d already done)", len(pending), len(shard_outputs) - len(pending))
 
+    # Track val shard paths for consolidation and counts
+    val_und_gcs_paths: list[str] = []
+    val_gen_gcs_paths: list[str] = []
+    total_train_records = 0
+    total_train_tokens = 0
+    total_val_und_records = 0
+    total_val_gen_records = 0
+
     if not pending:
         logger.info("All shards already processed. Running consolidation only.")
     else:
@@ -457,11 +617,12 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
         chunk_size = num_workers
         num_chunks = math.ceil(len(pending) / chunk_size)
         logger.info(
-            "Processing %d shards in %d chunks (%d workers per chunk), download_dir=%s",
+            "Processing %d shards in %d chunks (%d workers per chunk), download_dir=%s, val_fraction=%.4f",
             len(pending),
             num_chunks,
             num_workers,
             config.download_dir,
+            config.val_fraction,
         )
 
         os.makedirs(config.download_dir, exist_ok=True)
@@ -505,25 +666,54 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
                         config.dual_ordering,
                         config.generation_ratio,
                         source_shard,
-                    ): source_shard
+                        config.val_fraction,
+                    ): (local_cache, source_shard)
                     for local_parquet, local_cache, _gcs_out, source_shard in chunk_jobs
                 }
 
                 for future in as_completed(futures):
-                    source = futures[future]
+                    local_cache, source = futures[future]
                     try:
-                        future.result()
+                        result = future.result()
                         total_completed += 1
+                        total_train_records += result["count"]
+                        total_train_tokens += result["token_count"]
+                        total_val_und_records += result.get("val_und_count", 0)
+                        total_val_gen_records += result.get("val_gen_count", 0)
                         logger.info("[%s] Shard done (%d/%d total)", chunk_label, total_completed, len(pending))
+
+                        # Track val cache paths
+                        if result.get("val_und_path"):
+                            shard_name = local_cache.rsplit("/", 1)[-1]
+                            val_und_gcs = f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
+                            val_und_gcs_paths.append(val_und_gcs)
+                        if result.get("val_gen_path"):
+                            shard_name = local_cache.rsplit("/", 1)[-1]
+                            val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
+                            val_gen_gcs_paths.append(val_gen_gcs)
                     except Exception:
                         logger.exception("Failed to process shard %s", source)
                         raise
 
-            # Step 3: Upload results to GCS
-            logger.info("[%s] Uploading %d shard caches ...", chunk_label, len(chunk_jobs))
+            # Step 3: Upload results to GCS (train + val caches)
+            logger.info("[%s] Uploading shard caches ...", chunk_label)
             for _local_parquet, local_cache, gcs_out_path, _source in chunk_jobs:
+                # Upload train cache
                 gcs_dest = gcs_out_path if gcs_out_path.startswith("gs://") else f"gs://{gcs_out_path}"
                 gcs_upload(local_cache, gcs_dest)
+
+                # Upload val caches if they exist
+                val_und_local = f"{local_cache}_val_und"
+                if os.path.isdir(val_und_local):
+                    shard_name = local_cache.rsplit("/", 1)[-1]
+                    val_und_gcs = f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
+                    gcs_upload(val_und_local, val_und_gcs if val_und_gcs.startswith("gs://") else f"gs://{val_und_gcs}")
+
+                val_gen_local = f"{local_cache}_val_gen"
+                if os.path.isdir(val_gen_local):
+                    shard_name = local_cache.rsplit("/", 1)[-1]
+                    val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
+                    gcs_upload(val_gen_local, val_gen_gcs if val_gen_gcs.startswith("gs://") else f"gs://{val_gen_gcs}")
 
             # Step 4: Clean up local files for this chunk
             shutil.rmtree(parquet_work_dir)
@@ -531,19 +721,32 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
             logger.info("[%s] Done and cleaned up.", chunk_label)
 
     # Consolidate all shard caches
-    all_shard_cache_paths = [out for _, out in shard_outputs]
-    existing_paths = [p for p in all_shard_cache_paths if fsspec_exists(f"{p}/.success")]
-    logger.info("Consolidating %d shard caches into %s/train", len(existing_paths), config.output_path)
+    all_train_paths = [out for _, out in shard_outputs]
+    _consolidate(all_train_paths, f"{config.output_path}/train", "train")
 
-    from levanter.store.cache import consolidate_shard_caches
+    if config.val_fraction > 0:
+        _consolidate(
+            val_und_gcs_paths,
+            f"{config.output_path}/val_understanding/validation",
+            "val_understanding",
+        )
+        _consolidate(
+            val_gen_gcs_paths,
+            f"{config.output_path}/val_generation/validation",
+            "val_generation",
+        )
 
-    exemplar = {"input_ids": np.zeros((0,), dtype=np.int32), "loss_weights": np.zeros((0,), dtype=np.float32)}
-    consolidate_shard_caches(
-        shard_cache_paths=existing_paths,
-        output_path=f"{config.output_path}/train",
-        exemplar=exemplar,
+    _write_metadata(
+        config,
+        {
+            "mode": "sequential",
+            "total_shards": len(shard_paths),
+            "train_records": total_train_records,
+            "train_tokens": total_train_tokens,
+            "val_understanding_records": total_val_und_records,
+            "val_generation_records": total_val_gen_records,
+        },
     )
-    logger.info("Consolidation complete.")
 
 
 def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
@@ -556,10 +759,12 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     4. Proportional distribution: each output shard receives a proportional
        slice from every file in the batch, guaranteeing cross-source mixing
     5. Shard-level shuffle: shuffle each output shard buffer before writing
+
+    Val records (~0.5% of data) are accumulated in memory across batches and
+    written as single caches at the end.
     """
     import fsspec as _fsspec
 
-    from levanter.store.cache import consolidate_shard_caches
     from zephyr.writers import write_levanter_cache
 
     random.seed(config.seed)
@@ -619,12 +824,17 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     all_output_paths: list[str] = []
     total_records = 0
 
+    # Accumulate val records across batches (small — ~0.5% of data)
+    all_val_und_records: list[dict[str, np.ndarray]] = []
+    all_val_gen_records: list[dict[str, np.ndarray]] = []
+
     logger.info(
-        "Shuffle mode: %d files in %d batches, rows_per_shard=%d, num_workers=%d",
+        "Shuffle mode: %d files in %d batches, rows_per_shard=%d, num_workers=%d, val_fraction=%.4f",
         len(shard_paths),
         len(batches),
         config.rows_per_shard,
         num_workers,
+        config.val_fraction,
     )
 
     # --- Process each batch ---
@@ -662,6 +872,7 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
                         config.w_visual,
                         config.dual_ordering,
                         config.generation_ratio,
+                        config.val_fraction,
                     ): lp
                     for lp in local_parquets
                 }
@@ -669,9 +880,11 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
                 for future in as_completed(futures):
                     source = futures[future]
                     try:
-                        records = future.result()
-                        random.shuffle(records)
-                        file_records[source] = records
+                        train_records, val_und, val_gen = future.result()
+                        random.shuffle(train_records)
+                        file_records[source] = train_records
+                        all_val_und_records.extend(val_und)
+                        all_val_gen_records.extend(val_gen)
                     except Exception:
                         logger.exception("Failed to tokenize %s", source)
                         raise
@@ -733,17 +946,57 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
 
     logger.info("Wrote %d shuffled shards (%d total records)", len(all_output_paths), total_records)
 
-    # Consolidate all shard caches
-    existing_paths = [p for p in all_output_paths if fsspec_exists(f"{p}/.success")]
-    logger.info("Consolidating %d shard caches into %s/train", len(existing_paths), config.output_path)
+    # --- Write val caches ---
+    val_und_gcs_paths: list[str] = []
+    val_gen_gcs_paths: list[str] = []
+    total_val_und = len(all_val_und_records)
+    total_val_gen = len(all_val_gen_records)
 
-    exemplar = {"input_ids": np.zeros((0,), dtype=np.int32), "loss_weights": np.zeros((0,), dtype=np.float32)}
-    consolidate_shard_caches(
-        shard_cache_paths=existing_paths,
-        output_path=f"{config.output_path}/train",
-        exemplar=exemplar,
+    if config.val_fraction > 0 and (all_val_und_records or all_val_gen_records):
+        logger.info(
+            "Writing val caches: %d understanding, %d generation records",
+            total_val_und,
+            total_val_gen,
+        )
+        staging_val_dir = tempfile.mkdtemp(prefix="vlm_val_", dir=config.staging_dir)
+
+        if all_val_und_records:
+            local_val_und = os.path.join(staging_val_dir, "val_und")
+            write_levanter_cache(iter(all_val_und_records), local_val_und, {**metadata, "split": "val_understanding"})
+            gcs_val_und = f"{config.output_path}/val_understanding/validation/shard-000000"
+            gcs_upload(local_val_und, gcs_val_und if gcs_val_und.startswith("gs://") else f"gs://{gcs_val_und}")
+            val_und_gcs_paths.append(gcs_val_und)
+
+        if all_val_gen_records:
+            local_val_gen = os.path.join(staging_val_dir, "val_gen")
+            write_levanter_cache(iter(all_val_gen_records), local_val_gen, {**metadata, "split": "val_generation"})
+            gcs_val_gen = f"{config.output_path}/val_generation/validation/shard-000000"
+            gcs_upload(local_val_gen, gcs_val_gen if gcs_val_gen.startswith("gs://") else f"gs://{gcs_val_gen}")
+            val_gen_gcs_paths.append(gcs_val_gen)
+
+        shutil.rmtree(staging_val_dir)
+        all_val_und_records.clear()
+        all_val_gen_records.clear()
+
+    # Consolidate all shard caches
+    _consolidate(all_output_paths, f"{config.output_path}/train", "train")
+
+    if config.val_fraction > 0:
+        _consolidate(val_und_gcs_paths, f"{config.output_path}/val_understanding/validation", "val_understanding")
+        _consolidate(val_gen_gcs_paths, f"{config.output_path}/val_generation/validation", "val_generation")
+
+    _write_metadata(
+        config,
+        {
+            "mode": "shuffled",
+            "total_input_files": len(shard_paths),
+            "total_batches": len(batches),
+            "train_records": total_records,
+            "train_shards": len(all_output_paths),
+            "val_understanding_records": total_val_und,
+            "val_generation_records": total_val_gen,
+        },
     )
-    logger.info("Consolidation complete.")
 
 
 if __name__ == "__main__":
