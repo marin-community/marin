@@ -575,27 +575,32 @@ class SmokeTestRunner:
         try:
             self._print_header()
 
-            if not self.config.local:
-                if self.config.mode != "redeploy":
-                    if self.config.mode in ("full", "keep"):
-                        self.logger.section("PHASE 0: Clean Start")
-                        self._cleanup_existing()
-                        if self._interrupted or self._check_deadline():
-                            return False
+            # Cluster startup: always run in the background so both local
+            # configs (which block on controller.wait()) and remote configs
+            # work identically.
+            controller_url: str | None = None
 
-                    self.logger.section("Starting Cluster")
-                    self._start_cluster_remote()
+            if self.config.mode != "redeploy":
+                if self.config.mode in ("full", "keep") and not self.config.local:
+                    self.logger.section("PHASE 0: Clean Start")
+                    self._cleanup_existing()
                     if self._interrupted or self._check_deadline():
                         return False
 
-                # Establish tunnel to get controller URL
-                self.logger.section("Connecting to Cluster")
-                controller_url = self._connect_remote()
-            else:
-                self.logger.section("Starting Local Cluster")
-                controller_url = self._start_cluster_local()
+                self.logger.section("Starting Cluster")
+                cluster_address = self._start_cluster()
                 if self._interrupted or self._check_deadline():
                     return False
+
+                if self.config.local:
+                    controller_url = cluster_address
+
+            if controller_url is None:
+                # Remote mode (or redeploy): establish tunnel to get a
+                # localhost URL regardless of whether we started the cluster
+                # above or it was already running.
+                self.logger.section("Connecting to Cluster")
+                controller_url = self._connect_remote()
 
             # Start controller log streaming (remote GCP only)
             if not self.config.local:
@@ -662,17 +667,32 @@ class SmokeTestRunner:
             self.logger.log(f"Cleanup failed: {e.stderr}", level="ERROR")
             raise
 
-    def _start_cluster_remote(self):
-        """Start remote cluster via `iris cluster start`.
+    def _start_cluster(self) -> str:
+        """Start cluster via ``iris cluster start`` as a background subprocess.
 
-        This builds images and boots the controller VM. The command exits
-        after the controller is running.
+        Always runs in the background so it works for both local and remote
+        configs (local controllers block on ``controller.wait()``; remote exits
+        after the controller VM is booted).  Adds ``--local`` when
+        ``self.config.local`` is set.
+
+        Returns the controller address from the "Controller started at" line.
+        For local mode this is directly usable; for remote mode the caller
+        should still establish a dashboard tunnel.
         """
-        self.logger.log("Starting cluster (this builds images and boots the controller)...")
-        result = _run_iris("cluster", "start", config_path=self.config.config_path)
-        for line in result.stdout.splitlines():
-            self.logger.log(f"  {line}")
-        self.logger.log("Cluster started")
+        args = ["cluster", "start"]
+        if self.config.local:
+            args.append("--local")
+
+        self.logger.log("Starting cluster (background)...")
+        bg = _run_iris_background(*args, config_path=self.config.config_path)
+        bg.name = "cluster-start"
+        self._background_procs.append(bg)
+
+        drain_path = self.log_tree.get_writer("cluster-start.log", "Cluster start stdout")
+        line = _wait_for_line(bg, r"Controller started at", timeout=DEFAULT_CLI_TIMEOUT, drain_to=drain_path)
+        address = _parse_address_from_line(line, "Controller started at")
+        self.logger.log(f"Controller started at: {address}")
+        return address
 
     def _connect_remote(self) -> str:
         """Establish tunnel via `iris cluster dashboard` as background subprocess.
@@ -690,23 +710,6 @@ class SmokeTestRunner:
         controller_url = _parse_address_from_line(line, "Controller RPC:")
         self.logger.log(f"Controller URL: {controller_url}")
         return controller_url
-
-    def _start_cluster_local(self) -> str:
-        """Start local cluster via `iris cluster start --local` as background subprocess.
-
-        Parses the controller address from stdout "Controller started at {address}".
-        The subprocess blocks until terminated.
-        """
-        self.logger.log("Starting local cluster...")
-        bg = _run_iris_background("cluster", "start", "--local", config_path=self.config.config_path)
-        bg.name = "local-controller"
-        self._background_procs.append(bg)
-
-        drain_path = self.log_tree.get_writer("local-controller.log", "Local controller stdout")
-        line = _wait_for_line(bg, r"Controller started at", timeout=60, drain_to=drain_path)
-        address = _parse_address_from_line(line, "Controller started at")
-        self.logger.log(f"Local controller at: {address}")
-        return address
 
     def _start_log_streaming(self):
         """Stream controller logs via `iris cluster debug logs --follow` as background subprocess."""
