@@ -200,6 +200,10 @@ Analogous to SODA's Table 1 ablation (S-only vs. S+A vs. S+A+T), we recommend an
 
 SODA found that S+A+T unlocked cross-modal capabilities (ASR/TTS) with minimal degradation on speech metrics. We expect V+T dual-ordering to similarly unlock cross-modal image-text capabilities. The key question is whether dual-ordering provides meaningful gains over single-ordering, or whether a single ordering suffices when combined with dedicated U and G instruction data.
 
+### Sequence Packing
+
+We pack sequences to the maximum context length (4,096 tokens for most experiments) with no padding, maximizing training efficiency. Multiple documents may be packed into a single training sequence, separated by end-of-text tokens. A single document longer than the maximum context length may be split into multiple training sequences.
+
 ### Key Differences from SODA Audio Setting
 
 1. **No hierarchical codebook**: SODA uses Mimi's 8-layer RVQ (semantic → acoustic) which requires flattening. TokLIP has a single codebook, so no flattening is needed, but there is also no explicit semantic/fine-grained separation.
