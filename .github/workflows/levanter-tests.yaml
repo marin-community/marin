@@ -126,19 +126,21 @@ jobs:
 
       - name: Install locked CPU torch wheel
         run: |
-          TORCH_CPU_VERSION=$(python - <<'PY'
+          TORCH_CPU_VERSION=$(python3 - <<'PY'
           import tomllib
           from pathlib import Path
 
           lock = tomllib.loads(Path("../../uv.lock").read_text())
-          versions = sorted(
-              {
-                  package["version"]
-                  for package in lock.get("package", [])
-                  if package.get("name") == "torch" and package.get("version", "").endswith("+cpu")
-              }
-          )
-          print(versions[-1] if versions else "")
+          versions = {
+              package["version"]
+              for package in lock.get("package", [])
+              if package.get("name") == "torch" and package.get("version", "").endswith("+cpu")
+          }
+          if len(versions) != 1:
+              raise SystemExit(
+                  f"Expected exactly one torch +cpu version in uv.lock, found {len(versions)}: {sorted(versions)}"
+              )
+          print(next(iter(versions)))
           PY
           )
           echo "Using torch ${TORCH_CPU_VERSION}"
