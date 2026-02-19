@@ -1,12 +1,14 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import warnings
 import jax
 import jax.numpy as jnp
 import pytest
 
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
+from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
 )
@@ -288,6 +290,42 @@ def test_infer_block_sizes_respects_local_batch_and_hidden_divisibility():
     assert block_sizes.h_block_size % 128 == 0
     assert 512 % block_sizes.b_block_size == 0
     assert 768 % block_sizes.h_block_size == 0
+
+
+def test_infer_block_sizes_huge_batch_without_scoped_vmem_flag_warns_and_uses_safe_v(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("LIBTPU_INIT_ARGS", raising=False)
+    monkeypatch.setattr(tuned_block_sizes, "_WARNED_HUGE_BATCH_SAFE_FALLBACK", False)
+
+    with pytest.warns(RuntimeWarning, match="Using safer fused CE huge-batch block sizes"):
+        block_sizes = infer_block_sizes(
+            b=262_144,
+            h=4096,
+            v=128_256,
+            dtype=jnp.bfloat16,
+            device_kind="TPU v5p",
+        )
+    assert block_sizes.v_block_size == 256
+
+
+def test_infer_block_sizes_huge_batch_with_scoped_vmem_flag_uses_fast_v(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("LIBTPU_INIT_ARGS", "--xla_tpu_scoped_vmem_limit_kib=50000")
+    monkeypatch.setattr(tuned_block_sizes, "_WARNED_HUGE_BATCH_SAFE_FALLBACK", False)
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        block_sizes = infer_block_sizes(
+            b=262_144,
+            h=4096,
+            v=128_256,
+            dtype=jnp.bfloat16,
+            device_kind="TPU v5p",
+        )
+    assert len(recorded) == 0
+    assert block_sizes.v_block_size == 1024
 
 
 def test_fused_cross_entropy_default_non_divisible_vocab_matches_reference():
