@@ -21,8 +21,7 @@ from pathlib import Path
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
-from iris.cluster.platform.bootstrap import WorkerBootstrap
-from iris.cluster.types import parse_memory_string
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
@@ -101,14 +100,14 @@ def _validate_accelerator_types(config: config_pb2.IrisClusterConfig) -> None:
 
 
 def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> None:
-    """Validate that scale groups define per-VM resources and slice_size."""
+    """Validate that scale groups define per-VM resources and num_vms."""
     for name, sg_config in config.scale_groups.items():
         if not sg_config.HasField("resources"):
             raise ValueError(f"Scale group '{name}' must set resources.")
-        if not sg_config.HasField("slice_size"):
-            raise ValueError(f"Scale group '{name}' must set slice_size.")
-        if sg_config.slice_size <= 0:
-            raise ValueError(f"Scale group '{name}' has invalid slice_size={sg_config.slice_size}.")
+        if not sg_config.HasField("num_vms"):
+            raise ValueError(f"Scale group '{name}' must set num_vms.")
+        if sg_config.num_vms <= 0:
+            raise ValueError(f"Scale group '{name}' has invalid num_vms={sg_config.num_vms}.")
 
         resources = sg_config.resources
         if resources.cpu < 0:
@@ -167,11 +166,46 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
                     )
 
 
+def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate optional per-scale-group worker settings."""
+    for name, sg_config in config.scale_groups.items():
+        if not sg_config.HasField("worker"):
+            continue
+
+        attributes = sg_config.worker.attributes
+        region = attributes.get(REGION_ATTRIBUTE_KEY, "").strip()
+        if REGION_ATTRIBUTE_KEY in attributes and not region:
+            raise ValueError(f"Scale group '{name}': worker.attributes.region must be non-empty.")
+
+        preemptible_attr = attributes.get(PREEMPTIBLE_ATTRIBUTE_KEY, "")
+        if PREEMPTIBLE_ATTRIBUTE_KEY in attributes:
+            normalized = preemptible_attr.strip().lower()
+            if normalized not in {"true", "false"}:
+                raise ValueError(
+                    f"Scale group '{name}': worker.attributes.preemptible must be 'true' or 'false',"
+                    f" got {preemptible_attr!r}."
+                )
+            if normalized != str(bool(sg_config.slice_template.preemptible)).lower():
+                raise ValueError(
+                    f"Scale group '{name}': worker.attributes.preemptible={normalized!r} "
+                    f"must match slice_template.preemptible={sg_config.slice_template.preemptible!r}."
+                )
+
+        template = sg_config.slice_template
+        if region and template.HasField("gcp") and template.gcp.zone:
+            zone_region = template.gcp.zone.rsplit("-", 1)[0]
+            if region != zone_region:
+                raise ValueError(
+                    f"Scale group '{name}': worker.attributes.region={region!r} must match "
+                    f"slice_template.gcp.zone region {zone_region!r}."
+                )
+
+
 def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     """Validate cluster config.
 
     Checks all scale groups for:
-    - Required fields (name, resources, slice_size)
+    - Required fields (name, resources, num_vms)
     - Enum fields are not UNSPECIFIED (accelerator_type)
     - Resource values are non-negative
     - Slice templates have required platform-specific fields
@@ -182,6 +216,7 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     _validate_accelerator_types(config)
     _validate_scale_group_resources(config)
     _validate_slice_templates(config)
+    _validate_worker_settings(config)
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
@@ -321,6 +356,10 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
 
     merged.defaults.CopyFrom(result_defaults)
 
+    # Apply controller defaults
+    if not merged.controller.HasField("heartbeat_failure_threshold"):
+        merged.controller.heartbeat_failure_threshold = 10
+
     # Apply scale group defaults
     for group in merged.scale_groups.values():
         if not group.HasField("priority"):
@@ -368,8 +407,10 @@ def make_local_config(
     if not config.HasField("defaults"):
         config.defaults.CopyFrom(config_pb2.DefaultsConfig())
 
-    # Set fast worker timeout for local testing
-    config.controller.worker_timeout.CopyFrom(Duration.from_seconds(5).to_proto())
+    # Set fast controller timings for local testing.
+    # worker_timeout is derived: heartbeat_interval * heartbeat_failure_threshold
+    # = 0.5s * 3 = 1.5s effective timeout.
+    config.controller.heartbeat_failure_threshold = 3
 
     # Set fast autoscaler timings for local testing
     config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
@@ -680,7 +721,7 @@ def create_autoscaler(
     autoscaler_config: config_pb2.AutoscalerConfig,
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     label_prefix: str,
-    worker_bootstrap: WorkerBootstrap | None = None,
+    bootstrap_config: config_pb2.BootstrapConfig | None = None,
     threads: ThreadContainer | None = None,
 ):
     """Create autoscaler from Platform and explicit config.
@@ -690,8 +731,9 @@ def create_autoscaler(
         autoscaler_config: Autoscaler settings (already resolved with defaults)
         scale_groups: Map of scale group name to config
         label_prefix: Prefix for labels on managed resources
-        worker_bootstrap: WorkerBootstrap for initializing new VMs (None disables bootstrap)
-        threads: Thread container for monitor threads. Uses global default if not provided.
+        bootstrap_config: Worker bootstrap settings passed through to platform.create_slice().
+            None disables bootstrap (test/local mode).
+        threads: Thread container for background threads. Uses global default if not provided.
 
     Returns:
         Configured Autoscaler instance
@@ -700,11 +742,7 @@ def create_autoscaler(
         ValueError: If autoscaler_config has invalid timing values
     """
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.scaling_group import (
-        DEFAULT_HEARTBEAT_GRACE,
-        DEFAULT_STARTUP_GRACE,
-        ScalingGroup,
-    )
+    from iris.cluster.controller.scaling_group import ScalingGroup
 
     threads = threads or get_thread_container()
 
@@ -713,16 +751,6 @@ def create_autoscaler(
 
     scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
     scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
-    startup_grace = (
-        Duration.from_proto(autoscaler_config.startup_grace_period)
-        if autoscaler_config.startup_grace_period.milliseconds > 0
-        else DEFAULT_STARTUP_GRACE
-    )
-    heartbeat_grace = (
-        Duration.from_proto(autoscaler_config.heartbeat_grace_period)
-        if autoscaler_config.heartbeat_grace_period.milliseconds > 0
-        else DEFAULT_HEARTBEAT_GRACE
-    )
 
     scaling_groups: dict[str, ScalingGroup] = {}
     for name, group_config in scale_groups.items():
@@ -732,9 +760,6 @@ def create_autoscaler(
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
-            startup_grace_period=startup_grace,
-            heartbeat_grace_period=heartbeat_grace,
-            threads=threads,
         )
         logger.info("Created scale group %s", name)
 
@@ -742,5 +767,5 @@ def create_autoscaler(
         scale_groups=scaling_groups,
         config=autoscaler_config,
         platform=platform,
-        worker_bootstrap=worker_bootstrap,
+        bootstrap_config=bootstrap_config,
     )

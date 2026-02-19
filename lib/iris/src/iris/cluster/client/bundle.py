@@ -11,6 +11,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Maximum bundle size in bytes (25 MB)
+MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+
 EXCLUDE_EXTENSIONS = {".mov", ".pyc"}
 
 EXCLUDE_DIRS = {
@@ -85,6 +88,9 @@ class BundleCreator:
 
         Returns:
             Bundle as bytes (zip file contents)
+
+        Raises:
+            ValueError: If bundle size exceeds MAX_BUNDLE_SIZE_BYTES
         """
         git_files = _get_git_non_ignored_files(self._workspace)
 
@@ -100,4 +106,15 @@ class BundleCreator:
                         rel = file.relative_to(self._workspace)
                         if file.is_file() and not _should_exclude(rel):
                             zf.write(file, rel)
-            return bundle_path.read_bytes()
+
+            bundle_bytes = bundle_path.read_bytes()
+            bundle_size_mb = len(bundle_bytes) / (1024 * 1024)
+            max_size_mb = MAX_BUNDLE_SIZE_BYTES / (1024 * 1024)
+
+            if len(bundle_bytes) > MAX_BUNDLE_SIZE_BYTES:
+                raise ValueError(
+                    f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB. "
+                    "Consider excluding large files or using .gitignore."
+                )
+
+            return bundle_bytes

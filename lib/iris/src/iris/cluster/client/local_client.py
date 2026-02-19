@@ -8,6 +8,7 @@ instead of Docker containers, ensuring local execution follows the same code pat
 as production cluster execution.
 """
 
+from collections.abc import Callable
 from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
@@ -35,7 +36,7 @@ def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig
         min_slices=1,
         max_slices=max_workers,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
-        slice_size=1,
+        num_vms=1,
         resources=config_pb2.ScaleGroupResources(
             cpu=8,
             memory_bytes=16 * 1024**3,
@@ -117,7 +118,6 @@ class LocalClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
-        fail_if_exists: bool = False,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -132,7 +132,6 @@ class LocalClusterClient:
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
             timeout=timeout,
-            fail_if_exists=fail_if_exists,
         )
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
@@ -190,6 +189,25 @@ class LocalClusterClient:
             max_total_lines=max_total_lines,
             regex=regex,
             attempt_id=attempt_id,
+        )
+
+    def wait_for_job_with_streaming(
+        self,
+        job_id: JobName,
+        *,
+        timeout: float,
+        poll_interval: float,
+        include_children: bool,
+        since_ms: int = 0,
+        on_logs: Callable[[cluster_pb2.Controller.GetTaskLogsResponse], None] | None = None,
+    ) -> cluster_pb2.JobStatus:
+        return self._remote_client.wait_for_job_with_streaming(
+            job_id,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            include_children=include_children,
+            since_ms=since_ms,
+            on_logs=on_logs,
         )
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:

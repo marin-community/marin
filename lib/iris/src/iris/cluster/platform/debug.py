@@ -13,6 +13,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from iris.time_utils import Deadline
+
 logger = logging.getLogger(__name__)
 
 
@@ -291,8 +293,8 @@ def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> 
     Returns:
         True if port is ready, False if timeout
     """
-    start = time.time()
-    while time.time() - start < timeout:
+    dl = Deadline.from_seconds(timeout)
+    while not dl.expired():
         try:
             with socket.create_connection((host, port), timeout=1.0):
                 return True

@@ -3,6 +3,7 @@
 
 # Test configuration for iris
 
+import atexit
 import logging
 import os
 import subprocess
@@ -125,25 +126,26 @@ def _thread_cleanup():
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Hook to debug pytest exit status - dump any non-daemon threads still alive.
+    """Dump any non-daemon threads still alive at session end.
 
-    Uses os._exit() to force-terminate if orphaned non-daemon threads would
-    otherwise prevent process exit.
+    Registers an atexit handler so the force-exit happens only after pytest has
+    finished printing the FAILURES section and test summary.
     """
     alive = [t for t in threading.enumerate() if t.is_alive() and not t.daemon and t.name != "MainThread"]
-    if alive:
-        tty = os.fdopen(os.dup(2), "w")
-        tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
-        frames = sys._current_frames()
-        for t in alive:
-            tty.write(f"\n  Thread: {t.name} (daemon={t.daemon}, ident={t.ident})\n")
-            frame = frames.get(t.ident)
-            if frame:
-                for line in traceback.format_stack(frame):
-                    tty.write(f"    {line.rstrip()}\n")
-        tty.flush()
-        tty.close()
-        # Force exit to prevent orphaned non-daemon threads from blocking
-        # Only force-exit on failure to avoid skipping atexit handlers on clean runs
-        if exitstatus != 0:
-            os._exit(exitstatus)
+    if not alive:
+        return
+
+    tty = os.fdopen(os.dup(2), "w")
+    tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
+    frames = sys._current_frames()
+    for t in alive:
+        tty.write(f"\n  Thread: {t.name} (daemon={t.daemon}, ident={t.ident})\n")
+        frame = frames.get(t.ident)
+        if frame:
+            for line in traceback.format_stack(frame):
+                tty.write(f"    {line.rstrip()}\n")
+    tty.flush()
+    tty.close()
+
+    if exitstatus != 0:
+        atexit.register(os._exit, exitstatus)

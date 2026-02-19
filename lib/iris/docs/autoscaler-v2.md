@@ -67,7 +67,7 @@ Introduce a `PendingGroup` accounting model:
 
 Scale group capacity is defined per VM via `ScaleGroupConfig.resources`:
 - `cpu`, `memory_bytes`, `disk_bytes`, `gpu_count`, `tpu_count`
-- `slice_size` is a separate field indicating how many tasks comprise a coscheduled slice.
+- `num_vms` is a separate field indicating how many tasks comprise a coscheduled slice.
 
 ### Algorithm
 

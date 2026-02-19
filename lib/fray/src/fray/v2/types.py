@@ -315,7 +315,7 @@ class ResourceConfig:
     """
 
     cpu: int = 1
-    ram: str = "1g"
+    ram: str = "4g"
     disk: str = "16g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
@@ -338,11 +338,8 @@ class ResourceConfig:
     @staticmethod
     def with_tpu(tpu_type: str, *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
         device = TpuConfig(variant=tpu_type)
-        try:
-            topo = get_tpu_topology(tpu_type)
-            replicas = slice_count * topo.vm_count
-        except ValueError:
-            replicas = slice_count
+        topo = get_tpu_topology(tpu_type)
+        replicas = slice_count * topo.vm_count
         kwargs = dict(kwargs)
         kwargs.setdefault("cpu", 32)
         kwargs.setdefault("ram", "128g")

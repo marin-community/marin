@@ -1,67 +1,66 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for WorkerBootstrap.bootstrap_vm(), focusing on per-VM bootstrap behavior."""
+"""Tests for worker bootstrap script generation."""
 
 from __future__ import annotations
 
 import pytest
 
-from iris.cluster.platform.base import PlatformError
-from iris.cluster.platform.bootstrap import WorkerBootstrap
+from iris.cluster.platform.bootstrap import build_worker_bootstrap_script, render_template
 from iris.rpc import config_pb2
-from iris.time_utils import Timestamp
-from tests.cluster.platform.fakes import FakeVmHandle
 
 
-def _make_cluster_config() -> config_pb2.IrisClusterConfig:
-    return config_pb2.IrisClusterConfig(
-        defaults=config_pb2.DefaultsConfig(
-            bootstrap=config_pb2.BootstrapConfig(
-                docker_image="gcr.io/test/iris-worker:latest",
-                worker_port=10001,
-                cache_dir="/var/cache/iris",
-            ),
-        ),
+def _bootstrap_config(**overrides: object) -> config_pb2.BootstrapConfig:
+    cfg = config_pb2.BootstrapConfig(
+        docker_image="gcr.io/test/iris-worker:latest",
+        worker_port=10001,
+        cache_dir="/var/cache/iris",
+        controller_address="10.0.0.10:10000",
     )
+    for key, value in overrides.items():
+        setattr(cfg, key, value)
+    return cfg
 
 
-def _make_vm(address: str = "10.0.0.1", vm_id: str = "vm-0") -> FakeVmHandle:
-    return FakeVmHandle(
-        vm_id=vm_id,
-        address=address,
-        created_at_ms=Timestamp.now().epoch_ms(),
-    )
+def test_build_worker_bootstrap_script_includes_controller_address() -> None:
+    script = build_worker_bootstrap_script(_bootstrap_config(), vm_address="10.0.0.2")
+
+    assert "--controller-address 10.0.0.10:10000" in script
+    assert "--config /etc/iris/config.yaml" not in script
+    assert "gcr.io/test/iris-worker:latest" in script
+    assert "IRIS_VM_ADDRESS=10.0.0.2" in script
 
 
-def test_bootstrap_vm_succeeds():
-    """bootstrap_vm() should call bootstrap on the VM and return its log."""
-    config = _make_cluster_config()
-    bootstrap = WorkerBootstrap(config)
-    vm = _make_vm("10.0.0.1")
+def test_build_worker_bootstrap_script_requires_controller_address() -> None:
+    cfg = _bootstrap_config()
+    cfg.controller_address = ""
 
-    log = bootstrap.bootstrap_vm(vm)
-
-    assert vm._bootstrap_count == 1
-    assert log == vm.bootstrap_log
+    with pytest.raises(ValueError, match="controller_address"):
+        build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
 
 
-def test_bootstrap_vm_raises_on_empty_address():
-    """bootstrap_vm() should raise PlatformError when a VM has no internal address."""
-    config = _make_cluster_config()
-    bootstrap = WorkerBootstrap(config)
-    vm = _make_vm(address="")
+def test_build_worker_bootstrap_script_includes_env_vars() -> None:
+    """Env vars in BootstrapConfig appear in the generated script."""
+    cfg = _bootstrap_config()
+    cfg.env_vars["IRIS_WORKER_ATTRIBUTES"] = '{"region": "us-west4"}'
+    cfg.env_vars["IRIS_SCALE_GROUP"] = "west-group"
 
-    with pytest.raises(PlatformError, match="has no internal address"):
-        bootstrap.bootstrap_vm(vm)
+    script = build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
+
+    assert "IRIS_WORKER_ATTRIBUTES=" in script
+    assert "us-west4" in script
+    assert "IRIS_SCALE_GROUP=" in script
+    assert "west-group" in script
 
 
-def test_bootstrap_vm_raises_on_connection_timeout():
-    """bootstrap_vm() should raise PlatformError when wait_for_connection times out."""
-    config = _make_cluster_config()
-    bootstrap = WorkerBootstrap(config)
-    vm = _make_vm("10.0.0.1")
-    vm._wait_for_connection_succeeds = False
+def test_render_template_preserves_docker_templates() -> None:
+    template = 'docker ps --format "{{.Names}} {{.Status}}" and {{ value }}'
+    rendered = render_template(template, value="x")
+    assert rendered == 'docker ps --format "{{.Names}} {{.Status}}" and x'
 
-    with pytest.raises(PlatformError, match="failed to become reachable"):
-        bootstrap.bootstrap_vm(vm)
+
+def test_render_template_preserves_shell_variables() -> None:
+    template = "echo ${PATH} and {{ value }}"
+    rendered = render_template(template, value="x")
+    assert rendered == "echo ${PATH} and x"

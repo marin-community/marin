@@ -6,6 +6,7 @@ import os
 import tempfile
 import typing
 import warnings
+import json
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
@@ -101,14 +102,14 @@ class WandbTracker(Tracker):
 
     def finish(self):
         logger.info("Finishing wandb run...")
-        self._write_replicate_file()
+        # Finish wandb first to ensure all metrics are synced to the summary
         self.run.finish()
+        # Then write the replicate file with the complete summary
+        self._write_replicate_file()
 
     def _write_replicate_file(self):
         if self._replicate_path is None:
             return
-
-        import json
 
         import fsspec
 
@@ -119,9 +120,45 @@ class WandbTracker(Tracker):
         with fs.open(metrics_file, "w") as f:
             record = {
                 "config": _convert_value_to_loggable_rec(dict(self.run.config)),
-                "summary": _convert_value_to_loggable_rec(dict(self.run.summary)),
+                "summary": _convert_value_to_loggable_rec(_summary_for_replicate(self.run)),
             }
             f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+
+
+def _summary_for_replicate(run: WandbRun) -> dict[str, Any]:
+    """Read final W&B summary in a way that survives `run.finish()`."""
+    # run.summary can be stale before finish(); _final_summary has the fully flushed values
+    final_summary = getattr(run, "_final_summary", None)
+    if final_summary is None:
+        return dict(run.summary)
+
+    summary: dict[str, Any] = {}
+    for item in final_summary.item:
+        path: list[str] = list(item.nested_key)
+        if item.key:
+            path.append(item.key)
+        if not path:
+            continue
+
+        try:
+            value = json.loads(item.value_json)
+        except (TypeError, json.JSONDecodeError):
+            value = item.value_json
+
+        _set_nested(summary, path, value)
+
+    return summary
+
+
+def _set_nested(target: dict[str, Any], path: list[str], value: Any) -> None:
+    cur = target
+    for key in path[:-1]:
+        next_val = cur.get(key)
+        if not isinstance(next_val, dict):
+            next_val = {}
+            cur[key] = next_val
+        cur = next_val
+    cur[path[-1]] = value
 
 
 def _convert_value_to_loggable_rec(value: Any):
