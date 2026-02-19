@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
-from iris.cluster.types import parse_memory_string
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
@@ -166,6 +166,41 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
                     )
 
 
+def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate optional per-scale-group worker settings."""
+    for name, sg_config in config.scale_groups.items():
+        if not sg_config.HasField("worker"):
+            continue
+
+        attributes = sg_config.worker.attributes
+        region = attributes.get(REGION_ATTRIBUTE_KEY, "").strip()
+        if REGION_ATTRIBUTE_KEY in attributes and not region:
+            raise ValueError(f"Scale group '{name}': worker.attributes.region must be non-empty.")
+
+        preemptible_attr = attributes.get(PREEMPTIBLE_ATTRIBUTE_KEY, "")
+        if PREEMPTIBLE_ATTRIBUTE_KEY in attributes:
+            normalized = preemptible_attr.strip().lower()
+            if normalized not in {"true", "false"}:
+                raise ValueError(
+                    f"Scale group '{name}': worker.attributes.preemptible must be 'true' or 'false',"
+                    f" got {preemptible_attr!r}."
+                )
+            if normalized != str(bool(sg_config.slice_template.preemptible)).lower():
+                raise ValueError(
+                    f"Scale group '{name}': worker.attributes.preemptible={normalized!r} "
+                    f"must match slice_template.preemptible={sg_config.slice_template.preemptible!r}."
+                )
+
+        template = sg_config.slice_template
+        if region and template.HasField("gcp") and template.gcp.zone:
+            zone_region = template.gcp.zone.rsplit("-", 1)[0]
+            if region != zone_region:
+                raise ValueError(
+                    f"Scale group '{name}': worker.attributes.region={region!r} must match "
+                    f"slice_template.gcp.zone region {zone_region!r}."
+                )
+
+
 def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     """Validate cluster config.
 
@@ -181,6 +216,7 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     _validate_accelerator_types(config)
     _validate_scale_group_resources(config)
     _validate_slice_templates(config)
+    _validate_worker_settings(config)
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:

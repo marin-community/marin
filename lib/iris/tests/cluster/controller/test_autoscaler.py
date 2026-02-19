@@ -22,7 +22,7 @@ from iris.cluster.controller.autoscaler import (
 )
 from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.cluster.platform.base import CloudSliceState, CloudWorkerState, QuotaExhaustedError, SliceStatus, WorkerStatus
-from iris.cluster.types import DeviceType, VmWorkerStatus
+from iris.cluster.types import REGION_ATTRIBUTE_KEY, DeviceType, VmWorkerStatus
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
@@ -929,6 +929,74 @@ class TestPreemptibleRouting:
         assert result.unmet_entries == []
 
 
+class TestRegionRouting:
+    def test_route_demand_filters_by_required_region(self):
+        config_west = make_scale_group_config(name="west", max_slices=5, priority=10, zones=["us-west4-b"])
+        config_west.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+
+        config_eu = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
+        config_eu.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+
+        west = ScalingGroup(config_west, make_mock_platform())
+        eu = ScalingGroup(config_eu, make_mock_platform())
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        for entry in demand:
+            entry.required_regions = frozenset({"us-west4"})
+
+        result = route_demand([west, eu], demand)
+
+        assert len(result.routed_entries["west"]) == 2
+        assert result.routed_entries.get("eu") is None
+        assert result.unmet_entries == []
+
+    def test_route_demand_unmet_when_no_group_matches_region(self):
+        config_eu = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
+        config_eu.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+        eu = ScalingGroup(config_eu, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_regions = frozenset({"us-west4"})
+
+        result = route_demand([eu], demand)
+
+        assert result.routed_entries.get("eu") is None
+        assert len(result.unmet_entries) == 1
+        assert "required_regions=['us-west4']" in result.unmet_entries[0].reason
+
+    def test_route_demand_combined_region_and_preemptible(self):
+        """Demand requiring both region=us-west4 and preemptible=True only routes to the matching group."""
+        config_west_preemptible = make_scale_group_config(
+            name="west-preemptible", max_slices=5, priority=10, zones=["us-west4-b"], preemptible=True
+        )
+        config_west_preemptible.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+
+        config_west_ondemand = make_scale_group_config(
+            name="west-ondemand", max_slices=5, priority=10, zones=["us-west4-b"], preemptible=False
+        )
+        config_west_ondemand.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+
+        config_eu_preemptible = make_scale_group_config(
+            name="eu-preemptible", max_slices=5, priority=10, zones=["europe-west4-b"], preemptible=True
+        )
+        config_eu_preemptible.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+
+        west_preemptible = ScalingGroup(config_west_preemptible, make_mock_platform())
+        west_ondemand = ScalingGroup(config_west_ondemand, make_mock_platform())
+        eu_preemptible = ScalingGroup(config_eu_preemptible, make_mock_platform())
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8", preemptible=True)
+        for entry in demand:
+            entry.required_regions = frozenset({"us-west4"})
+
+        result = route_demand([west_preemptible, west_ondemand, eu_preemptible], demand)
+
+        assert len(result.routed_entries["west-preemptible"]) == 2
+        assert result.routed_entries.get("west-ondemand") is None
+        assert result.routed_entries.get("eu-preemptible") is None
+        assert result.unmet_entries == []
+
+
 class TestAutoscalerWaterfallEndToEnd:
     """End-to-end tests for waterfall routing with FakePlatform."""
 
@@ -1689,3 +1757,78 @@ def test_bootstrap_skipped_without_config():
         assert vm._bootstrap_count == 0, "No bootstrap without config"
 
     autoscaler.shutdown()
+
+
+class TestPerGroupBootstrapConfig:
+    """Tests for _per_group_bootstrap_config merging worker attributes into env vars."""
+
+    def test_merges_worker_attributes(self):
+        """Worker attributes, env, and scale group name are injected into env_vars."""
+        import json
+
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="test:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="west-group", max_slices=5)
+        sg_config.worker.attributes["region"] = "us-west4"
+        sg_config.worker.attributes["preemptible"] = "true"
+        sg_config.worker.env["IRIS_REGION"] = "us-west4"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is not None
+        assert bc.docker_image == "test:latest"
+        attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
+        assert attrs["region"] == "us-west4"
+        assert attrs["preemptible"] == "true"
+        env = json.loads(bc.env_vars["IRIS_TASK_DEFAULT_ENV_JSON"])
+        assert env["IRIS_REGION"] == "us-west4"
+        assert bc.env_vars["IRIS_SCALE_GROUP"] == "west-group"
+
+    def test_returns_base_when_no_worker(self):
+        """Groups without worker config get the base bootstrap config unchanged."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="test:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="plain-group", max_slices=5)
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"plain-group": group}, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is base_bc
+
+    def test_returns_none_without_base(self):
+        """Without a base bootstrap config, returns None."""
+        sg_config = make_scale_group_config(name="test-group", max_slices=5)
+        sg_config.worker.attributes["region"] = "us-west4"
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"test-group": group}, bootstrap_config=None)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is None
+
+    def test_does_not_mutate_base_config(self):
+        """Merging should not modify the original base bootstrap config."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="test:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="west-group", max_slices=5)
+        sg_config.worker.attributes["region"] = "us-west4"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc)
+
+        autoscaler._per_group_bootstrap_config(group)
+
+        assert "IRIS_WORKER_ATTRIBUTES" not in base_bc.env_vars

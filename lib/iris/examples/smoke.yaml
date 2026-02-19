@@ -58,6 +58,10 @@ scale_groups:
       gcp:
         zone: europe-west4-b
         runtime_version: v2-alpha-tpuv5-lite
+    worker:
+      attributes:
+        region: "europe-west4"
+        preemptible: "true"
   tpu_v5e_32:
     accelerator_type: tpu
     accelerator_variant: v5litepod-32
@@ -79,3 +83,7 @@ scale_groups:
       gcp:
         zone: europe-west4-b
         runtime_version: v2-alpha-tpuv5-lite
+    worker:
+      attributes:
+        region: "europe-west4"
+        preemptible: "true"

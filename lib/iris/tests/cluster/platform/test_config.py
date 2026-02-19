@@ -20,6 +20,7 @@ from iris.cluster.config import (
     validate_config,
 )
 from iris.cluster.platform.factory import create_platform
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY
 from iris.rpc import config_pb2
 
 
@@ -200,9 +201,9 @@ scale_groups:
         assert loaded_config.scale_groups["tpu_group_b"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
 
     def test_example_eu_west4_config_round_trips(self, tmp_path: Path):
-        """Real example config from examples/eu-west4.yaml round-trips correctly."""
+        """Real example config from examples/marin.yaml round-trips correctly."""
         iris_root = Path(__file__).parent.parent.parent.parent
-        config_path = iris_root / "examples" / "eu-west4.yaml"
+        config_path = iris_root / "examples" / "marin.yaml"
         if not config_path.exists():
             pytest.skip("Example config not found")
 
@@ -686,7 +687,7 @@ scale_groups:
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
-            iris_root / "examples" / "eu-west4.yaml",
+            iris_root / "examples" / "marin.yaml",
             iris_root / "examples" / "demo.yaml",
         ]
 
@@ -809,3 +810,121 @@ class TestConfigValidation:
         config.scale_groups["tpu"].CopyFrom(sg)
 
         validate_config(config)  # Should not raise
+
+
+def _gcp_scale_group(zone: str, *, preemptible: bool = False) -> config_pb2.ScaleGroupConfig:
+    """Build a valid GCP-backed ScaleGroupConfig for worker settings validation tests."""
+    sg = config_pb2.ScaleGroupConfig(
+        name="test",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        num_vms=1,
+        resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=1),
+    )
+    sg.slice_template.gcp.zone = zone
+    sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
+    sg.slice_template.preemptible = preemptible
+    return sg
+
+
+def _config_with_gcp_sg(
+    zone: str,
+    *,
+    preemptible: bool = False,
+    worker_attributes: dict[str, str] | None = None,
+) -> config_pb2.IrisClusterConfig:
+    """Build an IrisClusterConfig containing a single GCP scale group with optional worker attributes."""
+    sg = _gcp_scale_group(zone, preemptible=preemptible)
+    if worker_attributes is not None:
+        for k, v in worker_attributes.items():
+            sg.worker.attributes[k] = v
+    config = config_pb2.IrisClusterConfig()
+    config.scale_groups["test"].CopyFrom(sg)
+    return config
+
+
+class TestWorkerSettingsValidation:
+    """Tests for worker.attributes validation (region/zone consistency, preemptible agreement)."""
+
+    def test_no_worker_settings_accepted(self):
+        """Scale groups without worker settings always pass validation."""
+        config = _config_with_gcp_sg("us-west4-b")
+        validate_config(config)
+
+    def test_region_matching_zone_prefix_accepted(self):
+        """worker.attributes.region that matches zone prefix passes validation."""
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={REGION_ATTRIBUTE_KEY: "us-west4"})
+        validate_config(config)
+
+    @pytest.mark.parametrize(
+        "zone,region",
+        [
+            ("us-west4-b", "us-central1"),
+            ("us-central1-a", "us-west4"),
+            ("europe-west4-a", "us-west4"),
+        ],
+    )
+    def test_region_mismatching_zone_prefix_rejected(self, zone: str, region: str):
+        """worker.attributes.region that doesn't match zone prefix fails validation."""
+        config = _config_with_gcp_sg(zone, worker_attributes={REGION_ATTRIBUTE_KEY: region})
+        with pytest.raises(ValueError, match="must match"):
+            validate_config(config)
+
+    def test_empty_region_attribute_rejected(self):
+        """worker.attributes.region set to empty string fails validation."""
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={REGION_ATTRIBUTE_KEY: ""})
+        with pytest.raises(ValueError, match="must be non-empty"):
+            validate_config(config)
+
+    def test_preemptible_true_matches_template_true(self):
+        """worker.attributes.preemptible='true' with slice_template.preemptible=True passes."""
+        config = _config_with_gcp_sg(
+            "us-west4-b", preemptible=True, worker_attributes={PREEMPTIBLE_ATTRIBUTE_KEY: "true"}
+        )
+        validate_config(config)
+
+    def test_preemptible_false_matches_template_false(self):
+        """worker.attributes.preemptible='false' with slice_template.preemptible=False passes."""
+        config = _config_with_gcp_sg(
+            "us-west4-b", preemptible=False, worker_attributes={PREEMPTIBLE_ATTRIBUTE_KEY: "false"}
+        )
+        validate_config(config)
+
+    @pytest.mark.parametrize(
+        "attr_value,template_preemptible",
+        [
+            ("true", False),
+            ("false", True),
+        ],
+    )
+    def test_preemptible_mismatch_rejected(self, attr_value: str, template_preemptible: bool):
+        """worker.attributes.preemptible disagreeing with slice_template.preemptible fails."""
+        config = _config_with_gcp_sg(
+            "us-west4-b",
+            preemptible=template_preemptible,
+            worker_attributes={PREEMPTIBLE_ATTRIBUTE_KEY: attr_value},
+        )
+        with pytest.raises(ValueError, match="must match"):
+            validate_config(config)
+
+    def test_invalid_preemptible_attribute_value_rejected(self):
+        """worker.attributes.preemptible with a non-boolean string fails validation."""
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={PREEMPTIBLE_ATTRIBUTE_KEY: "yes"})
+        with pytest.raises(ValueError, match="must be 'true' or 'false'"):
+            validate_config(config)
+
+    def test_both_region_and_preemptible_valid_together(self):
+        """Both region and preemptible worker attributes that agree with slice_template pass."""
+        config = _config_with_gcp_sg(
+            "us-west4-b",
+            preemptible=True,
+            worker_attributes={REGION_ATTRIBUTE_KEY: "us-west4", PREEMPTIBLE_ATTRIBUTE_KEY: "true"},
+        )
+        validate_config(config)
+
+    def test_region_check_skipped_for_non_gcp_platform(self):
+        """Region/zone consistency is only checked for GCP slice templates; manual/local groups are unaffected."""
+        sg = _valid_scale_group()  # uses local platform
+        sg.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+        config = config_pb2.IrisClusterConfig()
+        config.scale_groups["test"].CopyFrom(sg)
+        validate_config(config)  # no GCP zone — region check does not apply

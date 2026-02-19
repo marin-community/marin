@@ -19,6 +19,7 @@ The run_once() flow splits into two phases:
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import deque
 from dataclasses import dataclass
@@ -32,7 +33,7 @@ from iris.cluster.platform.base import (
     RemoteWorkerHandle,
     SliceHandle,
 )
-from iris.cluster.types import DeviceType, VmWorkerStatusMap
+from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
@@ -90,6 +91,7 @@ class DemandEntry:
     constraints: list[cluster_pb2.Constraint]
     resources: cluster_pb2.ResourceSpecProto
     preemptible: bool | None = None  # None = no preference
+    required_regions: frozenset[str] | None = None
     invalid_reason: str | None = None
 
 
@@ -131,11 +133,27 @@ def route_demand(
     unmet: list[UnmetDemand] = []
     group_reasons: dict[str, str] = {}
 
+    def group_region(group: ScalingGroup) -> str | None:
+        if group.config.HasField("worker"):
+            region = group.config.worker.attributes.get(REGION_ATTRIBUTE_KEY, "").strip()
+            if region:
+                return region
+        template = group.config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone.rsplit("-", 1)[0]
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
+
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
         if not group.matches_device_requirement(entry.device_type, entry.device_variant):
             return False
         if entry.preemptible is not None and group.config.slice_template.preemptible != entry.preemptible:
             return False
+        if entry.required_regions:
+            region = group_region(group)
+            if region not in entry.required_regions:
+                return False
         if entry.invalid_reason:
             return False
         if entry.coschedule_group_id and group.num_vms != len(entry.task_ids):
@@ -187,10 +205,12 @@ def route_demand(
             for g in sorted_groups
             if g.matches_device_requirement(entry.device_type, entry.device_variant)
             and (entry.preemptible is None or g.config.slice_template.preemptible == entry.preemptible)
+            and (not entry.required_regions or group_region(g) in entry.required_regions)
         ]
         if not matching_groups:
             reason = (
                 f"no_matching_group: need device={entry.device_type}:{entry.device_variant}"
+                f", required_regions={sorted(entry.required_regions) if entry.required_regions else []}"
                 f", available groups={[g.name for g in sorted_groups]}"
             )
             unmet.append(UnmetDemand(entry=entry, reason=reason))
@@ -549,7 +569,8 @@ class Autoscaler:
 
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
-            slice_obj = group.scale_up(bootstrap_config=self._bootstrap_config, timestamp=ts)
+            bc = self._per_group_bootstrap_config(group)
+            slice_obj = group.scale_up(bootstrap_config=bc, timestamp=ts)
             group.complete_scale_up(slice_obj, ts)
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             action.slice_id = slice_obj.slice_id
@@ -571,6 +592,29 @@ class Autoscaler:
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)
             return False
+
+    def _per_group_bootstrap_config(self, group: ScalingGroup) -> config_pb2.BootstrapConfig | None:
+        """Build a per-group BootstrapConfig by merging worker attributes into env vars.
+
+        Copies the base bootstrap config and injects IRIS_WORKER_ATTRIBUTES,
+        IRIS_TASK_DEFAULT_ENV_JSON, and IRIS_SCALE_GROUP from the group's
+        worker settings into env_vars. This allows per-region/per-group config
+        to flow through the platform's bootstrap path without platform API changes.
+        """
+        if not self._bootstrap_config:
+            return None
+        if not group.config.HasField("worker"):
+            return self._bootstrap_config
+        bc = config_pb2.BootstrapConfig()
+        bc.CopyFrom(self._bootstrap_config)
+        attributes = dict(group.config.worker.attributes)
+        if attributes:
+            bc.env_vars["IRIS_WORKER_ATTRIBUTES"] = json.dumps(attributes, sort_keys=True)
+        if group.config.worker.env:
+            bc.env_vars["IRIS_TASK_DEFAULT_ENV_JSON"] = json.dumps(dict(group.config.worker.env))
+        if group.config.name:
+            bc.env_vars["IRIS_SCALE_GROUP"] = group.config.name
+        return bc
 
     def _register_slice_workers(
         self,

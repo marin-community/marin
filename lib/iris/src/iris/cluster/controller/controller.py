@@ -6,7 +6,6 @@
 import logging
 import threading
 from collections import defaultdict
-from collections.abc import Sequence
 from concurrent.futures import Future, as_completed
 from dataclasses import dataclass, field
 from time import sleep
@@ -33,13 +32,13 @@ from iris.cluster.controller.state import (
     HeartbeatSnapshot,
 )
 from iris.cluster.types import (
-    PREEMPTIBLE_ATTRIBUTE_KEY,
     JobName,
     VmWorkerStatus,
     VmWorkerStatusMap,
     WorkerId,
     get_device_type_enum,
     get_device_variant,
+    normalize_constraints,
 )
 from iris.logging import get_global_buffer
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
@@ -48,19 +47,6 @@ from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
-    """Extract preemptible preference from job constraints.
-
-    Returns True if the job requires preemptible workers, False if it requires
-    non-preemptible workers, or None if no preference is expressed.
-    """
-    for c in constraints:
-        if c.key == PREEMPTIBLE_ATTRIBUTE_KEY and c.op == cluster_pb2.CONSTRAINT_OP_EQ:
-            if c.value.HasField("string_value"):
-                return c.value.string_value == "true"
-    return None
 
 
 def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
@@ -96,7 +82,15 @@ def compute_demand_entries(state: ControllerState) -> list:
         device = job.request.resources.device
         device_type = get_device_type_enum(device)
         device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
-        preemptible_pref = _extract_preemptible_preference(job.request.constraints)
+        preemptible_pref: bool | None = None
+        required_regions: frozenset[str] | None = None
+        invalid_reason: str | None = None
+        try:
+            normalized = normalize_constraints(job.request.constraints)
+            preemptible_pref = normalized.preemptible
+            required_regions = normalized.required_regions
+        except ValueError as e:
+            invalid_reason = f"invalid_constraints: {e}"
 
         if job.is_coscheduled:
             task_ids = [t.task_id.to_wire() for t in tasks]
@@ -108,6 +102,8 @@ def compute_demand_entries(state: ControllerState) -> list:
                 constraints=list(job.request.constraints),
                 resources=job.request.resources,
                 preemptible=preemptible_pref,
+                required_regions=required_regions,
+                invalid_reason=invalid_reason,
             )
             demand_entries.append(entry)
             continue
@@ -121,6 +117,8 @@ def compute_demand_entries(state: ControllerState) -> list:
                 constraints=list(job.request.constraints),
                 resources=job.request.resources,
                 preemptible=preemptible_pref,
+                required_regions=required_regions,
+                invalid_reason=invalid_reason,
             )
             demand_entries.append(entry)
 
@@ -461,6 +459,7 @@ class Controller:
                     resources=job.request.resources,
                     ports=list(job.request.ports),
                     attempt_id=task.current_attempt_id,
+                    constraints=list(job.request.constraints),
                 )
                 # Copy timeout if set (check milliseconds field > 0)
                 if job.request.timeout.milliseconds > 0:

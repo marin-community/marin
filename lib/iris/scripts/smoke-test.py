@@ -16,7 +16,7 @@ Usage:
     uv run python scripts/smoke-test.py
 
     # With custom config and log directory
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \\
+    uv run python scripts/smoke-test.py --config examples/marin.yaml \\
         --log-dir /path/to/logs
 
     # Custom timeout (45 min) for slow environments
@@ -51,10 +51,12 @@ from iris.cluster.platform.debug import (
     stream_docker_logs,
 )
 from iris.cluster.types import (
+    Constraint,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
+    region_constraint,
     tpu_device,
 )
 from iris.rpc import cluster_pb2, config_pb2
@@ -160,6 +162,43 @@ def _quick_task_job(task_id: int):
     time_module.sleep(2.0)
     print(f"Task {task_id} completed")
     return task_id
+
+
+def _assert_region_child(expected_region: str):
+    """Parent job that submits a child and asserts the child inherits the region constraint.
+
+    Uses iris_ctx() to get the IrisClient and submit a child without explicit
+    constraints. The child reads its inherited constraints from JobInfo and
+    asserts the expected region is present.
+    """
+    from iris.client.client import iris_ctx
+    from iris.cluster.types import ResourceSpec as RS
+
+    ctx = iris_ctx()
+
+    def _child_check_region():
+        from iris.cluster.client import get_job_info
+        from iris.cluster.types import REGION_ATTRIBUTE_KEY as RK
+
+        info = get_job_info()
+        if info is None:
+            raise RuntimeError("Not running in an Iris job context")
+        region_constraints = [c for c in info.constraints if c.key == RK]
+        if not region_constraints:
+            raise RuntimeError(f"No region constraint found. constraints={info.constraints}")
+        actual = region_constraints[0].value
+        if actual != expected_region:
+            raise RuntimeError(f"Expected region {expected_region}, got {actual}")
+        print(f"Child validated inherited region: {actual}")
+        return actual
+
+    child = ctx.client.submit(
+        entrypoint=Entrypoint.from_callable(_child_check_region),
+        name="smoke-inherited-child",
+        resources=RS(device=tpu_device("v5litepod-16")),
+    )
+    child.wait(timeout=300, raise_on_failure=True)
+    print(f"Parent: child completed with inherited region={expected_region}")
 
 
 def _distributed_work_job():
@@ -608,7 +647,7 @@ class SmokeTestRunner:
         client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
 
         # Test 1: Simple TPU job
-        self.logger.log(f"[Test 1/4] Simple TPU job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 1/6] Simple TPU job ({self.config.tpu_type})")
         result = self._run_simple_tpu_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
@@ -617,7 +656,7 @@ class SmokeTestRunner:
             return
 
         # Test 2: Concurrent TPU jobs
-        self.logger.log(f"[Test 2/4] Concurrent TPU jobs (3x {self.config.tpu_type})")
+        self.logger.log(f"[Test 2/6] Concurrent TPU jobs (3x {self.config.tpu_type})")
         result = self._run_concurrent_tpu_jobs(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
@@ -626,17 +665,35 @@ class SmokeTestRunner:
             return
 
         # Test 3: Coscheduled multi-task job
-        self.logger.log(f"[Test 3/4] Coscheduled multi-task job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 3/6] Coscheduled multi-task job ({self.config.tpu_type})")
         result = self._run_coscheduled_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
 
-        if self._interrupted:
+        if self._interrupted or self._check_deadline():
             return
 
         # Test 4: JAX TPU job - validates JAX can initialize and use TPU
-        self.logger.log(f"[Test 4/4] JAX TPU job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 4/6] JAX TPU job ({self.config.tpu_type})")
         result = self._run_jax_tpu_job(client)
+        self._results.append(result)
+        self._log_autoscaler_status(controller_url)
+
+        if self._interrupted or self._check_deadline():
+            return
+
+        # Test 5: Region-constrained job - validates constraint-based routing
+        self.logger.log(f"[Test 5/6] Region-constrained job ({self.config.tpu_type})")
+        result = self._run_region_constrained_job(client)
+        self._results.append(result)
+        self._log_autoscaler_status(controller_url)
+
+        if self._interrupted or self._check_deadline():
+            return
+
+        # Test 6: Nested constraint propagation - child inherits parent region
+        self.logger.log(f"[Test 6/6] Nested constraint propagation ({self.config.tpu_type})")
+        result = self._run_nested_constraint_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
 
@@ -682,6 +739,7 @@ class SmokeTestRunner:
         resources: ResourceSpec,
         coscheduling: CoschedulingConfig | None = None,
         environment: EnvironmentSpec | None = None,
+        constraints: list[Constraint] | None = None,
         replicas: int = 1,
         timeout: int | None = None,
     ) -> TestResult:
@@ -694,6 +752,7 @@ class SmokeTestRunner:
                 name=job_name,
                 resources=resources,
                 environment=environment or EnvironmentSpec(),
+                constraints=constraints,
                 coscheduling=coscheduling,
                 replicas=replicas,
             )
@@ -820,6 +879,37 @@ class SmokeTestRunner:
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
             replicas=4,
             timeout=300,
+        )
+
+    def _run_region_constrained_job(self, client: IrisClient) -> TestResult:
+        """Run a job with an explicit region constraint.
+
+        Validates that constraint-based routing places the job on workers
+        whose attributes match the requested region.
+        """
+        return self._run_job_test(
+            client=client,
+            test_name="Region-constrained job",
+            entrypoint=Entrypoint.from_callable(_hello_tpu_job),
+            job_name=f"smoke-region-{self._run_id}",
+            resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
+            constraints=[region_constraint("europe-west4")],
+        )
+
+    def _run_nested_constraint_job(self, client: IrisClient) -> TestResult:
+        """Submit a parent job with a region constraint whose body submits a child.
+
+        The parent uses IrisClient (via iris_ctx()) to submit a child without
+        explicit constraints. The child inherits the parent's region constraint
+        and asserts it via JobInfo.constraints.
+        """
+        return self._run_job_test(
+            client=client,
+            test_name="Nested constraint propagation",
+            entrypoint=Entrypoint.from_callable(_assert_region_child, "europe-west4"),
+            job_name=f"smoke-nested-{self._run_id}",
+            resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
+            constraints=[region_constraint("europe-west4")],
         )
 
     def _log_autoscaler_status(self, controller_url: str):
@@ -1040,7 +1130,7 @@ def main(
         uv run python scripts/smoke-test.py --mode redeploy
 
         # With custom config and log directory
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \
+        uv run python scripts/smoke-test.py --config examples/marin.yaml \
             --log-dir /path/to/logs
     """
     from iris.logging import configure_logging

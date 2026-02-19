@@ -337,18 +337,16 @@ class TpuDevice(_message.Message):
     def __init__(self, variant: _Optional[str] = ..., topology: _Optional[str] = ..., count: _Optional[int] = ...) -> None: ...
 
 class ResourceSpecProto(_message.Message):
-    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "device", "regions")
+    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "device")
     CPU_FIELD_NUMBER: _ClassVar[int]
     MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
     DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
     DEVICE_FIELD_NUMBER: _ClassVar[int]
-    REGIONS_FIELD_NUMBER: _ClassVar[int]
     cpu: int
     memory_bytes: int
     disk_bytes: int
     device: DeviceConfig
-    regions: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
     __slots__ = ("pip_packages", "env_vars", "extras", "python_version", "dockerfile")
@@ -844,7 +842,7 @@ class Controller(_message.Message):
 class Worker(_message.Message):
     __slots__ = ()
     class RunTaskRequest(_message.Message):
-        __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_gcs_path", "resources", "timeout", "ports", "attempt_id")
+        __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_gcs_path", "resources", "timeout", "ports", "attempt_id", "constraints")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         NUM_TASKS_FIELD_NUMBER: _ClassVar[int]
         ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
@@ -854,6 +852,7 @@ class Worker(_message.Message):
         TIMEOUT_FIELD_NUMBER: _ClassVar[int]
         PORTS_FIELD_NUMBER: _ClassVar[int]
         ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+        CONSTRAINTS_FIELD_NUMBER: _ClassVar[int]
         task_id: str
         num_tasks: int
         entrypoint: RuntimeEntrypoint
@@ -863,7 +862,8 @@ class Worker(_message.Message):
         timeout: _time_pb2.Duration
         ports: _containers.RepeatedScalarFieldContainer[str]
         attempt_id: int
-        def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ...) -> None: ...
+        constraints: _containers.RepeatedCompositeFieldContainer[Constraint]
+        def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ...) -> None: ...
     class GetTaskStatusRequest(_message.Message):
         __slots__ = ("task_id", "include_result")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
