@@ -64,11 +64,16 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --reasoning-effort xhigh \
   --hold-dev-tpu \
   --dev-tpu-cluster us-central1 \
+  --dev-tpu-fallback-cluster us-east5-a \
   --dev-tpu-name "$USER-gdn" \
-  --dev-tpu-type v5p-8
+  --dev-tpu-type v5p-8 \
+  --dev-tpu-allocate-attempts 2 \
+  --dev-tpu-allocate-retry-sleep 20 \
+  --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name $USER-gdn --tests both"
 ```
 
 When `--hold-dev-tpu` is enabled, `gdnctl` injects a session directive forcing dev TPU validation/profile commands (`dev-tpu-test` / `dev-tpu-profile`) and warning if `--post-check` includes `ray-test` or `ray-profile`.
+Keep `--post-check` cluster/name aligned to the held allocation (`--cluster` + `--tpu-name`) so checks run on the active dev TPU.
 
 Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`
@@ -81,3 +86,4 @@ The default prompt is aggressive by design:
 - requires hotspot-driven escalation when gains are small.
 - disallows leaving `Commit: (pending)` in new log entries.
 - allows equivalent model reformulations (including removing explicit triangular inversion) if semantics stay correct and performance improves.
+- `--dirty-policy stash` restores the stashed tree automatically at the end of each iteration.

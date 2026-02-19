@@ -26,7 +26,14 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --dirty-policy stash \
   --no-commit-policy count-failure \
   --prompt-file scripts/gdn/codex_iteration_prompt.md \
-  --post-check "uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both" \
+  --hold-dev-tpu \
+  --dev-tpu-cluster us-central1 \
+  --dev-tpu-fallback-cluster us-east5-a \
+  --dev-tpu-name "$USER-gdn" \
+  --dev-tpu-type v5p-8 \
+  --dev-tpu-allocate-attempts 2 \
+  --dev-tpu-allocate-retry-sleep 20 \
+  --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name $USER-gdn --tests both" \
   --post-check "uv run python scripts/gdn/gdnctl.py lint-log"
 ```
 
@@ -53,8 +60,10 @@ Prompt and final-response logs are stored under:
 - `--directive`, `--directive-file`, and `--directive-preset` allow per-session research directives without editing shared prompt files.
 - Preset directives are backed by markdown docs in `scripts/gdn/session_directives/` (for example `triangular-inversion`).
 - `--dirty-policy stash` avoids hard stops after failed attempts leave a dirty tree.
+- `--dirty-policy stash` restores the stashed tree automatically after each iteration.
 - `--no-commit-policy count-failure` allows the loop to continue when an iteration intentionally records a failed attempt without a commit.
 - `--hold-dev-tpu --dev-tpu-name <name>` keeps a dev TPU allocation active for the whole loop and releases it automatically on exit.
+- Keep `--post-check` cluster/name aligned with the active held allocation (`--cluster` + `--tpu-name`) so checks run on the right TPU.
 - If TPU queueing is unstable, switch profile runs to `dev-tpu-profile` on an allocated TPU.
 - If runs flap on infra errors, restart from the latest successful commit.
 

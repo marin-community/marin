@@ -138,8 +138,15 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --directive-preset triangular-inversion \
   --dirty-policy stash \
   --no-commit-policy count-failure \
+  --hold-dev-tpu \
+  --dev-tpu-cluster us-central1 \
+  --dev-tpu-fallback-cluster us-east5-a \
+  --dev-tpu-name "$USER-gdn" \
+  --dev-tpu-type v5p-8 \
+  --dev-tpu-allocate-attempts 2 \
+  --dev-tpu-allocate-retry-sleep 20 \
   --prompt-file scripts/gdn/codex_iteration_prompt.md \
-  --post-check "uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both" \
+  --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name $USER-gdn --tests both" \
   --post-check "uv run python scripts/gdn/gdnctl.py lint-log"
 ```
 
@@ -151,8 +158,10 @@ Notes:
 - `--directive`, `--directive-file`, and `--directive-preset` inject per-session guidance (for example triangular inversion focus) without editing prompt files.
 - Preset directives are stored as markdown docs under `scripts/gdn/session_directives/` (`triangular-inversion` maps to `scripts/gdn/session_directives/triangular-inversion.md`).
 - Prefer `--dirty-policy stash --no-commit-policy count-failure` for unattended long runs so failed attempts do not permanently block progress.
+- `--dirty-policy stash` restores the stashed tree automatically after each iteration.
 - Add `--hold-dev-tpu --dev-tpu-name <name>` to make `codex-loop` allocate/hold/release a dev TPU allocation for the entire loop session.
 - In managed dev TPU mode, use `dev-tpu-test`/`dev-tpu-profile` (not Ray TPU test/profile commands) for loop validation/profiling.
+- Keep managed-mode `--post-check` commands aligned with the held allocation `--cluster` and `--tpu-name`.
 
 ## Logging Expectations
 After each meaningful iteration, append:
