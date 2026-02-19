@@ -29,12 +29,14 @@ import tempfile
 from levanter.data.text import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
 
-from experiments.defaults import default_train
+from experiments.defaults import default_train, default_validation_sets
+from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution import executor_main
+from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 logger = logging.getLogger(__name__)
@@ -188,7 +190,7 @@ def unified_data_config(
             )
             weights[f"eval_{bench}"] = 0.0
 
-    return LmDataConfig(
+    data_config = LmDataConfig(
         tokenizer=UNIFIED_TOKENIZER_PATH,
         components=components,
         train_weights=weights,
@@ -196,6 +198,14 @@ def unified_data_config(
         permutation_type="feistel",
         block_cross_document_attention=True,
     )
+
+    # Text-only validation sets (Paloma, uncheatable_eval) use the base Llama3
+    # tokenizer since the unified tokenizer only adds visual tokens — text
+    # tokenization is identical, so we reuse existing Llama3-tokenized caches.
+    validation_sets = default_validation_sets(tokenizer=llama3_tokenizer)
+    data_config = add_validation_sets_to_mixture(data_config, validation_sets)
+
+    return data_config
 
 
 # --- Train Configs ---
@@ -269,7 +279,7 @@ def make_unified_0_6b(
         train_config=unified_0_6b_train,
         tags=["unified", "scaling", "qwen3", "0.6b"],
         eval_harness_tasks=[],
-        use_default_validation=True,
+        use_default_validation=False,
     )
 
 
@@ -289,7 +299,7 @@ def make_unified_1_7b(
         train_config=unified_1_7b_train,
         tags=["unified", "scaling", "qwen3", "1.7b"],
         eval_harness_tasks=[],
-        use_default_validation=True,
+        use_default_validation=False,
     )
 
 
@@ -309,7 +319,7 @@ def make_unified_4b(
         train_config=unified_4b_train,
         tags=["unified", "scaling", "qwen3", "4b"],
         eval_harness_tasks=[],
-        use_default_validation=True,
+        use_default_validation=False,
     )
 
 

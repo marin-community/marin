@@ -335,10 +335,7 @@ def tokenize(config: TokenizeConfigBase):
         )
 
         # Broadcast the tokenizer to all workers via ZephyrContext
-        # Use load_tokenizer instead of AutoTokenizer.from_pretrained to support gs:// paths
-        from levanter.compat.hf_checkpoints import load_tokenizer
-
-        ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+        ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
 
         shard_paths = ctx.execute(temp_shards)
 
