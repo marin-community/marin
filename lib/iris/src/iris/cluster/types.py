@@ -434,6 +434,24 @@ def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConf
     )
 
 
+def gpu_device(variant: str, count: int = 1) -> cluster_pb2.DeviceConfig:
+    """Create a DeviceConfig for a GPU device.
+
+    Args:
+        variant: GPU variant string (e.g., "H100", "A100").
+        count: Number of GPUs per node.
+
+    Returns:
+        DeviceConfig with the gpu field set.
+    """
+    return cluster_pb2.DeviceConfig(
+        gpu=cluster_pb2.GpuDevice(
+            variant=variant,
+            count=count,
+        )
+    )
+
+
 def parse_memory_string(memory_str: str) -> int:
     """Parse human-readable memory string to bytes.
 
@@ -489,9 +507,6 @@ class ResourceSpec:
         if self.device is not None:
             spec.device.CopyFrom(self.device)
         return spec
-
-
-DEFAULT_BASE_IMAGE = "iris-task:latest"
 
 
 CALLABLE_RUNNER = """\

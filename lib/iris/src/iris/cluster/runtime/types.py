@@ -16,6 +16,7 @@ tasks are in the BUILDING state per worker, preventing resource exhaustion from
 too many concurrent uv sync operations.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -50,6 +51,11 @@ class ContainerConfig:
         if not self.resources or not self.resources.memory_bytes:
             return None
         return self.resources.memory_bytes // (1024 * 1024)
+
+    def get_disk_bytes(self) -> int | None:
+        if not self.resources or not self.resources.disk_bytes:
+            return None
+        return self.resources.disk_bytes
 
 
 @dataclass
@@ -189,8 +195,28 @@ class ContainerRuntime(Protocol):
         """
         ...
 
+    def stage_bundle(
+        self,
+        *,
+        bundle_gcs_path: str,
+        workdir: Path,
+        workdir_files: dict[str, bytes],
+        fetch_bundle: Callable[[str], Path],
+    ) -> None:
+        """Materialize task bundle/workdir files for this runtime.
+
+        Runtimes that execute from worker-local paths (docker/containerd/process)
+        stage the bundle into ``workdir`` directly. Kubernetes runtime may no-op
+        and materialize inside the task Pod instead.
+        """
+        ...
+
     def list_containers(self) -> list[ContainerHandle]:
         """List all managed containers."""
+        ...
+
+    def remove_all_iris_containers(self) -> int:
+        """Force remove all iris-managed containers/sandboxes. Returns count removed."""
         ...
 
     def cleanup(self) -> None:

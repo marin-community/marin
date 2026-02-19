@@ -210,14 +210,9 @@ registry target (see [Code Changes](#8-code-changes-file-by-file)).
 
 ```bash
 # Build all images (from marin repo root)
-uv run iris build worker-image --tag iris-worker:latest
-uv run iris build controller-image --tag iris-controller:latest --dockerfile lib/iris/Dockerfile.controller.coreweave
-uv run iris build task-image --tag iris-task:latest
-
-# Push to ghcr.io (new --registry ghcr flag, to be implemented)
-uv run iris build push iris-worker:latest --registry ghcr --image-name iris-worker
-uv run iris build push iris-controller:latest --registry ghcr --image-name iris-controller-coreweave
-uv run iris build push iris-task:latest --registry ghcr --image-name iris-task
+uv run iris build worker-image --push
+uv run iris build controller-image --push
+uv run iris build task-image --push
 ```
 
 All images on `ghcr.io/marin-community/` are **public** -- consumers (including `crictl pull`
@@ -363,6 +358,11 @@ metal node.** Iris creates NodePool (scale-up) / deletes NodePool (scale-down).
 
 Operator-managed Deployment + Service. Workers discover the controller via K8s Service DNS.
 The controller Pod authenticates to the K8s API via in-cluster service account.
+
+**Cost note**: The smallest CoreWeave CPU instance is `cd-gp-i64-erapids` (64 vCPU, 512 GB
+RAM, Intel Emerald Rapids). This is significantly overprovisioned for the Iris controller,
+which needs minimal compute. CoreWeave does not offer smaller bare metal nodes. This is an
+always-on cost that operators should be aware of.
 
 ### Decision 3: Bootstrap moves into Platform with async state model (all platforms)
 
@@ -772,7 +772,7 @@ metadata:
   name: iris-controller-pool
 spec:
   computeClass: default
-  instanceType: <cpu-instance>   # small CPU-only instance
+  instanceType: cd-gp-i64-erapids  # smallest available CPU instance (64 vCPU, 512GB RAM)
   targetNodes: 1
   autoscaling: false
   nodeLabels:
@@ -1505,39 +1505,65 @@ to validate runtime semantics without requiring CoreWeave capacity.
 
 ---
 
-## 10. Implementation Order
+## 10. Implementation Order & Progress
 
 Execution is split into two spirals. Spiral 1 is a behavior-preserving platform refactor.
 Spiral 2 delivers CoreWeave support on that interface.
 
-### Spiral 1 (refactor, no CoreWeave dependency)
+### Spiral 1 (refactor, no CoreWeave dependency) — DONE
 
-Scope:
-1. Rename transport/handle types (`SshConnection` -> `RemoteExec`, `VmHandle` -> `RemoteWorkerHandle`,
-   related status/field names) and update all call sites.
-2. Move bootstrap ownership into `Platform.create_slice(config, bootstrap_config)` across
-   GCP/Manual/Local; add `BOOTSTRAPPING` slice state.
-3. Remove autoscaler-driven bootstrap threads (`WorkerBootstrap` path) and make reconcile
-   observe platform-reported state transitions.
+Landed in #2853 (`a16e0a3ca`) and supporting PRs.
 
-Exit criteria:
-1. Existing platform/controller/e2e test suites in Section 9.1 stay green.
-2. GCP/manual/local behavior is unchanged except for the new state progression visibility
-   (`CREATING -> BOOTSTRAPPING -> READY|FAILED`).
+| Item | Status | PR |
+|---|---|---|
+| Rename types (`VmHandle` -> `RemoteWorkerHandle`, `SshConnection` -> `RemoteExec`, all related names) | Done | #2853 |
+| Move bootstrap into `Platform.create_slice(config, bootstrap_config)` with async state model | Done | #2853 |
+| Add `BOOTSTRAPPING` and `FAILED` to `CloudSliceState` | Done | #2853 |
+| Remove `WorkerBootstrap` class, `bootstrap_slice_vms()`, autoscaler bootstrap threads | Done | #2853 |
+| Autoscaler observes state via `describe()` / `_poll_slice_states()` | Done | #2853 |
+| Remove `bootstrap()` / `wait_for_connection()` from `RemoteWorkerHandle` protocol | Done | #2853 |
+| Replace fragile `.format()` bootstrap templates with `{{ var }}` syntax | Done | #2819 |
 
-### Spiral 2 (CoreWeave delivery)
+Exit criteria met: existing platform/controller/e2e test suites remain green; GCP/manual/local
+behavior is unchanged except for the new state progression visibility.
 
-Scope:
-1. Implement `CoreweavePlatform` with idempotent reconcile semantics, lifecycle state mapping,
-   and deterministic cleanup on failure.
-2. Implement `ContainerdRuntime` with CRI host-network task sandbox semantics (`network=NODE`).
-3. Add worker runtime selection (`--runtime`) and image/build pipeline updates for CoreWeave.
-4. Add operator manifests under `infra/coreweave/k8s/`.
+### Auxiliary work (landed, not in original spirals)
 
-Exit criteria:
-1. New behavior tests in Section 9.2 pass.
-2. CoreWeave smoke test in Section 9.3 passes end-to-end.
-3. Documentation/manifests and runtime behavior are aligned (no unresolved critical TODOs).
+| Item | Status | PR |
+|---|---|---|
+| GHCR push support for iris Docker images (`--registry ghcr`) | Done | #2871 |
+| CI job to build and push `iris-worker`, `iris-controller`, `iris-task` to ghcr.io | Done | #2871 |
+| Multi-region support (region constraints, worker attributes, routing) | Done | #2870 |
+| Bootstrap template system replacement | Done | #2819 |
+| Smoke-test CLI defaults | Done | #2864 |
+
+### Spiral 2 (CoreWeave delivery) — NOT STARTED
+
+All items below are remaining work. `CoreweavePlatform` is still a stub (all methods
+raise `NotImplementedError`).
+
+| Item | Status | Notes |
+|---|---|---|
+| **CoreweavePlatform implementation** | Not started | Stub only. Needs: kubectl NodePool CRD apply, Pod creation, internal monitoring thread, `describe()` state mapping, `terminate()` cleanup, `list_slices()` / `list_all_slices()` by label, `discover_controller()` via K8s Service DNS, quota error detection. |
+| **ContainerdRuntime** (`runtime/containerd.py`) | Not started | No crictl wrapper. Needs: `create_container()` via `crictl runp` + `crictl create`, `build()`, `run()`, `status()`, `logs()`, `stats()`, `cleanup()`. CRI host-network sandbox (`network=NODE`). |
+| **`--runtime` flag on worker** | Not started | `worker/main.py` hardwires `DockerRuntime`. Needs `--runtime docker\|containerd` flag and selection logic. |
+| **Operator manifests** (`infra/coreweave/k8s/`) | Not started | No directory exists. Needs: `namespace.yaml`, `rbac.yaml`, `configmap.yaml`, `controller-nodepool.yaml` (using `cd-gp-i64-erapids`), `controller-deployment.yaml`, `controller-service.yaml`. |
+| **`CoreweaveControllerConfig` proto** | Not started | `ControllerVmConfig` oneof only has `gcp`, `manual`, `local`. Needs `coreweave` variant with `port` and `service_name` fields. |
+| **`BootstrapConfig` proto: add `runtime` and `task_image` fields** | Not started | Current proto has `controller_address`, `worker_id`, `worker_port`, `docker_image`, `cache_dir`, `env_vars` but is missing `runtime` ("docker" or "containerd") and `task_image`. |
+| **Worker Dockerfile: install `crictl`** | Not started | `Dockerfile.worker` only has `docker-ce-cli`. Needs `crictl` binary from cri-tools release. |
+| **CoreWeave controller Dockerfile** | Not started | No `Dockerfile.controller.coreweave`. Needs `python:3.11-slim` + `kubectl` (no `gcloud`). |
+| **Behavior tests** (Section 9.2) | Not started | Lifecycle convergence, restart recovery, containerd networking, failure classification. |
+| **CoreWeave smoke test** (Section 9.3) | Not started | End-to-end scale-up, task, endpoint rendezvous, scale-down. |
+
+### Recommended implementation order for Spiral 2
+
+1. Proto extensions (`CoreweaveControllerConfig`, `BootstrapConfig.runtime`, `BootstrapConfig.task_image`)
+2. Operator manifests (`infra/coreweave/k8s/`)
+3. `CoreweavePlatform` implementation (kubectl-based NodePool + Pod lifecycle)
+4. `ContainerdRuntime` implementation (crictl wrapper)
+5. `--runtime` flag on `worker/main.py`
+6. Dockerfile updates (crictl in worker, CoreWeave controller variant)
+7. Behavior tests + smoke test
 
 ---
 

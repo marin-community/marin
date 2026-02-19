@@ -19,7 +19,7 @@ from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.task_logging import FsspecLogSink, LogSink, LogSinkConfig
+from iris.cluster.task_logging import FsspecLogSink, LogSink, LogSinkConfig, ProcessLogSink
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
@@ -44,6 +44,7 @@ class WorkerConfig:
     worker_id: str | None = None
     worker_attributes: dict[str, str] = field(default_factory=dict)
     default_task_env: dict[str, str] = field(default_factory=dict)
+    default_task_image: str | None = None
     log_prefix: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
@@ -96,6 +97,7 @@ class Worker:
 
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
+        self._process_log_sink: ProcessLogSink | None = None
 
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
@@ -155,6 +157,8 @@ class Worker:
         if self._server:
             self._server.should_exit = True
         self._threads.stop()
+        if self._process_log_sink:
+            self._process_log_sink.close()
 
         # Remove any remaining containers (tasks already killed above via stop_event)
         with self._lock:
@@ -182,6 +186,7 @@ class Worker:
                 # Shutdown requested during registration
                 break
             self._worker_id = worker_id
+            self._ensure_process_log_sink()
             self._serve(stop_event)
 
     def _register(self, stop_event: threading.Event) -> str | None:
@@ -221,6 +226,21 @@ class Worker:
             stop_event.wait(5.0)
 
         return None
+
+    def _ensure_process_log_sink(self) -> None:
+        if self._process_log_sink:
+            return
+        prefix = self._config.log_prefix or self._inferred_log_prefix
+        if not prefix:
+            logger.warning("Process log sink disabled: log prefix not configured")
+            return
+        worker_id = self._worker_id or "unknown"
+        self._process_log_sink = ProcessLogSink(
+            prefix=prefix,
+            worker_id=worker_id,
+            log_buffer=get_global_buffer(),
+        )
+        logger.info("Process log sink enabled: %s", self._process_log_sink.log_path)
 
     def _resolve_address(self) -> str:
         """Resolve the address to advertise to the controller."""
@@ -430,6 +450,7 @@ class Worker:
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
             default_task_env=self._config.default_task_env,
+            default_task_image=self._config.default_task_image,
             port_allocator=self._port_allocator,
             report_state=lambda: self._notify_task_update(attempt),
             log_sink=log_sink,

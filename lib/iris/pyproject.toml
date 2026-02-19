@@ -12,6 +12,7 @@ dependencies = [
     "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
+    "s3fs>=2024.0.0",
     "grpcio>=1.76.0",
     "httpx>=0.28.1",
     "humanfriendly>=10.0",
@@ -59,10 +60,11 @@ packages = ["src/iris"]
 
 [tool.pytest.ini_options]
 timeout = 30
-addopts = "-n auto --durations=10 -m 'not slow and not docker' -v"
+addopts = "-n auto --durations=10 -m 'not slow and not docker and not containerd' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",
+    "containerd: marks tests requiring containerd/crictl runtime (needs containerd daemon and root)",
     "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]

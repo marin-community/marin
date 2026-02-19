@@ -1105,6 +1105,14 @@ class ControllerState:
             )
             self._workers[event.worker_id] = worker
             txn.log("worker_registered", event.worker_id, address=event.address)
+        logger.info(
+            "Worker registered: id=%s addr=%s gpu_count=%d gpu_name=%s attrs=%s",
+            event.worker_id,
+            event.address,
+            event.metadata.gpu_count,
+            event.metadata.gpu_name,
+            sorted(attributes.keys()),
+        )
 
     def _on_worker_heartbeat(self, txn: TransactionLog, event: WorkerHeartbeatEvent) -> None:
         worker = self._workers[event.worker_id]

@@ -11,8 +11,7 @@ from iris.cluster.controller.autoscaler import (
     UnmetDemand,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.lifecycle import (
-    reload_controller,
+from iris.cluster.controller.vm_lifecycle import (
     start_controller,
     stop_controller,
 )
@@ -33,7 +32,6 @@ __all__ = [
     "ScalingGroup",
     "UnmetDemand",
     "create_autoscaler",
-    "reload_controller",
     "start_controller",
     "stop_controller",
 ]
