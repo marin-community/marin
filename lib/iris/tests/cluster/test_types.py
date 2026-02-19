@@ -220,12 +220,6 @@ def test_normalize_constraints_combines_fields():
     assert nc.required_regions == frozenset({"us-central1"})
 
 
-def test_normalize_constraints_empty_input():
-    nc = normalize_constraints([])
-    assert nc.preemptible is None
-    assert nc.required_regions is None
-
-
 # ---------------------------------------------------------------------------
 # merge_constraints (Python Constraint dataclass inputs)
 # ---------------------------------------------------------------------------

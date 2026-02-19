@@ -16,7 +16,7 @@ Usage:
     uv run python scripts/smoke-test.py
 
     # With custom config and log directory
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \\
+    uv run python scripts/smoke-test.py --config examples/marin.yaml \\
         --log-dir /path/to/logs
 
     # Custom timeout (45 min) for slow environments
@@ -162,6 +162,25 @@ def _quick_task_job(task_id: int):
     time_module.sleep(2.0)
     print(f"Task {task_id} completed")
     return task_id
+
+
+def _assert_region_job(expected_region: str):
+    """Assert that this job's constraints include the expected region."""
+    from iris.cluster.client import get_job_info
+    from iris.cluster.types import REGION_ATTRIBUTE_KEY
+
+    info = get_job_info()
+    if info is None:
+        raise RuntimeError("Not running in an Iris job context")
+
+    region_constraints = [c for c in info.constraints if c.key == REGION_ATTRIBUTE_KEY]
+    if not region_constraints:
+        raise RuntimeError(f"No region constraint found in job info. constraints={info.constraints}")
+    actual = region_constraints[0].value
+    if actual != expected_region:
+        raise RuntimeError(f"Expected region {expected_region}, got {actual}")
+    print(f"Region constraint validated: {actual}")
+    return actual
 
 
 def _distributed_work_job():
@@ -884,9 +903,10 @@ class SmokeTestRunner:
                 self.logger.log(f"  [FAIL] Parent job failed: {state_name}", level="ERROR")
                 return TestResult(test_name, False, f"Parent failed: {state_name}", duration)
 
-            # Child inherits parent constraint without specifying its own
+            # Child inherits parent constraint without specifying its own.
+            # The child asserts it sees the inherited region constraint.
             child_job = client.submit(
-                entrypoint=Entrypoint.from_callable(_hello_tpu_job),
+                entrypoint=Entrypoint.from_callable(_assert_region_job, "europe-west4"),
                 name=f"smoke-child-{self._run_id}",
                 resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
             )
@@ -1128,7 +1148,7 @@ def main(
         uv run python scripts/smoke-test.py --mode redeploy
 
         # With custom config and log directory
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \
+        uv run python scripts/smoke-test.py --config examples/marin.yaml \
             --log-dir /path/to/logs
     """
     from iris.logging import configure_logging

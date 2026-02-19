@@ -201,9 +201,9 @@ scale_groups:
         assert loaded_config.scale_groups["tpu_group_b"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
 
     def test_example_eu_west4_config_round_trips(self, tmp_path: Path):
-        """Real example config from examples/eu-west4.yaml round-trips correctly."""
+        """Real example config from examples/marin.yaml round-trips correctly."""
         iris_root = Path(__file__).parent.parent.parent.parent
-        config_path = iris_root / "examples" / "eu-west4.yaml"
+        config_path = iris_root / "examples" / "marin.yaml"
         if not config_path.exists():
             pytest.skip("Example config not found")
 
@@ -687,7 +687,7 @@ scale_groups:
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
-            iris_root / "examples" / "eu-west4.yaml",
+            iris_root / "examples" / "marin.yaml",
             iris_root / "examples" / "demo.yaml",
         ]
 

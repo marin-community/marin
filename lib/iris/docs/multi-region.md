@@ -490,7 +490,7 @@ entry = DemandEntry(
 
 ## Documentation Updates
 
-- Update Iris examples (including `/Users/power/code/marin/lib/iris/examples/eu-west4.yaml`) to show canonical region constraints and `worker.attributes.region`.
+- Update Iris examples (including `/Users/power/code/marin/lib/iris/examples/marin.yaml`) to show canonical region constraints and `worker.attributes.region`.
 - Update user-facing client docs to explain constraint inheritance semantics.
 - Update any references to `resources.regions` to constraints-only language.
 
