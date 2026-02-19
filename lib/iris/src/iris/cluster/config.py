@@ -13,6 +13,7 @@ Supports YAML config files for cluster management. This module provides:
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ from pathlib import Path
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
-from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, parse_memory_string
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, ZONE_ATTRIBUTE_KEY, parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
@@ -189,6 +190,16 @@ def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
                 raise ValueError(
                     f"Scale group '{name}': worker.attributes.preemptible={normalized!r} "
                     f"must match slice_template.preemptible={sg_config.slice_template.preemptible!r}."
+                )
+
+        zone_attr = attributes.get(ZONE_ATTRIBUTE_KEY, "").strip()
+        if ZONE_ATTRIBUTE_KEY in attributes and not zone_attr:
+            raise ValueError(f"Scale group '{name}': worker.attributes.zone must be non-empty.")
+        if zone_attr and sg_config.slice_template.HasField("gcp") and sg_config.slice_template.gcp.zone:
+            if zone_attr != sg_config.slice_template.gcp.zone:
+                raise ValueError(
+                    f"Scale group '{name}': worker.attributes.zone={zone_attr!r} must match "
+                    f"slice_template.gcp.zone={sg_config.slice_template.gcp.zone!r}."
                 )
 
         template = sg_config.slice_template
@@ -422,6 +433,117 @@ def make_local_config(
     return config
 
 
+def _expand_multi_zone_groups(data: dict) -> None:
+    """Expand scale groups with `zones` into one group per zone.
+
+    Consumes the YAML-only `zones` key on each scale group. For each zone,
+    creates a copy of the scale group with:
+    - name suffixed with -{zone} (e.g. tpu_v5e_16-europe-west4-b)
+    - slice_template.gcp.zone set to the zone
+    - worker.attributes.zone and worker.attributes.region set automatically
+    - min_slices defaulted to 0 if not explicitly set
+
+    Also merges all expanded zones into platform.gcp.zones.
+
+    Raises:
+        ValueError: If zones is not a non-empty list of unique non-empty strings,
+            if an expanded name collides with an existing scale group, or if
+            user-provided zone/region fields conflict with the expansion.
+    """
+    scale_groups = data.get("scale_groups")
+    if not isinstance(scale_groups, dict):
+        return
+
+    all_expanded_zones: set[str] = set()
+    expanded: dict[str, dict] = {}
+    to_remove: list[str] = []
+
+    for name, sg in list(scale_groups.items()):
+        if not isinstance(sg, dict) or "zones" not in sg:
+            continue
+
+        zones = sg.pop("zones")
+        if not isinstance(zones, list) or not zones:
+            raise ValueError(f"Scale group '{name}': zones must be a non-empty list")
+
+        for zone in zones:
+            if not isinstance(zone, str) or not zone.strip():
+                raise ValueError(f"Scale group '{name}': each zone must be a non-empty string, got {zone!r}")
+
+        if len(zones) != len(set(zones)):
+            raise ValueError(f"Scale group '{name}': zones list contains duplicates: {zones}")
+
+        to_remove.append(name)
+
+        # Detect conflicts with user-provided fields that expansion will set
+        existing_gcp_zone = (sg.get("slice_template") or {}).get("gcp", {}).get("zone")
+        existing_worker_attrs = (sg.get("worker") or {}).get("attributes", {})
+        existing_zone_attr = existing_worker_attrs.get("zone")
+        existing_region_attr = existing_worker_attrs.get("region")
+
+        if existing_gcp_zone:
+            raise ValueError(
+                f"Scale group '{name}': cannot set both 'zones' and 'slice_template.gcp.zone'. "
+                f"Remove slice_template.gcp.zone — it is set automatically by zone expansion."
+            )
+        if existing_zone_attr:
+            raise ValueError(
+                f"Scale group '{name}': cannot set both 'zones' and 'worker.attributes.zone'. "
+                f"Remove worker.attributes.zone — it is set automatically by zone expansion."
+            )
+        if existing_region_attr:
+            raise ValueError(
+                f"Scale group '{name}': cannot set both 'zones' and 'worker.attributes.region'. "
+                f"Remove worker.attributes.region — it is set automatically by zone expansion."
+            )
+
+        for zone in zones:
+            region = zone.rsplit("-", 1)[0]
+            expanded_name = f"{name}-{zone}"
+
+            if expanded_name in scale_groups:
+                raise ValueError(
+                    f"Scale group '{name}': expanded name '{expanded_name}' collides with " f"an existing scale group."
+                )
+            if expanded_name in expanded:
+                raise ValueError(
+                    f"Scale group '{name}': expanded name '{expanded_name}' collides with " f"another expanded group."
+                )
+
+            expanded_sg = copy.deepcopy(sg)
+            expanded_sg["name"] = expanded_name
+
+            # Set zone in slice_template.gcp
+            st = expanded_sg.setdefault("slice_template", {})
+            gcp = st.setdefault("gcp", {})
+            gcp["zone"] = zone
+
+            # Set worker.attributes.zone and .region
+            worker = expanded_sg.setdefault("worker", {})
+            attrs = worker.setdefault("attributes", {})
+            attrs[ZONE_ATTRIBUTE_KEY] = zone
+            attrs[REGION_ATTRIBUTE_KEY] = region
+
+            if "min_slices" not in expanded_sg:
+                expanded_sg["min_slices"] = 0
+
+            expanded[expanded_name] = expanded_sg
+            all_expanded_zones.add(zone)
+
+    for name in to_remove:
+        del scale_groups[name]
+    scale_groups.update(expanded)
+
+    # Merge expanded zones into platform.gcp.zones
+    if all_expanded_zones:
+        platform = data.setdefault("platform", {})
+        platform_gcp = platform.get("gcp")
+        if isinstance(platform_gcp, dict):
+            existing = set(platform_gcp.get("zones", []))
+            existing.update(all_expanded_zones)
+            platform_gcp["zones"] = sorted(existing)
+
+
 def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     """Load cluster config from YAML file."""
     config_path = Path(config_path)
@@ -443,6 +565,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
             defaults_bootstrap["controller_address"] = os.path.expandvars(defaults_bootstrap["controller_address"])
 
     _normalize_scale_group_resources(data)
+    _expand_multi_zone_groups(data)
 
     # Ensure scale_groups have their name field set (proto uses map key, but config field needs it)
     if "scale_groups" in data:
