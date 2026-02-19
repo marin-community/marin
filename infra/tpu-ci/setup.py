@@ -471,7 +471,6 @@ def update_token():
         check=False,
     )
 
-    import json as json_mod
 
     try:
         resp = json_mod.loads(result.stdout)
