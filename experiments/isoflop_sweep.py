@@ -13,6 +13,7 @@ from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import downloads
 from experiments.scaling_law_sweeps import adamh as adamh_recipe
 from experiments.scaling_law_sweeps import c_adamc as c_adamc_recipe
+from experiments.scaling_law_sweeps import completed_adamh as completed_adamh_recipe
 from experiments.scaling_law_sweeps import muonh as muonh_recipe
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from marin.execution.executor import executor_main
@@ -86,6 +87,12 @@ SCALING_SUITES = {
         tokenized=nemotron_mix,
         experiment_name="scale-lr-adamh",
         budgets=ADAMH_NEMOTRON_BUDGETS,
+    ),
+    # --- Completed AdamH sweeps ---
+    "nemotron-completed-adamh": completed_adamh_recipe.create_isoflop_sweep_steps(
+        tokenized=nemotron_mix,
+        experiment_name="adamh_scaling_v1",
+        budgets=LEGACY_BUDGETS,
     ),
 }
 

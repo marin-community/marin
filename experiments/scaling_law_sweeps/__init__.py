@@ -17,4 +17,6 @@
 - c_adamc: Original Marin 2025 recipe using CautiousConfig optimizer
 - muonh: MuonH optimizer recipe
 - adamh: AdamH optimizer recipe
+- completed_cadamc: Complete(d)P scaling recipe with data/batch-scaled hyperparameters
+- completed_cadamc_v5: Complete(d)P recipe variant with constant config-level WD
 """

@@ -12,7 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""MuonH scaling recipe for ISOFlop sweeps."""
+"""Complete(d) AdamH scaling recipe for ISOFlop sweeps.
+
+Close-to-CompletedP heuristic scaling for AdamH.
+
+Let r = (batch_size * seq_len) / tokens, r0 = (B0 * seq_len) / T0.
+
+Formulas:
+- Learning rate: lr = lr0 * sqrt(r/r0)
+- Adam LR: adam_lr = adam_lr0 * sqrt(r/r0) * (H0/H)        [muP constraint]
+- Epsilon: epsilon = epsilon0 * sqrt(r0/r)
+- Beta1: fixed at 0.9
+- Beta2: beta2 = clip(beta2_0^(B/B0), 0.9, 0.9999)         [constant token half-life]
+
+Reference 0 (B0=8, H0=512, T0=1e9, seq_len=4096): optimal AdamH for Qwen3 ~130M on Nemotron Mix.
+"""
 
 import math
 from collections.abc import Iterator
@@ -22,7 +36,7 @@ from levanter.data.text import LMMixtureDatasetConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
-from levanter.optim import MuonHConfig
+from levanter.optim import AdamHConfig
 
 from experiments.defaults import default_train
 from experiments.evals.evals import default_eval
@@ -31,7 +45,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
-from marin.scaling_laws import CandidateConfig, pick_v5p_type
+from marin.scaling_laws import CandidateConfig, pick_v4_type
 
 # --- Constants ---
 SEQ_LEN: int = 4096
@@ -57,33 +71,37 @@ def _format_run_name(
 
 
 @dataclass(frozen=True)
-class MuonHRecipe:
-    """MuonH scaling recipe."""
+class CompletedAdamHRecipe:
+    """Complete(d) AdamH scaling recipe.
 
-    name: str = "muonh"
+    Close-to-CompletedP heuristic scaling where hyperparameters scale with
+    the ratio r/r0 = (B * T0) / (B0 * T) and batch size B/B0,
+    using the AdamH optimizer.
+    """
+
+    name: str = "completed-adamh"
     tokenizer: str = "stanford-crfm/marin-tokenizer"
 
     @property
     def vocab_size(self) -> int:
         return get_vocab_size_for_tokenizer(self.tokenizer)
 
-    # --- Learning rate scaling ---
-    lr_constant: float = 0.33
-    muonh_learning_rate: float = 0.01
-    muonh_lr_batch_ref: int = 128
+    # --- Reference point (B0=8, H0=512, T0=1e9, seq_len=4096) ---
+    # Optimal AdamH for Qwen3 ~130M on Nemotron Mix
+    reference_batch_size: int = 8
+    reference_tokens: float = 1e9
+    reference_hidden_dim: int = 512
 
-    # --- MuonH hyperparameters ---
-    muonh_momentum: float = 0.98
-    muonh_nesterov: bool = True
-    muonh_backend_steps: int = 5
-    muonh_muon_epsilon: float = 1e-5
+    # --- Base hyperparameters (at reference point) ---
+    lr_base: float = 0.0010013084985803517
+    adam_lr_base: float = 0.0005204192548239702 * 512  # adam_lr = adam_lr_base * sqrt(r/r0) / hidden_dim
+    epsilon_base: float = 9.309976507000956e-08
+    beta1: float = 0.9  # fixed
+    beta2_base: float = 0.9998999999999991  # beta2 = clip(beta2_0^(B/B0), 0.9, 0.9999)
 
-    # --- Adam hyperparameters ---
-    beta1: float = 0.95
-    beta2_base: float = 0.98
-    beta2_batch_divisor: float = 128
-    epsilon: float = 1e-15
-    max_grad_norm: float = 1.0
+    # --- Fixed hyperparameters (not scaled) ---
+    max_grad_norm: float = 0.102
+    nesterov: bool = False
 
     # --- Schedule ---
     min_lr_ratio: float = 0.0
@@ -108,20 +126,55 @@ class MuonHRecipe:
     base_max_params_budget: float = 3e20
     global_max_params: float = 1e12
 
+    # --- Beta2 constraints ---
+    min_beta2: float = 0.9
+    max_beta2: float = 0.9999
+
     # --- Search step sizes ---
     small_budget_step_size: int = 128
     large_budget_step_size: int = 256
     budget_step_threshold: float = 2e19
 
-    def _compute_adam_lr(self, batch_size: int, hidden_dim: int) -> float:
-        return (self.lr_constant * math.sqrt(batch_size)) / hidden_dim
+    def _compute_scaling_ratio(self, batch_size: int, tokens: float) -> float:
+        """Compute r/r0 = (B * T0) / (B0 * T).
 
-    def _compute_muon_lr(self, batch_size: int) -> float:
-        lr_scale = math.sqrt(batch_size / self.muonh_lr_batch_ref)
-        return self.muonh_learning_rate * min(1.0, lr_scale)
+        Equivalent to (B * seq_len / T) / (B0 * seq_len / T0); seq_len cancels.
+        """
+        return (batch_size * self.reference_tokens) / (self.reference_batch_size * tokens)
+
+    def _compute_learning_rate(self, batch_size: int, tokens: float) -> float:
+        """lr = lr0 * sqrt(r/r0)"""
+        ratio = self._compute_scaling_ratio(batch_size, tokens)
+        lr = self.lr_base * math.sqrt(ratio)
+        return min(self.max_learning_rate, lr)
+
+    def _compute_adam_lr(self, hidden_dim: int, batch_size: int, tokens: float) -> float:
+        """adam_lr = adam_lr0 * sqrt(r/r0) * (H0/H)"""
+        ratio = self._compute_scaling_ratio(batch_size, tokens)
+        adam_lr = self.adam_lr_base * math.sqrt(ratio) / hidden_dim
+        return min(self.max_learning_rate, adam_lr)
+
+    def _compute_epsilon(self, batch_size: int, tokens: float) -> float:
+        """epsilon = epsilon0 * sqrt(r0/r)"""
+        ratio = self._compute_scaling_ratio(batch_size, tokens)
+        return self.epsilon_base * math.sqrt(1.0 / ratio)
 
     def _compute_beta2(self, batch_size: int) -> float:
-        return max(0.95, self.beta2_base ** (batch_size / self.beta2_batch_divisor))
+        """beta2 = clip(beta2_0^(B/B0), min_beta2, max_beta2). Constant token half-life."""
+        exponent = batch_size / self.reference_batch_size
+        return max(self.min_beta2, min(self.max_beta2, self.beta2_base**exponent))
+
+    def _any_cap_hit(self, batch_size: int, tokens: float, hidden_dim: int) -> bool:
+        """Return True if any hyperparameter would be clamped at this configuration."""
+        ratio = self._compute_scaling_ratio(batch_size, tokens)
+        lr = self.lr_base * math.sqrt(ratio)
+        adam_lr = self.adam_lr_base * math.sqrt(ratio) / hidden_dim
+        beta2 = self.beta2_base ** (batch_size / self.reference_batch_size)
+        return (
+            lr > self.max_learning_rate
+            or adam_lr > self.max_learning_rate
+            or beta2 < self.min_beta2
+        )
 
     def _compute_num_layers(self, hidden_size: int) -> int:
         hs_pow = math.log2(hidden_size)
@@ -156,7 +209,6 @@ class MuonHRecipe:
             num_kv_heads=n_heads,
             max_seq_len=seq_len,
             rope=Llama3RotaryEmbeddingsConfig(),
-            cross_entropy_block_size=32000,
         )
 
     def estimate_memory_bytes(
@@ -199,15 +251,13 @@ class MuonHRecipe:
         flops_budget: float,
         seq_len: int = SEQ_LEN,
     ) -> CandidateConfig | None:
-        hidden_size = model_config.hidden_dim
-
+        hidden_dim = model_config.hidden_dim
         batch_exact = tokens / (STEPS_PER_RUN * seq_len)
         batch_size = _round_to_power_of_two(batch_exact)
 
-        adam_lr = self._compute_adam_lr(batch_size, hidden_size)
-        while adam_lr > self.max_learning_rate:
+        # Reduce batch size (extend steps) until all hyperparameters are within valid range
+        while self._any_cap_hit(batch_size, tokens, hidden_dim) and batch_size > self.min_batch_size:
             batch_size //= 2
-            adam_lr = self._compute_adam_lr(batch_size, hidden_size)
 
         if batch_size < self.min_batch_size or batch_size > self.max_batch_size:
             return None
@@ -215,24 +265,24 @@ class MuonHRecipe:
         train_steps = round(tokens / (batch_size * seq_len))
         actual_tokens = batch_size * train_steps * seq_len
 
+        # Compute all scaled hyperparameters
+        lr = self._compute_learning_rate(batch_size, tokens)
+        adam_lr = self._compute_adam_lr(hidden_dim, batch_size, tokens)
+        epsilon = self._compute_epsilon(batch_size, tokens)
         beta2 = self._compute_beta2(batch_size)
-        muon_lr = self._compute_muon_lr(batch_size)
 
-        optimizer_config = MuonHConfig(
-            learning_rate=muon_lr,
+        optimizer_config = AdamHConfig(
+            learning_rate=lr,
             adam_lr=adam_lr,
             min_lr_ratio=self.min_lr_ratio,
-            momentum=self.muonh_momentum,
-            nesterov=self.muonh_nesterov,
-            backend_steps=self.muonh_backend_steps,
+            warmup=self.warmup,
             beta1=self.beta1,
             beta2=beta2,
-            epsilon=self.epsilon,
-            muon_epsilon=self.muonh_muon_epsilon,
+            epsilon=epsilon,
             max_grad_norm=self.max_grad_norm,
-            warmup=self.warmup,
             lr_schedule=self.lr_schedule,
             decay=self.decay,
+            nesterov=self.nesterov,
         )
 
         return CandidateConfig(
@@ -257,7 +307,7 @@ class MuonHRecipe:
                 yield candidate
 
 
-RECIPE = MuonHRecipe()
+RECIPE = CompletedAdamHRecipe()
 
 
 def create_isoflop_sweep_steps(
@@ -267,11 +317,11 @@ def create_isoflop_sweep_steps(
     eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
     seq_len: int = SEQ_LEN,
 ) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
-    """Create ExecutorSteps for an ISOFlop sweep using MuonH recipe."""
+    """Create ExecutorSteps for an ISOFlop sweep using Completed AdamH recipe."""
     candidates = [c for budget in budgets for c in RECIPE.candidates_for_budget(budget, seq_len)]
 
     base_train_config = SimpleTrainConfig(
-        resources=ResourceConfig.with_tpu("v5p-8"),
+        resources=ResourceConfig.with_tpu("v4-8"),
         train_batch_size=1,
         num_train_steps=50_000,
         learning_rate=1.0,
@@ -283,7 +333,7 @@ def create_isoflop_sweep_steps(
     for candidate in candidates:
         model_config = candidate.model_config
         estimated_memory = RECIPE.estimate_memory_bytes(candidate)
-        tpu_type = pick_v5p_type(estimated_memory)
+        tpu_type = pick_v4_type(estimated_memory)
 
         run_name = _format_run_name(
             candidate.flops_budget,
@@ -301,7 +351,7 @@ def create_isoflop_sweep_steps(
             f"B={candidate.batch_size}",
             f"steps={candidate.train_steps}",
             f"tokens={candidate.tokens:.1e}",
-            "optimizer=muonh",
+            "optimizer=completed-adamh",
         )
 
         train_cfg = replace(
