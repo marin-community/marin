@@ -552,11 +552,17 @@ def test_get_process_logs():
     log_buffer = LogRingBuffer(maxlen=100)
 
     # Add some test log records
-    log_buffer.append(BufferedLogRecord(timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1"))
     log_buffer.append(
-        BufferedLogRecord(timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log")
+        BufferedLogRecord(seq=1, timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1")
     )
-    log_buffer.append(BufferedLogRecord(timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2"))
+    log_buffer.append(
+        BufferedLogRecord(
+            seq=2, timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log"
+        )
+    )
+    log_buffer.append(
+        BufferedLogRecord(seq=3, timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2")
+    )
 
     service = ControllerServiceImpl(
         state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=log_buffer

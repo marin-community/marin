@@ -16,7 +16,9 @@ def ring_buffer():
 def test_ring_buffer_fifo_eviction(ring_buffer):
     """Oldest records are evicted when buffer is full."""
     for i in range(15):
-        ring_buffer.append(BufferedLogRecord(timestamp=float(i), level="INFO", logger_name="test", message=f"msg-{i}"))
+        ring_buffer.append(
+            BufferedLogRecord(seq=i, timestamp=float(i), level="INFO", logger_name="test", message=f"msg-{i}")
+        )
     results = ring_buffer.query()
     assert len(results) == 10
     assert results[0].message == "msg-5"
@@ -25,9 +27,11 @@ def test_ring_buffer_fifo_eviction(ring_buffer):
 
 def test_ring_buffer_query_prefix(ring_buffer):
     """Query filters records by logger name prefix."""
-    ring_buffer.append(BufferedLogRecord(0.0, "INFO", "iris.controller", "a"))
-    ring_buffer.append(BufferedLogRecord(1.0, "INFO", "iris.worker", "b"))
-    ring_buffer.append(BufferedLogRecord(2.0, "INFO", "iris.controller.scheduler", "c"))
+    ring_buffer.append(BufferedLogRecord(seq=1, timestamp=0.0, level="INFO", logger_name="iris.controller", message="a"))
+    ring_buffer.append(BufferedLogRecord(seq=2, timestamp=1.0, level="INFO", logger_name="iris.worker", message="b"))
+    ring_buffer.append(
+        BufferedLogRecord(seq=3, timestamp=2.0, level="INFO", logger_name="iris.controller.scheduler", message="c")
+    )
 
     results = ring_buffer.query(prefix="iris.controller")
     assert len(results) == 2
@@ -38,7 +42,9 @@ def test_ring_buffer_query_prefix(ring_buffer):
 def test_ring_buffer_query_limit(ring_buffer):
     """Query respects limit parameter, returning most recent records."""
     for i in range(10):
-        ring_buffer.append(BufferedLogRecord(float(i), "INFO", "test", f"msg-{i}"))
+        ring_buffer.append(
+            BufferedLogRecord(seq=i, timestamp=float(i), level="INFO", logger_name="test", message=f"msg-{i}")
+        )
     results = ring_buffer.query(limit=3)
     assert len(results) == 3
     assert results[0].message == "msg-7"

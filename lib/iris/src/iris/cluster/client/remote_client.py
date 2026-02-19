@@ -164,19 +164,32 @@ class RemoteClusterClient:
         """Wait for job completion while streaming task logs."""
         deadline = Deadline.from_seconds(timeout)
         readers: dict[str, LogReader] = {}
+        known_tasks: set[str] = set()
         terminal_status: cluster_pb2.JobStatus | None = None
         try:
             while True:
                 status = self.get_job_status(job_id)
+                state_name = cluster_pb2.JobState.Name(status.state)
                 tasks = self._collect_task_statuses(job_id, include_children=include_children)
                 task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
                 max_lines = 10000
                 total_lines = 0
                 last_timestamp_ms = since_ms
 
+                waiting_tasks = []
                 for task_status in tasks:
                     if not task_status.log_directory or not task_status.worker_id:
+                        waiting_tasks.append(task_status.task_id)
                         continue
+
+                    if task_status.task_id not in known_tasks:
+                        known_tasks.add(task_status.task_id)
+                        logger.info(
+                            "Streaming logs for task=%s worker=%s log_dir=%s",
+                            task_status.task_id,
+                            task_status.worker_id,
+                            task_status.log_directory,
+                        )
 
                     attempts_by_id = {a.attempt_id: a for a in task_status.attempts}
                     assert attempts_by_id, f"Task {task_status.task_id} missing attempts in status response"
@@ -227,6 +240,15 @@ class RemoteClusterClient:
                             )
                         )
 
+                if waiting_tasks:
+                    logger.debug(
+                        "job=%s state=%s: %d task(s) not yet streaming (no log_directory/worker): %s",
+                        job_id,
+                        state_name,
+                        len(waiting_tasks),
+                        ", ".join(waiting_tasks),
+                    )
+
                 response = cluster_pb2.Controller.GetTaskLogsResponse(
                     task_logs=task_logs,
                     last_timestamp_ms=last_timestamp_ms,
@@ -236,10 +258,17 @@ class RemoteClusterClient:
                     on_logs(response)
 
                 if is_job_finished(status.state):
+                    logger.info(
+                        "job=%s finished with state=%s, draining logs (total_lines=%d)",
+                        job_id,
+                        state_name,
+                        total_lines,
+                    )
                     if terminal_status is not None:
                         return terminal_status
-                    # Do one final immediate drain in the next loop iteration.
+                    # Give log writers a moment to flush, then drain once more.
                     terminal_status = status
+                    time.sleep(1)
                     continue
 
                 deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")

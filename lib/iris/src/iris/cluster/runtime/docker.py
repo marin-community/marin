@@ -16,9 +16,11 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -661,6 +663,20 @@ class DockerRuntime:
         handle = DockerContainerHandle(config=config, runtime=self)
         self._handles.append(handle)
         return handle
+
+    def stage_bundle(
+        self,
+        *,
+        bundle_gcs_path: str,
+        workdir: Path,
+        workdir_files: dict[str, bytes],
+        fetch_bundle: Callable[[str], Path],
+    ) -> None:
+        """Stage bundle and workdir files on worker-local filesystem."""
+        bundle_path = fetch_bundle(bundle_gcs_path)
+        shutil.copytree(bundle_path, workdir, dirs_exist_ok=True)
+        for name, data in workdir_files.items():
+            (workdir / name).write_bytes(data)
 
     def _track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""

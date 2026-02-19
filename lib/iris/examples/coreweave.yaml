@@ -1,0 +1,123 @@
+# Iris configuration for CoreWeave CKS clusters.
+#
+# Architecture: Shared NodePool model. `iris cluster start` creates one
+# NodePool per scale group (plus a controller pool) with CoreWeave autoscaling
+# enabled. Iris manages only Pods; CoreWeave manages node provisioning.
+# NodePool names are derived from this config: {label_prefix}-{scale_group_name}.
+# When Pods are deleted, NodePools scale to zero automatically.
+#
+# Workflow:
+#
+#   1. Deploy RBAC prerequisites (one-time):
+#        kubectl apply -f infra/coreweave/k8s/
+#
+#   2. Set S3 object storage credentials (required for s3:// storage URIs):
+#        export CW_KEY_ID=<your-coreweave-key-id>
+#        export CW_KEY_SECRET=<your-coreweave-key-secret>
+#      These are created in the CoreWeave Console under API Access > Object Storage.
+#      `iris cluster start` creates a K8s Secret from these env vars automatically.
+#
+#   3. Start the cluster (creates shared NodePools, ConfigMap, Deployment, Service):
+#        iris --config=lib/iris/examples/coreweave.yaml cluster start
+#
+#   4. Use the Iris CLI:
+#        iris --config=lib/iris/examples/coreweave.yaml cluster status
+#        iris --config=lib/iris/examples/coreweave.yaml cluster dashboard
+#
+# This config file is used by:
+#   - The CLI on the operator's laptop (for `cluster start`, `cluster status`, job submission)
+#   - The controller and workers inside the cluster (mounted as ConfigMap at /etc/iris/config.yaml)
+#
+# To use a local kubeconfig (e.g. from CoreWeave Console > Tokens > Download):
+#   Set platform.coreweave.kubeconfig_path below, or:
+#   export KUBECONFIG=~/.kube/coreweave-iris
+
+platform:
+  label_prefix: iris
+  coreweave:
+    region: US-WEST-04A
+    namespace: iris
+    kubeconfig_path: ~/.kube/coreweave-iris  # Set this to your local kubeconfig, or use KUBECONFIG env var
+    object_storage_endpoint: https://cwobject.com
+
+storage:
+  bundle_prefix: s3://marin-us-west-04a/iris/bundles
+  log_prefix: s3://marin-us-west-04a/iris/logs
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  coreweave:
+    port: 10000
+    service_name: iris-controller-svc
+    scale_group: cpu-erapids
+
+defaults:
+  timeouts:
+    boot_timeout:
+      milliseconds: 1800000    # 30 min — bare metal boot takes 20-30 min
+    init_timeout:
+      milliseconds: 1800000
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+    startup_grace_period:
+      milliseconds: 2400000    # 40 min — covers autoscaler node provisioning + Pod startup
+  default_task_image: ghcr.io/marin-community/iris-task:latest
+  bootstrap:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    worker_port: 10001
+    cache_dir: /mnt/local/iris-cache
+    runtime: kubernetes
+
+scale_groups:
+  # CPU general-purpose — used for data processing, orchestration, etc.
+  cpu-erapids:
+    accelerator_type: cpu
+    num_vms: 1
+    resources:
+      cpu: 64
+      ram: 256GB
+      gpu_count: 0
+      disk: 1TB
+    worker:
+      attributes:
+        region: US-WEST-04A
+        pool: cpu-erapids
+    min_slices: 0
+    max_slices: 1  # Cost-safe default; increase for production workloads
+    priority: 100
+    slice_template:
+      accelerator_type: cpu
+      num_vms: 1
+      coreweave:
+        region: US-WEST-04A
+        instance_type: cd-gp-i64-erapids
+
+  # 8x H100 with InfiniBand — primary training workhorse
+  h100-8x:
+    accelerator_type: gpu
+    accelerator_variant: H100
+    num_vms: 1
+    resources:
+      cpu: 128
+      ram: 2048GB
+      gpu_count: 8
+      disk: 1TB
+    worker:
+      attributes:
+        region: US-WEST-04A
+        pool: h100-8x
+    min_slices: 0
+    max_slices: 1  # Cost-safe default; increase for production workloads
+    priority: 50
+    slice_template:
+      accelerator_type: gpu
+      accelerator_variant: H100
+      num_vms: 1
+      coreweave:
+        region: US-WEST-04A
+        instance_type: gd-8xh100ib-i128

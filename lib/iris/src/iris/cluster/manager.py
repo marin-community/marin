@@ -11,142 +11,47 @@ Provides free functions for cluster lifecycle operations:
 from __future__ import annotations
 
 import logging
-import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 
 from iris.cluster.config import IrisConfig, validate_config
-from iris.cluster.controller.lifecycle import (
-    start_controller,
-    stop_controller,
-)
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline
 
 logger = logging.getLogger(__name__)
-
-TERMINATE_TIMEOUT_SECONDS = 60
 
 
 @contextmanager
 def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
     """Start controller, open tunnel, yield address, stop on exit.
 
-    For local mode, starts an in-process controller.
-    For GCP/Manual, creates Platform, starts controller VM, opens tunnel.
+    Delegates controller lifecycle to the platform (GCP, CoreWeave, Local, etc.).
     """
     validate_config(config)
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
 
-    which = config.controller.WhichOneof("controller")
-    if which == "local":
-        from iris.cluster.controller.local import LocalController
-
-        controller = LocalController(config)
-        address = controller.start()
-        try:
-            with platform.tunnel(address) as tunnel_url:
-                yield tunnel_url
-        finally:
-            controller.stop()
-            platform.shutdown()
-    else:
-        address, _vm = start_controller(platform, config)
-        try:
-            with platform.tunnel(address) as tunnel_url:
-                yield tunnel_url
-        finally:
-            stop_controller(platform, config)
-            platform.shutdown()
+    address = platform.start_controller(config)
+    try:
+        with platform.tunnel(address) as tunnel_url:
+            yield tunnel_url
+    finally:
+        platform.stop_controller(config)
+        platform.shutdown()
 
 
-def _collect_terminate_targets(
-    platform,
+def stop_all(
     config: config_pb2.IrisClusterConfig,
-) -> list[tuple[str, Callable[[], None]]]:
-    """Enumerate all resources that need terminating: controller + slices.
+    dry_run: bool = False,
+    label_prefix: str | None = None,
+) -> list[str]:
+    """Stop controller and all worker slices.
 
-    Returns a list of (name, terminate_fn) pairs. Discovery (list_all_slices) is
-    a single pass across all zones; the actual deletes happen later in parallel.
-    """
-    label_prefix = config.platform.label_prefix or "iris"
-    targets: list[tuple[str, Callable[[], None]]] = []
-
-    targets.append(("controller", lambda: stop_controller(platform, config)))
-
-    all_slices = platform.list_all_slices(
-        labels={f"{label_prefix}-managed": "true"},
-    )
-    for slice_handle in all_slices:
-        logger.info("Queued termination for slice %s", slice_handle.slice_id)
-        targets.append((f"slice:{slice_handle.slice_id}", slice_handle.terminate))
-
-    return targets
-
-
-def stop_all(config: config_pb2.IrisClusterConfig) -> None:
-    """Stop controller and all worker slices in parallel.
-
-    First enumerates all terminate targets (controller VM + TPU slices), then
-    runs all deletes concurrently via daemon threads.  Applies a hard timeout
-    of TERMINATE_TIMEOUT_SECONDS — any operation still running after that is
-    logged at WARNING and abandoned.
-
-    Daemon threads are used instead of ThreadPoolExecutor so that timed-out
-    threads don't block interpreter shutdown (Python's atexit handler for
-    ThreadPoolExecutor joins all worker threads indefinitely).
+    Delegates to the platform's stop_all() for platform-specific teardown,
+    then calls platform.shutdown() to release platform resources.
     """
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
-    errors: list[str] = []
-
     try:
-        targets = _collect_terminate_targets(platform, config)
-        if not targets:
-            logger.info("No resources to terminate")
-            return
-
-        logger.info("Terminating %d resource(s) in parallel", len(targets))
-
-        results: dict[str, Exception | None] = {}
-        lock = threading.Lock()
-
-        def _run(name: str, fn: Callable[[], None]) -> None:
-            try:
-                fn()
-            except Exception as exc:
-                with lock:
-                    results[name] = exc
-                return
-            with lock:
-                results[name] = None
-
-        threads: dict[str, threading.Thread] = {}
-        for name, fn in targets:
-            t = threading.Thread(target=_run, args=(name, fn), daemon=True)
-            t.start()
-            threads[name] = t
-
-        dl = Deadline.from_seconds(TERMINATE_TIMEOUT_SECONDS)
-        for _name, t in threads.items():
-            t.join(timeout=dl.remaining_seconds())
-
-        for name, t in threads.items():
-            if t.is_alive():
-                logger.warning(
-                    "Termination of %s still running after %ds, giving up",
-                    name,
-                    TERMINATE_TIMEOUT_SECONDS,
-                )
-                errors.append(f"timeout:{name}")
-            else:
-                exc = results.get(name)
-                if exc is not None:
-                    logger.exception("Failed to terminate %s", name, exc_info=exc)
-                    errors.append(name)
+        return platform.stop_all(config, dry_run=dry_run, label_prefix=label_prefix)
     finally:
         platform.shutdown()
-
-    if errors:
-        logger.error("Errors when stopping cluster: %s", errors)

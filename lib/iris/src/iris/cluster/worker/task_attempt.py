@@ -22,7 +22,6 @@ from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, Contain
 from google.protobuf import json_format
 
 from iris.cluster.types import (
-    DEFAULT_BASE_IMAGE,
     JobName,
     is_task_finished,
 )
@@ -206,6 +205,7 @@ class TaskAttempt:
         worker_id: str | None,
         controller_address: str | None,
         default_task_env: dict[str, str],
+        default_task_image: str | None,
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
         log_sink: LogSink,
@@ -221,6 +221,7 @@ class TaskAttempt:
             worker_id: Worker identifier for env injection
             controller_address: Controller address for env injection
             default_task_env: Worker-level default env vars injected into task containers
+            default_task_image: Fully-qualified task container image from cluster config
             port_allocator: Port allocator for retry logic
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
@@ -232,6 +233,7 @@ class TaskAttempt:
         self._worker_id = worker_id
         self._controller_address = controller_address
         self._default_task_env = default_task_env
+        self._default_task_image = default_task_image
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
@@ -245,8 +247,6 @@ class TaskAttempt:
         self.ports: dict[str, int] = config.ports
         self.workdir: Path | None = config.workdir
         self._cache_dir: Path = config.cache_dir
-        self._bundle_path: Path | None = None
-
         # Task state
         self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
@@ -425,6 +425,7 @@ class TaskAttempt:
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
         self._report_state()  # Report BUILDING state to controller
+
         download_start = time.monotonic()
 
         # Chaos injection for testing failures during download
@@ -439,23 +440,28 @@ class TaskAttempt:
         # downloads are typically fast. Future work could add cancellation support
         # to BundleProvider.get_bundle if long downloads become a problem.)
 
-        self._bundle_path = self._bundle_provider.get_bundle(
-            self.request.bundle_gcs_path,
-            expected_hash=None,
+        assert self.workdir is not None
+        self._runtime.stage_bundle(
+            bundle_gcs_path=self.request.bundle_gcs_path,
+            workdir=self.workdir,
+            workdir_files=dict(self.request.entrypoint.workdir_files),
+            fetch_bundle=lambda path: self._bundle_provider.get_bundle(path, expected_hash=None),
         )
         logger.info(
-            "Bundle downloaded for task %s in %.2fs",
+            "Bundle staged for task %s in %.2fs",
             self.task_id,
             time.monotonic() - download_start,
         )
 
     def _resolve_image(self) -> None:
-        """Resolve the task image.
+        """Resolve the task image from cluster config.
 
         No per-job Docker build — the pre-built base image has a pre-warmed
         uv cache. The remote client wraps the entrypoint with uv sync.
         """
-        self.image_tag = DEFAULT_BASE_IMAGE
+        if not self._default_task_image:
+            raise ValueError("No task image configured. Set defaults.default_task_image in cluster config.")
+        self.image_tag = self._default_task_image
         logger.info("Using task image %s for task %s", self.image_tag, self.task_id)
 
     def _create_container(self) -> None:
@@ -480,16 +486,6 @@ class TaskAttempt:
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint
 
-        # Copy bundle into task context dir so everything is in one place
-        assert self.workdir is not None
-        shutil.copytree(self._bundle_path, self.workdir, dirs_exist_ok=True)
-
-        # Unpack any files the entrypoint needs in the workdir
-        if rt_ep.workdir_files:
-            assert self.workdir is not None
-            for name, data in rt_ep.workdir_files.items():
-                (self.workdir / name).write_bytes(data)
-
         # Extract timeout from proto (0 or unset means no timeout)
         timeout_seconds = None
         if self.request.HasField("timeout") and self.request.timeout.milliseconds > 0:
@@ -504,17 +500,19 @@ class TaskAttempt:
         uv_cache.mkdir(parents=True, exist_ok=True)
         cargo_cache.mkdir(parents=True, exist_ok=True)
 
+        mounts = [
+            (str(self.workdir), "/app", "rw"),
+            (str(uv_cache), "/uv/cache", "rw"),
+            (str(cargo_cache), "/root/.cargo/registry", "rw"),
+        ]
+
         config = ContainerConfig(
             image=self.image_tag,
             entrypoint=rt_ep,
             env=env,
             resources=self.request.resources if self.request.HasField("resources") else None,
             timeout_seconds=timeout_seconds,
-            mounts=[
-                (str(self.workdir), "/app", "rw"),
-                (str(uv_cache), "/uv/cache", "rw"),
-                (str(cargo_cache), "/root/.cargo/registry", "rw"),
-            ],
+            mounts=mounts,
             task_id=self.task_id.to_wire(),
             job_id=job_id.to_wire(),
             worker_metadata=self._worker_metadata,

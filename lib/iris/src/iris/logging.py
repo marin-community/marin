@@ -14,6 +14,7 @@ LOG_DATEFMT = "%Y%m%d %H%M%S"
 
 @dataclass(frozen=True)
 class BufferedLogRecord:
+    seq: int
     timestamp: float
     level: str
     logger_name: str
@@ -23,6 +24,7 @@ class BufferedLogRecord:
 class LogBuffer(Protocol):
     def append(self, record: BufferedLogRecord) -> None: ...
     def query(self, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]: ...
+    def query_since(self, last_seq: int, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]: ...
 
 
 class LogRingBuffer:
@@ -31,6 +33,12 @@ class LogRingBuffer:
     def __init__(self, maxlen: int = 5000):
         self._buffer: deque[BufferedLogRecord] = deque(maxlen=maxlen)
         self._lock = Lock()
+        self._seq = 0
+
+    def next_seq(self) -> int:
+        with self._lock:
+            self._seq += 1
+            return self._seq
 
     def append(self, record: BufferedLogRecord) -> None:
         with self._lock:
@@ -43,6 +51,14 @@ class LogRingBuffer:
             items = [r for r in items if r.logger_name.startswith(prefix)]
         return items[-limit:]
 
+    def query_since(self, last_seq: int, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]:
+        with self._lock:
+            items = list(self._buffer)
+        if prefix:
+            items = [r for r in items if r.logger_name.startswith(prefix)]
+        newer = [r for r in items if r.seq > last_seq]
+        return newer[-limit:]
+
 
 class RingBufferHandler(logging.Handler):
     def __init__(self, buffer: LogRingBuffer):
@@ -52,6 +68,7 @@ class RingBufferHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         self._buffer.append(
             BufferedLogRecord(
+                seq=self._buffer.next_seq(),
                 timestamp=record.created,
                 level=record.levelname,
                 logger_name=record.name,

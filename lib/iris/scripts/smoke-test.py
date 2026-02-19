@@ -7,23 +7,25 @@
 This script provides end-to-end validation of an Iris cluster by exercising
 the `iris` CLI for cluster lifecycle and `IrisClient` for job submission:
 
-1. Cleans up existing resources (`iris cluster debug cleanup`)
+1. Cleans up existing resources (`iris cluster stop`)
 2. Starts the cluster (`iris cluster start`)
 3. Establishes connection (`iris cluster dashboard` or local address)
 4. Submits TPU jobs to exercise autoscaling via IrisClient
-5. Logs results to stdout and structured log directory
-6. Cleans up on success/failure/interrupt (`iris cluster stop`, cleanup)
+5. Logs results to stdout via standard logging
+6. Cleans up on success/failure/interrupt (`iris cluster stop`)
 
 Usage:
-    # Basic smoke test (uses examples/smoke.yaml, logs to logs/smoke-test-{timestamp}/)
+    # Basic smoke test (uses examples/smoke.yaml)
     uv run python scripts/smoke-test.py
 
-    # With custom config and log directory
-    uv run python scripts/smoke-test.py --config examples/marin.yaml \\
-        --log-dir /path/to/logs
+    # With custom config
+    uv run python scripts/smoke-test.py --config examples/marin.yaml
 
-    # Custom timeout (45 min) for slow environments
-    uv run python scripts/smoke-test.py --timeout 2700
+    # Custom boot timeout for slow environments
+    uv run python scripts/smoke-test.py --boot-timeout 600
+
+    # Custom per-job timeout
+    uv run python scripts/smoke-test.py --job-timeout 120
 
     # Keep cluster running on failure for debugging
     uv run python scripts/smoke-test.py --mode keep
@@ -32,7 +34,9 @@ Usage:
     uv run python scripts/smoke-test.py --mode redeploy
 """
 
+import json
 import logging
+import os
 import queue
 import re
 import signal
@@ -46,23 +50,277 @@ from pathlib import Path
 from typing import Literal, TextIO
 
 import click
-
 from iris.client import IrisClient
+from iris.cluster.config import load_config
+import fsspec
 from iris.cluster.types import (
     Constraint,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
+    gpu_device,
     region_constraint,
     tpu_device,
 )
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, config_pb2
+
+logger = logging.getLogger("smoke-test")
 
 IRIS_ROOT = Path(__file__).parent.parent
 DEFAULT_CONFIG_PATH = IRIS_ROOT / "examples" / "smoke.yaml"
 
-DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; TPU slices are pre-warmed by earlier tests
+DEFAULT_JOB_TIMEOUT = 60  # 1 minute; node pools are pre-provisioned
+DEFAULT_BOOT_TIMEOUT = 300  # 5 minutes; cluster start + connection
+
+
+def _log_section(title: str):
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info(" %s", title)
+    logger.info("=" * 60)
+
+
+# =============================================================================
+# Diagnostics Formatting
+# =============================================================================
+
+
+def _format_resource(res: dict) -> str:
+    """One-line summary of a resource spec, omitting zero-valued fields.
+
+    Handles both job resources (device.gpu/tpu wrapper) and autoscaler demand
+    entries (flat gpu_count/tpu_count fields).
+    """
+    parts: list[str] = []
+    device = res.get("device", {})
+    gpu = device.get("gpu")
+    tpu = device.get("tpu")
+    if gpu:
+        parts.append(f"{gpu.get('count', 1)}x {gpu.get('variant', '?')}")
+    elif tpu:
+        parts.append(tpu.get("variant", "TPU"))
+    elif int(res.get("gpu_count", 0)) > 0:
+        parts.append(f"{res['gpu_count']} gpu")
+    elif int(res.get("tpu_count", 0)) > 0:
+        parts.append(f"{res['tpu_count']} tpu")
+    cpu = res.get("cpu", 0)
+    if cpu:
+        parts.append(f"{cpu} cpu")
+    mem = int(res.get("memory_bytes", 0))
+    if mem:
+        parts.append(f"{mem / (1 << 30):.0f}GB mem")
+    return ", ".join(parts) if parts else "none"
+
+
+def _format_epoch_ms(epoch_ms: str | int) -> str:
+    ms = int(epoch_ms)
+    if ms == 0:
+        return "never"
+    return datetime.fromtimestamp(ms / 1000).strftime("%H:%M:%S")
+
+
+def _worker_process_log_path(log_prefix: str, worker_id: str) -> str:
+    return f"{log_prefix.rstrip('/')}/process/worker/{worker_id}/logs.jsonl"
+
+
+def _load_worker_process_logs(log_prefix: str, worker_id: str, limit: int = 200) -> list[dict]:
+    path = _worker_process_log_path(log_prefix, worker_id)
+    try:
+        with fsspec.open(path, "rb") as f:
+            data = f.read().decode("utf-8", errors="replace")
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        logger.warning("Failed to fetch worker process logs from %s: %s", path, e)
+        return []
+    lines = [line for line in data.splitlines() if line.strip()]
+    if limit > 0:
+        lines = lines[-limit:]
+    records: list[dict] = []
+    for line in lines:
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
+def _log_autoscaler_pretty(status: dict) -> None:
+    """Log autoscaler status as a readable summary."""
+    groups = status.get("groups", [])
+    if not groups:
+        logger.info("  (no scale groups)")
+        return
+
+    logger.info("Scale groups:")
+    for g in groups:
+        name = g.get("name", "?")
+        cfg = g.get("config", {})
+        accel = cfg.get("accelerator_variant", cfg.get("accelerator_type", ""))
+        slices = g.get("slices", [])
+        counts = g.get("slice_state_counts", {})
+        nonzero_states = {k: v for k, v in counts.items() if v}
+        state_str = ", ".join(f"{k}={v}" for k, v in nonzero_states.items()) if nonzero_states else "idle"
+        logger.info(
+            "  %-20s  accel=%-10s  demand=%s  peak=%s  slices=%d (%s)  max=%s",
+            name,
+            accel,
+            g.get("current_demand", 0),
+            g.get("peak_demand", 0),
+            len(slices),
+            state_str,
+            cfg.get("max_slices", "?"),
+        )
+        for s in slices:
+            error_msg = s.get("error_message", "")
+            if error_msg:
+                logger.warning("    slice %s ERROR: %s", s.get("slice_id", "?"), error_msg)
+        failures = g.get("consecutive_failures", 0)
+        if failures:
+            logger.warning(
+                "    consecutive_failures=%d  backoff_until=%s",
+                failures,
+                _format_epoch_ms(g.get("backoff_until", {}).get("epoch_ms", "0")),
+            )
+
+    # Recent actions
+    actions = status.get("recent_actions", [])
+    if actions:
+        logger.info("Recent autoscaler actions:")
+        for a in actions:
+            logger.info(
+                "  %s  %-10s  group=%-15s  slice=%s  reason=%s  status=%s",
+                _format_epoch_ms(a.get("timestamp", {}).get("epoch_ms", "0")),
+                a.get("action_type", "?"),
+                a.get("scale_group", "?"),
+                a.get("slice_id", "?"),
+                a.get("reason", ""),
+                a.get("status", ""),
+            )
+
+    # Unmet demand
+    routing = status.get("last_routing_decision", {})
+    unmet = routing.get("unmet_entries", [])
+    if unmet:
+        logger.warning("Unmet demand (%d entries):", len(unmet))
+        for u in unmet:
+            entry = u.get("entry", {})
+            task_ids = entry.get("task_ids", [])
+            reason = u.get("reason", "?")
+            res = _format_resource(entry.get("resources", {}))
+            accel = entry.get("accelerator_variant", entry.get("accelerator_type", ""))
+            logger.warning(
+                "  reason=%-15s  accel=%-10s  resources=%-20s  tasks=%s",
+                reason,
+                accel,
+                res,
+                ", ".join(task_ids),
+            )
+
+
+def _log_jobs_pretty(jobs: list[dict]) -> None:
+    """Log job list as a readable table."""
+    if not jobs:
+        logger.info("No jobs")
+        return
+    logger.info("Jobs (%d):", len(jobs))
+    logger.info(
+        "  %-40s  %-22s  %-20s  %s",
+        "JOB",
+        "STATE",
+        "RESOURCES",
+        "TASKS",
+    )
+    logger.info("  %s", "-" * 110)
+    for j in jobs:
+        job_id = j.get("job_id", "?")
+        state = j.get("state", "?").replace("JOB_STATE_", "")
+        res = _format_resource(j.get("resources", {}))
+        task_counts = j.get("task_state_counts", {})
+        task_str = ", ".join(f"{k}={v}" for k, v in task_counts.items() if v)
+        error = j.get("error", "")
+        line = f"  {job_id:<40s}  {state:<22s}  {res:<20s}  {task_str}"
+        if error:
+            line += f"  error={error}"
+        failures = j.get("failure_count", 0)
+        if failures:
+            line += f"  failures={failures}"
+        logger.info(line)
+
+
+# =============================================================================
+# Accelerator Detection
+# =============================================================================
+
+
+@dataclass
+class AcceleratorConfig:
+    """Accelerator configuration detected from cluster config."""
+
+    device_type: str  # "gpu" or "tpu"
+    variant: str  # e.g., "H100", "v5litepod-16"
+    count: int  # GPUs per node or TPU chips per VM
+    num_vms: int  # VMs per slice (replicas for coscheduled jobs)
+    region: str  # for constraint tests
+
+    @property
+    def is_gpu(self) -> bool:
+        return self.device_type == "gpu"
+
+    def make_device(self) -> cluster_pb2.DeviceConfig:
+        if self.is_gpu:
+            return gpu_device(self.variant, self.count)
+        return tpu_device(self.variant, self.count if self.count > 0 else None)
+
+    def label(self) -> str:
+        if self.is_gpu:
+            return f"{self.count}x {self.variant}"
+        return self.variant
+
+
+def detect_accelerator(config_path: Path) -> AcceleratorConfig:
+    """Detect the primary accelerator type and region from a cluster config.
+
+    Scans scale groups for the first active (max_slices > 0) group and returns
+    its accelerator type, variant, and region.
+    """
+    config = load_config(config_path)
+
+    for _name, sg in config.scale_groups.items():
+        if sg.HasField("max_slices") and sg.max_slices <= 0:
+            continue
+        if sg.accelerator_type not in (config_pb2.ACCELERATOR_TYPE_GPU, config_pb2.ACCELERATOR_TYPE_TPU):
+            continue
+
+        template = sg.slice_template
+        platform = template.WhichOneof("platform")
+
+        region = ""
+        if platform == "coreweave" and template.coreweave.region:
+            region = template.coreweave.region
+        elif platform == "gcp" and template.gcp.zone:
+            region = template.gcp.zone.rsplit("-", 1)[0]
+
+        if sg.accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU:
+            return AcceleratorConfig(
+                device_type="gpu",
+                variant=sg.accelerator_variant,
+                count=sg.resources.gpu_count or 1,
+                num_vms=sg.num_vms,
+                region=region,
+            )
+
+        return AcceleratorConfig(
+            device_type="tpu",
+            variant=sg.accelerator_variant,
+            count=sg.resources.tpu_count,
+            num_vms=sg.num_vms,
+            region=region,
+        )
+
+    # Fallback for local/CPU configs — tests use tpu_device() which local workers accept
+    return AcceleratorConfig(device_type="tpu", variant="v5litepod-16", count=4, num_vms=4, region="")
 
 
 # =============================================================================
@@ -70,7 +328,7 @@ DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; TPU slices are pre-warmed by earlier tes
 # =============================================================================
 
 
-DEFAULT_CLI_TIMEOUT = 900  # 15 minutes; generous limit for image builds and cluster operations
+DEFAULT_CLI_TIMEOUT = 300  # 5 minutes; CLI ops (stop/status) on a running cluster
 
 
 def _run_iris(*args: str, config_path: Path, timeout: float = DEFAULT_CLI_TIMEOUT) -> subprocess.CompletedProcess[str]:
@@ -85,10 +343,10 @@ def _run_iris(*args: str, config_path: Path, timeout: float = DEFAULT_CLI_TIMEOU
     subprocess.TimeoutExpired if the command exceeds timeout.
     """
     cmd = ["uv", "run", "iris", "--config", str(config_path), *args]
-    logging.info("Running (timeout=%ds): %s", timeout, " ".join(cmd))
+    logger.info("Running (timeout=%ds): %s", timeout, " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(IRIS_ROOT), timeout=timeout)
     if result.returncode != 0:
-        logging.error(
+        logger.error(
             "Command failed (exit %d): %s\nstdout: %s\nstderr: %s",
             result.returncode,
             " ".join(cmd),
@@ -97,6 +355,18 @@ def _run_iris(*args: str, config_path: Path, timeout: float = DEFAULT_CLI_TIMEOU
         )
         result.check_returncode()
     return result
+
+
+def _run_iris_rpc(
+    controller_url: str, service: str, method: str, *args: str, timeout: float = 30
+) -> subprocess.CompletedProcess[str]:
+    """Run `uv run iris --controller-url <url> rpc <service> <method> ...`.
+
+    Returns the CompletedProcess; does not raise on non-zero exit so callers
+    can handle failures gracefully during diagnostics.
+    """
+    cmd = ["uv", "run", "iris", "--controller-url", controller_url, "rpc", service, method, *args]
+    return subprocess.run(cmd, capture_output=True, text=True, cwd=str(IRIS_ROOT), timeout=timeout)
 
 
 @dataclass
@@ -133,7 +403,7 @@ def _run_iris_background(
     responsible for calling terminate() to stop the process and close handles.
     """
     cmd = ["uv", "run", "iris", "--config", str(config_path), *args]
-    logging.info("Starting background: %s", " ".join(cmd))
+    logger.info("Starting background: %s", " ".join(cmd))
 
     owned_fds: list[TextIO] = []
     if stdout_path:
@@ -163,19 +433,12 @@ def _run_iris_background(
     return BackgroundProc(name="", proc=proc, owned_fds=owned_fds)
 
 
-def _wait_for_line(bg: BackgroundProc, pattern: str, timeout: float = 300, drain_to: Path | None = None) -> str:
+def _wait_for_line(bg: BackgroundProc, pattern: str, timeout: float = 300) -> str:
     """Read stdout from a background subprocess until a line matches `pattern`.
 
     Uses a reader thread so the timeout is enforced even if readline blocks on a
     partial line.  After the match is found, a drain thread continues consuming
     stdout to prevent the pipe buffer from filling and blocking the subprocess.
-
-    Args:
-        bg: Background process whose stdout is PIPE.
-        pattern: Regex pattern to search for in each line.
-        timeout: Maximum seconds to wait for a match.
-        drain_to: If set, remaining stdout (including pre-match lines) is written
-            to this file.  Otherwise drained and discarded.
 
     Returns the full matching line. Raises TimeoutError or RuntimeError on failure.
     """
@@ -196,8 +459,12 @@ def _wait_for_line(bg: BackgroundProc, pattern: str, timeout: float = 300, drain
 
     deadline = time.monotonic() + timeout
     compiled = re.compile(pattern)
+    # Docker push/pull output: 12-char hex hash followed by layer status.
+    # These repeat hundreds of times and provide no useful signal.
+    docker_layer_noise = re.compile(
+        r"^[0-9a-f]{12}: (Waiting|Preparing|Pushing|Pulling|Layer already|Mounted|Pushed|Pulled)"
+    )
     matched_line: str | None = None
-    pre_match_lines: list[str] = []
 
     while time.monotonic() < deadline:
         remaining = deadline - time.monotonic()
@@ -211,8 +478,8 @@ def _wait_for_line(bg: BackgroundProc, pattern: str, timeout: float = 300, drain
             continue
         if line is None:
             raise RuntimeError(f"Subprocess EOF before matching pattern: {pattern}")
-        logging.info("  [bg] %s", line)
-        pre_match_lines.append(line)
+        if not docker_layer_noise.search(line):
+            logger.info("  [bg] %s", line)
         if compiled.search(line):
             matched_line = line
             break
@@ -221,13 +488,6 @@ def _wait_for_line(bg: BackgroundProc, pattern: str, timeout: float = 300, drain
         raise TimeoutError(f"Timed out waiting for pattern '{pattern}' after {timeout}s")
 
     # Drain remaining stdout so the pipe never fills and blocks the subprocess.
-    drain_file: TextIO | None = None
-    if drain_to is not None:
-        drain_file = open(drain_to, "w")
-        bg.owned_fds.append(drain_file)
-        for prev in pre_match_lines:
-            drain_file.write(prev + "\n")
-
     def _drain():
         while True:
             try:
@@ -238,9 +498,6 @@ def _wait_for_line(bg: BackgroundProc, pattern: str, timeout: float = 300, drain
                 continue
             if remaining_line is None:
                 break
-            if drain_file is not None:
-                drain_file.write(remaining_line + "\n")
-                drain_file.flush()
 
     drain_thread = threading.Thread(target=_drain, daemon=True)
     drain_thread.start()
@@ -259,66 +516,14 @@ def _terminate_process(proc: subprocess.Popen, name: str, timeout: float = 10.0)
     """Send SIGTERM to a subprocess and wait for it to exit."""
     if proc.poll() is not None:
         return
-    logging.info("Terminating %s (pid=%d)...", name, proc.pid)
+    logger.info("Terminating %s (pid=%d)...", name, proc.pid)
     proc.terminate()
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        logging.warning("Process %s did not exit after SIGTERM, sending SIGKILL", name)
+        logger.warning("Process %s did not exit after SIGTERM, sending SIGKILL", name)
         proc.kill()
         proc.wait(timeout=5.0)
-
-
-# =============================================================================
-# Log Infrastructure
-# =============================================================================
-
-
-@dataclass
-class LogArtifact:
-    path: Path
-    description: str
-
-
-class LogTree:
-    """Tracks log artifacts created during a smoke test run."""
-
-    def __init__(self, root: Path):
-        self._root = root
-        self._root.mkdir(parents=True, exist_ok=True)
-        self._artifacts: list[LogArtifact] = []
-
-    @property
-    def root(self) -> Path:
-        return self._root
-
-    def get_writer(self, name: str, description: str) -> Path:
-        """Register and return path for a log artifact. Creates parent dirs."""
-        path = self._root / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._artifacts.append(LogArtifact(path=path, description=description))
-        return path
-
-    def get_dir(self, name: str, description: str) -> Path:
-        """Register and return path for a directory artifact."""
-        path = self._root / name
-        path.mkdir(parents=True, exist_ok=True)
-        self._artifacts.append(LogArtifact(path=path, description=description))
-        return path
-
-    def summary_lines(self) -> list[str]:
-        lines = ["## Artifacts", ""]
-        for artifact in self._artifacts:
-            rel = artifact.path.relative_to(self._root)
-            if artifact.path.is_dir():
-                count = sum(1 for _ in artifact.path.iterdir()) if artifact.path.exists() else 0
-                status = f"{count} files"
-            else:
-                exists = artifact.path.exists()
-                size = artifact.path.stat().st_size if exists else 0
-                status = f"{size:,} bytes" if exists else "not created"
-            lines.append(f"- **{artifact.description}:** `{rel}` ({status})")
-        return lines
 
 
 # =============================================================================
@@ -341,7 +546,7 @@ def _quick_task_job(task_id: int):
     return task_id
 
 
-def _assert_region_child(expected_region: str):
+def _assert_region_child(expected_region: str, device_type: str, device_variant: str, device_count: int):
     """Parent job that submits a child and asserts the child inherits the region constraint.
 
     Uses iris_ctx() to get the IrisClient and submit a child without explicit
@@ -350,6 +555,8 @@ def _assert_region_child(expected_region: str):
     """
     from iris.client.client import iris_ctx
     from iris.cluster.types import ResourceSpec as RS
+    from iris.cluster.types import gpu_device as _gpu_device
+    from iris.cluster.types import tpu_device as _tpu_device
 
     ctx = iris_ctx()
 
@@ -369,12 +576,17 @@ def _assert_region_child(expected_region: str):
         print(f"Child validated inherited region: {actual}")
         return actual
 
+    if device_type == "gpu":
+        device = _gpu_device(device_variant, device_count)
+    else:
+        device = _tpu_device(device_variant, device_count if device_count > 0 else None)
+
     child = ctx.client.submit(
         entrypoint=Entrypoint.from_callable(_child_check_region),
         name="smoke-inherited-child",
-        resources=RS(device=tpu_device("v5litepod-16")),
+        resources=RS(device=device),
     )
-    child.wait(timeout=300, raise_on_failure=True)
+    child.wait(timeout=60, raise_on_failure=True)
     print(f"Parent: child completed with inherited region={expected_region}")
 
 
@@ -435,6 +647,35 @@ def _jax_tpu_job():
     return result
 
 
+def _hello_gpu_job():
+    """Simple job that prints and returns on a GPU worker."""
+    print("Hello from GPU!")
+    return 42
+
+
+def _check_gpus_job(expected_count: int):
+    """Verify that the expected number of GPUs are visible via nvidia-smi."""
+    import subprocess as _sp
+
+    result = _sp.run(
+        ["nvidia-smi", "-L"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"nvidia-smi failed (exit {result.returncode}): {result.stderr}")
+
+    gpus = [line for line in result.stdout.splitlines() if line.startswith("GPU ")]
+    print(f"Found {len(gpus)} GPU(s):")
+    for gpu in gpus:
+        print(f"  {gpu}")
+
+    if len(gpus) < expected_count:
+        raise RuntimeError(f"Expected {expected_count} GPUs, found {len(gpus)}")
+    return len(gpus)
+
+
 def _configure_logging():
     """Configure logging to show all iris module output."""
     logging.basicConfig(
@@ -448,64 +689,6 @@ def _configure_logging():
 
 
 # =============================================================================
-# Logging Infrastructure
-# =============================================================================
-
-
-class SmokeTestLogger:
-    """Dual-output logger with timestamps and elapsed time.
-
-    Writes both to stdout (with timestamps) and to a markdown file with
-    structured sections for easy post-mortem analysis.
-    """
-
-    def __init__(self, log_tree: LogTree):
-        self._start_time = time.monotonic()
-        self._start_datetime = datetime.now()
-        self._log_tree = log_tree
-        summary_path = log_tree.get_writer("summary.md", "Execution summary")
-        self._file: TextIO = open(summary_path, "w")
-
-    def close(self):
-        self._file.close()
-
-    def write_header(self, config: "SmokeTestConfig"):
-        """Write the markdown document header with run configuration."""
-        self._file.write("# Smoke Test Execution Log\n\n")
-        self._file.write(f"**Started:** {self._start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        self._file.write(f"**Config:** `{config.config_path}`\n\n")
-        self._file.write(f"**TPU type:** `{config.tpu_type}`\n\n")
-        self._file.write(f"**Log directory:** `{config.log_dir}`\n\n")
-        self._file.write("---\n\n")
-        self._file.flush()
-
-    def write_artifacts(self, log_tree: LogTree):
-        """Write the artifacts section from the log tree."""
-        self._file.write("\n---\n\n")
-        for line in log_tree.summary_lines():
-            self._file.write(line + "\n")
-        self._file.flush()
-
-    def log(self, message: str, level: str = "INFO"):
-        now = datetime.now()
-        elapsed = time.monotonic() - self._start_time
-        line = f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [{elapsed:8.1f}s] [{level}] {message}"
-        print(line, flush=True)
-        self._file.write(line + "\n")
-        self._file.flush()
-
-    def section(self, title: str):
-        """Write a markdown section header."""
-        self.log("")
-        self._file.write(f"\n## {title}\n\n")
-        self._file.flush()
-        print("=" * 60, flush=True)
-        print(f" {title}", flush=True)
-        print("=" * 60, flush=True)
-        self.log("")
-
-
-# =============================================================================
 # Configuration
 # =============================================================================
 
@@ -515,10 +698,9 @@ class SmokeTestConfig:
     """Configuration for the smoke test."""
 
     config_path: Path
-    log_dir: Path
-    timeout_seconds: int = 1800  # 30 min total
+    accelerator: AcceleratorConfig
+    boot_timeout_seconds: int = DEFAULT_BOOT_TIMEOUT
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
-    tpu_type: str = "v5litepod-16"
     local: bool = False  # Run locally without GCP
     mode: Literal["full", "keep", "redeploy"] = "full"
 
@@ -553,16 +735,17 @@ class SmokeTestRunner:
 
     def __init__(self, config: SmokeTestConfig):
         self.config = config
-        self.log_tree = LogTree(config.log_dir)
-        self.logger = SmokeTestLogger(self.log_tree)
-        self._task_logs_dir = self.log_tree.get_dir("task-logs", "Task logs from each job/task")
+        self._accel = config.accelerator
         self._interrupted = False
-        self._deadline: float | None = None
         self._results: list[TestResult] = []
+        self._failed = False
+        self._cluster_config = load_config(config.config_path)
         # Unique run ID to avoid job name collisions with previous runs
         self._run_id = datetime.now().strftime("%H%M%S")
         # Background subprocesses to clean up
         self._background_procs: list[BackgroundProc] = []
+        # Set once we have a controller connection (for RPC diagnostics at teardown)
+        self._controller_url: str | None = None
 
     def run(self) -> bool:
         """Run the smoke test. Returns True if all tests pass."""
@@ -570,7 +753,8 @@ class SmokeTestRunner:
 
         signal.signal(signal.SIGINT, self._handle_interrupt)
         signal.signal(signal.SIGTERM, self._handle_interrupt)
-        self._deadline = time.monotonic() + self.config.timeout_seconds
+
+        self._configure_s3_env()
 
         try:
             self._print_header()
@@ -582,14 +766,14 @@ class SmokeTestRunner:
 
             if self.config.mode != "redeploy":
                 if self.config.mode in ("full", "keep") and not self.config.local:
-                    self.logger.section("PHASE 0: Clean Start")
+                    _log_section("PHASE 0: Clean Start")
                     self._cleanup_existing()
-                    if self._interrupted or self._check_deadline():
+                    if self._interrupted:
                         return False
 
-                self.logger.section("Starting Cluster")
+                _log_section("Starting Cluster")
                 cluster_address = self._start_cluster()
-                if self._interrupted or self._check_deadline():
+                if self._interrupted:
                     return False
 
                 if self.config.local:
@@ -599,72 +783,75 @@ class SmokeTestRunner:
                 # Remote mode (or redeploy): establish tunnel to get a
                 # localhost URL regardless of whether we started the cluster
                 # above or it was already running.
-                self.logger.section("Connecting to Cluster")
+                _log_section("Connecting to Cluster")
                 controller_url = self._connect_remote()
 
-            # Start controller log streaming (remote GCP only)
-            if not self.config.local:
-                self._start_log_streaming()
+            self._controller_url = controller_url
 
             # Run tests
-            self.logger.section("Running Tests")
+            _log_section("Running Tests")
             self._run_tests(controller_url)
 
             # Results
-            self.logger.section("Results Summary")
+            _log_section("Results Summary")
             success = self._print_results()
             return success
 
         except Exception as e:
-            self.logger.log(f"FATAL ERROR: {e}", level="ERROR")
+            logger.error("FATAL ERROR: %s", e)
+            self._failed = True
             return False
 
         finally:
             self._cleanup()
-            self.logger.close()
 
     def _handle_interrupt(self, _signum: int, _frame: object):
-        self.logger.log("Interrupted! Cleaning up...", level="WARN")
+        logger.warning("Interrupted! Cleaning up...")
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         self._interrupted = True
 
-    def _check_deadline(self) -> bool:
-        """Returns True if the global deadline has passed. Sets interrupted flag."""
-        if self._deadline is not None and time.monotonic() > self._deadline:
-            self.logger.log(
-                f"Global timeout ({self.config.timeout_seconds}s) exceeded!",
-                level="ERROR",
-            )
-            self._interrupted = True
-            return True
-        return False
+    def _configure_s3_env(self) -> None:
+        """Set AWS_ENDPOINT_URL from the CoreWeave config if not already set.
+
+        On the operator's laptop, AWS_ENDPOINT_URL is typically not set (it's
+        injected inside K8s Pods). Without it, fsspec/s3fs can't reach CoreWeave
+        Object Storage for reading logs.
+        """
+        if os.environ.get("AWS_ENDPOINT_URL"):
+            return
+        platform = self._cluster_config.platform
+        if platform.HasField("coreweave") and platform.coreweave.object_storage_endpoint:
+            endpoint = platform.coreweave.object_storage_endpoint
+            os.environ["AWS_ENDPOINT_URL"] = endpoint
+            logger.info("Set AWS_ENDPOINT_URL=%s from config", endpoint)
 
     def _print_header(self):
-        self.logger.write_header(self.config)
-        self.logger.log("")
-        self.logger.log("=" * 60)
-        self.logger.log(" IRIS CLUSTER SMOKE TEST")
-        self.logger.log("=" * 60)
-        self.logger.log("")
-        self.logger.log(f"Config: {self.config.config_path}")
-        self.logger.log(f"Timeout: {self.config.timeout_seconds}s")
-        self.logger.log(f"TPU type: {self.config.tpu_type}")
-        self.logger.log(f"Log directory: {self.config.log_dir}")
-        self.logger.log(f"Local: {self.config.local}")
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info(" IRIS CLUSTER SMOKE TEST")
+        logger.info("=" * 60)
+        logger.info("")
+        logger.info("Config: %s", self.config.config_path)
+        logger.info("Boot timeout: %ds", self.config.boot_timeout_seconds)
+        logger.info("Job timeout: %ds", self.config.job_timeout_seconds)
+        logger.info("Accelerator: %s (%s)", self._accel.label(), self._accel.device_type)
+        logger.info("Local: %s", self.config.local)
 
     # ----- Cluster lifecycle via CLI -----
 
     def _cleanup_existing(self):
-        """Delete existing iris resources via `iris cluster debug cleanup --no-dry-run`."""
-        self.logger.log("Cleaning up existing resources...")
+        """Delete existing iris resources via `iris cluster stop`."""
+        logger.info("Cleaning up existing resources...")
         try:
-            result = _run_iris("cluster", "debug", "cleanup", "--no-dry-run", config_path=self.config.config_path)
+            result = _run_iris(
+                "cluster", "stop", config_path=self.config.config_path, timeout=self.config.boot_timeout_seconds
+            )
             for line in result.stdout.splitlines():
-                self.logger.log(f"  {line}")
-            self.logger.log("Cleanup complete")
+                logger.info("  %s", line)
+            logger.info("Cleanup complete")
         except subprocess.CalledProcessError as e:
-            self.logger.log(f"Cleanup failed: {e.stderr}", level="ERROR")
+            logger.error("Cleanup failed: %s", e.stderr)
             raise
 
     def _start_cluster(self) -> str:
@@ -683,15 +870,14 @@ class SmokeTestRunner:
         if self.config.local:
             args.append("--local")
 
-        self.logger.log("Starting cluster (background)...")
+        logger.info("Starting cluster (background)...")
         bg = _run_iris_background(*args, config_path=self.config.config_path)
         bg.name = "cluster-start"
         self._background_procs.append(bg)
 
-        drain_path = self.log_tree.get_writer("cluster-start.log", "Cluster start stdout")
-        line = _wait_for_line(bg, r"Controller started at", timeout=DEFAULT_CLI_TIMEOUT, drain_to=drain_path)
+        line = _wait_for_line(bg, r"Controller started at", timeout=self.config.boot_timeout_seconds)
         address = _parse_address_from_line(line, "Controller started at")
-        self.logger.log(f"Controller started at: {address}")
+        logger.info("Controller started at: %s", address)
         return address
 
     def _connect_remote(self) -> str:
@@ -700,132 +886,131 @@ class SmokeTestRunner:
         Parses the controller URL from the output line "Controller RPC: {url}".
         The subprocess blocks to keep the tunnel alive.
         """
-        self.logger.log("Starting dashboard tunnel...")
+        logger.info("Starting dashboard tunnel...")
         bg = _run_iris_background("cluster", "dashboard", config_path=self.config.config_path)
         bg.name = "dashboard-tunnel"
         self._background_procs.append(bg)
 
-        drain_path = self.log_tree.get_writer("dashboard-tunnel.log", "Dashboard tunnel stdout")
-        line = _wait_for_line(bg, r"Controller RPC:", timeout=120, drain_to=drain_path)
+        line = _wait_for_line(bg, r"Controller RPC:", timeout=self.config.boot_timeout_seconds)
         controller_url = _parse_address_from_line(line, "Controller RPC:")
-        self.logger.log(f"Controller URL: {controller_url}")
+        logger.info("Controller URL: %s", controller_url)
         return controller_url
-
-    def _start_log_streaming(self):
-        """Stream controller logs via `iris cluster debug logs --follow` as background subprocess."""
-        log_file = self.log_tree.get_writer("controller-logs.txt", "Controller docker logs")
-        bg = _run_iris_background(
-            "cluster",
-            "debug",
-            "logs",
-            "--follow",
-            config_path=self.config.config_path,
-            stdout_path=log_file,
-        )
-        bg.name = "controller-logs"
-        self._background_procs.append(bg)
-        self.logger.log("Started controller log streaming")
 
     # ----- Monitoring via CLI -----
 
     def _log_autoscaler_status(self):
-        """Log current autoscaler state via `iris cluster debug autoscaler-status`."""
+        """Log current cluster state via `iris cluster status`."""
         try:
-            result = _run_iris("cluster", "debug", "autoscaler-status", config_path=self.config.config_path)
+            result = _run_iris("cluster", "status", config_path=self.config.config_path)
             for line in result.stdout.splitlines():
-                self.logger.log(f"  {line}")
+                logger.info("  %s", line)
         except Exception as e:
-            self.logger.log(f"  (Could not fetch autoscaler status: {e})", level="WARN")
+            logger.warning("  (Could not fetch cluster status: %s)", e)
 
     # ----- Test execution -----
 
     def _run_tests(self, controller_url: str):
-        """Run test jobs against the cluster."""
+        """Run test jobs against the cluster, choosing GPU or TPU suite."""
         client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
 
-        # Test 1: Simple TPU job
-        self.logger.log(f"[Test 1/6] Simple TPU job ({self.config.tpu_type})")
-        result = self._run_simple_tpu_job(client)
+        if self._accel.is_gpu:
+            self._run_gpu_tests(client)
+        else:
+            self._run_tpu_tests(client)
+
+    def _run_test_step(self, client: IrisClient, label: str, method, *args) -> bool:
+        """Run one test step: log, execute, record result, check deadline.
+
+        Returns False if the runner should stop (interrupted/deadline).
+        """
+        logger.info(label)
+        result = method(client, *args)
         self._results.append(result)
         self._log_autoscaler_status()
+        return not self._interrupted
 
-        if self._interrupted or self._check_deadline():
-            return
+    # ----- GPU test suite -----
 
-        # Test 2: Concurrent TPU jobs
-        self.logger.log(f"[Test 2/6] Concurrent TPU jobs (3x {self.config.tpu_type})")
-        result = self._run_concurrent_tpu_jobs(client)
-        self._results.append(result)
-        self._log_autoscaler_status()
+    def _run_gpu_tests(self, client: IrisClient):
+        a = self._accel
+        tests = [
+            (f"Simple GPU job ({a.label()})", self._run_simple_gpu_job),
+            (f"Concurrent GPU jobs (3x {a.label()})", self._run_concurrent_gpu_jobs),
+        ]
+        if not self.config.local:
+            tests.append((f"Multi-GPU device check ({a.label()})", self._run_gpu_check_job))
+        if a.region and not self.config.local:
+            tests.append((f"Region-constrained GPU job ({a.region})", self._run_region_constrained_gpu_job))
 
-        if self._interrupted or self._check_deadline():
-            return
+        total = len(tests)
+        for i, (label, method) in enumerate(tests, 1):
+            if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method):
+                return
 
-        # Test 3: Coscheduled multi-task job
-        self.logger.log(f"[Test 3/6] Coscheduled multi-task job ({self.config.tpu_type})")
-        result = self._run_coscheduled_job(client)
-        self._results.append(result)
-        self._log_autoscaler_status()
+    def _run_simple_gpu_job(self, client: IrisClient) -> TestResult:
+        return self._run_job_test(
+            client=client,
+            test_name=f"Simple GPU job ({self._accel.label()})",
+            entrypoint=Entrypoint.from_callable(_hello_gpu_job),
+            job_name=f"smoke-simple-gpu-{self._run_id}",
+            resources=ResourceSpec(device=self._accel.make_device()),
+        )
 
-        if self._interrupted or self._check_deadline():
-            return
-
-        # Test 4: JAX TPU job - validates JAX can initialize and use TPU
-        self.logger.log(f"[Test 4/6] JAX TPU job ({self.config.tpu_type})")
-        result = self._run_jax_tpu_job(client)
-        self._results.append(result)
-        self._log_autoscaler_status()
-
-        if self._interrupted or self._check_deadline():
-            return
-
-        # Test 5: Region-constrained job - validates constraint-based routing
-        self.logger.log(f"[Test 5/6] Region-constrained job ({self.config.tpu_type})")
-        result = self._run_region_constrained_job(client)
-        self._results.append(result)
-        self._log_autoscaler_status()
-
-        if self._interrupted or self._check_deadline():
-            return
-
-        # Test 6: Nested constraint propagation - child inherits parent region
-        self.logger.log(f"[Test 6/6] Nested constraint propagation ({self.config.tpu_type})")
-        result = self._run_nested_constraint_job(client)
-        self._results.append(result)
-        self._log_autoscaler_status()
-
-    def _print_task_logs_on_failure(self, job, max_lines: int = 50):
-        """Print task logs when a job fails, to show build errors."""
+    def _run_concurrent_gpu_jobs(self, client: IrisClient) -> TestResult:
+        resources = ResourceSpec(device=self._accel.make_device())
+        test_name = f"Concurrent GPU jobs (3x {self._accel.label()})"
+        jobs_config = [
+            (Entrypoint.from_callable(_quick_task_job, i), f"smoke-concurrent-gpu-{self._run_id}-{i}", resources)
+            for i in range(3)
+        ]
         try:
-            for task in job.tasks():
-                logs = task.logs(max_lines=max_lines)
-                if logs:
-                    self.logger.log(f"  Task {task.task_index} logs (last {len(logs)} lines):")
-                    for entry in logs[-max_lines:]:
-                        self.logger.log(f"    [{entry.source}] {entry.data}")
-        except Exception as e:
-            self.logger.log(f"  Failed to fetch task logs: {e}", level="WARN")
+            duration, failed_jobs = self._submit_and_wait_multiple(client, jobs_config, test_name)
+            if not failed_jobs:
+                logger.info("  [PASS] All 3 jobs completed in %.1fs", duration)
+                return TestResult(test_name, True, f"All completed in {duration:.1f}s", duration)
+            else:
+                logger.error("  [FAIL] Some jobs failed: %s", ", ".join(failed_jobs))
+                return TestResult(test_name, False, f"Failed: {', '.join(failed_jobs)}", duration)
+        except TimeoutError:
+            logger.error("  [FAIL] Timed out waiting for jobs")
+            return TestResult(test_name, False, f"Timed out after {self.config.job_timeout_seconds}s", 0.0)
 
-    def _write_task_logs(self, job, test_name: str):
-        """Persist task logs for a job to the log directory."""
-        job_dir = self._task_logs_dir / job.job_id.to_safe_token()
-        job_dir.mkdir(parents=True, exist_ok=True)
-        for task in job.tasks():
-            task_file = job_dir / f"task-{task.task_index}.log"
-            try:
-                entries = task.logs()
-                with open(task_file, "w") as handle:
-                    handle.write(f"test_name={test_name}\n")
-                    handle.write(f"job_id={job.job_id}\n")
-                    handle.write(f"task_index={task.task_index}\n")
-                    handle.write(f"task_state={cluster_pb2.TaskState.Name(task.state)}\n\n")
-                    for entry in entries:
-                        handle.write(f"[{entry.timestamp}] [{entry.source}] {entry.data}\n")
-            except Exception as e:
-                self.logger.log(
-                    f"  Failed to write logs for job {job.job_id} task {task.task_index}: {e}",
-                    level="WARN",
-                )
+    def _run_gpu_check_job(self, client: IrisClient) -> TestResult:
+        return self._run_job_test(
+            client=client,
+            test_name=f"Multi-GPU device check ({self._accel.label()})",
+            entrypoint=Entrypoint.from_callable(_check_gpus_job, self._accel.count),
+            job_name=f"smoke-gpu-check-{self._run_id}",
+            resources=ResourceSpec(device=self._accel.make_device()),
+        )
+
+    def _run_region_constrained_gpu_job(self, client: IrisClient) -> TestResult:
+        return self._run_job_test(
+            client=client,
+            test_name=f"Region-constrained GPU job ({self._accel.region})",
+            entrypoint=Entrypoint.from_callable(_hello_gpu_job),
+            job_name=f"smoke-region-gpu-{self._run_id}",
+            resources=ResourceSpec(device=self._accel.make_device()),
+            constraints=[region_constraint(self._accel.region)],
+        )
+
+    # ----- TPU test suite -----
+
+    def _run_tpu_tests(self, client: IrisClient):
+        a = self._accel
+        tests = [
+            (f"[Test 1/6] Simple TPU job ({a.variant})", self._run_simple_tpu_job),
+            (f"[Test 2/6] Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs),
+            (f"[Test 3/6] Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job),
+            (f"[Test 4/6] JAX TPU job ({a.variant})", self._run_jax_tpu_job),
+        ]
+        if a.region:
+            tests.append((f"[Test 5/6] Region-constrained job ({a.region})", self._run_region_constrained_job))
+            tests.append((f"[Test 6/6] Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
+
+        for label, method in tests:
+            if not self._run_test_step(client, label, method):
+                return
 
     def _run_job_test(
         self,
@@ -853,34 +1038,33 @@ class SmokeTestRunner:
                 coscheduling=coscheduling,
                 replicas=replicas,
             )
-            self.logger.log(f"  Job submitted: {job.job_id}")
+            logger.info("  Job submitted: %s", job.job_id)
 
             status = job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
             duration = time.monotonic() - start
-            self._write_task_logs(job, test_name)
 
             if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
-                self.logger.log(f"  [PASS] Completed in {duration:.1f}s")
+                logger.info("  [PASS] Completed in %.1fs", duration)
                 return TestResult(test_name, True, f"Completed in {duration:.1f}s", duration)
             else:
                 state_name = cluster_pb2.JobState.Name(status.state)
-                self.logger.log(f"  [FAIL] Job ended with state {state_name}", level="ERROR")
-                self._print_task_logs_on_failure(job)
+                logger.error(
+                    "  [FAIL] Job ended with state %s (use `iris job logs %s` to inspect)",
+                    state_name,
+                    job.job_id,
+                )
                 return TestResult(test_name, False, f"State: {state_name}, error: {status.error}", duration)
 
         except TimeoutError:
             duration = time.monotonic() - start
-            self.logger.log(f"  [FAIL] Timed out after {job_timeout}s", level="ERROR")
-            try:
-                self._write_task_logs(job, test_name)
-            except Exception:
-                pass
+            logger.error("  [FAIL] Timed out after %ds", job_timeout)
             return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
 
     def _submit_and_wait_multiple(
         self,
         client: IrisClient,
         jobs_config: list[tuple[Entrypoint, str, ResourceSpec]],
+        test_name: str = "Concurrent jobs",
     ) -> tuple[float, list[str]]:
         """Submit multiple jobs and wait for all to complete.
 
@@ -898,7 +1082,7 @@ class SmokeTestRunner:
                 environment=EnvironmentSpec(),
             )
             jobs.append(job)
-            self.logger.log(f"  Job submitted: {job.job_id}")
+            logger.info("  Job submitted: %s", job.job_id)
 
         failed_jobs = []
         for job in jobs:
@@ -906,7 +1090,6 @@ class SmokeTestRunner:
             if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
                 state_name = cluster_pb2.JobState.Name(status.state)
                 failed_jobs.append(f"{job.job_id}: {state_name}")
-            self._write_task_logs(job, "Concurrent TPU jobs (3x)")
 
         return time.monotonic() - start, failed_jobs
 
@@ -914,35 +1097,34 @@ class SmokeTestRunner:
         """Run a simple TPU job that just prints and returns."""
         return self._run_job_test(
             client=client,
-            test_name=f"Simple TPU job ({self.config.tpu_type})",
+            test_name=f"Simple TPU job ({self._accel.variant})",
             entrypoint=Entrypoint.from_callable(_hello_tpu_job),
             job_name=f"smoke-simple-{self._run_id}",
-            resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
+            resources=ResourceSpec(device=self._accel.make_device()),
         )
 
     def _run_concurrent_tpu_jobs(self, client: IrisClient) -> TestResult:
         """Submit 3 concurrent TPU jobs to test parallel provisioning and queueing."""
-        resources = ResourceSpec(device=tpu_device(self.config.tpu_type))
+        resources = ResourceSpec(device=self._accel.make_device())
+        test_name = f"Concurrent TPU jobs (3x {self._accel.variant})"
         jobs_config = [
             (Entrypoint.from_callable(_quick_task_job, i), f"smoke-concurrent-{self._run_id}-{i}", resources)
             for i in range(3)
         ]
 
         try:
-            duration, failed_jobs = self._submit_and_wait_multiple(client, jobs_config)
+            duration, failed_jobs = self._submit_and_wait_multiple(client, jobs_config, test_name)
 
             if not failed_jobs:
-                self.logger.log(f"  [PASS] All 3 jobs completed in {duration:.1f}s")
-                return TestResult("Concurrent TPU jobs (3x)", True, f"All completed in {duration:.1f}s", duration)
+                logger.info("  [PASS] All 3 jobs completed in %.1fs", duration)
+                return TestResult(test_name, True, f"All completed in {duration:.1f}s", duration)
             else:
-                self.logger.log(f"  [FAIL] Some jobs failed: {', '.join(failed_jobs)}", level="ERROR")
-                return TestResult("Concurrent TPU jobs (3x)", False, f"Failed: {', '.join(failed_jobs)}", duration)
+                logger.error("  [FAIL] Some jobs failed: %s", ", ".join(failed_jobs))
+                return TestResult(test_name, False, f"Failed: {', '.join(failed_jobs)}", duration)
 
         except TimeoutError:
-            self.logger.log("  [FAIL] Timed out waiting for jobs", level="ERROR")
-            return TestResult(
-                "Concurrent TPU jobs (3x)", False, f"Timed out after {self.config.job_timeout_seconds}s", 0.0
-            )
+            logger.error("  [FAIL] Timed out waiting for jobs")
+            return TestResult(test_name, False, f"Timed out after {self.config.job_timeout_seconds}s", 0.0)
 
     def _run_coscheduled_job(self, client: IrisClient) -> TestResult:
         """Run a coscheduled multi-task job on TPU workers."""
@@ -951,65 +1133,166 @@ class SmokeTestRunner:
             test_name="Coscheduled multi-task job",
             entrypoint=Entrypoint.from_callable(_distributed_work_job),
             job_name=f"smoke-coscheduled-{self._run_id}",
-            resources=ResourceSpec(
-                device=tpu_device(self.config.tpu_type),
-            ),
+            resources=ResourceSpec(device=self._accel.make_device()),
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
-            replicas=4,
+            replicas=self._accel.num_vms,
         )
 
     def _run_jax_tpu_job(self, client: IrisClient) -> TestResult:
         """Run a JAX TPU job that initializes JAX and exercises the TPU.
 
-        Uses coscheduling with replicas=4 because multi-host TPU pods (e.g. v5litepod-16)
-        require all hosts to run JAX simultaneously for collective initialization.
+        Uses coscheduling because multi-host TPU pods require all hosts to run
+        JAX simultaneously for collective initialization.
         """
         return self._run_job_test(
             client=client,
-            test_name=f"JAX TPU job ({self.config.tpu_type})",
+            test_name=f"JAX TPU job ({self._accel.variant})",
             entrypoint=Entrypoint.from_callable(_jax_tpu_job),
             job_name=f"smoke-jax-tpu-{self._run_id}",
-            resources=ResourceSpec(
-                device=tpu_device(self.config.tpu_type),
-            ),
+            resources=ResourceSpec(device=self._accel.make_device()),
             environment=EnvironmentSpec(pip_packages=["jax[tpu]"]),
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
-            replicas=4,
-            timeout=300,
+            replicas=self._accel.num_vms,
+            timeout=120,
         )
 
     def _run_region_constrained_job(self, client: IrisClient) -> TestResult:
-        """Run a job with an explicit region constraint.
-
-        Validates that constraint-based routing places the job on workers
-        whose attributes match the requested region.
-        """
+        """Run a job with an explicit region constraint."""
         return self._run_job_test(
             client=client,
-            test_name="Region-constrained job",
+            test_name=f"Region-constrained job ({self._accel.region})",
             entrypoint=Entrypoint.from_callable(_hello_tpu_job),
             job_name=f"smoke-region-{self._run_id}",
-            resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
-            constraints=[region_constraint(["europe-west4"])],
+            resources=ResourceSpec(device=self._accel.make_device()),
+            constraints=[region_constraint(self._accel.region)],
         )
 
     def _run_nested_constraint_job(self, client: IrisClient) -> TestResult:
         """Submit a parent job with a region constraint whose body submits a child.
 
-        The parent uses IrisClient (via iris_ctx()) to submit a child without
-        explicit constraints. The child inherits the parent's region constraint
-        and asserts it via JobInfo.constraints.
+        The child inherits the parent's region constraint and asserts it.
         """
+        a = self._accel
         return self._run_job_test(
             client=client,
             test_name="Nested constraint propagation",
-            entrypoint=Entrypoint.from_callable(_assert_region_child, "europe-west4"),
+            entrypoint=Entrypoint.from_callable(_assert_region_child, a.region, a.device_type, a.variant, a.count),
             job_name=f"smoke-nested-{self._run_id}",
-            resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
-            constraints=[region_constraint(["europe-west4"])],
+            resources=ResourceSpec(device=a.make_device()),
+            constraints=[region_constraint(a.region)],
         )
 
-    # ----- Results and cleanup -----
+    # ----- Diagnostics and cleanup -----
+
+    def _dump_controller_diagnostics(self):
+        """Fetch controller process logs, autoscaler status, and job list via CLI RPC.
+
+        Called before teardown so diagnostics are captured even when tests fail.
+        Only runs if we have a controller URL (i.e. we connected to the cluster).
+        """
+        if not self._controller_url:
+            return
+
+        _log_section("Controller Diagnostics")
+        self._dump_process_logs()
+        self._dump_autoscaler_status()
+        self._dump_job_list()
+
+    def _dump_worker_process_logs(self):
+        assert self._controller_url
+        log_prefix = self._cluster_config.storage.log_prefix
+        if not log_prefix:
+            logger.warning("Worker process logs unavailable: storage.log_prefix not configured")
+            return
+        try:
+            result = _run_iris_rpc(self._controller_url, "controller", "list-workers")
+            if result.returncode != 0:
+                logger.warning("Failed to list workers: %s", result.stderr)
+                return
+            workers = json.loads(result.stdout).get("workers", [])
+        except Exception as e:
+            logger.warning("Could not list workers: %s", e)
+            return
+        if not workers:
+            logger.warning("No workers reported by controller")
+            return
+
+        _log_section("Worker Process Logs")
+        for worker in workers:
+            worker_id = worker.get("worker_id") or "unknown"
+            records = _load_worker_process_logs(log_prefix, worker_id, limit=500)
+            if not records:
+                logger.info("Worker %s: no process logs found", worker_id)
+                continue
+            warn_error = [r for r in records if r.get("level") in ("WARNING", "ERROR")]
+            if not warn_error:
+                logger.info("Worker %s: no WARNING/ERROR logs", worker_id)
+                continue
+            seen: dict[str, int] = {}
+            for r in warn_error:
+                msg = r.get("message", "")
+                core = msg.split("] ", 1)[-1] if "] " in msg else msg
+                seen[core] = seen.get(core, 0) + 1
+            logger.warning(
+                "Worker %s WARNING/ERROR logs (%d entries, %d unique):",
+                worker_id,
+                len(warn_error),
+                len(seen),
+            )
+            for msg, count in seen.items():
+                suffix = f" (x{count})" if count > 1 else ""
+                logger.warning("  %s%s", msg, suffix)
+
+    def _dump_process_logs(self):
+        assert self._controller_url
+        try:
+            result = _run_iris_rpc(self._controller_url, "controller", "get-process-logs", "--limit", "0")
+            if result.returncode != 0:
+                logger.warning("Failed to fetch process logs: %s", result.stderr)
+                return
+            records = json.loads(result.stdout).get("records", [])
+            warn_error = [r for r in records if r.get("level") in ("WARNING", "ERROR")]
+            if not warn_error:
+                logger.info("No WARNING/ERROR logs from controller")
+                return
+            # Deduplicate repeated messages (e.g. CAPACITY INSUFFICIENT every 10s)
+            seen: dict[str, int] = {}
+            for r in warn_error:
+                msg = r["message"]
+                # Strip the leading timestamp to group identical messages
+                core = msg.split("] ", 1)[-1] if "] " in msg else msg
+                seen[core] = seen.get(core, 0) + 1
+            logger.warning("Controller WARNING/ERROR logs (%d entries, %d unique):", len(warn_error), len(seen))
+            for msg, count in seen.items():
+                suffix = f" (x{count})" if count > 1 else ""
+                logger.warning("  %s%s", msg, suffix)
+        except Exception as e:
+            logger.warning("Could not fetch process logs: %s", e)
+
+    def _dump_autoscaler_status(self):
+        assert self._controller_url
+        try:
+            result = _run_iris_rpc(self._controller_url, "controller", "get-autoscaler-status")
+            if result.returncode != 0:
+                logger.warning("Failed to fetch autoscaler status: %s", result.stderr)
+                return
+            status = json.loads(result.stdout).get("status", {})
+            _log_autoscaler_pretty(status)
+        except Exception as e:
+            logger.warning("Could not fetch autoscaler status: %s", e)
+
+    def _dump_job_list(self):
+        assert self._controller_url
+        try:
+            result = _run_iris_rpc(self._controller_url, "controller", "list-jobs")
+            if result.returncode != 0:
+                logger.warning("Failed to fetch job list: %s", result.stderr)
+                return
+            data = json.loads(result.stdout)
+            jobs = data.get("jobs", [])
+            _log_jobs_pretty(jobs)
+        except Exception as e:
+            logger.warning("Could not fetch job list: %s", e)
 
     def _print_results(self) -> bool:
         """Print final results and return True if all passed."""
@@ -1018,21 +1301,21 @@ class SmokeTestRunner:
 
         for result in self._results:
             status = "PASS" if result.passed else "FAIL"
-            self.logger.log(f"  [{status}] {result.name}: {result.message}")
+            logger.info("  [%s] %s: %s", status, result.name, result.message)
             total_duration += result.duration_seconds
             if not result.passed:
                 all_passed = False
 
-        self.logger.log("")
+        logger.info("")
         passed_count = sum(1 for r in self._results if r.passed)
         total_count = len(self._results)
 
         if all_passed:
-            self.logger.log(f"Results: {passed_count}/{total_count} tests passed in {total_duration:.1f}s")
+            logger.info("Results: %d/%d tests passed in %.1fs", passed_count, total_count, total_duration)
         else:
-            self.logger.log(f"Results: {passed_count}/{total_count} tests passed in {total_duration:.1f}s", level="WARN")
+            logger.warning("Results: %d/%d tests passed in %.1fs", passed_count, total_count, total_duration)
+            self._failed = True
 
-        self.logger.write_artifacts(self.log_tree)
         return all_passed
 
     def _cleanup(self):
@@ -1042,7 +1325,12 @@ class SmokeTestRunner:
         in one phase (e.g. terminating a background process) does not prevent
         the cluster from being torn down.
         """
-        self.logger.section("CLEANUP")
+        # Fetch diagnostics while the controller and dashboard tunnel are still alive.
+        self._dump_controller_diagnostics()
+        if self._failed and self._controller_url:
+            self._dump_worker_process_logs()
+
+        _log_section("CLEANUP")
 
         # Terminate all background subprocesses and close their owned file handles.
         # Failures here must not prevent cluster teardown below.
@@ -1050,41 +1338,32 @@ class SmokeTestRunner:
             try:
                 bg.terminate()
             except Exception as e:
-                self.logger.log(f"Error terminating {bg.name}: {e}", level="WARN")
+                logger.warning("Error terminating %s: %s", bg.name, e)
         self._background_procs.clear()
-        self.logger.log("Stopped background processes")
+        logger.info("Stopped background processes")
 
         # In redeploy mode, skip VM cleanup to preserve VMs for next run
         if self.config.mode == "redeploy":
-            self.logger.log("Redeploy mode: keeping VMs running for next iteration")
+            logger.info("Redeploy mode: keeping VMs running for next iteration")
             return
 
         if self.config.mode == "keep":
-            self.logger.log("Skipping cleanup (--mode keep)")
-            self.logger.log("VMs left running for debugging or redeploy iteration")
+            logger.info("Skipping cleanup (--mode keep)")
+            logger.info("VMs left running for debugging or redeploy iteration")
             return
 
         # Stop cluster via CLI
         if not self.config.local:
-            self.logger.log("Stopping remote cluster...")
+            logger.info("Stopping remote cluster...")
             try:
                 result = _run_iris("cluster", "stop", config_path=self.config.config_path)
                 for line in result.stdout.splitlines():
-                    self.logger.log(f"  {line}")
-                self.logger.log("Remote cluster stopped")
+                    logger.info("  %s", line)
+                logger.info("Remote cluster stopped")
             except Exception as e:
-                self.logger.log(f"Error stopping remote cluster: {e}", level="WARN")
+                logger.warning("Error stopping remote cluster: %s", e)
 
-            # Final resource cleanup — always attempted even if cluster stop failed
-            self.logger.log("Running final resource cleanup...")
-            try:
-                result = _run_iris("cluster", "debug", "cleanup", "--no-dry-run", config_path=self.config.config_path)
-                for line in result.stdout.splitlines():
-                    self.logger.log(f"  {line}")
-            except Exception as e:
-                self.logger.log(f"Error during final cleanup: {e}", level="WARN")
-
-        self.logger.log("Done")
+        logger.info("Done")
 
 
 # =============================================================================
@@ -1102,11 +1381,11 @@ class SmokeTestRunner:
     help="Path to cluster config YAML",
 )
 @click.option(
-    "--timeout",
-    "timeout_seconds",
-    default=1800,
+    "--boot-timeout",
+    "boot_timeout_seconds",
+    default=DEFAULT_BOOT_TIMEOUT,
     show_default=True,
-    help="Total timeout in seconds",
+    help="Timeout in seconds for cluster startup and connection",
 )
 @click.option(
     "--job-timeout",
@@ -1114,17 +1393,6 @@ class SmokeTestRunner:
     default=DEFAULT_JOB_TIMEOUT,
     show_default=True,
     help="Per-job timeout in seconds",
-)
-@click.option(
-    "--log-dir",
-    type=click.Path(path_type=Path),
-    help="Log directory path (default: logs/smoke-test-{timestamp})",
-)
-@click.option(
-    "--tpu-type",
-    default="v5litepod-16",
-    show_default=True,
-    help="TPU type for test jobs",
 )
 @click.option(
     "--mode",
@@ -1140,45 +1408,41 @@ class SmokeTestRunner:
 )
 def main(
     config_path: Path,
-    timeout_seconds: int,
+    boot_timeout_seconds: int,
     job_timeout_seconds: int,
-    log_dir: Path | None,
-    tpu_type: str,
     mode: str,
     local: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
 
-    This script starts a cluster, submits TPU jobs to exercise autoscaling,
-    and validates that everything works correctly. On completion (or failure),
-    the cluster is cleaned up unless --mode keep or --mode redeploy is specified.
+    Automatically detects whether the config uses GPU or TPU accelerators and
+    runs the appropriate test suite. GPU configs run multi-GPU device checks;
+    TPU configs run JAX TPU and coscheduling tests.
 
     Examples:
 
         # Basic smoke test (uses examples/smoke.yaml by default)
         uv run python scripts/smoke-test.py
 
+        # CoreWeave GPU smoke test
+        uv run python scripts/smoke-test.py --config examples/coreweave.yaml
+
         # Keep VMs running after test
         uv run python scripts/smoke-test.py --mode keep
 
         # Redeploy mode: reuse existing VMs (much faster for iteration)
         uv run python scripts/smoke-test.py --mode redeploy
-
-        # With custom config and log directory
-        uv run python scripts/smoke-test.py --config examples/marin.yaml \\
-            --log-dir /path/to/logs
     """
-    # Create default log directory with timestamp if not provided
-    if log_dir is None:
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        log_dir = Path("logs") / f"smoke-test-{timestamp}"
+    config_path = config_path.resolve()
+
+    accelerator = detect_accelerator(config_path)
+    logger.info("Detected accelerator: %s (%s)", accelerator.label(), accelerator.device_type)
 
     config = SmokeTestConfig(
         config_path=config_path,
-        timeout_seconds=timeout_seconds,
+        accelerator=accelerator,
+        boot_timeout_seconds=boot_timeout_seconds,
         job_timeout_seconds=job_timeout_seconds,
-        log_dir=log_dir,
-        tpu_type=tpu_type,
         mode=mode,  # type: ignore
         local=local,
     )

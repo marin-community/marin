@@ -13,9 +13,10 @@ from threading import Event, Lock, Thread
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
-import fsspec
 from google.protobuf import json_format
 
+import fsspec
+from iris.logging import BufferedLogRecord, LogBuffer
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
 from iris.time_utils import Duration, Timestamp
@@ -171,9 +172,9 @@ class FsspecLogSink:
                 preserving_proto_field_name=True,
             )
 
-            # Ensure parent directory exists
-            parent = str(Path(path).parent)
-            self._fs.makedirs(parent, exist_ok=True)
+            if self._scheme != "s3":
+                parent = str(Path(path).parent)
+                self._fs.makedirs(parent, exist_ok=True)
 
             self._fs.write_text(path, json_str)
         except Exception as e:
@@ -214,31 +215,22 @@ class FsspecLogSink:
         return json.dumps(json_dict, ensure_ascii=False)
 
     def _append_lines(self, path: str, lines: list[str]) -> None:
-        """Append lines to a file using fsspec append mode.
+        """Append lines to a file via download-then-reupload.
 
-        Args:
-            path: File path (without scheme)
-            lines: Lines to append
+        Uses cat_file + pipe_file instead of open("a") to avoid s3fs DirCache
+        staleness and partial-upload races that cause duplicate entries.
         """
-        # Ensure parent directory exists
-        parent = str(Path(path).parent)
-        self._fs.makedirs(parent, exist_ok=True)
+        if self._scheme != "s3":
+            parent = str(Path(path).parent)
+            self._fs.makedirs(parent, exist_ok=True)
 
-        # Try to use append mode if supported
+        new_data = "".join(line + "\n" for line in lines).encode("utf-8")
         try:
-            with self._fs.open(path, mode="a") as f:
-                for line in lines:
-                    f.write(line + "\n")
-        except (AttributeError, NotImplementedError, OSError, ValueError) as append_error:
-            # Fallback: read existing content and rewrite
-            logger.debug("append mode unavailable for %s (%s), falling back to rewrite", path, append_error)
-            try:
-                existing = self._fs.cat_file(path).decode("utf-8")
-            except (FileNotFoundError, OSError):
-                existing = ""
+            existing = self._fs.cat_file(path)
+        except FileNotFoundError:
+            existing = b""
 
-            content = existing + "".join(line + "\n" for line in lines)
-            self._fs.write_text(path, content)
+        self._fs.pipe_file(path, existing + new_data)
 
     def _sync_loop(self) -> None:
         interval_s = self._config.sync_interval.to_seconds()
@@ -393,10 +385,8 @@ class LogReader:
         """Read entries appended since the last call."""
         log_path = self._logs_path
         try:
-            with self._fs.open(log_path, mode="rb") as f:
-                f.seek(self._offset)
-                chunk = f.read()
-                self._offset = f.tell()
+            chunk = self._fs.cat_file(log_path, start=self._offset)
+            self._offset += len(chunk)
         except FileNotFoundError:
             return []
         except OSError:
@@ -451,32 +441,36 @@ class LogReader:
             return
 
         try:
-            with self._fs.open(self._logs_path, mode="rb") as f:
-                self._offset = 0
-                self._tail = ""
-                while True:
-                    line_start = f.tell()
-                    raw = f.readline()
-                    if not raw:
-                        self._offset = f.tell()
-                        return
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    if not line:
-                        continue
-                    entry = logging_pb2.LogEntry()
-                    try:
-                        json_format.Parse(line, entry)
-                    except Exception:
-                        continue
-                    if entry.timestamp.epoch_ms > since_ms:
-                        self._offset = line_start
-                        return
-        except FileNotFoundError:
+            data = self._fs.cat_file(self._logs_path)
+        except (FileNotFoundError, OSError):
             self._offset = 0
             self._tail = ""
-        except OSError:
-            self._offset = 0
-            self._tail = ""
+            return
+
+        self._offset = 0
+        self._tail = ""
+        pos = 0
+        while pos < len(data):
+            nl = data.find(b"\n", pos)
+            if nl < 0:
+                self._offset = pos
+                return
+            line = data[pos:nl].decode("utf-8", errors="replace").strip()
+            next_pos = nl + 1
+            if not line:
+                pos = next_pos
+                continue
+            entry = logging_pb2.LogEntry()
+            try:
+                json_format.Parse(line, entry)
+            except Exception:
+                pos = next_pos
+                continue
+            if entry.timestamp.epoch_ms > since_ms:
+                self._offset = pos
+                return
+            pos = next_pos
+        self._offset = pos
 
     def read_metadata(self) -> logging_pb2.TaskAttemptMetadata | None:
         metadata_path = self._metadata_path
@@ -490,3 +484,93 @@ class LogReader:
         except Exception as e:
             logger.warning(f"Failed to read metadata from {metadata_path}: {e}")
             return None
+
+
+class ProcessLogSink:
+    """Periodic sink for process logs using fsspec JSONL storage.
+
+    Writes logs for a single worker process to:
+    {prefix}/process/worker/{worker_id}/logs.jsonl
+    """
+
+    def __init__(
+        self,
+        *,
+        prefix: str,
+        worker_id: str,
+        log_buffer: LogBuffer,
+        sync_interval: Duration | None = None,
+        max_entries: int = 5000,
+    ) -> None:
+        if "://" not in prefix:
+            raise ValueError(f"log prefix must be a URL, got: {prefix}")
+        self._prefix = prefix.rstrip("/")
+        self._worker_id = worker_id
+        self._log_buffer = log_buffer
+        self._sync_interval = sync_interval or Duration.from_seconds(10.0)
+        self._max_entries = max_entries
+        self._last_seq = 0
+        self._scheme, path = self._prefix.split("://", 1)
+        self._fs = fsspec.filesystem(self._scheme)
+        self._path_prefix = path
+        self._stop_event = Event()
+        self._sync_thread = Thread(
+            target=self._sync_loop,
+            name=f"process-log-sync-{worker_id}",
+            daemon=True,
+        )
+        self._sync_thread.start()
+
+    @property
+    def log_path(self) -> str:
+        return f"{self._scheme}://{self._storage_log_path}"
+
+    @property
+    def _storage_log_path(self) -> str:
+        return f"{self._path_prefix}/process/worker/{self._worker_id}/logs.jsonl"
+
+    def _sync_loop(self) -> None:
+        interval_s = self._sync_interval.to_seconds()
+        while not self._stop_event.wait(interval_s):
+            self.sync()
+
+    def sync(self) -> None:
+        records = self._log_buffer.query_since(self._last_seq, limit=self._max_entries)
+        if not records:
+            return
+        self._last_seq = max(r.seq for r in records)
+        lines = [self._record_to_json_line(r) for r in records]
+        try:
+            self._append_lines(self._storage_log_path, lines)
+        except Exception as e:
+            logger.warning("Failed to write process logs to %s: %r", self.log_path, e, exc_info=True)
+
+    def close(self) -> None:
+        self._stop_event.set()
+        self._sync_thread.join(timeout=5.0)
+        self.sync()
+
+    def _record_to_json_line(self, record: BufferedLogRecord) -> str:
+        return json.dumps(
+            {
+                "seq": record.seq,
+                "timestamp": record.timestamp,
+                "level": record.level,
+                "logger_name": record.logger_name,
+                "message": record.message,
+            },
+            ensure_ascii=False,
+        )
+
+    def _append_lines(self, path: str, lines: list[str]) -> None:
+        if self._scheme != "s3":
+            parent = str(Path(path).parent)
+            self._fs.makedirs(parent, exist_ok=True)
+
+        new_data = "".join(line + "\n" for line in lines).encode("utf-8")
+        try:
+            existing = self._fs.cat_file(path)
+        except FileNotFoundError:
+            existing = b""
+
+        self._fs.pipe_file(path, existing + new_data)
