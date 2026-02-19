@@ -17,13 +17,18 @@ from levanter.utils.jax_utils import local_cpu_mesh
 class PermutationDataset(AsyncDataset[T_co]):
     """A dataset that wraps another dataset and applies a per-epoch permutation to the indices.
 
-    The dataset is logically infinite: indices beyond the underlying dataset length
-    wrap into new epochs, each with a distinct deterministic permutation derived via
-    ``jax.random.fold_in(key, epoch)``.  Every window of ``dataset_len`` consecutive
+    The dataset is logically infinite by default: indices beyond the underlying dataset
+    length wrap into new epochs, each with a distinct deterministic permutation derived
+    via ``jax.random.fold_in(key, epoch)``.  Every window of ``dataset_len`` consecutive
     indices visits each element exactly once, so after ``k`` epochs each element has
     been seen exactly ``k`` times.
 
-    Use ``.take(n)`` or ``SlicedAsyncDataset`` to bound iteration.
+    Args:
+        dataset: The underlying dataset to permute.
+        key: PRNG key for deterministic shuffling.
+        perm_type: Permutation algorithm (default ``"feistel"``).
+        max_epochs: If set, the dataset terminates after this many epochs.
+            ``None`` (default) means infinite.
     """
 
     def __init__(
@@ -31,10 +36,12 @@ class PermutationDataset(AsyncDataset[T_co]):
         dataset: AsyncDataset[T_co],
         key: PRNGKeyArray,
         perm_type: PermType = "feistel",
+        max_epochs: Optional[int] = None,
     ):
         self.dataset = dataset
         self.key = key
         self._perm_type = perm_type
+        self._max_epochs = max_epochs
         self._cached_len: Optional[int] = None
 
         @alru_cache(maxsize=4)
@@ -51,10 +58,19 @@ class PermutationDataset(AsyncDataset[T_co]):
         return self._cached_len
 
     async def async_len(self) -> int:
+        if self._max_epochs is not None:
+            return self._max_epochs * await self._get_dataset_len()
         return sys.maxsize
 
     def is_finite(self) -> bool:
-        return False
+        return self._max_epochs is not None
+
+    def metrics_for_global_index(self, global_index: int) -> dict[str, float]:
+        if self._cached_len is None or self._cached_len == 0:
+            return {}
+        epoch = global_index // self._cached_len
+        progress = (global_index % self._cached_len) / self._cached_len
+        return {"data/epoch": float(epoch), "data/epoch_progress": progress}
 
     async def getitem_async(self, index: int) -> T_co:
         dataset_len = await self._get_dataset_len()
@@ -79,8 +95,8 @@ class EraShufflingDataset(AsyncDataset[T_co]):
     A dataset that shuffles the data in "eras" of fixed length. Era shuffling is somewhere in between a shuffle buffer
     and a permutation. It's a "local" permutation where pi(i) \in [ (i//L) * L, (i//L + 1) * L ) for some era length L.
 
-    The dataset is logically infinite: indices beyond the underlying dataset length
-    wrap into new epochs, each with a fresh set of era permutations derived via
+    The dataset is logically infinite by default: indices beyond the underlying dataset
+    length wrap into new epochs, each with a fresh set of era permutations derived via
     ``jax.random.fold_in(key, era)``.  Every window of ``dataset_len`` consecutive
     indices visits each element exactly once.
 
@@ -94,6 +110,13 @@ class EraShufflingDataset(AsyncDataset[T_co]):
     - It distributes less well than a shuffle buffer does. It's more like a "local" shuffle buffer.
     - You have to wait for an era to fill before you can start shuffling it. With prefetching, this is less of an issue.
 
+    Args:
+        dataset: The underlying dataset to shuffle.
+        era_length: Number of elements per era.
+        key: PRNG key for deterministic shuffling.
+        perm_type: Permutation algorithm (default ``"feistel"``).
+        max_epochs: If set, the dataset terminates after this many epochs.
+            ``None`` (default) means infinite.
 
     # TODO: given the way tokenization works (where it runs way ahead of training), we can probably increase the era
     length # over time. This would be a nice feature to have.
@@ -106,6 +129,7 @@ class EraShufflingDataset(AsyncDataset[T_co]):
         *,
         key: jax.random.PRNGKey,
         perm_type: PermType = "feistel",
+        max_epochs: Optional[int] = None,
     ):
         self.dataset = dataset
         self.era_length = era_length
@@ -119,6 +143,7 @@ class EraShufflingDataset(AsyncDataset[T_co]):
 
         self.key = key
         self._perm_type = perm_type
+        self._max_epochs = max_epochs
         self._cached_len: Optional[int] = None
 
         @alru_cache(maxsize=4)  # we're mostly going to be going sequentially
@@ -152,10 +177,19 @@ class EraShufflingDataset(AsyncDataset[T_co]):
         return shuffled
 
     async def async_len(self) -> int:
+        if self._max_epochs is not None:
+            return self._max_epochs * await self._get_dataset_len()
         return sys.maxsize
 
     def is_finite(self) -> bool:
-        return False
+        return self._max_epochs is not None
+
+    def metrics_for_global_index(self, global_index: int) -> dict[str, float]:
+        if self._cached_len is None or self._cached_len == 0:
+            return {}
+        epoch = global_index // self._cached_len
+        progress = (global_index % self._cached_len) / self._cached_len
+        return {"data/epoch": float(epoch), "data/epoch_progress": progress}
 
     async def getitem_async(self, index: int) -> T_co:
         return await self.dataset.getitem_async(await self._get_index(index))

@@ -21,7 +21,6 @@ import levanter.eval_harness
 from levanter import callbacks
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
-from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
@@ -230,22 +229,8 @@ def main(config: TrainLmConfig):
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
 
-        if isinstance(train_dataset, MixtureDataset):
-            last_stage = -1
-
-            def log_mixture_weights(step_info):
-                nonlocal last_stage
-                seq_index = trainer.config.batch_schedule.global_data_offset_by_step(step_info.step)
-                block_id = seq_index // train_dataset.block_size
-                stage = train_dataset._get_stage_for_block(block_id)
-                weights = train_dataset.weight_stages[stage][1]
-                if stage != last_stage:
-                    metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
-                    metrics["mixture/stage"] = stage
-                    levanter.tracker.log(metrics, step=step_info.step)
-                    last_stage = stage
-
-            trainer.add_hook(log_mixture_weights, every=1)
+        # Dataset metrics (epoch, mixture weights, etc.) are now logged automatically
+        # by the DataLoader via metrics_for_global_index() — no custom hook needed.
         # trainer.add_hook(callbacks.GradWatchCallback(include_histograms=True), every=5)
 
         if config.hf_save_path is not None and config.hf_save_steps is not None:

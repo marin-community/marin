@@ -129,6 +129,177 @@ async def test_permutation_dataset_take_bounds_iteration():
     assert await bounded.async_len() == 30
 
 
+# --- max_epochs tests ---
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_max_epochs_finite():
+    """With max_epochs set, PermutationDataset is finite and has correct length."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0), max_epochs=3)
+    assert perm_ds.is_finite()
+    assert await perm_ds.async_len() == 30  # 3 * 10
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_max_epochs_single():
+    """max_epochs=1 gives a single-pass dataset that terminates."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0), max_epochs=1)
+    assert perm_ds.is_finite()
+    assert await perm_ds.async_len() == 10
+    batch = await perm_ds.get_batch(list(range(10)))
+    assert set(batch) == set(data)
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_max_epochs_none_is_infinite():
+    """max_epochs=None (default) gives an infinite dataset."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0), max_epochs=None)
+    assert not perm_ds.is_finite()
+    assert await perm_ds.async_len() == sys.maxsize
+
+
+@pytest.mark.asyncio
+async def test_era_shuffling_max_epochs_finite():
+    """With max_epochs set, EraShufflingDataset is finite."""
+    data = list(range(20))
+    dataset = ListAsyncDataset(data)
+    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0), max_epochs=2)
+    assert era_ds.is_finite()
+    assert await era_ds.async_len() == 40  # 2 * 20
+
+
+@pytest.mark.asyncio
+async def test_era_shuffling_max_epochs_none_is_infinite():
+    """max_epochs=None (default) gives an infinite EraShufflingDataset."""
+    data = list(range(20))
+    dataset = ListAsyncDataset(data)
+    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0), max_epochs=None)
+    assert not era_ds.is_finite()
+    assert await era_ds.async_len() == sys.maxsize
+
+
+# --- metrics_for_global_index tests ---
+
+
+@pytest.mark.asyncio
+async def test_permutation_dataset_metrics():
+    """metrics_for_global_index reports epoch and progress."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0))
+
+    # Force _cached_len to be populated
+    await perm_ds.getitem_async(0)
+
+    metrics_0 = perm_ds.metrics_for_global_index(0)
+    assert metrics_0["data/epoch"] == 0.0
+    assert metrics_0["data/epoch_progress"] == 0.0
+
+    metrics_5 = perm_ds.metrics_for_global_index(5)
+    assert metrics_5["data/epoch"] == 0.0
+    assert metrics_5["data/epoch_progress"] == 0.5
+
+    metrics_10 = perm_ds.metrics_for_global_index(10)
+    assert metrics_10["data/epoch"] == 1.0
+    assert metrics_10["data/epoch_progress"] == 0.0
+
+    metrics_25 = perm_ds.metrics_for_global_index(25)
+    assert metrics_25["data/epoch"] == 2.0
+    assert metrics_25["data/epoch_progress"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_era_shuffling_dataset_metrics():
+    """metrics_for_global_index on EraShufflingDataset reports epoch and progress."""
+    data = list(range(20))
+    dataset = ListAsyncDataset(data)
+    era_ds = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0))
+
+    # Force _cached_len to be populated
+    await era_ds.getitem_async(0)
+
+    metrics_0 = era_ds.metrics_for_global_index(0)
+    assert metrics_0["data/epoch"] == 0.0
+    assert metrics_0["data/epoch_progress"] == 0.0
+
+    metrics_10 = era_ds.metrics_for_global_index(10)
+    assert metrics_10["data/epoch"] == 0.0
+    assert metrics_10["data/epoch_progress"] == 0.5
+
+    metrics_20 = era_ds.metrics_for_global_index(20)
+    assert metrics_20["data/epoch"] == 1.0
+    assert metrics_20["data/epoch_progress"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_base_dataset_metrics_empty():
+    """Base AsyncDataset returns empty metrics by default."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    assert dataset.metrics_for_global_index(0) == {}
+    assert dataset.metrics_for_global_index(5) == {}
+
+
+@pytest.mark.asyncio
+async def test_mapped_dataset_delegates_metrics():
+    """MappedAsyncDataset delegates metrics_for_global_index to the inner dataset."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0))
+
+    # Force _cached_len to be populated
+    await perm_ds.getitem_async(0)
+
+    mapped = perm_ds.map(lambda x: x * 2)
+    metrics = mapped.metrics_for_global_index(10)
+    assert metrics["data/epoch"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_sliced_dataset_delegates_metrics():
+    """SlicedAsyncDataset delegates metrics with shifted index."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = PermutationDataset(dataset, jax.random.PRNGKey(0))
+
+    # Force _cached_len to be populated
+    await perm_ds.getitem_async(0)
+
+    sliced = perm_ds.slice_dataset(start_index=10)
+    # Index 0 in the sliced dataset maps to index 10 in the inner dataset (epoch 1)
+    metrics = sliced.metrics_for_global_index(0)
+    assert metrics["data/epoch"] == 1.0
+
+
+# --- Convenience method max_epochs tests ---
+
+
+@pytest.mark.asyncio
+async def test_shuffle_method_with_max_epochs():
+    """The .shuffle() convenience method accepts max_epochs."""
+    data = list(range(10))
+    dataset = ListAsyncDataset(data)
+    perm_ds = dataset.shuffle(jax.random.PRNGKey(0), max_epochs=2)
+    assert perm_ds.is_finite()
+    assert await perm_ds.async_len() == 20
+
+
+@pytest.mark.asyncio
+async def test_era_shuffle_method_with_max_epochs():
+    """The .era_shuffle() convenience method accepts max_epochs."""
+    data = list(range(20))
+    dataset = ListAsyncDataset(data)
+    era_ds = dataset.era_shuffle(5, jax.random.PRNGKey(0), max_epochs=3)
+    assert era_ds.is_finite()
+    assert await era_ds.async_len() == 60
+
+
 # --- EraShufflingDataset tests ---
 
 

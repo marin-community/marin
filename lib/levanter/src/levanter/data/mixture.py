@@ -202,6 +202,14 @@ class MixtureDataset(AsyncDataset[T]):
         assert self._is_finite_cache is not None
         return self._is_finite_cache
 
+    def metrics_for_global_index(self, global_index: int) -> dict[str, float]:
+        block_id = global_index // self.block_size
+        stage_idx = self._get_stage_for_block(block_id)
+        _, weights = self.weight_stages[stage_idx]
+        metrics: dict[str, float] = {f"data/mixture/{name}": weight for name, weight in weights.items()}
+        metrics["data/mixture_stage"] = float(stage_idx)
+        return metrics
+
     def _get_stage_for_block(self, block_id: int) -> int:
         block_start = block_id * self.block_size
         stage_starts = np.array([start for start, _ in self.weight_stages])
