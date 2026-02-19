@@ -11,12 +11,9 @@ import logging
 from pathlib import Path
 
 from google.cloud import storage
-from iris.temp_buckets import REGION_TO_TMP_BUCKET, get_temp_bucket_path, region_from_metadata
+from iris.temp_buckets import region_from_metadata
 
 logger = logging.getLogger(__name__)
-
-# Re-export so existing ``from marin.utilities.gcs_utils import ...`` callers keep working.
-__all__ = ["REGION_TO_TMP_BUCKET", "get_temp_bucket_path"]
 
 
 def split_gcs_path(gs_uri: str) -> tuple[str, Path]:

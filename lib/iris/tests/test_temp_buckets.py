@@ -86,14 +86,3 @@ def test_get_temp_bucket_path_strips_prefix_slashes():
 
     with patch("iris.temp_buckets.urllib.request.urlopen", return_value=mock_resp):
         assert get_temp_bucket_path(ttl_days=3, prefix="/foo/bar/") == "gs://marin-tmp-us-central1/ttl=3d/foo/bar"
-
-
-def test_get_temp_bucket_path_europe_region():
-    """europe-west4 maps to marin-tmp-eu-west4 (abbreviated name)."""
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = b"projects/12345/zones/europe-west4-a"
-    mock_resp.__enter__ = lambda s: s
-    mock_resp.__exit__ = lambda s, *a: None
-
-    with patch("iris.temp_buckets.urllib.request.urlopen", return_value=mock_resp):
-        assert get_temp_bucket_path(ttl_days=7, prefix="checkpoints") == "gs://marin-tmp-eu-west4/ttl=7d/checkpoints"

@@ -25,7 +25,8 @@ from levanter.main import train_lm
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
-from marin.utilities.gcs_utils import get_bucket_location, get_temp_bucket_path, get_vm_region
+from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
+from iris.temp_buckets import get_temp_bucket_path
 
 logger = logging.getLogger(__name__)
 
