@@ -15,7 +15,7 @@
 """Complete(d) C-AdamC scaling recipe for ISOFlop sweeps.
 
 This recipe applies Complete(d)P scaling adjustments on top of c_adamc base formulas.
-scaling_ratio = (m_B / m_D) / (m_B_ref / m_D_ref) = ref_steps / actual_steps.
+scaling_ratio = (batch_size * ref_steps) / (ref_batch_size * actual_steps)
 
 Formulas:
 - Learning rate: lr = lr_base * sqrt(scaling_ratio) / hidden_dim
@@ -83,22 +83,18 @@ class CompletedCAdamCRecipe:
     def vocab_size(self) -> int:
         return get_vocab_size_for_tokenizer(self.tokenizer)
 
-    # --- Base hyperparameters (at reference scale) ---
-    # LR formula: lr = lr_base * sqrt(scaling_ratio) / hidden_dim
-    # At reference (scaling_ratio=1): lr = lr_base / hidden_dim
-    # Calibrated to match adamc_sweep 130m (B=128, d=512, lr=0.008): lr_base = 0.008 * 512
-    lr_base: float = 0.008 * 512  # = 4.096
-
-    # These are the "base" values that get scaled by Complete(d)P ratios
-    # At reference (scaling_ratio=1), these match c_adamc values
-    weight_decay_base: float = 0.1
-    epsilon_base: float = 1e-15  # Same as c_adamc
-    one_minus_beta1_base: float = 0.05  # (1 - 0.95), same as c_adamc
-    one_minus_beta2_base: float = 0.02  # (1 - 0.98), same as c_adamc
-
     # --- Reference scale for Complete(d)P scaling adjustments ---
+    # At reference (batch_size=128, steps=65536, hidden_dim=512), scaling_ratio=1
     reference_batch_size: int = 128
-    reference_total_tokens: float = 128 * SEQ_LEN * STEPS_PER_RUN  # ~34B tokens
+    reference_hidden_dim: int = 512
+
+    # --- Base hyperparameters (scaled by reference hidden_dim) ---
+    # Calibrated to match c_adamc 130m (B=128, d=512, lr=0.008, wd=0.1, eps=1e-15)
+    lr_base: float = 0.008 * 512  # lr = lr_base * sqrt(ratio) / hidden_dim
+    weight_decay_base: float = 0.1 / 512  # wd = wd_base * sqrt(ratio) * hidden_dim
+    epsilon_base: float = 1e-15 * 512  # eps = eps_base * sqrt(1/ratio) / hidden_dim
+    one_minus_beta1_base: float = 0.05  # (1 - 0.95)
+    one_minus_beta2_base: float = 0.02  # (1 - 0.98)
 
     # --- Fixed hyperparameters (not scaled) ---
     max_grad_norm: float = 1.0
@@ -135,45 +131,36 @@ class CompletedCAdamCRecipe:
     large_budget_step_size: int = 256
     budget_step_threshold: float = 2e19
 
-    def _compute_scaling_ratio(self, batch_tokens: float, total_tokens: float) -> float:
-        """Compute m_B / m_D ratio relative to reference."""
-        current_ratio = batch_tokens / total_tokens
-        reference_batch_tokens = self.reference_batch_size * SEQ_LEN
-        reference_ratio = reference_batch_tokens / self.reference_total_tokens
-        return current_ratio / reference_ratio
+    def _compute_scaling_ratio(self, batch_size: int, train_steps: int) -> float:
+        """Compute scaling ratio: (batch_size * ref_steps) / (ref_batch_size * train_steps)."""
+        return (batch_size * STEPS_PER_RUN) / (self.reference_batch_size * train_steps)
 
-    def _compute_learning_rate(
-        self, hidden_dim: int, batch_tokens: float, total_tokens: float
-    ) -> float:
-        """lr = lr_base * sqrt(scaling_ratio) / hidden_dim
-
-        scaling_ratio = ref_steps / actual_steps (batch_size cancels out).
-        At reference, matches c_adamc: lr = 0.33 * sqrt(128) / hidden_dim.
-        """
-        ratio = self._compute_scaling_ratio(batch_tokens, total_tokens)
+    def _compute_learning_rate(self, hidden_dim: int, batch_size: int, train_steps: int) -> float:
+        """lr = lr_base * sqrt(scaling_ratio) / hidden_dim"""
+        ratio = self._compute_scaling_ratio(batch_size, train_steps)
         lr = self.lr_base * math.sqrt(ratio) / hidden_dim
         return min(self.max_learning_rate, lr)
 
-    def _compute_epsilon(self, batch_tokens: float, total_tokens: float) -> float:
-        """eps = eps_base * (m_D / m_B) ** 0.5"""
-        ratio = self._compute_scaling_ratio(batch_tokens, total_tokens)
-        return self.epsilon_base * math.sqrt(1.0 / ratio)
+    def _compute_epsilon(self, hidden_dim: int, batch_size: int, train_steps: int) -> float:
+        """eps = eps_base * sqrt(1 / scaling_ratio) / hidden_dim"""
+        ratio = self._compute_scaling_ratio(batch_size, train_steps)
+        return self.epsilon_base * math.sqrt(1.0 / ratio) / hidden_dim
 
-    def _compute_weight_decay(self, batch_tokens: float, total_tokens: float) -> float:
-        """wd = wd_base * (m_B / m_D) ** 0.5"""
-        ratio = self._compute_scaling_ratio(batch_tokens, total_tokens)
-        return self.weight_decay_base * math.sqrt(ratio)
+    def _compute_weight_decay(self, hidden_dim: int, batch_size: int, train_steps: int) -> float:
+        """wd = wd_base * sqrt(scaling_ratio) * hidden_dim"""
+        ratio = self._compute_scaling_ratio(batch_size, train_steps)
+        return self.weight_decay_base * math.sqrt(ratio) * hidden_dim
 
-    def _compute_beta1(self, batch_tokens: float, total_tokens: float) -> float:
-        """(1 - beta1) = (1 - beta1_base) * (m_B / m_D)"""
-        ratio = self._compute_scaling_ratio(batch_tokens, total_tokens)
+    def _compute_beta1(self, batch_size: int, train_steps: int) -> float:
+        """(1 - beta1) = (1 - beta1_base) * scaling_ratio"""
+        ratio = self._compute_scaling_ratio(batch_size, train_steps)
         one_minus_beta1 = self.one_minus_beta1_base * ratio
         beta1 = 1.0 - one_minus_beta1
         return max(self.min_beta, min(self.max_beta, beta1))
 
-    def _compute_beta2(self, batch_tokens: float, total_tokens: float) -> float:
-        """(1 - beta2) = (1 - beta2_base) * (m_B / m_D)"""
-        ratio = self._compute_scaling_ratio(batch_tokens, total_tokens)
+    def _compute_beta2(self, batch_size: int, train_steps: int) -> float:
+        """(1 - beta2) = (1 - beta2_base) * scaling_ratio"""
+        ratio = self._compute_scaling_ratio(batch_size, train_steps)
         one_minus_beta2 = self.one_minus_beta2_base * ratio
         beta2 = 1.0 - one_minus_beta2
         return max(self.min_beta, min(self.max_beta, beta2))
@@ -257,29 +244,28 @@ class CompletedCAdamCRecipe:
         batch_exact = tokens / (STEPS_PER_RUN * seq_len)
         batch_size = _round_to_power_of_two(batch_exact)
 
-        # Compute batch tokens and total tokens for scaling
-        batch_tokens = batch_size * seq_len
+        # Compute train_steps for initial LR check
+        train_steps = round(tokens / (batch_size * seq_len))
 
         # Compute scaled learning rate and check constraints
-        lr = self._compute_learning_rate(hidden_dim, batch_tokens, tokens)
+        lr = self._compute_learning_rate(hidden_dim, batch_size, train_steps)
         while lr > self.max_learning_rate and batch_size > self.min_batch_size:
             batch_size //= 2
-            batch_tokens = batch_size * seq_len
-            lr = self._compute_learning_rate(hidden_dim, batch_tokens, tokens)
+            train_steps = round(tokens / (batch_size * seq_len))
+            lr = self._compute_learning_rate(hidden_dim, batch_size, train_steps)
 
         if batch_size < self.min_batch_size or batch_size > self.max_batch_size:
             return None
 
         train_steps = round(tokens / (batch_size * seq_len))
         actual_tokens = batch_size * train_steps * seq_len
-        batch_tokens = batch_size * seq_len
 
         # Compute all scaled hyperparameters
-        lr = self._compute_learning_rate(hidden_dim, batch_tokens, actual_tokens)
-        epsilon = self._compute_epsilon(batch_tokens, actual_tokens)
-        weight_decay = self._compute_weight_decay(batch_tokens, actual_tokens)
-        beta1 = self._compute_beta1(batch_tokens, actual_tokens)
-        beta2 = self._compute_beta2(batch_tokens, actual_tokens)
+        lr = self._compute_learning_rate(hidden_dim, batch_size, train_steps)
+        epsilon = self._compute_epsilon(hidden_dim, batch_size, train_steps)
+        weight_decay = self._compute_weight_decay(hidden_dim, batch_size, train_steps)
+        beta1 = self._compute_beta1(batch_size, train_steps)
+        beta2 = self._compute_beta2(batch_size, train_steps)
 
         optimizer_config = CautiousConfig(
             learning_rate=lr,

@@ -12,7 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AdamH scaling recipe for ISOFlop sweeps."""
+"""Complete(d) C-AdamC v5 scaling recipe for ISOFlop sweeps.
+
+This recipe applies Complete(d)P scaling adjustments on top of c_adamc base formulas.
+scaling_ratio = (batch_size * ref_steps) / (ref_batch_size * actual_steps)
+
+Formulas:
+- Learning rate: lr = lr_base * sqrt(scaling_ratio) / hidden_dim
+- Adam epsilon: eps = eps_base * sqrt(1 / scaling_ratio)
+- Weight decay: wd = wd_base (constant over batch/steps at config level)
+- Beta schedules: (1 - beta) = (1 - beta_base) * scaling_ratio
+
+At reference (batch_size=128, steps=65536), scaling_ratio=1 and all formulas match c_adamc.
+"""
 
 import math
 from collections.abc import Iterator
@@ -22,7 +34,7 @@ from levanter.data.text import LMMixtureDatasetConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
-from levanter.optim import AdamHConfig
+from levanter.optim.cautious import CautiousConfig
 
 from experiments.defaults import default_train
 from experiments.evals.evals import default_eval
@@ -57,28 +69,36 @@ def _format_run_name(
 
 
 @dataclass(frozen=True)
-class AdamHRecipe:
-    """AdamH scaling recipe."""
+class CompletedCAdamCV5Recipe:
+    """Complete(d) C-AdamC v5 scaling recipe using CautiousConfig optimizer.
 
-    name: str = "adamh"
+    Implements Complete(d)P scaling where hyperparameters scale with
+    data size (m_D = tokens) and batch size (m_B = batch_size * seq_len).
+    Weight decay is intentionally not scaled by ``scaling_ratio`` in this version.
+    """
+
+    name: str = "completed-c-adamc-v5"
     tokenizer: str = "stanford-crfm/marin-tokenizer"
 
     @property
     def vocab_size(self) -> int:
         return get_vocab_size_for_tokenizer(self.tokenizer)
 
-    # --- Learning rate scaling ---
-    lr_constant: float = 0.33
-    adamh_base_lr: float = 0.02
-    adamh_lr_batch_ref: int = 128
+    # --- Reference scale for Complete(d)P scaling adjustments ---
+    # At reference (batch_size=128, steps=65536, hidden_dim=512), scaling_ratio=1
+    reference_batch_size: int = 128
+    reference_hidden_dim: int = 512
 
-    # --- Adam hyperparameters ---
-    beta1: float = 0.9
-    beta2_base: float = 0.98
-    beta2_batch_divisor: float = 128
-    epsilon: float = 1e-15
+    # --- Base hyperparameters (scaled by reference hidden_dim) ---
+    # Calibrated to match c_adamc 130m (B=128, d=512, lr=0.008, wd=0.1, eps=1e-15)
+    lr_base: float = 0.008 * 512  # lr = lr_base * sqrt(ratio) / hidden_dim
+    weight_decay_base: float = 0.1 / 512  # wd = wd_base * hidden_dim
+    epsilon_base: float = 1e-15 * 512  # eps = eps_base * sqrt(1/ratio) / hidden_dim
+    one_minus_beta1_base: float = 0.05  # (1 - 0.95)
+    one_minus_beta2_base: float = 0.02  # (1 - 0.98)
+
+    # --- Fixed hyperparameters (not scaled) ---
     max_grad_norm: float = 1.0
-    nesterov: bool = False
 
     # --- Schedule ---
     min_lr_ratio: float = 0.0
@@ -96,27 +116,57 @@ class AdamHRecipe:
     layer_formula_offset: int = 9
 
     # --- Constraints ---
-    max_learning_rate: float = 0.02
+    max_learning_rate: float = 0.01
     min_batch_size: int = 8
     max_batch_size: int = 8192
     base_max_params: float = 12e9
     base_max_params_budget: float = 3e20
     global_max_params: float = 1e12
 
+    # --- Beta constraints ---
+    min_beta: float = 0.5
+    max_beta: float = 0.9999
+
     # --- Search step sizes ---
     small_budget_step_size: int = 128
     large_budget_step_size: int = 256
     budget_step_threshold: float = 2e19
 
-    def _compute_adam_lr(self, batch_size: int, hidden_dim: int) -> float:
-        return (self.lr_constant * math.sqrt(batch_size)) / hidden_dim
+    def _compute_scaling_ratio(self, batch_size: int, train_steps: int) -> float:
+        """Compute scaling ratio: (batch_size * ref_steps) / (ref_batch_size * train_steps)."""
+        return (batch_size * STEPS_PER_RUN) / (self.reference_batch_size * train_steps)
 
-    def _compute_adamh_lr(self, batch_size: int) -> float:
-        lr_scale = math.sqrt(batch_size / self.adamh_lr_batch_ref)
-        return self.adamh_base_lr * lr_scale
+    def _compute_learning_rate(self, hidden_dim: int, batch_size: int, train_steps: int) -> float:
+        """lr = lr_base * sqrt(scaling_ratio) / hidden_dim"""
+        ratio = self._compute_scaling_ratio(batch_size, train_steps)
+        lr = self.lr_base * math.sqrt(ratio) / hidden_dim
+        return min(self.max_learning_rate, lr)
 
-    def _compute_beta2(self, batch_size: int) -> float:
-        return max(0.95, self.beta2_base ** (batch_size / self.beta2_batch_divisor))
+    def _compute_epsilon(self, hidden_dim: int, batch_size: int, train_steps: int) -> float:
+        """eps = eps_base * sqrt(1 / scaling_ratio) / hidden_dim"""
+        ratio = self._compute_scaling_ratio(batch_size, train_steps)
+        return self.epsilon_base * math.sqrt(1.0 / ratio) / hidden_dim
+
+    def _compute_weight_decay(self, hidden_dim: int) -> float:
+        """wd = wd_base * hidden_dim.
+
+        AdamC then scales this by ``learning_rate / max_learning_rate`` during training.
+        """
+        return self.weight_decay_base * hidden_dim
+
+    def _compute_beta1(self, batch_size: int, train_steps: int) -> float:
+        """(1 - beta1) = (1 - beta1_base) * scaling_ratio"""
+        ratio = self._compute_scaling_ratio(batch_size, train_steps)
+        one_minus_beta1 = self.one_minus_beta1_base * ratio
+        beta1 = 1.0 - one_minus_beta1
+        return max(self.min_beta, min(self.max_beta, beta1))
+
+    def _compute_beta2(self, batch_size: int, train_steps: int) -> float:
+        """(1 - beta2) = (1 - beta2_base) * scaling_ratio"""
+        ratio = self._compute_scaling_ratio(batch_size, train_steps)
+        one_minus_beta2 = self.one_minus_beta2_base * ratio
+        beta2 = 1.0 - one_minus_beta2
+        return max(self.min_beta, min(self.max_beta, beta2))
 
     def _compute_num_layers(self, hidden_size: int) -> int:
         hs_pow = math.log2(hidden_size)
@@ -151,7 +201,6 @@ class AdamHRecipe:
             num_kv_heads=n_heads,
             max_seq_len=seq_len,
             rope=Llama3RotaryEmbeddingsConfig(),
-            cross_entropy_implementation="xla",
         )
 
     def estimate_memory_bytes(
@@ -194,15 +243,19 @@ class AdamHRecipe:
         flops_budget: float,
         seq_len: int = SEQ_LEN,
     ) -> CandidateConfig | None:
-        hidden_size = model_config.hidden_dim
-
+        hidden_dim = model_config.hidden_dim
         batch_exact = tokens / (STEPS_PER_RUN * seq_len)
         batch_size = _round_to_power_of_two(batch_exact)
 
-        adam_lr = self._compute_adam_lr(batch_size, hidden_size)
-        while adam_lr > self.max_learning_rate:
+        # Compute train_steps for initial LR check
+        train_steps = round(tokens / (batch_size * seq_len))
+
+        # Compute scaled learning rate and check constraints
+        lr = self._compute_learning_rate(hidden_dim, batch_size, train_steps)
+        while lr > self.max_learning_rate and batch_size > self.min_batch_size:
             batch_size //= 2
-            adam_lr = self._compute_adam_lr(batch_size, hidden_size)
+            train_steps = round(tokens / (batch_size * seq_len))
+            lr = self._compute_learning_rate(hidden_dim, batch_size, train_steps)
 
         if batch_size < self.min_batch_size or batch_size > self.max_batch_size:
             return None
@@ -210,21 +263,25 @@ class AdamHRecipe:
         train_steps = round(tokens / (batch_size * seq_len))
         actual_tokens = batch_size * train_steps * seq_len
 
-        beta2 = self._compute_beta2(batch_size)
-        adamh_lr = self._compute_adamh_lr(batch_size)
+        # Compute all scaled hyperparameters
+        lr = self._compute_learning_rate(hidden_dim, batch_size, train_steps)
+        epsilon = self._compute_epsilon(hidden_dim, batch_size, train_steps)
+        weight_decay = self._compute_weight_decay(hidden_dim)
+        beta1 = self._compute_beta1(batch_size, train_steps)
+        beta2 = self._compute_beta2(batch_size, train_steps)
 
-        optimizer_config = AdamHConfig(
-            learning_rate=adamh_lr,
-            adam_lr=adam_lr,
+        optimizer_config = CautiousConfig(
+            learning_rate=lr,
+            weight_decay=weight_decay,
             min_lr_ratio=self.min_lr_ratio,
-            beta1=self.beta1,
-            beta2=beta2,
-            epsilon=self.epsilon,
-            max_grad_norm=self.max_grad_norm,
             warmup=self.warmup,
+            beta1=beta1,
+            beta2=beta2,
+            epsilon=epsilon,
+            max_grad_norm=self.max_grad_norm,
+            adamc_weight_decay=True,
             lr_schedule=self.lr_schedule,
             decay=self.decay,
-            nesterov=self.nesterov,
         )
 
         return CandidateConfig(
@@ -249,7 +306,7 @@ class AdamHRecipe:
                 yield candidate
 
 
-RECIPE = AdamHRecipe()
+RECIPE = CompletedCAdamCV5Recipe()
 
 
 def create_isoflop_sweep_steps(
@@ -259,7 +316,7 @@ def create_isoflop_sweep_steps(
     eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
     seq_len: int = SEQ_LEN,
 ) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
-    """Create ExecutorSteps for an ISOFlop sweep using AdamH recipe."""
+    """Create ExecutorSteps for an ISOFlop sweep using Completed C-AdamC v5 recipe."""
     candidates = [c for budget in budgets for c in RECIPE.candidates_for_budget(budget, seq_len)]
 
     base_train_config = SimpleTrainConfig(
@@ -293,7 +350,7 @@ def create_isoflop_sweep_steps(
             f"B={candidate.batch_size}",
             f"steps={candidate.train_steps}",
             f"tokens={candidate.tokens:.1e}",
-            "optimizer=adamh",
+            "optimizer=completed-c-adamc-v5",
         )
 
         train_cfg = replace(
