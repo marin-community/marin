@@ -17,6 +17,11 @@ from .helpers import _failing, _quick, _slow
 pytestmark = pytest.mark.e2e
 
 
+def _quick_with_log_marker():
+    print("TASK_LOG_MARKER: dashboard-task-log-visible")
+    return 1
+
+
 def test_jobs_tab_shows_all_states(cluster, page, screenshot):
     """Submit jobs in various states, verify the Jobs tab renders them."""
     succeeded_job = cluster.submit(_quick, "dash-succeeded")
@@ -48,8 +53,28 @@ def test_job_detail_page(cluster, page, screenshot):
     screenshot("job-detail-succeeded")
 
 
+def test_job_detail_shows_task_logs(cluster, page, screenshot):
+    """Job detail Task Logs panel shows task stdout logs."""
+    job = cluster.submit(_quick_with_log_marker, "dash-task-logs")
+    cluster.wait(job, timeout=30)
+
+    dashboard_goto(page, f"{cluster.url}/job/{job.job_id.to_wire()}")
+    wait_for_dashboard_ready(page)
+
+    if not _is_noop_page(page):
+        page.wait_for_function(
+            "() => document.querySelector('pre') && "
+            "document.querySelector('pre').textContent.includes('TASK_LOG_MARKER: dashboard-task-log-visible')",
+            timeout=10000,
+        )
+    assert_visible(page, "text=TASK_LOG_MARKER: dashboard-task-log-visible")
+    screenshot("job-detail-task-logs")
+
+
 def test_workers_tab(cluster, page, screenshot):
     """Workers tab shows healthy workers."""
+    cluster.wait_for_workers(1)
+    dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
     dashboard_click(page, 'button.tab-btn:has-text("Workers")')
 

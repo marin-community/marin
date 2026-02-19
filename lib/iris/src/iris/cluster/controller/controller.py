@@ -6,7 +6,6 @@
 import logging
 import threading
 from collections import defaultdict
-from collections.abc import Sequence
 from concurrent.futures import Future, as_completed
 from dataclasses import dataclass, field
 from time import sleep
@@ -19,6 +18,7 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.scheduler import (
+    JobRequirements,
     Scheduler,
     SchedulingContext,
 )
@@ -32,33 +32,31 @@ from iris.cluster.controller.state import (
     HeartbeatSnapshot,
 )
 from iris.cluster.types import (
-    PREEMPTIBLE_ATTRIBUTE_KEY,
     JobName,
     VmWorkerStatus,
     VmWorkerStatusMap,
+    WorkerId,
     get_device_type_enum,
     get_device_variant,
+    normalize_constraints,
 )
 from iris.logging import get_global_buffer
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, RateLimiter
+from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
 
-def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
-    """Extract preemptible preference from job constraints.
-
-    Returns True if the job requires preemptible workers, False if it requires
-    non-preemptible workers, or None if no preference is expressed.
-    """
-    for c in constraints:
-        if c.key == PREEMPTIBLE_ATTRIBUTE_KEY and c.op == cluster_pb2.CONSTRAINT_OP_EQ:
-            if c.value.HasField("string_value"):
-                return c.value.string_value == "true"
-    return None
+def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
+    """Convert a ControllerJob to scheduler-compatible JobRequirements."""
+    return JobRequirements(
+        resources=job.request.resources,
+        constraints=list(job.request.constraints),
+        is_coscheduled=job.is_coscheduled,
+        coscheduling_group_by=job.coscheduling_group_by,
+    )
 
 
 def compute_demand_entries(state: ControllerState) -> list:
@@ -84,7 +82,15 @@ def compute_demand_entries(state: ControllerState) -> list:
         device = job.request.resources.device
         device_type = get_device_type_enum(device)
         device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
-        preemptible_pref = _extract_preemptible_preference(job.request.constraints)
+        preemptible_pref: bool | None = None
+        required_regions: frozenset[str] | None = None
+        invalid_reason: str | None = None
+        try:
+            normalized = normalize_constraints(job.request.constraints)
+            preemptible_pref = normalized.preemptible
+            required_regions = normalized.required_regions
+        except ValueError as e:
+            invalid_reason = f"invalid_constraints: {e}"
 
         if job.is_coscheduled:
             task_ids = [t.task_id.to_wire() for t in tasks]
@@ -96,6 +102,8 @@ def compute_demand_entries(state: ControllerState) -> list:
                 constraints=list(job.request.constraints),
                 resources=job.request.resources,
                 preemptible=preemptible_pref,
+                required_regions=required_regions,
+                invalid_reason=invalid_reason,
             )
             demand_entries.append(entry)
             continue
@@ -109,62 +117,44 @@ def compute_demand_entries(state: ControllerState) -> list:
                 constraints=list(job.request.constraints),
                 resources=job.request.resources,
                 preemptible=preemptible_pref,
+                required_regions=required_regions,
+                invalid_reason=invalid_reason,
             )
             demand_entries.append(entry)
 
     return demand_entries
 
 
-class WorkerClient(Protocol):
-    """Protocol for worker RPC client.
-
-    Matches client-side WorkerServiceClientSync signature. The server Protocol has different signatures.
-    """
-
-    def get_task_status(
-        self,
-        request: cluster_pb2.Worker.GetTaskStatusRequest,
-    ) -> cluster_pb2.TaskStatus: ...
-
-    def list_tasks(
-        self,
-        request: cluster_pb2.Worker.ListTasksRequest,
-    ) -> cluster_pb2.Worker.ListTasksResponse: ...
-
-    def health_check(
-        self,
-        request: cluster_pb2.Empty,
-    ) -> cluster_pb2.Worker.HealthResponse: ...
-
-    def heartbeat(
-        self,
-        request: cluster_pb2.HeartbeatRequest,
-    ) -> cluster_pb2.HeartbeatResponse: ...
-
-
 class WorkerStubFactory(Protocol):
     """Factory for getting worker RPC stubs."""
 
-    def get_stub(self, address: str) -> WorkerClient:
-        """Get a worker stub for the given address.
-
-        Args:
-            address: Worker address in "host:port" format
-
-        Returns:
-            A WorkerClient stub for making RPC calls
-        """
-        ...
+    def get_stub(self, address: str) -> WorkerServiceClientSync: ...
+    def evict(self, address: str) -> None: ...
 
 
 class RpcWorkerStubFactory:
-    """Factory that creates real gRPC client stubs for worker communication."""
+    """Caches WorkerServiceClientSync stubs by address so each worker gets
+    one persistent httpx.Client instead of a new one per RPC."""
 
-    def get_stub(self, address: str) -> WorkerClient:
-        return WorkerServiceClientSync(
-            address=f"http://{address}",
-            timeout_ms=10000,
-        )
+    def __init__(self, timeout: Duration = Duration.from_seconds(10.0)) -> None:
+        self._timeout = timeout
+        self._stubs: dict[str, WorkerServiceClientSync] = {}
+        self._lock = threading.Lock()
+
+    def get_stub(self, address: str) -> WorkerServiceClientSync:
+        with self._lock:
+            stub = self._stubs.get(address)
+            if stub is None:
+                stub = WorkerServiceClientSync(
+                    address=f"http://{address}",
+                    timeout_ms=self._timeout.to_ms(),
+                )
+                self._stubs[address] = stub
+            return stub
+
+    def evict(self, address: str) -> None:
+        with self._lock:
+            self._stubs.pop(address, None)
 
 
 @dataclass
@@ -187,9 +177,6 @@ class ControllerConfig:
 
     heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     """How often to send heartbeats to workers."""
-
-    worker_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
-    """How long without worker heartbeats before declaring a worker unavailable."""
 
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
@@ -248,10 +235,10 @@ class Controller:
             )
 
         self._config = config
-        self._stub_factory = worker_stub_factory
+        self.stub_factory = worker_stub_factory
 
         self._state = ControllerState(heartbeat_failure_threshold=config.heartbeat_failure_threshold)
-        self._scheduler = Scheduler(self._state)
+        self._scheduler = Scheduler()
         self._service = ControllerServiceImpl(
             self._state,
             self,
@@ -282,9 +269,6 @@ class Controller:
 
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
-        self._autoscaler_limiter: RateLimiter | None = (
-            RateLimiter(autoscaler.evaluation_interval.to_seconds()) if autoscaler else None
-        )
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -303,11 +287,15 @@ class Controller:
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
+        # timeout_keep_alive: uvicorn defaults to 5s, which races with client polling
+        # intervals of the same length, causing TCP resets on idle connections. Use 120s
+        # to safely cover long polling gaps during job waits.
         server_config = uvicorn.Config(
             self._dashboard._app,
             host=self._config.host,
             port=self._config.port,
             log_level="error",
+            timeout_keep_alive=120,
         )
         self._server = uvicorn.Server(server_config)
         self._threads.spawn_server(self._server, name="controller-server")
@@ -358,13 +346,12 @@ class Controller:
                 break
 
             self._run_scheduling()
-            self._check_worker_timeouts()
 
     def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
         """Autoscaler loop: runs on its own thread so blocking cloud API calls
         don't stall scheduling or heartbeats."""
         while not stop_event.is_set():
-            stop_event.wait(timeout=self._config.autoscaler_interval.to_seconds())
+            stop_event.wait(timeout=self._autoscaler.evaluation_interval.to_seconds())
             if stop_event.is_set():
                 break
             try:
@@ -396,19 +383,41 @@ class Controller:
         if not pending_tasks:
             return
 
-        result = self._scheduler.find_assignments(pending_tasks, workers)
+        # Handle timeouts before scheduling (scheduler doesn't know about deadlines)
+        schedulable_task_ids: list[JobName] = []
+        jobs: dict[JobName, JobRequirements] = {}
+        for task in pending_tasks:
+            if not task.can_be_scheduled():
+                continue
+            job = self._state.get_job(task.job_id)
+            if not job:
+                continue
+            if job.scheduling_deadline is not None and job.scheduling_deadline.expired():
+                self._mark_task_unschedulable(task)
+                continue
+            schedulable_task_ids.append(task.task_id)
+            if task.job_id not in jobs:
+                jobs[task.job_id] = job_requirements_from_job(job)
+
+        if not schedulable_task_ids:
+            return
+
+        building_counts = self._state.snapshot_building_counts()
+        context = self._scheduler.create_scheduling_context(
+            workers,
+            building_counts=building_counts,
+            pending_tasks=schedulable_task_ids,
+            jobs=jobs,
+        )
+        result = self._scheduler.find_assignments(context)
 
         # Buffer assignments for heartbeat delivery (commits resources via TaskAssignedEvent)
         if result.assignments:
             self._buffer_assignments(result.assignments)
 
-        # Handle timed-out tasks
-        for task in result.timed_out_tasks:
-            self._mark_task_unschedulable(task)
-
     def _buffer_assignments(
         self,
-        assignments: list[tuple[ControllerTask, ControllerWorker]],
+        assignments: list[tuple[JobName, WorkerId]],
     ) -> None:
         """Commit resources and buffer task assignments for heartbeat delivery.
 
@@ -416,41 +425,48 @@ class Controller:
         buffers RunTaskRequest protos via state.buffer_dispatch().
         """
         # Group assignments by job for coscheduled handling
-        by_job: dict[JobName, list[tuple[ControllerTask, ControllerWorker]]] = defaultdict(list)
-        for task, worker in assignments:
-            by_job[task.job_id].append((task, worker))
+        by_job: dict[JobName, list[tuple[JobName, WorkerId]]] = defaultdict(list)
+        for task_id, worker_id in assignments:
+            job_id = task_id.parent
+            if job_id is not None:
+                by_job[job_id].append((task_id, worker_id))
 
         for job_id, job_assignments in by_job.items():
             job = self._state.get_job(job_id)
             if job is None:
                 continue
 
-            for task, worker in job_assignments:
+            for task_id, worker_id in job_assignments:
+                task = self._state.get_task(task_id)
+                if task is None:
+                    continue
+
                 # Commit resources via event
                 self._state.handle_event(
                     TaskAssignedEvent(
-                        task_id=task.task_id,
-                        worker_id=worker.worker_id,
+                        task_id=task_id,
+                        worker_id=worker_id,
                     )
                 )
 
                 # Build the run request
                 request = cluster_pb2.Worker.RunTaskRequest(
-                    task_id=task.task_id.to_wire(),
-                    num_tasks=len(self._state.get_job_tasks(task.job_id)),
+                    task_id=task_id.to_wire(),
+                    num_tasks=len(self._state.get_job_tasks(job_id)),
                     entrypoint=job.request.entrypoint,
                     environment=job.request.environment,
                     bundle_gcs_path=job.request.bundle_gcs_path,
                     resources=job.request.resources,
                     ports=list(job.request.ports),
                     attempt_id=task.current_attempt_id,
+                    constraints=list(job.request.constraints),
                 )
                 # Copy timeout if set (check milliseconds field > 0)
                 if job.request.timeout.milliseconds > 0:
                     request.timeout.CopyFrom(job.request.timeout)
 
                 # Buffer dispatch (state handles the lock)
-                self._state.buffer_dispatch(worker.worker_id, request)
+                self._state.buffer_dispatch(worker_id, request)
 
             # Wake heartbeat thread to deliver buffered dispatches immediately
             if job_assignments:
@@ -477,11 +493,18 @@ class Controller:
 
     def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext:
         """Create a scheduling context for the given workers."""
-        return self._scheduler.create_scheduling_context(workers)
+        building_counts = self._state.snapshot_building_counts()
+        return self._scheduler.create_scheduling_context(
+            workers,
+            building_counts=building_counts,
+        )
 
     def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str:
         """Get detailed diagnostics for why a job cannot be scheduled."""
-        return self._scheduler.get_job_scheduling_diagnostics(job, context)
+        req = job_requirements_from_job(job)
+        tasks = self._state.get_job_tasks(job.job_id)
+        schedulable_task_id = next((t.task_id for t in tasks if t.can_be_scheduled()), None)
+        return self._scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
 
     def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:
         """Buffer kill requests for delivery via next heartbeat.
@@ -511,6 +534,10 @@ class Controller:
         Uses state-owned transitions: begin_heartbeat() atomically snapshots worker
         state and drains dispatch buffers, then RPCs proceed without locks, and
         complete_heartbeat()/fail_heartbeat() apply results.
+
+        When fail_heartbeat causes a worker to exceed the failure threshold,
+        _on_worker_failed prunes it from state. We detect this (worker no longer
+        in state) and evict the cached stub + notify the autoscaler.
         """
         # Phase 1: create snapshots for all healthy workers
         snapshots: list[HeartbeatSnapshot] = []
@@ -534,7 +561,7 @@ class Controller:
                     self._state.complete_heartbeat(snapshot, response)
                 except Exception as e:
                     logger.warning(f"Heartbeat error for {snapshot.worker_id}: {e}")
-                    self._state.fail_heartbeat(snapshot, str(e))
+                    self._handle_heartbeat_failure(snapshot, str(e))
         except TimeoutError:
             # Process any futures that completed before timeout
             for future, snapshot in futures.items():
@@ -544,11 +571,26 @@ class Controller:
                         self._state.complete_heartbeat(snapshot, response)
                     except Exception as e:
                         logger.warning(f"Heartbeat error for {snapshot.worker_id}: {e}")
-                        self._state.fail_heartbeat(snapshot, str(e))
+                        self._handle_heartbeat_failure(snapshot, str(e))
                 else:
                     logger.warning(f"Heartbeat timed out for {snapshot.worker_id}")
-                    self._state.fail_heartbeat(snapshot, "Heartbeat timed out")
+                    self._handle_heartbeat_failure(snapshot, "Heartbeat timed out")
                     future.cancel()
+
+    def _handle_heartbeat_failure(self, snapshot: HeartbeatSnapshot, error: str) -> None:
+        """Process a heartbeat failure: update state, evict stub + notify autoscaler if worker died.
+
+        After fail_heartbeat, if the worker was pruned from state (exceeded failure
+        threshold), we evict the cached RPC stub and notify the autoscaler.
+        """
+        self._state.fail_heartbeat(snapshot, error)
+
+        # fail_heartbeat -> _on_worker_heartbeat_failed -> _on_worker_failed prunes
+        # the worker from state when consecutive failures exceed the threshold.
+        if self._state.get_worker(snapshot.worker_id) is None:
+            self.stub_factory.evict(snapshot.worker_address)
+            if self._autoscaler and snapshot.vm_address:
+                self._autoscaler.notify_worker_failed(snapshot.vm_address)
 
     def _do_heartbeat_rpc(
         self,
@@ -562,18 +604,17 @@ class Controller:
         if rule := chaos("controller.heartbeat"):
             sleep(rule.delay_seconds)
             raise Exception("chaos: heartbeat unavailable")
-        stub = self._stub_factory.get_stub(snapshot.worker_address)
+        stub = self.stub_factory.get_stub(snapshot.worker_address)
 
-        # Build expected_tasks list using the pre-snapshotted running_tasks.
-        # Chaos injection point for race condition testing.
+        # Build expected_tasks from snapshot — no state lock needed.
         expected_tasks = []
-        for tid in snapshot.running_tasks:
+        for entry in snapshot.running_tasks:
             if rule := chaos("controller.heartbeat.iteration"):
                 sleep(rule.delay_seconds)
             expected_tasks.append(
                 cluster_pb2.Controller.RunningTaskEntry(
-                    task_id=tid.to_wire(),
-                    attempt_id=self._state.get_task(tid).current_attempt_id if self._state.get_task(tid) else 0,
+                    task_id=entry.task_id.to_wire(),
+                    attempt_id=entry.attempt_id,
                 )
             )
         request = cluster_pb2.HeartbeatRequest(
@@ -583,27 +624,12 @@ class Controller:
         )
         return stub.heartbeat(request)
 
-    def _check_worker_timeouts(self) -> None:
-        """Check for worker timeouts, send kill RPCs, and notify autoscaler."""
-        result = self._state.check_worker_timeouts(self._config.worker_timeout)
-
-        # Send kill RPCs outside lock
-        if result.tasks_to_kill:
-            self.kill_tasks_on_workers(result.tasks_to_kill)
-
-        # Notify autoscaler so it can terminate the containing slice
-        if self._autoscaler and result.failed_vm_addresses:
-            for vm_address in result.failed_vm_addresses:
-                self._autoscaler.notify_worker_failed(vm_address)
-
     def _run_autoscaler_once(self) -> None:
         """Run one autoscaler cycle: refresh (I/O) then update (CPU).
 
         Called from the autoscaler loop thread.
         """
-        if not self._autoscaler or not self._autoscaler_limiter:
-            return
-        if not self._autoscaler_limiter.should_run():
+        if not self._autoscaler:
             return
 
         vm_status_map = self._build_vm_status_map()
@@ -615,7 +641,7 @@ class Controller:
         """Build a map of VM address to worker status for autoscaler.
 
         The autoscaler needs to look up worker status by VM address (not worker_id)
-        because VmHandle only exposes the VM's IP address, not the worker's self-assigned ID.
+        because RemoteWorkerHandle only exposes the VM's IP address, not the worker's self-assigned ID.
         Workers include their vm_address (from IRIS_VM_ADDRESS env var) in metadata.
         """
         result: VmWorkerStatusMap = {}

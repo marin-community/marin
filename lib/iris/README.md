@@ -8,20 +8,20 @@ Distributed job orchestration replacing Ray with simpler primitives.
 
 ```bash
 # Start controller VM (runs autoscaler internally)
-uv run iris --config=examples/eu-west4.yaml cluster start
+uv run iris --config=examples/marin.yaml cluster start
 
 # Start a local cluster for testing (mimics the config without GCP)
 # Dashboard is available at the printed URL; press Ctrl+C to stop.
-uv run iris --config=examples/eu-west4.yaml cluster start --local
+uv run iris --config=examples/marin.yaml cluster start --local
 
 # Check cluster status
-uv run iris --config=examples/eu-west4.yaml cluster status
+uv run iris --config=examples/marin.yaml cluster status
 
 # Validate cluster with test jobs (establishes SSH tunnel automatically)
-uv run iris --config=examples/eu-west4.yaml cluster debug validate
+uv run iris --config=examples/marin.yaml cluster debug validate
 
 # Stop cluster (controller + all worker slices, terminated in parallel; 60s timeout)
-uv run iris --config=examples/eu-west4.yaml cluster stop
+uv run iris --config=examples/marin.yaml cluster stop
 ```
 
 ### Submit a Job
@@ -219,6 +219,17 @@ controller:
 
 The controller will **fail at startup** if `bundle_prefix` is not configured.
 
+### Multi-Region Bundle Storage
+
+**Design Decision:** Bundles are stored in a single centralized GCS bucket and fetched by workers in all regions as needed, rather than implementing regional caching or replication.
+
+**Rationale:**
+- Bundles are small (~4MB each)
+- Cross-region transfer costs are negligible at expected scale:
+  - 10,000 tasks/day × 4MB = 40GB/day ≈ $4/day in cross-region transfer fees
+- The complexity of regional bundle caching is not justified by these costs
+- Centralized storage simplifies operations and reduces infrastructure complexity
+
 ## CLI Reference
 
 **Note:** The `--config` option is a global option on the top-level `iris` command group. It must be placed after `iris` but before the subcommand (e.g., `iris --config cluster.yaml cluster start` or `iris --config cluster.yaml job run ...`).
@@ -306,7 +317,7 @@ The smoke test validates end-to-end cluster functionality including autoscaling.
 
 ```bash
 # Full smoke test (builds images, starts cluster, runs TPU jobs, cleans up)
-uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/eu-west4.yaml
+uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/marin.yaml
 
 # Run tests and keep VMs running for debugging (manual cleanup required later)
 uv run python lib/iris/scripts/smoke-test.py --config ... --mode keep

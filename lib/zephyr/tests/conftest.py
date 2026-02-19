@@ -112,7 +112,7 @@ def zephyr_ctx(fray_client, tmp_path_factory):
     chunk_prefix = str(tmp_path / "chunks")
     with ZephyrContext(
         client=fray_client,
-        num_workers=2,
+        max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name="test-ctx",
