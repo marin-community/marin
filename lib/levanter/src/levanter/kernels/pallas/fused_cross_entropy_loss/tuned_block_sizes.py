@@ -11,6 +11,7 @@ from .config import BlockSizes
 
 
 DEFAULT_DEVICE_KEY = "default"
+_GB10_FALLBACK_BLOCK_SIZES = BlockSizes(b_block_size=32, h_block_size=128, v_block_size=64)
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,6 +299,20 @@ def _shape_bucket(b: int, h: int, v: int) -> Optional[str]:
     return None
 
 
+def _fallback_block_sizes_for_device(
+    *,
+    b: int,
+    h: int,
+    v: int,
+    dtype: Optional[jnp.dtype],
+    device_key: Optional[str],
+) -> Optional[BlockSizes]:
+    del b, h, v, dtype
+    if device_key == "NVIDIA GB10":
+        return _GB10_FALLBACK_BLOCK_SIZES
+    return None
+
+
 def infer_block_sizes(
     b: int,
     h: int,
@@ -329,6 +344,10 @@ def infer_block_sizes(
             entry = TUNED_BLOCK_SIZES.get(key, {}).get((dtype_name, bucket))
             if entry is not None:
                 return entry
+
+    fallback = _fallback_block_sizes_for_device(b=b, h=h, v=v, dtype=dtype, device_key=device_key)
+    if fallback is not None:
+        return fallback
 
     return BlockSizes.get_default()
 

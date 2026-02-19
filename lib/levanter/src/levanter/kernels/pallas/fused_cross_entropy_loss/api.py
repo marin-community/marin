@@ -108,12 +108,8 @@ def _resolve_precision_for_impl(
     impl: Implementation | ArrayImpl,
     precision: jax.lax.PrecisionLike,
 ) -> jax.lax.PrecisionLike:
-    if precision is not None:
-        return precision
-    pallas_gpu_impl = IMPLEMENTATIONS.get("pallas_gpu")
-    if impl == "pallas_gpu" or (callable(impl) and pallas_gpu_impl is not None and impl is pallas_gpu_impl):
-        return jax.lax.Precision.HIGHEST
-    return None
+    del impl
+    return precision
 
 
 def fused_cross_entropy_loss_and_logsumexp_penalty(

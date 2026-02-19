@@ -12,10 +12,14 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
+from .reference import linear_softmax_cross_entropy_loss_reference
+from .xla import linear_softmax_cross_entropy_loss_xla
 
 
 _GB10_WEIGHT_TILE_BYTES_LIMIT = 101_376
-_GB10_MAX_DOT_TILES = 512
+_GB10_MAX_H_TILES = 512
+_GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
+_GB10_XLA_STREAMING_V_BLOCK_LARGE_BATCH = 8192
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -44,9 +48,34 @@ def _max_weight_tile_bytes_for_device(device_kind: str) -> Optional[int]:
     return None
 
 
-def _max_dot_tiles_for_device(device_kind: str) -> Optional[int]:
+def _max_h_tiles_for_device(device_kind: str) -> Optional[int]:
     if "gb10" in device_kind:
-        return _GB10_MAX_DOT_TILES
+        return _GB10_MAX_H_TILES
+    return None
+
+
+def _should_use_gb10_full_matmul_fallback(
+    x: Float[Array, "B H"],
+    w: Float[Array, "H V"],
+) -> bool:
+    device_kind = _device_kind()
+    if "gb10" not in device_kind:
+        return False
+    if x.dtype != jnp.bfloat16 or w.dtype != jnp.bfloat16:
+        return False
+    b_dim = x.shape[0]
+    v_dim = w.shape[1]
+    output_elements = b_dim * v_dim
+    return output_elements <= _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS
+
+
+def _gb10_xla_fallback_block_sizes(
+    *,
+    b_dim: int,
+    v_dim: int,
+) -> BlockSizes | None:
+    if b_dim >= 1024 and v_dim >= 65536:
+        return BlockSizes(v_block_size=_GB10_XLA_STREAMING_V_BLOCK_LARGE_BATCH)
     return None
 
 
@@ -84,6 +113,8 @@ def _validate_inputs(
         raise PallasUnsupportedError("b_block_size must be at least 16 on GPU.")
     if block_sizes.h_block_size < 16:
         raise PallasUnsupportedError("h_block_size must be at least 16 on GPU.")
+    if block_sizes.v_block_size < 16:
+        raise PallasUnsupportedError("v_block_size must be at least 16 on GPU.")
     if block_sizes.b_block_size % 16 != 0:
         raise PallasUnsupportedError("b_block_size must be a multiple of 16 on GPU.")
     if block_sizes.h_block_size % 16 != 0:
@@ -112,7 +143,6 @@ def _validate_launch_feasibility(
     h_block_size: int,
     v_block_size: int,
     num_h_blocks: int,
-    num_v_blocks: int,
 ) -> None:
     if not _is_power_of_two(h_block_size):
         raise PallasUnsupportedError(
@@ -134,143 +164,161 @@ def _validate_launch_feasibility(
                 f"h_block_size={h_block_size}, v_block_size={v_block_size}."
             )
 
-    max_dot_tiles = _max_dot_tiles_for_device(device_kind)
-    if max_dot_tiles is not None:
-        dot_tiles = num_h_blocks * num_v_blocks
-        if dot_tiles > max_dot_tiles:
-            raise PallasUnsupportedError(
-                "Kernel launch would require too many static dot tiles for this GPU and is likely to trigger "
-                "pathological compile time. "
-                f"dot_tiles={dot_tiles}, limit={max_dot_tiles}, "
-                f"num_h_blocks={num_h_blocks}, num_v_blocks={num_v_blocks}."
-            )
+    max_h_tiles = _max_h_tiles_for_device(device_kind)
+    if max_h_tiles is not None and num_h_blocks > max_h_tiles:
+        raise PallasUnsupportedError(
+            "Kernel launch would require too many hidden-dimension dot tiles for this GPU and is likely to trigger "
+            "pathological compile time. "
+            f"num_h_blocks={num_h_blocks}, limit={max_h_tiles}, h_block_size={h_block_size}."
+        )
 
 
-def _forward_pallas_gpu_kernel(
+def _forward_pallas_gpu_tile_kernel(
     x_ref,
     labels_ref,
     w_ref,
-    out_loss_ref,
-    out_lse_ref,
+    out_m_ref,
+    out_l_ref,
+    out_label_ref,
     *,
     v_dim: int,
     h_block_size: int,
-    num_v_blocks: int,
     num_h_blocks: int,
     v_block_size: int,
-    dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
 ):
-    """Forward kernel that streams logits over V blocks per batch block."""
-    m = jnp.full((x_ref.shape[0],), -jnp.inf, dtype=jnp.float32)
-    l = jnp.zeros((x_ref.shape[0],), dtype=jnp.float32)
-    label_logits = jnp.full((x_ref.shape[0],), -jnp.inf, dtype=jnp.float32)
+    """Compute per-(B block, V block) partials for streaming softmax reduction."""
+    b_block_size = x_ref.shape[0]
+    v_block_index = pl.program_id(1)
+    v_start = v_block_index * v_block_size
+
     labels = labels_ref[...]
+    in_block = labels >= 0
 
-    for v_idx in range(num_v_blocks):
-        v_start = v_idx * v_block_size
-        logits = jnp.zeros((x_ref.shape[0], v_block_size), dtype=jnp.float32)
-        for h_idx in range(num_h_blocks):
-            h_start = h_idx * h_block_size
-            x_block = x_ref[:, h_start : h_start + h_block_size]
-            w_block = w_ref[h_start : h_start + h_block_size, v_start : v_start + v_block_size]
-            logits = logits + jax.lax.dot_general(
-                x_block,
-                w_block,
-                (((1,), (0,)), ((), ())),
-                preferred_element_type=jnp.float32,
-                precision=precision,
-            )
+    logits = jnp.zeros((b_block_size, v_block_size), dtype=jnp.float32)
+    for h_block_index in range(num_h_blocks):
+        h_start = h_block_index * h_block_size
+        h_end = h_start + h_block_size
+        x_block = x_ref[:, h_start:h_end]
+        w_block = w_ref[h_start:h_end, :]
+        logits = logits + jax.lax.dot_general(
+            x_block,
+            w_block,
+            (((1,), (0,)), ((), ())),
+            precision=precision,
+        )
 
-        v_offsets = jnp.arange(v_block_size)
-        in_v_block = (v_start + v_offsets) < v_dim
-        logits = jnp.where(in_v_block[None, :], logits, -jnp.inf)
+    logits = _apply_logit_soft_cap(logits, logit_soft_cap)
 
-        if dtype is not None:
-            logits = logits.astype(dtype)
-        logits = _apply_logit_soft_cap(logits, logit_soft_cap)
+    vocab_indices = v_start + jnp.arange(v_block_size, dtype=jnp.int32)
+    in_v_block = vocab_indices < v_dim
+    safe_logits = jnp.where(in_v_block[None, :], logits, -jnp.inf)
 
-        block_m = jnp.max(logits, axis=-1)
-        m_next = jnp.maximum(m, block_m)
-        block_l = jnp.sum(jnp.exp(logits - m_next[:, None]), axis=-1)
-        alpha = jnp.exp(m - m_next)
-        l = alpha * l + block_l
-        m = m_next
+    tile_m = jnp.max(safe_logits, axis=-1)
+    exp_shifted = jnp.where(in_v_block[None, :], jnp.exp(safe_logits - tile_m[:, None]), 0.0)
+    tile_l = jnp.sum(exp_shifted, axis=-1)
 
-        in_block = jnp.logical_and(labels >= v_start, labels < v_start + v_block_size)
-        safe_local_idx = jnp.where(in_block, labels - v_start, 0)
-        idx = jnp.arange(v_block_size, dtype=labels.dtype)[None, :]
-        label_one_hot = jnp.logical_and(idx == safe_local_idx[:, None], in_block[:, None])
-        safe_logits = jnp.where(in_v_block[None, :], logits, 0.0)
-        logits_for_label = jnp.where(in_block[:, None], safe_logits, 0.0)
-        block_label_logits = jnp.sum(logits_for_label * label_one_hot.astype(logits.dtype), axis=-1)
-        block_label_logits = jnp.where(in_block, block_label_logits, -jnp.inf)
-        label_logits = jnp.where(in_block, block_label_logits, label_logits)
+    tile_m = jnp.where(in_block, tile_m, -jnp.inf)
+    tile_l = jnp.where(in_block, tile_l, 0.0)
 
-    out_lse_ref[...] = (jnp.log(l) + m).astype(out_lse_ref.dtype)
-    out_loss_ref[...] = (jnp.log(l) + m - label_logits).astype(out_loss_ref.dtype)
+    label_offsets = labels.astype(jnp.int32) - jnp.int32(v_start)
+    label_in_block = in_block & (label_offsets >= 0) & (label_offsets < v_block_size)
+    safe_label_offsets = jnp.clip(label_offsets, 0, v_block_size - 1)
+    cols = jnp.arange(v_block_size, dtype=jnp.int32)[None, :]
+    label_one_hot = (cols == safe_label_offsets[:, None]).astype(logits.dtype)
+    tile_label_logits = jnp.sum(logits * label_one_hot, axis=-1)
+    tile_label_logits = jnp.where(label_in_block, tile_label_logits, -jnp.inf)
+
+    out_m_ref[0, 0, :] = tile_m.astype(out_m_ref.dtype)
+    out_l_ref[0, 0, :] = tile_l.astype(out_l_ref.dtype)
+    out_label_ref[0, 0, :] = tile_label_logits.astype(out_label_ref.dtype)
 
 
 @partial(
     jax.jit,
     static_argnames=[
+        "b_block_size",
         "h_block_size",
         "v_dim",
+        "num_b_blocks",
         "num_v_blocks",
         "num_h_blocks",
         "v_block_size",
-        "dtype",
         "logit_soft_cap",
         "precision",
     ],
 )
-def _linear_softmax_cross_entropy_loss_pallas_gpu_single_block(
+def _linear_softmax_cross_entropy_loss_pallas_gpu_tiled(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
     *,
+    b_block_size: int,
     v_dim: int,
     h_block_size: int,
+    num_b_blocks: int,
     num_v_blocks: int,
     num_h_blocks: int,
     v_block_size: int,
-    dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-):
-    """Single-batch-block GPU kernel launch."""
-    b_dim, h_pad = x.shape
-    v_pad = w.shape[1]
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
-    out_loss, out_lse = pl.pallas_call(
+) -> tuple[Float[Array, "NB NV BB"], Float[Array, "NB NV BB"], Float[Array, "NB NV BB"]]:
+    """Phase 1: parallel grid over (B-block, V-block) producing reduction partials."""
+    h_pad = x.shape[1]
+
+    return pl.pallas_call(
         partial(
-            _forward_pallas_gpu_kernel,
+            _forward_pallas_gpu_tile_kernel,
             v_dim=v_dim,
             h_block_size=h_block_size,
-            num_v_blocks=num_v_blocks,
             num_h_blocks=num_h_blocks,
             v_block_size=v_block_size,
-            dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
         ),
         in_specs=[
-            pl.BlockSpec((b_dim, h_pad), lambda _: (0, 0)),
-            pl.BlockSpec((b_dim,), lambda _: (0,)),
-            pl.BlockSpec((h_pad, v_pad), lambda _: (0, 0)),
+            pl.BlockSpec((b_block_size, h_pad), lambda b_index, v_index: (b_index, 0)),
+            pl.BlockSpec((b_block_size,), lambda b_index, v_index: (b_index,)),
+            pl.BlockSpec((h_pad, v_block_size), lambda b_index, v_index: (0, v_index)),
         ],
         out_specs=[
-            pl.BlockSpec((b_dim,), lambda _: (0,)),
-            pl.BlockSpec((b_dim,), lambda _: (0,)),
+            pl.BlockSpec((1, 1, b_block_size), lambda b_index, v_index: (b_index, v_index, 0)),
+            pl.BlockSpec((1, 1, b_block_size), lambda b_index, v_index: (b_index, v_index, 0)),
+            pl.BlockSpec((1, 1, b_block_size), lambda b_index, v_index: (b_index, v_index, 0)),
         ],
         out_shape=[
-            jax.ShapeDtypeStruct((b_dim,), dtype=out_dtype),
-            jax.ShapeDtypeStruct((b_dim,), dtype=out_dtype),
+            jax.ShapeDtypeStruct((num_b_blocks, num_v_blocks, b_block_size), dtype=jnp.float32),
+            jax.ShapeDtypeStruct((num_b_blocks, num_v_blocks, b_block_size), dtype=jnp.float32),
+            jax.ShapeDtypeStruct((num_b_blocks, num_v_blocks, b_block_size), dtype=jnp.float32),
         ],
-        grid=(1,),
+        grid=(num_b_blocks, num_v_blocks),
     )(x, labels, w)
-    return out_loss, out_lse
+
+
+def _reduce_partials_flash_style(
+    partial_m: Float[Array, "NB NV BB"],
+    partial_l: Float[Array, "NB NV BB"],
+    partial_label: Float[Array, "NB NV BB"],
+) -> tuple[Float[Array, "NB BB"], Float[Array, "NB BB"]]:
+    """FlashAttention-style associative reduction over vocab tiles."""
+
+    def merge_fn(lhs, rhs):
+        m_l, l_l, label_l = lhs
+        m_r, l_r, label_r = rhs
+        m = jnp.maximum(m_l, m_r)
+        l = l_l * jnp.exp(m_l - m) + l_r * jnp.exp(m_r - m)
+        label = jnp.maximum(label_l, label_r)
+        return m, l, label
+
+    m_scan, l_scan, label_scan = jax.lax.associative_scan(merge_fn, (partial_m, partial_l, partial_label), axis=1)
+    m = m_scan[:, -1, :]
+    l = l_scan[:, -1, :]
+    label_logits = label_scan[:, -1, :]
+
+    lse = jnp.log(l) + m
+    loss = lse - label_logits
+    return loss, lse
 
 
 @partial(jax.jit, static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"])
@@ -285,6 +333,33 @@ def linear_softmax_cross_entropy_loss_pallas_gpu(
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     """GPU Pallas implementation returning per-example loss and logsumexp."""
+    device_kind = _device_kind()
+    is_gb10_bf16 = "gb10" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
+
+    if _should_use_gb10_full_matmul_fallback(x, w):
+        return linear_softmax_cross_entropy_loss_reference(
+            x,
+            labels,
+            w,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+        )
+    if is_gb10_bf16:
+        xla_block_sizes = _gb10_xla_fallback_block_sizes(
+            b_dim=x.shape[0],
+            v_dim=w.shape[1],
+        )
+        return linear_softmax_cross_entropy_loss_xla(
+            x,
+            labels,
+            w,
+            block_sizes=xla_block_sizes,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+        )
+
     if block_sizes is None:
         block_sizes = BlockSizes.get_default()
 
@@ -312,48 +387,31 @@ def linear_softmax_cross_entropy_loss_pallas_gpu(
         h_block_size=h_block,
         v_block_size=v_block,
         num_h_blocks=num_h_blocks,
-        num_v_blocks=num_v_blocks,
     )
 
-    if num_b_blocks == 1:
-        out_loss, out_lse = _linear_softmax_cross_entropy_loss_pallas_gpu_single_block(
-            x_pad,
-            labels_pad,
-            w_pad,
-            v_dim=v_dim,
-            h_block_size=h_block,
-            num_v_blocks=num_v_blocks,
-            num_h_blocks=num_h_blocks,
-            v_block_size=v_block,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        )
-    else:
-        x_chunks = x_pad.reshape((num_b_blocks, b_block, h_pad))
-        labels_chunks = labels_pad.reshape((num_b_blocks, b_block))
-        single_block_fn = partial(
-            _linear_softmax_cross_entropy_loss_pallas_gpu_single_block,
-            h_block_size=h_block,
-            v_dim=v_dim,
-            num_v_blocks=num_v_blocks,
-            num_h_blocks=num_h_blocks,
-            v_block_size=v_block,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        )
-        out_loss, out_lse = jax.vmap(
-            single_block_fn,
-            in_axes=(0, 0, None),
-            out_axes=(0, 0),
-        )(
-            x_chunks,
-            labels_chunks,
-            w_pad,
-        )
-        out_loss = out_loss.reshape((b_pad,))
-        out_lse = out_lse.reshape((b_pad,))
+    partial_m, partial_l, partial_label_logits = _linear_softmax_cross_entropy_loss_pallas_gpu_tiled(
+        x_pad,
+        labels_pad,
+        w_pad,
+        b_block_size=b_block,
+        v_dim=v_dim,
+        h_block_size=h_block,
+        num_b_blocks=num_b_blocks,
+        num_v_blocks=num_v_blocks,
+        num_h_blocks=num_h_blocks,
+        v_block_size=v_block,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+    )
+
+    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    loss_blocks, lse_blocks = _reduce_partials_flash_style(
+        partial_m,
+        partial_l,
+        partial_label_logits,
+    )
+    out_loss = loss_blocks.astype(out_dtype).reshape((b_pad,))
+    out_lse = lse_blocks.astype(out_dtype).reshape((b_pad,))
 
     return out_loss[:b_dim], out_lse[:b_dim]
 
