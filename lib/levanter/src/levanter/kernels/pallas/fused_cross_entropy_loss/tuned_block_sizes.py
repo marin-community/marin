@@ -228,6 +228,38 @@ def _shape_bucket(b: int, h: int, v: int) -> Optional[str]:
     return None
 
 
+def _largest_divisor_multiple_of_128(dim: int, preferred: int) -> int:
+    """Return the largest multiple-of-128 divisor of `dim` up to `preferred`.
+
+    If `dim` has no multiple-of-128 divisor (for example dim not divisible by 128),
+    return `preferred` and let runtime validation/fallback handle unsupported cases.
+    """
+    upper = min(dim, preferred)
+    upper -= upper % 128
+
+    for block in range(upper, 127, -128):
+        if dim % block == 0:
+            return block
+
+    return preferred
+
+
+def _sanitize_for_pallas(
+    block_sizes: BlockSizes,
+    *,
+    b: int,
+    h: int,
+) -> BlockSizes:
+    """Adjust inferred block sizes so B/H blocks divide local shapes when possible."""
+    b_block_size = _largest_divisor_multiple_of_128(b, block_sizes.b_block_size)
+    h_block_size = _largest_divisor_multiple_of_128(h, block_sizes.h_block_size)
+    return BlockSizes(
+        b_block_size=b_block_size,
+        h_block_size=h_block_size,
+        v_block_size=block_sizes.v_block_size,
+    )
+
+
 def infer_block_sizes(
     b: int,
     h: int,
@@ -258,9 +290,9 @@ def infer_block_sizes(
                 continue
             entry = TUNED_BLOCK_SIZES.get(key, {}).get((dtype_name, bucket))
             if entry is not None:
-                return entry
+                return _sanitize_for_pallas(entry, b=b, h=h)
 
-    return BlockSizes.get_default()
+    return _sanitize_for_pallas(BlockSizes.get_default(), b=b, h=h)
 
 
 def infer_xla_v_block_size(

@@ -52,6 +52,19 @@ def _labels_one_hot_emulated(
     return (cols == safe_labels[:, None]).astype(dtype)
 
 
+def _mask_invalid_vocab_columns(
+    logits: jax.Array,
+    *,
+    v_index: jax.Array,
+    v_block_size: int,
+    v_dim: int,
+) -> jax.Array:
+    """Mask padded tail-vocab columns with -inf so they do not affect softmax."""
+    cols = v_index * v_block_size + jnp.arange(v_block_size, dtype=jnp.int32)
+    valid = cols < v_dim
+    return jnp.where(valid[None, :], logits, -jnp.inf)
+
+
 def _validate_inputs(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -184,6 +197,13 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
         labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, logits.dtype)
         label_logits_block = jnp.sum(labels_one_hot * logits, axis=-1)
         label_logits_scratch_ref[...] += label_logits_block[:, None]
+
+        logits = _mask_invalid_vocab_columns(
+            logits,
+            v_index=v_index,
+            v_block_size=v_block_size,
+            v_dim=v_dim,
+        )
 
         m_prev, l_prev = m_scratch_ref[...], l_scratch_ref[...]
         m_curr = jnp.max(logits, axis=-1)[:, None]
@@ -384,6 +404,13 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
         else:
             cap_deriv = 1.0
 
+        logits = _mask_invalid_vocab_columns(
+            logits,
+            v_index=v_index,
+            v_block_size=v_block_size,
+            v_dim=v_dim,
+        )
+
         logits = logits - lse_ref[...][:, None]
         probs = jnp.exp(logits)
         dout_loss = dout_loss_ref[...]
@@ -470,7 +497,7 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
     num_h_blocks = math.ceil(h_dim / block_sizes.h_block_size)
     num_stages = 2
     num_cores, num_b_blocks_per_core = _infer_core_grid(b_dim, block_sizes)
-    x_grad, w_grad_partial = pl.pallas_call(
+    x_grad_f32, w_grad_partial_f32 = pl.pallas_call(
         partial(
             linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel,
             dtype=dtype,
@@ -515,13 +542,13 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
             pl.BlockSpec(memory_space=pltpu.HBM),  # w_grad_partial
         ],
         out_shape=[
-            jax.ShapeDtypeStruct(x.shape, dtype=x.dtype),
-            jax.ShapeDtypeStruct((num_cores,) + w.shape, dtype=w.dtype),
+            jax.ShapeDtypeStruct(x.shape, dtype=jnp.float32),
+            jax.ShapeDtypeStruct((num_cores,) + w.shape, dtype=jnp.float32),
         ],
         scratch_shapes=(
             pltpu.VMEM((block_sizes.b_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # xw_scratch
-            pltpu.VMEM((block_sizes.b_block_size, block_sizes.h_block_size), dtype=x.dtype),  # x_grad_tile
-            pltpu.VMEM((block_sizes.h_block_size, block_sizes.v_block_size), dtype=w.dtype),  # w_grad_tile
+            pltpu.VMEM((block_sizes.b_block_size, block_sizes.h_block_size), dtype=jnp.float32),  # x_grad_tile
+            pltpu.VMEM((block_sizes.h_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # w_grad_tile
             pltpu.SemaphoreType.DMA,  # x_write_sem
             pltpu.SemaphoreType.DMA,  # w_write_sem
         ),
@@ -529,7 +556,8 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
             dimension_semantics=("parallel", "arbitrary", "arbitrary", "arbitrary", "arbitrary"),
         ),
     )(x, labels, w, lse, dout_loss, dout_lse)
-    w_grad = jnp.sum(w_grad_partial, axis=0)
+    x_grad = x_grad_f32.astype(x.dtype)
+    w_grad = jnp.sum(w_grad_partial_f32, axis=0).astype(w.dtype)
     return x_grad, w_grad
 
 
