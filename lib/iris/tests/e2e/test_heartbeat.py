@@ -16,7 +16,7 @@ import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 
-pytestmark = [pytest.mark.e2e, pytest.mark.timeout(120)]
+pytestmark = [pytest.mark.e2e, pytest.mark.timeout(60)]
 
 # Local config sets heartbeat_failure_threshold = 3 via make_local_config().
 # Tests must use this value (not the production default of 10) since the e2e
@@ -60,7 +60,7 @@ def test_heartbeat_failures_below_threshold_recovers(cluster):
     )
 
     job = cluster.submit(quick_job, "transient-hb-fail")
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -73,7 +73,7 @@ def test_heartbeat_failures_at_threshold_kills_worker(cluster):
     """
 
     def slow_job():
-        time.sleep(5)
+        time.sleep(2)
         return 42
 
     enable_chaos(
@@ -84,7 +84,7 @@ def test_heartbeat_failures_at_threshold_kills_worker(cluster):
     )
 
     job = cluster.submit(slow_job, "threshold-hb-fail", max_retries_preemption=10)
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -101,7 +101,7 @@ def test_dispatch_cleared_on_worker_failure(cluster):
     """
 
     def slow_job():
-        time.sleep(10)
+        time.sleep(3)
         return 42
 
     enable_chaos(
@@ -112,7 +112,7 @@ def test_dispatch_cleared_on_worker_failure(cluster):
     )
 
     job = cluster.submit(slow_job, "dispatch-clear-test", max_retries_preemption=10)
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -133,7 +133,7 @@ def test_multiple_workers_one_fails(cluster):
     )
 
     job = cluster.submit(quick_job, "multi-worker-fail", max_retries_preemption=10)
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -156,5 +156,5 @@ def test_heartbeat_failure_with_pending_kills(cluster):
     )
 
     job = cluster.submit(quick_job, "kill-clear-test", max_retries_preemption=10)
-    status = cluster.wait(job, timeout=60)
+    status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED

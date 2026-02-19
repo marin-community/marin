@@ -9,6 +9,9 @@
 
 FROM python:3.12
 
+LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
+LABEL org.opencontainers.image.description="Iris task base image"
+
 RUN sed -i 's|deb.debian.org|cdn-fastly.deb.debian.org|g' /etc/apt/sources.list.d/*.sources 2>/dev/null; \
     sed -i 's|deb.debian.org|cdn-fastly.deb.debian.org|g' /etc/apt/sources.list 2>/dev/null; \
     apt-get update && apt-get install -y --no-install-recommends git curl build-essential \
