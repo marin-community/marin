@@ -8,7 +8,6 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import logging
-import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -16,9 +15,7 @@ from pathlib import Path
 
 import click
 from fray.v2.client import current_client
-from fray.v2.local_backend import LocalClient
 from fray.v2.types import ResourceConfig
-from iris.temp_buckets import get_temp_bucket_path
 
 from zephyr.execution import ZephyrContext
 
@@ -133,21 +130,6 @@ def run_local(
     client = current_client()
     logger.info("Zephyr using fray client: %s", type(client).__name__)
 
-    # For distributed backends (iris, ray), chunk storage must be shared (GCS).
-    # Local /tmp won't work when coordinator and workers run in separate containers.
-    chunk_storage_prefix = None
-    is_distributed = not isinstance(client, LocalClient)
-    if is_distributed:
-        chunk_storage_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")
-        if chunk_storage_prefix is None:
-            marin_prefix = os.environ.get("MARIN_PREFIX")
-            if not marin_prefix:
-                raise click.UsageError(
-                    "MARIN_PREFIX must be set when using a distributed backend.\n"
-                    "  Example: export MARIN_PREFIX=gs://marin-us-central2"
-                )
-            chunk_storage_prefix = f"{marin_prefix}/tmp/zephyr"
-
     main_fn = _load_entry_point(script_path, entry_point)
     sys.argv = [script_path, *script_args]
 
@@ -155,7 +137,6 @@ def run_local(
         client=client,
         max_workers=config.max_parallelism,
         resources=resources,
-        chunk_storage_prefix=chunk_storage_prefix,
         name="cli",
     ):
         main_fn()
