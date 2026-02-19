@@ -475,6 +475,17 @@ def _expand_multi_zone_groups(data: dict) -> None:
 
         to_remove.append(name)
 
+        # Zone expansion only makes sense for GCP slice templates.
+        # If the template already specifies a non-GCP platform, reject it.
+        st = sg.get("slice_template") or {}
+        non_gcp_platforms = {"manual", "local", "coreweave"}
+        specified_platforms = non_gcp_platforms & st.keys()
+        if specified_platforms:
+            raise ValueError(
+                f"Scale group '{name}': 'zones' expansion is only supported for GCP slice templates, "
+                f"but slice_template specifies {', '.join(sorted(specified_platforms))}."
+            )
+
         # Detect conflicts with user-provided fields that expansion will set
         existing_gcp_zone = (sg.get("slice_template") or {}).get("gcp", {}).get("zone")
         existing_worker_attrs = (sg.get("worker") or {}).get("attributes", {})

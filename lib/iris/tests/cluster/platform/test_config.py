@@ -1233,6 +1233,28 @@ scale_groups:
         with pytest.raises(ValueError, match="cannot set both"):
             load_config(p)
 
+    def test_non_gcp_slice_template_rejected(self, tmp_path: Path):
+        """Zone expansion on a non-GCP slice template is rejected."""
+        config_content = """\
+platform:
+  gcp:
+    project_id: test
+
+scale_groups:
+  manual_group:
+    zones: [us-west4-a]
+    accelerator_type: cpu
+    num_vms: 1
+    resources: { cpu: 8, ram: 16GB, disk: 50GB, tpu_count: 0, gpu_count: 0 }
+    slice_template:
+      manual:
+        hosts: [10.0.0.1]
+"""
+        p = tmp_path / "config.yaml"
+        p.write_text(config_content)
+        with pytest.raises(ValueError, match="only supported for GCP"):
+            load_config(p)
+
     def test_name_collision_with_existing_group_rejected(self, tmp_path: Path):
         """Expanded name colliding with an existing static group is rejected."""
         config_content = """\
