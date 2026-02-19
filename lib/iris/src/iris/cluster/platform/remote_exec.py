@@ -1,13 +1,13 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SSH utilities and connection implementations for VM management.
+"""Remote execution utilities and connection implementations for worker management.
 
 This module provides:
-- SshConnection protocol for transport abstraction
-- GcloudSshConnection for TPU VM SSH via gcloud
-- GceSshConnection for standard GCE VMs via gcloud compute ssh
-- DirectSshConnection for raw SSH connections
+- RemoteExec protocol for transport abstraction
+- GcloudRemoteExec for TPU VM SSH via gcloud
+- GceRemoteExec for standard GCE VMs via gcloud compute ssh
+- DirectSshRemoteExec for raw SSH connections
 - Utility functions for connection testing and streaming commands
 """
 
@@ -32,11 +32,15 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-class SshConnection(Protocol):
-    """Execute commands on a remote host via SSH. Carries location metadata.
+class RemoteExec(Protocol):
+    """Execute commands on a remote host. Carries location metadata.
 
-    Implementations must provide run() for synchronous execution and
-    run_streaming() for commands with streaming output.
+    Implementations: GcloudRemoteExec (TPU VMs via gcloud), GceRemoteExec
+    (GCE VMs via gcloud), DirectSshRemoteExec (raw SSH).
+
+    Used by GCP and Manual platforms for bootstrap and health checks.
+    CoreWeave does not use RemoteExec -- its bootstrap is handled by
+    the Pod spec and ongoing communication is via heartbeat RPC.
     """
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
@@ -67,7 +71,7 @@ class SshConnection(Protocol):
 
 
 @dataclass
-class GcloudSshConnection:
+class GcloudRemoteExec:
     """SSH via gcloud compute tpus tpu-vm ssh.
 
     Used for connecting to TPU VMs via the gcloud CLI. The gcloud tool
@@ -117,11 +121,11 @@ class GcloudSshConnection:
 
 
 @dataclass
-class GceSshConnection:
+class GceRemoteExec:
     """SSH via gcloud compute ssh for standard GCE VMs (not TPU VMs).
 
     Used for connecting to regular GCE instances like the controller VM.
-    Unlike GcloudSshConnection which uses `gcloud compute tpus tpu-vm ssh`,
+    Unlike GcloudRemoteExec which uses `gcloud compute tpus tpu-vm ssh`,
     this uses `gcloud compute ssh` for standard compute instances.
     """
 
@@ -159,10 +163,10 @@ class GceSshConnection:
 
 
 @dataclass
-class DirectSshConnection:
+class DirectSshRemoteExec:
     """SSH via raw ssh command.
 
-    Used for direct SSH connections to VMs when not using gcloud.
+    Used for direct SSH connections to hosts when not using gcloud.
     Configures SSH for non-interactive use with known host checking disabled.
     """
 
@@ -215,11 +219,11 @@ class DirectSshConnection:
 
 
 # ============================================================================
-# SSH Utilities
+# Connection Utilities
 # ============================================================================
 
 
-def connection_available(conn: SshConnection, timeout: Duration = Duration.from_seconds(30)) -> bool:
+def connection_available(conn: RemoteExec, timeout: Duration = Duration.from_seconds(30)) -> bool:
     """Check if remote connection works by running a simple echo command.
 
     Returns True if connection succeeds, False otherwise. Logs errors prominently
@@ -229,7 +233,6 @@ def connection_available(conn: SshConnection, timeout: Duration = Duration.from_
         result = conn.run("echo ok", timeout=timeout)
         if result.returncode == 0:
             return True
-        # Capture stderr for error diagnosis - this is the most useful info
         error_msg = result.stderr.strip() if result.stderr else f"exit code {result.returncode}"
         logger.warning("SSH connection check failed to %s: %s", conn.address, error_msg)
         return False
@@ -242,7 +245,7 @@ def connection_available(conn: SshConnection, timeout: Duration = Duration.from_
 
 
 def wait_for_connection(
-    conn: SshConnection,
+    conn: RemoteExec,
     timeout: Duration,
     poll_interval: Duration,
     stop_event: threading.Event | None = None,
@@ -269,7 +272,6 @@ def wait_for_connection(
                 logger.info("SSH: Connection established to %s after %ds (%d attempts)", conn.address, elapsed, attempt)
             return True
 
-        # Log first failure prominently (connection_available already logged the error details)
         if not first_failure_logged:
             logger.warning(
                 "SSH: First connection attempt failed to %s (will retry for %ds)",
@@ -277,7 +279,7 @@ def wait_for_connection(
                 int(timeout.to_seconds()),
             )
             first_failure_logged = True
-        elif attempt % 6 == 0:  # Every 30 seconds at 5-second intervals
+        elif attempt % 6 == 0:
             elapsed = int(timer.elapsed_seconds())
             remaining = int(dl.remaining_seconds())
             logger.info("SSH: Still waiting for %s (%ds elapsed, %ds remaining)", conn.address, elapsed, remaining)
@@ -297,7 +299,7 @@ SSH_RETRYABLE_EXIT_CODES = {255}  # SSH connection failures
 
 
 def run_streaming_with_retry(
-    conn: SshConnection,
+    conn: RemoteExec,
     command: str,
     max_retries: int = SSH_MAX_RETRIES,
     overall_timeout: int = 600,
@@ -329,7 +331,6 @@ def run_streaming_with_retry(
             proc.wait(timeout=overall_timeout)
             returncode = proc.returncode or 0
 
-            # Retry on SSH connection failures (exit code 255)
             if returncode in SSH_RETRYABLE_EXIT_CODES:
                 last_error = f"SSH exit code {returncode}"
                 logger.warning("SSH: Connection failed on attempt %d (exit code %d)", attempt + 1, returncode)

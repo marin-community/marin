@@ -17,7 +17,7 @@ from iris.cluster.controller.events import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingResult
 from iris.cluster.controller.state import ControllerState, ControllerTask
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
@@ -1252,18 +1252,18 @@ def test_preemptible_constraint_routes_to_matching_worker(scheduler, state, job_
     """Job constrained to non-preemptible workers is only scheduled on a matching worker."""
     # Preemptible worker
     meta_preemptible = worker_metadata()
-    meta_preemptible.attributes["preemptible"].string_value = "true"
+    meta_preemptible.attributes[PREEMPTIBLE_ATTRIBUTE_KEY].string_value = "true"
     register_worker(state, "w-preemptible", "addr1", meta_preemptible)
 
     # On-demand worker
     meta_ondemand = worker_metadata()
-    meta_ondemand.attributes["preemptible"].string_value = "false"
+    meta_ondemand.attributes[PREEMPTIBLE_ATTRIBUTE_KEY].string_value = "false"
     register_worker(state, "w-ondemand", "addr2", meta_ondemand)
 
     # Job requiring non-preemptible worker
     req = job_request()
     constraint = req.constraints.add()
-    constraint.key = "preemptible"
+    constraint.key = PREEMPTIBLE_ATTRIBUTE_KEY
     constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
     constraint.value.string_value = "false"
     tasks = submit_job(state, "j1", req)

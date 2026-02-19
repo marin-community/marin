@@ -29,7 +29,7 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
 )
-from iris.cluster.types import DeviceType, JobName, WorkerId
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, DeviceType, JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
@@ -1397,7 +1397,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key="preemptible",
+                key=PREEMPTIBLE_ATTRIBUTE_KEY,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="true"),
             )
@@ -1418,7 +1418,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key="preemptible",
+                key=PREEMPTIBLE_ATTRIBUTE_KEY,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="false"),
             )
@@ -1456,6 +1456,66 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none():
     demand = compute_demand_entries(state)
     assert len(demand) == 1
     assert demand[0].preemptible is None
+
+
+def test_compute_demand_entries_extracts_required_region():
+    state = ControllerState()
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="regional-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+        constraints=[
+            cluster_pb2.Constraint(
+                key=REGION_ATTRIBUTE_KEY,
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="us-west4"),
+            )
+        ],
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].required_regions == frozenset({"us-west4"})
+    assert demand[0].invalid_reason is None
+
+
+def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints():
+    state = ControllerState()
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="invalid-regional-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+        constraints=[
+            cluster_pb2.Constraint(
+                key=REGION_ATTRIBUTE_KEY,
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="us-west4"),
+            ),
+            cluster_pb2.Constraint(
+                key=REGION_ATTRIBUTE_KEY,
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="eu-west4"),
+            ),
+        ],
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].invalid_reason is not None
 
 
 # =============================================================================

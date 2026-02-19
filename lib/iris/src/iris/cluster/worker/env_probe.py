@@ -3,6 +3,7 @@
 
 """Environment probing for worker registration."""
 
+import json
 import logging
 import os
 import re
@@ -238,28 +239,16 @@ def _detect_preemptible(extra_attributes: dict[str, str]) -> bool:
 def _get_extra_attributes() -> dict[str, str]:
     """Get extra worker attributes from IRIS_WORKER_ATTRIBUTES env var.
 
-    Format: key1=value1,key2=value2,...
-    Example: taint:maintenance=true,pool=large-jobs
-
-    Values are always strings; the caller is responsible for type conversion if needed.
+    Format: JSON object, e.g. {"region":"us-west4","pool":"large-jobs"}.
+    Values are stringified.
     """
     attrs_env = os.environ.get("IRIS_WORKER_ATTRIBUTES", "")
     if not attrs_env:
         return {}
-    result: dict[str, str] = {}
-    for pair in attrs_env.split(","):
-        pair = pair.strip()
-        if not pair:
-            continue
-        if "=" not in pair:
-            logger.warning("Skipping malformed attribute (no '='): %s", pair)
-            continue
-        key, value = pair.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key:
-            result[key] = value
-    return result
+    parsed = json.loads(attrs_env)
+    if not isinstance(parsed, dict):
+        raise ValueError("IRIS_WORKER_ATTRIBUTES must decode to a dictionary")
+    return {str(key): str(value) for key, value in parsed.items() if str(key)}
 
 
 def _build_worker_attributes(

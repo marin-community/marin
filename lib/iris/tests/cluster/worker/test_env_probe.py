@@ -13,13 +13,10 @@ from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, _get_extra
     "env_value,expected",
     [
         ("", {}),
-        ("key1=value1", {"key1": "value1"}),
-        ("key1=value1,key2=value2", {"key1": "value1", "key2": "value2"}),
-        ("taint:maintenance=true,pool=large-jobs", {"taint:maintenance": "true", "pool": "large-jobs"}),
-        ("key1=value1,  key2=value2  ", {"key1": "value1", "key2": "value2"}),  # whitespace
-        ("key1=value1,malformed,key2=value2", {"key1": "value1", "key2": "value2"}),  # skip malformed
-        ("=value", {}),  # empty key
-        ("key=", {"key": ""}),  # empty value is valid
+        ('{"key1":"value1"}', {"key1": "value1"}),
+        ('{"key1":"value1","key2":"value2"}', {"key1": "value1", "key2": "value2"}),
+        ('{"taint:maintenance":"true","pool":"large-jobs"}', {"taint:maintenance": "true", "pool": "large-jobs"}),
+        ('{"key":""}', {"key": ""}),
     ],
 )
 def test_get_extra_attributes_parsing(monkeypatch, env_value, expected):
@@ -27,6 +24,12 @@ def test_get_extra_attributes_parsing(monkeypatch, env_value, expected):
     monkeypatch.setenv("IRIS_WORKER_ATTRIBUTES", env_value)
     result = _get_extra_attributes()
     assert result == expected
+
+
+def test_get_extra_attributes_raises_for_non_json(monkeypatch):
+    monkeypatch.setenv("IRIS_WORKER_ATTRIBUTES", "key1=value1")
+    with pytest.raises(ValueError):
+        _get_extra_attributes()
 
 
 def test_environment_provider_basic_probe(monkeypatch):

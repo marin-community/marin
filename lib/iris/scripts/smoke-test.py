@@ -12,18 +12,18 @@ This script provides end-to-end validation of an Iris cluster:
 5. Cleans up on success/failure/interrupt
 
 Usage:
-    # Basic smoke test (logs to logs/smoke-test-{timestamp}/)
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml
+    # Basic smoke test (uses examples/smoke.yaml, logs to logs/smoke-test-{timestamp}/)
+    uv run python scripts/smoke-test.py
 
-    # With custom log directory
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \\
+    # With custom config and log directory
+    uv run python scripts/smoke-test.py --config examples/marin.yaml \\
         --log-dir /path/to/logs
 
     # Custom timeout (45 min) for slow environments
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --timeout 2700
+    uv run python scripts/smoke-test.py --timeout 2700
 
     # Keep cluster running on failure for debugging
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --mode keep
+    uv run python scripts/smoke-test.py --mode keep
 """
 
 import logging
@@ -39,13 +39,6 @@ from typing import Literal, TextIO
 import click
 from iris.cli.cluster import _build_cluster_images
 from iris.client import IrisClient
-from iris.cluster.types import (
-    CoschedulingConfig,
-    Entrypoint,
-    EnvironmentSpec,
-    ResourceSpec,
-    tpu_device,
-)
 from iris.cluster.config import IrisConfig, load_config, make_local_config
 from iris.cluster.controller.lifecycle import start_controller, stop_controller
 from iris.cluster.controller.local import LocalController
@@ -57,11 +50,21 @@ from iris.cluster.platform.debug import (
     list_iris_tpus,
     stream_docker_logs,
 )
+from iris.cluster.types import (
+    Constraint,
+    CoschedulingConfig,
+    Entrypoint,
+    EnvironmentSpec,
+    ResourceSpec,
+    region_constraint,
+    tpu_device,
+)
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import format_accelerator_display
 
 IRIS_ROOT = Path(__file__).parent.parent
+DEFAULT_CONFIG_PATH = IRIS_ROOT / "examples" / "smoke.yaml"
 DEFAULT_CONTROLLER_PORT = 10000
 
 
@@ -161,6 +164,43 @@ def _quick_task_job(task_id: int):
     return task_id
 
 
+def _assert_region_child(expected_region: str):
+    """Parent job that submits a child and asserts the child inherits the region constraint.
+
+    Uses iris_ctx() to get the IrisClient and submit a child without explicit
+    constraints. The child reads its inherited constraints from JobInfo and
+    asserts the expected region is present.
+    """
+    from iris.client.client import iris_ctx
+    from iris.cluster.types import ResourceSpec as RS
+
+    ctx = iris_ctx()
+
+    def _child_check_region():
+        from iris.cluster.client import get_job_info
+        from iris.cluster.types import REGION_ATTRIBUTE_KEY as RK
+
+        info = get_job_info()
+        if info is None:
+            raise RuntimeError("Not running in an Iris job context")
+        region_constraints = [c for c in info.constraints if c.key == RK]
+        if not region_constraints:
+            raise RuntimeError(f"No region constraint found. constraints={info.constraints}")
+        actual = region_constraints[0].value
+        if actual != expected_region:
+            raise RuntimeError(f"Expected region {expected_region}, got {actual}")
+        print(f"Child validated inherited region: {actual}")
+        return actual
+
+    child = ctx.client.submit(
+        entrypoint=Entrypoint.from_callable(_child_check_region),
+        name="smoke-inherited-child",
+        resources=RS(device=tpu_device("v5litepod-16")),
+    )
+    child.wait(timeout=300, raise_on_failure=True)
+    print(f"Parent: child completed with inherited region={expected_region}")
+
+
 def _distributed_work_job():
     """Coscheduled job that uses job context."""
     from iris.cluster.client import get_job_info
@@ -258,8 +298,7 @@ class SmokeTestLogger:
         self._file.write(f"**Started:** {self._start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         self._file.write(f"**Config:** `{config.config_path}`\n\n")
         self._file.write(f"**TPU type:** `{config.tpu_type}`\n\n")
-        if config.prefix:
-            self._file.write(f"**Prefix:** `{config.prefix}`\n\n")
+        self._file.write(f"**Prefix:** `{config.prefix}`\n\n")
         self._file.write(f"**Log directory:** `{config.log_dir}`\n\n")
         self._file.write("---\n\n")
         self._file.flush()
@@ -303,9 +342,9 @@ class DockerLogStreamer:
         mode: Literal["controller", "workers"],
         zone: str,
         project: str,
+        label_prefix: str,
         log_tree: LogTree,
         container_name: str = "iris-worker",
-        label_prefix: str = "iris",
     ):
         self._mode = mode
         self._zone = zone
@@ -403,13 +442,13 @@ class SmokeTestConfig:
     timeout_seconds: int = 1800  # 30 min total
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
     tpu_type: str = "v5litepod-16"
-    prefix: str | None = None  # Unique prefix for controller VM name (sets label_prefix in config)
+    prefix: str = "smoke"  # Unique prefix for controller VM name (sets label_prefix in config)
     local: bool = False  # Run locally without GCP
     mode: Literal["full", "keep", "redeploy"] = "full"
 
     @property
     def label_prefix(self) -> str:
-        return self.prefix or "iris"
+        return self.prefix
 
 
 # =============================================================================
@@ -479,8 +518,7 @@ class SmokeTestRunner:
                 cluster_config = make_local_config(cluster_config)
 
             # Apply prefix to cluster config for unique controller VM name
-            if self.config.prefix:
-                cluster_config.platform.label_prefix = self.config.prefix
+            cluster_config.platform.label_prefix = self.config.prefix
 
             self._is_local = cluster_config.controller.WhichOneof("controller") == "local"
 
@@ -578,8 +616,7 @@ class SmokeTestRunner:
         self.logger.log(f"Timeout: {self.config.timeout_seconds}s")
         self.logger.log(f"TPU type: {self.config.tpu_type}")
         self.logger.log(f"Log directory: {self.config.log_dir}")
-        if self.config.prefix:
-            self.logger.log(f"Prefix: {self.config.prefix}")
+        self.logger.log(f"Prefix: {self.config.prefix}")
 
     def _cleanup_existing(self, zone: str, project: str):
         """Delete existing iris resources (controller VM, TPU slices) for clean start."""
@@ -610,7 +647,7 @@ class SmokeTestRunner:
         client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
 
         # Test 1: Simple TPU job
-        self.logger.log(f"[Test 1/4] Simple TPU job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 1/6] Simple TPU job ({self.config.tpu_type})")
         result = self._run_simple_tpu_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
@@ -619,7 +656,7 @@ class SmokeTestRunner:
             return
 
         # Test 2: Concurrent TPU jobs
-        self.logger.log(f"[Test 2/4] Concurrent TPU jobs (3x {self.config.tpu_type})")
+        self.logger.log(f"[Test 2/6] Concurrent TPU jobs (3x {self.config.tpu_type})")
         result = self._run_concurrent_tpu_jobs(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
@@ -628,17 +665,35 @@ class SmokeTestRunner:
             return
 
         # Test 3: Coscheduled multi-task job
-        self.logger.log(f"[Test 3/4] Coscheduled multi-task job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 3/6] Coscheduled multi-task job ({self.config.tpu_type})")
         result = self._run_coscheduled_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
 
-        if self._interrupted:
+        if self._interrupted or self._check_deadline():
             return
 
         # Test 4: JAX TPU job - validates JAX can initialize and use TPU
-        self.logger.log(f"[Test 4/4] JAX TPU job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 4/6] JAX TPU job ({self.config.tpu_type})")
         result = self._run_jax_tpu_job(client)
+        self._results.append(result)
+        self._log_autoscaler_status(controller_url)
+
+        if self._interrupted or self._check_deadline():
+            return
+
+        # Test 5: Region-constrained job - validates constraint-based routing
+        self.logger.log(f"[Test 5/6] Region-constrained job ({self.config.tpu_type})")
+        result = self._run_region_constrained_job(client)
+        self._results.append(result)
+        self._log_autoscaler_status(controller_url)
+
+        if self._interrupted or self._check_deadline():
+            return
+
+        # Test 6: Nested constraint propagation - child inherits parent region
+        self.logger.log(f"[Test 6/6] Nested constraint propagation ({self.config.tpu_type})")
+        result = self._run_nested_constraint_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
 
@@ -684,6 +739,7 @@ class SmokeTestRunner:
         resources: ResourceSpec,
         coscheduling: CoschedulingConfig | None = None,
         environment: EnvironmentSpec | None = None,
+        constraints: list[Constraint] | None = None,
         replicas: int = 1,
         timeout: int | None = None,
     ) -> TestResult:
@@ -696,6 +752,7 @@ class SmokeTestRunner:
                 name=job_name,
                 resources=resources,
                 environment=environment or EnvironmentSpec(),
+                constraints=constraints,
                 coscheduling=coscheduling,
                 replicas=replicas,
             )
@@ -822,6 +879,37 @@ class SmokeTestRunner:
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
             replicas=4,
             timeout=300,
+        )
+
+    def _run_region_constrained_job(self, client: IrisClient) -> TestResult:
+        """Run a job with an explicit region constraint.
+
+        Validates that constraint-based routing places the job on workers
+        whose attributes match the requested region.
+        """
+        return self._run_job_test(
+            client=client,
+            test_name="Region-constrained job",
+            entrypoint=Entrypoint.from_callable(_hello_tpu_job),
+            job_name=f"smoke-region-{self._run_id}",
+            resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
+            constraints=[region_constraint("europe-west4")],
+        )
+
+    def _run_nested_constraint_job(self, client: IrisClient) -> TestResult:
+        """Submit a parent job with a region constraint whose body submits a child.
+
+        The parent uses IrisClient (via iris_ctx()) to submit a child without
+        explicit constraints. The child inherits the parent's region constraint
+        and asserts it via JobInfo.constraints.
+        """
+        return self._run_job_test(
+            client=client,
+            test_name="Nested constraint propagation",
+            entrypoint=Entrypoint.from_callable(_assert_region_child, "europe-west4"),
+            job_name=f"smoke-nested-{self._run_id}",
+            resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
+            constraints=[region_constraint("europe-west4")],
         )
 
     def _log_autoscaler_status(self, controller_url: str):
@@ -966,21 +1054,24 @@ class SmokeTestRunner:
 @click.option(
     "--config",
     "config_path",
-    required=True,
+    default=str(DEFAULT_CONFIG_PATH),
     type=click.Path(exists=True, path_type=Path),
-    help="Path to cluster config YAML (e.g., examples/eu-west4.yaml)",
+    show_default=True,
+    help="Path to cluster config YAML",
 )
 @click.option(
     "--timeout",
     "timeout_seconds",
     default=1800,
-    help="Total timeout in seconds (default: 1800 = 30 min)",
+    show_default=True,
+    help="Total timeout in seconds",
 )
 @click.option(
     "--job-timeout",
     "job_timeout_seconds",
     default=DEFAULT_JOB_TIMEOUT,
-    help=f"Per-job timeout in seconds (default: {DEFAULT_JOB_TIMEOUT} = 10 min)",
+    show_default=True,
+    help="Per-job timeout in seconds",
 )
 @click.option(
     "--log-dir",
@@ -990,18 +1081,20 @@ class SmokeTestRunner:
 @click.option(
     "--tpu-type",
     default="v5litepod-16",
-    help="TPU type for test jobs (default: v5litepod-16)",
+    show_default=True,
+    help="TPU type for test jobs",
 )
 @click.option(
     "--mode",
     type=click.Choice(["full", "keep", "redeploy"]),
     default="full",
+    show_default=True,
     help="Execution mode: 'full' (clean start + teardown), 'keep' (clean start + keep VMs), 'redeploy' (reuse VMs)",
 )
 @click.option(
     "--prefix",
-    type=str,
-    default=None,
+    default="smoke",
+    show_default=True,
     help="Unique prefix for controller VM name (e.g., 'smoke-123' creates 'iris-controller-smoke-123')",
 )
 @click.option(
@@ -1016,7 +1109,7 @@ def main(
     log_dir: Path | None,
     tpu_type: str,
     mode: str,
-    prefix: str | None,
+    prefix: str,
     local: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
@@ -1027,17 +1120,17 @@ def main(
 
     Examples:
 
-        # Basic smoke test (full VM creation)
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml
+        # Basic smoke test (uses examples/smoke.yaml by default)
+        uv run python scripts/smoke-test.py
 
         # Keep VMs running after test
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --mode keep
+        uv run python scripts/smoke-test.py --mode keep
 
         # Redeploy mode: reuse existing VMs (much faster for iteration)
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --mode redeploy
+        uv run python scripts/smoke-test.py --mode redeploy
 
-        # With custom log directory
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \
+        # With custom config and log directory
+        uv run python scripts/smoke-test.py --config examples/marin.yaml \
             --log-dir /path/to/logs
     """
     from iris.logging import configure_logging

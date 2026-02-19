@@ -42,6 +42,8 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
+    worker_attributes: dict[str, str] = field(default_factory=dict)
+    default_task_env: dict[str, str] = field(default_factory=dict)
     log_prefix: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
@@ -103,12 +105,15 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         # Start HTTP server
+        # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
+        # causing TCP resets on idle connections.
         self._server = uvicorn.Server(
             uvicorn.Config(
                 self._dashboard._app,
                 host=self._config.host,
                 port=self._config.port,
                 log_level="error",
+                timeout_keep_alive=120,
             )
         )
         self._threads.spawn_server(self._server, name="worker-server")
@@ -424,6 +429,7 @@ class Worker:
             worker_metadata=self._worker_metadata,
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
+            default_task_env=self._config.default_task_env,
             port_allocator=self._port_allocator,
             report_state=lambda: self._notify_task_update(attempt),
             log_sink=log_sink,
