@@ -61,6 +61,7 @@ Prompt and final-response logs are stored under:
 - Preset directives are backed by markdown docs in `scripts/gdn/session_directives/` (for example `triangular-inversion`).
 - `--dirty-policy stash` avoids hard stops after failed attempts leave a dirty tree.
 - `--dirty-policy stash` restores the stashed tree automatically after each iteration.
+- If stash restore conflicts with newly-generated iteration edits, default `--stash-restore-policy warn-keep` keeps the stash and continues; set `--stash-restore-policy fail` to stop instead.
 - `--no-commit-policy count-failure` allows the loop to continue when an iteration intentionally records a failed attempt without a commit.
 - `--hold-dev-tpu --dev-tpu-name <name>` keeps a dev TPU allocation active for the whole loop and releases it automatically on exit.
 - Keep `--post-check` cluster/name aligned with the active held allocation (`--cluster` + `--tpu-name`) so checks run on the right TPU.

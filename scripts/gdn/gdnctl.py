@@ -368,19 +368,23 @@ def _stash_dirty_tree(cwd: Path, *, iteration: int) -> tuple[str, str]:
     return stash_ref, stash_message
 
 
-def _restore_stash_tree(cwd: Path, *, stash_ref: str, stash_message: str) -> None:
+def _restore_stash_tree(cwd: Path, *, stash_ref: str, stash_message: str) -> bool:
     print(f"[gdnctl] restoring stashed dirty tree: {stash_message} ({stash_ref})")
     proc = _run(["git", "stash", "pop", stash_ref], cwd=cwd, capture_output=True, check=False)
     output = (proc.stdout + proc.stderr).strip()
-    if proc.returncode != 0:
-        details = f"\n{output}" if output else ""
-        raise RuntimeError(
-            "[gdnctl] Failed to restore stashed dirty tree. "
-            "Resolve stash conflicts manually before continuing."
-            f"{details}"
-        )
     if output:
-        print(f"[gdnctl] {output}")
+        sink = sys.stdout if proc.returncode == 0 else sys.stderr
+        print(f"[gdnctl] {output}", file=sink)
+
+    if proc.returncode == 0:
+        return True
+
+    print(
+        "[gdnctl] stash restore failed; stash was kept for manual recovery "
+        f"({stash_ref}, message={stash_message}).",
+        file=sys.stderr,
+    )
+    return False
 
 
 @contextmanager
@@ -404,7 +408,12 @@ def _clean_worktree_for_iteration(
     finally:
         if stash_entry is not None:
             stash_ref, stash_message = stash_entry
-            _restore_stash_tree(workdir, stash_ref=stash_ref, stash_message=stash_message)
+            restored = _restore_stash_tree(workdir, stash_ref=stash_ref, stash_message=stash_message)
+            if not restored and args.stash_restore_policy == "fail":
+                raise RuntimeError(
+                    "[gdnctl] Failed to restore stashed dirty tree. "
+                    "Resolve stash conflicts manually before continuing."
+                )
 
 
 def _test_targets(selection: str) -> list[str]:
@@ -1230,6 +1239,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["fail", "stash"],
         default="fail",
         help="Behavior when the tree is dirty at iteration start (ignored with --allow-dirty).",
+    )
+    codex_loop.add_argument(
+        "--stash-restore-policy",
+        choices=["warn-keep", "fail"],
+        default="warn-keep",
+        help=(
+            "Behavior if restoring a stashed dirty tree fails at iteration end: "
+            "`warn-keep` keeps the stash and continues, `fail` stops the loop."
+        ),
     )
     codex_loop.add_argument("--allow-no-commit", action="store_true", help="Do not require a new commit")
     codex_loop.add_argument(

@@ -87,3 +87,4 @@ The default prompt is aggressive by design:
 - disallows leaving `Commit: (pending)` in new log entries.
 - allows equivalent model reformulations (including removing explicit triangular inversion) if semantics stay correct and performance improves.
 - `--dirty-policy stash` restores the stashed tree automatically at the end of each iteration.
+- If stash restore conflicts with new iteration edits, the default `--stash-restore-policy warn-keep` keeps the stash and continues; use `--stash-restore-policy fail` for strict behavior.
