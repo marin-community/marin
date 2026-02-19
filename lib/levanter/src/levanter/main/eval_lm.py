@@ -19,7 +19,7 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
 from levanter.data.text import LmDataConfig
-from levanter.eval import TaggedEvaluator, eval_model
+from levanter.eval import HaliaxTaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
@@ -79,7 +79,7 @@ def main(config: EvalLmConfig):
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint, not both")
 
     with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
-        evaluator = TaggedEvaluator(
+        evaluator = HaliaxTaggedEvaluator(
             Batch, datasets, tokenizer, max_examples_per_dataset=max_examples, axis_mapping=compute_axis_mapping
         )
 
