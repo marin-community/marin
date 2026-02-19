@@ -14,8 +14,15 @@ declare -A COPY_MAP=(
 
 for src in "${!COPY_MAP[@]}"; do
   dst="${COPY_MAP[$src]}"
-  echo "Copying: $src/validation/ -> $dst/validation/"
-  gcloud storage cp -r "${src}/validation/" "${dst}/validation/"
+
+  # Clean up bad double-nested validation/validation/ from previous run
+  if gcloud storage ls "${dst}/validation/validation/" &>/dev/null; then
+    echo "Removing bad nested dir: ${dst}/validation/validation/"
+    gcloud storage rm -r "${dst}/validation/validation/"
+  fi
+
+  echo "Copying: ${src}/validation/* -> ${dst}/validation/"
+  gcloud storage cp -r "${src}/validation/*" "${dst}/validation/"
 
   # Append SUCCESS status so executor skips re-tokenization
   echo '{"date": "'"$(date -u +%Y-%m-%dT%H:%M:%S.%6N)"'", "status": "SUCCESS", "message": "Copied from us-central1", "ray_task_id": null}' | \
