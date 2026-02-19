@@ -17,15 +17,18 @@ This CLI wraps the most repetitive commands used while optimizing
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 import json
 import os
 import re
+import signal
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -57,6 +60,10 @@ CODEX_FILE_UPDATE_HEADER_RE = re.compile(r"^file (update|create|add|delete|renam
 CODEX_DIFF_LINE_RE = re.compile(
     r"^(diff --git |index [0-9a-f]+\.\.[0-9a-f]+|--- |\+\+\+ |@@ |\\ No newline at end of file$|"
     r"new file mode |deleted file mode |similarity index |rename from |rename to |old mode |new mode |Binary files |[ +-].*)"
+)
+DEV_TPU_READY_MARKERS = (
+    "TPU allocation is active. Press Ctrl-C to release...",
+    "TPU allocated successfully!",
 )
 
 
@@ -139,6 +146,140 @@ def _run_streaming(
     if check and return_code != 0:
         raise subprocess.CalledProcessError(return_code, list(cmd))
     return return_code
+
+
+def _build_dev_tpu_allocate_cmd(args: argparse.Namespace) -> list[str]:
+    cmd = [
+        *DEV_TPU,
+        "--cluster",
+        args.dev_tpu_cluster,
+        "--tpu-name",
+        args.dev_tpu_name,
+    ]
+    if args.dev_tpu_verbose:
+        cmd.append("--verbose")
+    cmd += ["allocate", "--sync-path", args.dev_tpu_sync_path]
+    if args.dev_tpu_type:
+        cmd += ["--tpu-type", args.dev_tpu_type]
+    return cmd
+
+
+def _tail_text(path: Path, *, max_lines: int = 80) -> str:
+    if not path.exists():
+        return ""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return "\n".join(lines[-max_lines:])
+
+
+def _stream_subprocess_output_to_file(
+    proc: subprocess.Popen[str],
+    *,
+    output_path: Path,
+    ready_markers: Sequence[str],
+    ready_event: threading.Event,
+) -> threading.Thread:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _worker() -> None:
+        with output_path.open("a", encoding="utf-8") as fout:
+            stdout = proc.stdout
+            if stdout is None:
+                return
+            for line in stdout:
+                fout.write(line)
+                fout.flush()
+                if any(marker in line for marker in ready_markers):
+                    ready_event.set()
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    return thread
+
+
+@contextmanager
+def _hold_dev_tpu_for_loop(
+    args: argparse.Namespace,
+    *,
+    log_dir: Path,
+) -> Generator[None, None, None]:
+    if not args.hold_dev_tpu:
+        yield
+        return
+
+    if not args.dev_tpu_name:
+        raise SystemExit("[gdnctl] --hold-dev-tpu requires --dev-tpu-name.")
+
+    allocate_cmd = _build_dev_tpu_allocate_cmd(args)
+    allocation_log = Path(args.dev_tpu_allocate_log or (log_dir / "dev_tpu_allocate.log")).resolve()
+    allocation_log.parent.mkdir(parents=True, exist_ok=True)
+    if allocation_log.exists():
+        allocation_log.unlink()
+
+    print("[gdnctl] starting managed dev TPU allocation for codex-loop")
+    print(f"[gdnctl] dev TPU allocation log: {allocation_log}")
+    _echo_cmd(allocate_cmd)
+    proc = subprocess.Popen(
+        allocate_cmd,
+        cwd=str(REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    ready_event = threading.Event()
+    pump_thread = _stream_subprocess_output_to_file(
+        proc,
+        output_path=allocation_log,
+        ready_markers=DEV_TPU_READY_MARKERS,
+        ready_event=ready_event,
+    )
+
+    deadline = time.time() + args.dev_tpu_ready_timeout
+    while time.time() < deadline:
+        if ready_event.is_set():
+            print(f"[gdnctl] dev TPU allocation is active: dev-tpu-{args.dev_tpu_name}")
+            break
+        rc = proc.poll()
+        if rc is not None:
+            tail = _tail_text(allocation_log)
+            raise SystemExit(
+                "[gdnctl] managed dev TPU allocation exited before becoming active "
+                f"(exit={rc}).\n"
+                f"See log: {allocation_log}\n"
+                f"{tail}"
+            )
+        time.sleep(2.0)
+    else:
+        tail = _tail_text(allocation_log)
+        try:
+            proc.send_signal(signal.SIGINT)
+        except Exception:
+            proc.terminate()
+        raise SystemExit(
+            "[gdnctl] timed out waiting for managed dev TPU allocation to become active.\n"
+            f"See log: {allocation_log}\n"
+            f"{tail}"
+        )
+
+    try:
+        yield
+    finally:
+        if proc.poll() is None:
+            print(f"[gdnctl] releasing managed dev TPU allocation: dev-tpu-{args.dev_tpu_name}")
+            try:
+                proc.send_signal(signal.SIGINT)
+            except Exception:
+                proc.terminate()
+            try:
+                proc.wait(timeout=args.dev_tpu_stop_timeout)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        pump_thread.join(timeout=2.0)
 
 
 def _git_head(cwd: Path) -> str:
@@ -657,6 +798,16 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     session_directives = _load_session_directives(args)
     log_dir = Path(args.log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.hold_dev_tpu and not args.dev_tpu_name:
+        raise SystemExit("[gdnctl] --hold-dev-tpu requires --dev-tpu-name.")
+
+    if args.dev_tpu_ready_timeout <= 0:
+        raise SystemExit("[gdnctl] --dev-tpu-ready-timeout must be > 0.")
+
+    if args.dev_tpu_stop_timeout <= 0:
+        raise SystemExit("[gdnctl] --dev-tpu-stop-timeout must be > 0.")
+
     codex_bin, supported_efforts = _resolve_codex_binary(
         explicit_binary=args.codex_bin,
         reasoning_effort=args.reasoning_effort,
@@ -675,94 +826,95 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
         )
 
     failures = 0
-    for iteration in range(1, args.iterations + 1):
-        print(f"\n[gdnctl] === codex iteration {iteration}/{args.iterations} ===")
+    with _hold_dev_tpu_for_loop(args, log_dir=log_dir):
+        for iteration in range(1, args.iterations + 1):
+            print(f"\n[gdnctl] === codex iteration {iteration}/{args.iterations} ===")
 
-        if args.require_clean and _git_dirty(workdir):
-            if args.dirty_policy == "stash":
-                _stash_dirty_tree(workdir, iteration=iteration)
-            else:
-                print(
-                    "[gdnctl] Working tree is dirty before starting the iteration. "
-                    "Commit/stash or rerun with --allow-dirty or --dirty-policy stash.",
-                    file=sys.stderr,
-                )
-                return 2
+            if args.require_clean and _git_dirty(workdir):
+                if args.dirty_policy == "stash":
+                    _stash_dirty_tree(workdir, iteration=iteration)
+                else:
+                    print(
+                        "[gdnctl] Working tree is dirty before starting the iteration. "
+                        "Commit/stash or rerun with --allow-dirty or --dirty-policy stash.",
+                        file=sys.stderr,
+                    )
+                    return 2
 
-        head_before = _git_head(workdir)
-        prompt = _format_prompt(
-            prompt_template,
-            iteration,
-            args.iterations,
-            head_before,
-            session_directives,
-        )
-
-        message_path = log_dir / f"iteration-{iteration:03d}-last-message.txt"
-        prompt_path = log_dir / f"iteration-{iteration:03d}-prompt.txt"
-        prompt_path.write_text(prompt, encoding="utf-8")
-
-        cmd = [
-            codex_bin,
-            "exec",
-            "-C",
-            str(workdir),
-            "--dangerously-bypass-approvals-and-sandbox",
-            "-o",
-            str(message_path),
-        ]
-
-        if args.model:
-            cmd += ["-m", args.model]
-        if args.reasoning_effort:
-            cmd += ["-c", f"model_reasoning_effort={json.dumps(args.reasoning_effort)}"]
-        if args.codex_profile:
-            cmd += ["-p", args.codex_profile]
-        if args.search and search_supported:
-            cmd.append("--search")
-
-        cmd.append("-")
-
-        rc = _run_streaming(
-            cmd,
-            cwd=workdir,
-            input_text=prompt,
-            check=False,
-            hide_codex_file_updates=not args.show_file_updates,
-        )
-
-        if rc != 0:
-            failures += 1
-            print(f"[gdnctl] codex iteration failed with exit code {rc}", file=sys.stderr)
-            if failures > args.max_failures:
-                return rc
-            continue
-
-        head_after = _git_head(workdir)
-        if args.require_new_commit and head_after == head_before:
-            message = (
-                "[gdnctl] Iteration did not produce a new commit. "
-                "Use --allow-no-commit or set --no-commit-policy count-failure/continue."
+            head_before = _git_head(workdir)
+            prompt = _format_prompt(
+                prompt_template,
+                iteration,
+                args.iterations,
+                head_before,
+                session_directives,
             )
-            if args.no_commit_policy == "fail":
-                print(message, file=sys.stderr)
-                return 3
-            print(f"{message} Continuing due to policy={args.no_commit_policy}.", file=sys.stderr)
-            if args.no_commit_policy == "count-failure":
+
+            message_path = log_dir / f"iteration-{iteration:03d}-last-message.txt"
+            prompt_path = log_dir / f"iteration-{iteration:03d}-prompt.txt"
+            prompt_path.write_text(prompt, encoding="utf-8")
+
+            cmd = [
+                codex_bin,
+                "exec",
+                "-C",
+                str(workdir),
+                "--dangerously-bypass-approvals-and-sandbox",
+                "-o",
+                str(message_path),
+            ]
+
+            if args.model:
+                cmd += ["-m", args.model]
+            if args.reasoning_effort:
+                cmd += ["-c", f"model_reasoning_effort={json.dumps(args.reasoning_effort)}"]
+            if args.codex_profile:
+                cmd += ["-p", args.codex_profile]
+            if args.search and search_supported:
+                cmd.append("--search")
+
+            cmd.append("-")
+
+            rc = _run_streaming(
+                cmd,
+                cwd=workdir,
+                input_text=prompt,
+                check=False,
+                hide_codex_file_updates=not args.show_file_updates,
+            )
+
+            if rc != 0:
                 failures += 1
+                print(f"[gdnctl] codex iteration failed with exit code {rc}", file=sys.stderr)
                 if failures > args.max_failures:
+                    return rc
+                continue
+
+            head_after = _git_head(workdir)
+            if args.require_new_commit and head_after == head_before:
+                message = (
+                    "[gdnctl] Iteration did not produce a new commit. "
+                    "Use --allow-no-commit or set --no-commit-policy count-failure/continue."
+                )
+                if args.no_commit_policy == "fail":
+                    print(message, file=sys.stderr)
                     return 3
-            continue
+                print(f"{message} Continuing due to policy={args.no_commit_policy}.", file=sys.stderr)
+                if args.no_commit_policy == "count-failure":
+                    failures += 1
+                    if failures > args.max_failures:
+                        return 3
+                continue
 
-        if args.post_check:
-            try:
-                _run_post_checks(workdir, args.post_check)
-            except subprocess.CalledProcessError as exc:
-                print(f"[gdnctl] post-check failed: {exc}", file=sys.stderr)
-                return exc.returncode or 1
+            if args.post_check:
+                try:
+                    _run_post_checks(workdir, args.post_check)
+                except subprocess.CalledProcessError as exc:
+                    print(f"[gdnctl] post-check failed: {exc}", file=sys.stderr)
+                    return exc.returncode or 1
 
-        if iteration < args.iterations and args.sleep_seconds > 0:
-            time.sleep(args.sleep_seconds)
+            if iteration < args.iterations and args.sleep_seconds > 0:
+                time.sleep(args.sleep_seconds)
 
     return 0
 
@@ -945,6 +1097,53 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["fail", "count-failure", "continue"],
         default="fail",
         help="Behavior when an iteration exits cleanly but does not create a commit.",
+    )
+    codex_loop.add_argument(
+        "--hold-dev-tpu",
+        action="store_true",
+        help="Allocate and hold a dev TPU allocation for the full loop duration.",
+    )
+    codex_loop.add_argument(
+        "--dev-tpu-cluster",
+        default="us-central1",
+        help="Cluster used for managed dev TPU allocation.",
+    )
+    codex_loop.add_argument(
+        "--dev-tpu-name",
+        default=None,
+        help="TPU name used by managed dev TPU allocation (required with --hold-dev-tpu).",
+    )
+    codex_loop.add_argument(
+        "--dev-tpu-type",
+        default=None,
+        help="Optional TPU type for managed dev TPU allocation (for example v5p-8).",
+    )
+    codex_loop.add_argument(
+        "--dev-tpu-sync-path",
+        default=".",
+        help="Sync path passed to managed `dev_tpu allocate`.",
+    )
+    codex_loop.add_argument(
+        "--dev-tpu-ready-timeout",
+        type=float,
+        default=900.0,
+        help="Seconds to wait for managed dev TPU allocation to become active.",
+    )
+    codex_loop.add_argument(
+        "--dev-tpu-stop-timeout",
+        type=float,
+        default=120.0,
+        help="Seconds to wait for managed dev TPU allocation to release on exit.",
+    )
+    codex_loop.add_argument(
+        "--dev-tpu-allocate-log",
+        default=None,
+        help="Optional log path for managed dev TPU allocate output (defaults under --log-dir).",
+    )
+    codex_loop.add_argument(
+        "--dev-tpu-verbose",
+        action="store_true",
+        help="Pass --verbose to managed dev TPU allocation.",
     )
     codex_loop.set_defaults(func=cmd_codex_loop)
 

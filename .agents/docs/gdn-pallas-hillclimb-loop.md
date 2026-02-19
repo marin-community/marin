@@ -54,6 +54,7 @@ Prompt and final-response logs are stored under:
 - Preset directives are backed by markdown docs in `scripts/gdn/session_directives/` (for example `triangular-inversion`).
 - `--dirty-policy stash` avoids hard stops after failed attempts leave a dirty tree.
 - `--no-commit-policy count-failure` allows the loop to continue when an iteration intentionally records a failed attempt without a commit.
+- `--hold-dev-tpu --dev-tpu-name <name>` keeps a dev TPU allocation active for the whole loop and releases it automatically on exit.
 - If TPU queueing is unstable, switch profile runs to `dev-tpu-profile` on an allocated TPU.
 - If runs flap on infra errors, restart from the latest successful commit.
 

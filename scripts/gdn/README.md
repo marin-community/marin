@@ -56,6 +56,18 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
 
 By default, `codex-loop` hides noisy `file update:` / `diff --git` blocks from Codex output. Use `--show-file-updates` to display them.
 
+To allocate and hold a dev TPU for the whole loop session:
+```bash
+uv run python scripts/gdn/gdnctl.py codex-loop \
+  --iterations 5 \
+  --model gpt-5.3-codex \
+  --reasoning-effort xhigh \
+  --hold-dev-tpu \
+  --dev-tpu-cluster us-central1 \
+  --dev-tpu-name "$USER-gdn" \
+  --dev-tpu-type v5p-8
+```
+
 Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`
 - session directive presets:
