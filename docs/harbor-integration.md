@@ -105,7 +105,6 @@ def evaluate_harbor(
 - `agent`: Harbor agent type:
   - `"claude-code"` - Anthropic's Claude Code agent (default)
   - `"terminus-2"` - Harbor's reference agent
-  - `"custom-vllm"` - Custom agent for vLLM models (TODO)
 - `n_concurrent`: Number of parallel trials (default: 4)
 - `env`: Container environment:
   - `"local"` - Local Docker (default, good for testing)
@@ -150,13 +149,12 @@ step = evaluate_harbor(
 ### Custom Model (Qwen 2.5 Instruct)
 
 ```python
-# TODO: Requires implementing custom-vllm agent
 step = evaluate_harbor(
     model_name="qwen2.5-7b-instruct",
     model_path="gs://marin-us-central2/models/qwen2.5-7b-instruct",
     dataset="aime",
     version="1.0",
-    agent="custom-vllm",  # Not yet implemented
+    agent="terminus-2",
     n_concurrent=4,
     env="local",
 )
@@ -201,22 +199,6 @@ Harbor returns results with per-task rewards (0.0 to 1.0):
     "accuracy": 0.70
   }
 }
-```
-
-## Limitations & TODOs
-
-### Current Limitations
-
-1. **API Models Only** - Currently only supports API-based models (Claude, GPT-4)
-2. **Single-turn Evaluation** - Harbor executes full agent trajectories, not single completions
-3. **Different from lm-eval** - Harbor tasks are agentic (multi-turn, tool use) vs lm-eval (single-turn completions)
-
-### Planned Improvements
-
-1. **Custom vLLM Agent** - Support for vLLM-hosted models (Qwen, Llama, etc.)
-2. **Trajectory Analysis** - Rich insights from Harbor's trajectory logs
-3. **RL Integration** - Use Harbor trajectories for RL training (following ARES pattern)
-4. **Multi-seed Evaluation** - Run same tasks with different seeds for variance analysis
 
 ## Environment Variables
 

@@ -398,7 +398,7 @@ class HarborEvaluator(Evaluator):
         # Generate deterministic job name for resume capability
         job_name = _generate_stable_job_name(dataset, version, model_name, agent, task_limit)
 
-        # Get stable local working directory (NOT temp)
+        # Get stable local working directory (persists across pre-emptions despite being in /tmp)
         workdir = _get_stable_local_workdir(job_name)
         output_dir = workdir / "harbor_results"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -595,6 +595,7 @@ class HarborEvaluator(Evaluator):
             total_reward += reward
 
             # Consider reward >= 0.99 as success (allows for small floating point errors)
+            # Harbor benchmarks generally return 1.0 for success and 0.0 for failure
             if reward >= 0.99:
                 successful += 1
 

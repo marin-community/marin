@@ -75,6 +75,8 @@ def _optional_int_from_env(var_name: str, *, default: int | None) -> int | None:
     return int(value)
 
 
+# HARBOR_MAX_INSTANCES controls the maximum number of tasks to evaluate (for testing, etc.)
+# HARBOR_N_CONCURRENT controls the number of trials that run simultaneously
 HARBOR_MAX_INSTANCES = _optional_int_from_env("HARBOR_MAX_INSTANCES", default=5)
 HARBOR_N_CONCURRENT = _optional_int_from_env("HARBOR_N_CONCURRENT", default=5)
 
