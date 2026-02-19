@@ -70,13 +70,9 @@ def _validate_inputs(
     if w.ndim != 2:
         raise PallasUnsupportedError(f"w must be rank-2 [H, V], got shape {w.shape}.")
     if x.shape[0] != labels.shape[0]:
-        raise PallasUnsupportedError(
-            f"Batch mismatch: x has B={x.shape[0]}, labels has B={labels.shape[0]}."
-        )
+        raise PallasUnsupportedError(f"Batch mismatch: x has B={x.shape[0]}, labels has B={labels.shape[0]}.")
     if x.shape[1] != w.shape[0]:
-        raise PallasUnsupportedError(
-            f"Hidden mismatch: x has H={x.shape[1]}, w has H={w.shape[0]}."
-        )
+        raise PallasUnsupportedError(f"Hidden mismatch: x has H={x.shape[1]}, w has H={w.shape[0]}.")
 
     if block_sizes.b_block_size <= 0:
         raise PallasUnsupportedError(f"b_block_size must be positive, got {block_sizes.b_block_size}.")
@@ -120,13 +116,11 @@ def _validate_launch_feasibility(
 ) -> None:
     if not _is_power_of_two(h_block_size):
         raise PallasUnsupportedError(
-            "h_block_size must be a power of 2 for current GPU Triton lowering; "
-            f"got h_block_size={h_block_size}."
+            "h_block_size must be a power of 2 for current GPU Triton lowering; " f"got h_block_size={h_block_size}."
         )
     if not _is_power_of_two(v_block_size):
         raise PallasUnsupportedError(
-            "v_block_size must be a power of 2 for current GPU Triton lowering; "
-            f"got v_block_size={v_block_size}."
+            "v_block_size must be a power of 2 for current GPU Triton lowering; " f"got v_block_size={v_block_size}."
         )
 
     device_kind = _device_kind()
