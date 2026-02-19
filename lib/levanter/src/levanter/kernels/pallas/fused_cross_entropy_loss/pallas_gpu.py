@@ -19,7 +19,7 @@ from .xla import linear_softmax_cross_entropy_loss_xla
 _GB10_WEIGHT_TILE_BYTES_LIMIT = 101_376
 _GB10_MAX_H_TILES = 512
 _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
-_GB10_XLA_STREAMING_V_BLOCK_LARGE_BATCH = 8192
+_GB10_XLA_STREAMING_V_BLOCK_LARGE_BATCH = 3072
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
