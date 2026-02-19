@@ -23,6 +23,7 @@ Usage:
     uv run lib/marin/src/marin/run/ray_run.py -- python experiments/unified/unified_pretrain.py
 """
 
+import dataclasses
 import logging
 import tempfile
 
@@ -52,7 +53,7 @@ UNIFIED_VOCAB_SIZE = LLAMA3_VOCAB_SIZE + TOKLIP_CODEBOOK_SIZE  # 144,640
 VISION_START_ID = 128_004  # <|reserved_special_token_2|> → <|vision_start|>
 VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 
-UNIFIED_TOKENIZER_PATH = "gs://marin-vlm/tokenizers/llama3-unified-144k"
+UNIFIED_TOKENIZER_PATH = "gs://marin-us-central2/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm/unified_pretraining_cache"
 UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
 
@@ -268,7 +269,7 @@ def make_unified_0_6b(
     multimodal_weight: float = 0.3,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
-    return default_train(
+    step = default_train(
         name="unified-qwen3-0.6b",
         tokenized=unified_data_config(
             text_weight=text_weight,
@@ -281,6 +282,10 @@ def make_unified_0_6b(
         eval_harness_tasks=[],
         use_default_validation=False,
     )
+    # Multimodal caches live in gs://marin-vlm (us multi-region); allow cross-region read
+    return dataclasses.replace(
+        step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",))
+    )
 
 
 def make_unified_1_7b(
@@ -288,7 +293,7 @@ def make_unified_1_7b(
     multimodal_weight: float = 0.3,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
-    return default_train(
+    step = default_train(
         name="unified-qwen3-1.7b",
         tokenized=unified_data_config(
             text_weight=text_weight,
@@ -301,6 +306,8 @@ def make_unified_1_7b(
         eval_harness_tasks=[],
         use_default_validation=False,
     )
+    step.config.allow_out_of_region = ("data.components",)
+    return step
 
 
 def make_unified_4b(
@@ -308,7 +315,7 @@ def make_unified_4b(
     multimodal_weight: float = 0.3,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
-    return default_train(
+    step = default_train(
         name="unified-qwen3-4b",
         tokenized=unified_data_config(
             text_weight=text_weight,
@@ -321,6 +328,8 @@ def make_unified_4b(
         eval_harness_tasks=[],
         use_default_validation=False,
     )
+    step.config.allow_out_of_region = ("data.components",)
+    return step
 
 
 if __name__ == "__main__":

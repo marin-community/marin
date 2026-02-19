@@ -27,6 +27,7 @@ Usage:
         -- python experiments/unified/unified_pretrain_demo.py
 """
 
+import dataclasses
 import logging
 import os
 import tempfile
@@ -34,12 +35,14 @@ import tempfile
 from levanter.data.text import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
 
-from experiments.defaults import default_train
+from experiments.defaults import default_train, default_validation_sets
+from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution import executor_main
+from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 logger = logging.getLogger(__name__)
@@ -55,7 +58,7 @@ UNIFIED_VOCAB_SIZE = LLAMA3_VOCAB_SIZE + TOKLIP_CODEBOOK_SIZE  # 144,640
 VISION_START_ID = 128_004  # <|reserved_special_token_2|> → <|vision_start|>
 VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 
-UNIFIED_TOKENIZER_PATH = "gs://marin-vlm/tokenizers/llama3-unified-144k"
+UNIFIED_TOKENIZER_PATH = "gs://marin-us-central2/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm/hf_85m_levanter_cache_test"
 UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
 
@@ -193,7 +196,7 @@ def unified_data_config(
             )
             weights[f"eval_{bench}"] = 0.0
 
-    return LmDataConfig(
+    data_config = LmDataConfig(
         tokenizer=UNIFIED_TOKENIZER_PATH,
         components=components,
         train_weights=weights,
@@ -202,12 +205,21 @@ def unified_data_config(
         block_cross_document_attention=True,
     )
 
+    # Text-only validation sets (Paloma, uncheatable_eval) use the base Llama3
+    # tokenizer since the unified tokenizer only adds visual tokens — text
+    # tokenization is identical, so we reuse existing Llama3-tokenized caches.
+    validation_sets = default_validation_sets(tokenizer=llama3_tokenizer)
+    data_config = add_validation_sets_to_mixture(data_config, validation_sets)
+
+    return data_config
+
 
 # --- Train Configs ---
 
 # 1 epoch ≈ 1,582,102 records / 256 batch_size ≈ 6,180 steps
 DEMO_TRAIN_STEPS = 6_180
 TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
+EXP_NAME = os.environ.get("EXP_NAME", "")
 
 
 def _demo_train_config(learning_rate: float = 3e-4) -> SimpleTrainConfig:
@@ -247,8 +259,8 @@ def make_unified_0_6b(
     multimodal_weight: float = 0.3,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
-    return default_train(
-        name="unified-qwen3-0.6b-demo",
+    step = default_train(
+        name=EXP_NAME or "unified-qwen3-0.6b-demo",
         tokenized=unified_data_config(
             text_weight=text_weight,
             multimodal_weight=multimodal_weight,
@@ -258,7 +270,11 @@ def make_unified_0_6b(
         train_config=_demo_train_config(learning_rate=3e-4),
         tags=["unified", "scaling", "qwen3", "0.6b", "demo"],
         eval_harness_tasks=[],
-        use_default_validation=True,
+        use_default_validation=False,
+    )
+    # Multimodal caches live in gs://marin-vlm (us multi-region); allow cross-region read
+    return dataclasses.replace(
+        step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",))
     )
 
 
@@ -267,8 +283,8 @@ def make_unified_1_7b(
     multimodal_weight: float = 0.3,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
-    return default_train(
-        name="unified-qwen3-1.7b-demo",
+    step = default_train(
+        name=EXP_NAME or "unified-qwen3-1.7b-demo",
         tokenized=unified_data_config(
             text_weight=text_weight,
             multimodal_weight=multimodal_weight,
@@ -278,7 +294,10 @@ def make_unified_1_7b(
         train_config=_demo_train_config(learning_rate=3e-4),
         tags=["unified", "scaling", "qwen3", "1.7b", "demo"],
         eval_harness_tasks=[],
-        use_default_validation=True,
+        use_default_validation=False,
+    )
+    return dataclasses.replace(
+        step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",))
     )
 
 
@@ -287,8 +306,8 @@ def make_unified_4b(
     multimodal_weight: float = 0.3,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
-    return default_train(
-        name="unified-qwen3-4b-demo",
+    step = default_train(
+        name=EXP_NAME or "unified-qwen3-4b-demo",
         tokenized=unified_data_config(
             text_weight=text_weight,
             multimodal_weight=multimodal_weight,
@@ -298,7 +317,10 @@ def make_unified_4b(
         train_config=_demo_train_config(learning_rate=1.5e-4),
         tags=["unified", "scaling", "qwen3", "4b", "demo"],
         eval_harness_tasks=[],
-        use_default_validation=True,
+        use_default_validation=False,
+    )
+    return dataclasses.replace(
+        step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",))
     )
 
 
