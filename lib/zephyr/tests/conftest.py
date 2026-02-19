@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Pytest fixtures for zephyr tests."""
+import tempfile
 
 import atexit
 import logging
@@ -142,6 +143,16 @@ class CallCounter:
         self.map_count += 1
         self.processed_ids.append(x["id"])
         return {**x, "processed": True}
+
+
+@pytest.fixture(autouse=True)
+def _configure_marin_prefix():
+    """Set MARIN_PREFIX to a temp directory for tests that rely on it."""
+    if "MARIN_PREFIX" not in os.environ:
+        with tempfile.TemporaryDirectory(prefix="marin_prefix") as temp_dir:
+            os.environ["MARIN_PREFIX"] = temp_dir
+            yield
+            del os.environ["MARIN_PREFIX"]
 
 
 @pytest.fixture(autouse=True)
