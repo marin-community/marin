@@ -201,3 +201,43 @@ Each iteration should include:
   - `throughput/duration`: `0.24169s -> 0.23450s` (`-2.98%`).
 - Assessment: moderate win; this clears prior scoped-vmem failure path and improves MFU above the 3% threshold, but the dominant hotspot category is still `custom-call`.
 - Next hypothesis: pursue a more radical launch/dataflow reduction in the remaining GDN custom-call path (e.g., associative/blockwise backward decomposition or fewer larger pallas calls that keep scoped-vmem bounded).
+
+### Iteration 6 - Replace explicit triangular inversion with blockwise solves
+- Date: 2026-02-19T19:15:26Z
+- Commit: this commit
+- Dominant bottleneck carried in: `custom-call` remained dominant in Iteration 5 (`4284.468 ms` in XProf `op_profile` by-program), with largest GDN shard-map pallas callsites under `jit(_train_step)/.../HackableDecoderLayer/.../pallas_call`.
+- Candidate shortlist (estimated upside / risk):
+  1. Replace explicit `(I - A)^-1` construction with direct blockwise solve + transpose-solve (`+10-20%`, medium/high numerical + backward-derivation risk).
+  2. Two-stage WY-style chunk decomposition to reduce per-chunk solve pressure (`+15-30%`, high implementation complexity risk).
+  3. Associative blockwise scan across chunks/segments to collapse launch count (`>20%`, very high algorithmic + vmem risk).
+- Selected hypothesis: implement option (1), removing explicit strict-lower triangular inversion from forward/backward hot paths and solving directly for required RHS/adjoint RHS.
+- Change summary:
+  - Replaced `_invert_I_minus_strict_lower_doubling` usage with `_solve_I_minus_strict_lower_blockwise` in both `_gdn_chunk_segment_fwd_kernel_tpu` and `_gdn_chunk_segment_bwd_kernel_tpu`.
+  - Added `_solve_I_minus_strict_lower_transpose_blockwise` for adjoint solves in backward (no explicit inverse materialization).
+  - Kept exact nilpotent-doubling semantics in base blocks and recursive block decomposition for larger tiles.
+  - Fixed TPU Pallas lowering regression by removing `jnp.flip`/`rev` from transpose solve and using direct recursive upper-triangular block solve.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both --no-sync`
+  - Result: `87 passed, 2 skipped`.
+- Profile run:
+  - Failed command attempts:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_blocksolve_i6_dev --no-sync` failed with `FileNotFoundError` for `gs://marin-us-east5-a/...`.
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_blocksolve_i6_dev2 --marin-prefix gs://marin-us-central1 --no-sync` failed region check (`us-central1` path on `us-east5` VM).
+  - Successful command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_blocksolve_i6_dev3 --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_blocksolve_i6_dev3_130m_ch128_seg16_20steps-8f5e31`
+  - Trace location: `.profiles/wandb/gdn_blocksolve_i6_dev3/plugins/profile/2026_02_19_19_09_35/perfetto_trace.json.gz`
+  - XProf extraction path: parsed `run-...-profiler:v0` `xplane.pb` via `.venv/bin/python` on dev TPU host with `xprof.convert.raw_to_tool_data.xspace_to_tool_data(..., tool="op_profile", params={"group_by":"program"})`.
+- Hotspots observed (before/after vs Iteration 5 run `gdn_chunkstarts_segfwd_i2_dev_130m_ch128_seg16_20steps-2c11a3`, XProf `op_profile` by-program):
+  - `jit__train_step` total: `7566.979 ms -> 8568.784 ms` (`+13.24%`).
+  - `custom-call`: `4284.468 ms -> 5286.068 ms` (`+23.38%`), still dominant.
+  - `all-gather`: `755.833 ms -> 756.352 ms` (`+0.07%`, effectively unchanged).
+  - Dominant custom-call children remained the same shard-map GDN paths and worsened:
+    - `shard_map.2936 and its duplicate(s)`: `1013.209 ms -> 1536.945 ms` (`+51.69%`).
+    - `shard_map.2930 and its duplicate(s)`: `784.315 ms -> 1194.791 ms` (`+52.34%`).
+    - `shard_map.2898 and its duplicate(s)`: `1028.278 ms -> 927.985 ms` (`-9.75%`).
+- MFU/throughput delta (vs Iteration 5 run):
+  - `throughput/mfu`: `4.3196 -> 3.9850` (`-7.75%`).
+  - `throughput/tokens_per_second`: `139737.23 -> 128914.05` (`-7.75%`).
+  - `throughput/duration`: `0.23450s -> 0.25418s` (`+8.40%`).
+- Assessment: **low-impact / regression**. MFU gain is below 3% (negative) and dominant hotspot is unchanged (`custom-call` in the same GDN shard-map path).
+- Next hypothesis: escalate to a more radical decomposition that reduces GDN custom-call launch count directly (for example, associative block transition composition across chunks/segments with fewer large pallas calls and a backward that consumes composed transitions instead of per-segment shard-map kernels).

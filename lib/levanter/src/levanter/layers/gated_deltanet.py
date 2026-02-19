@@ -1055,83 +1055,132 @@ def _mxu_matmul_f32(a, b, *, precision_mode: str = "fp32"):
     return out.astype(jnp.float32)
 
 
-def _invert_I_minus_strict_lower_doubling(
-    A_strict,
+def _solve_I_minus_strict_lower_blockwise(
+    A_strict: jnp.ndarray,
+    rhs: jnp.ndarray,
     *,
     precision_mode: str = "fp32",
     base_block: int = 32,
-):
-    """
-    Compute (I - A_strict)^(-1) where A_strict is strictly lower triangular.
+) -> jnp.ndarray:
+    """Solve ``(I - A_strict) @ X = rhs`` for strictly lower-triangular ``A_strict``.
 
-    Hybrid algorithm:
-      - For n <= base_block: exact Neumann/doubling series via matmuls:
-          (I - A)^(-1) = (I + A)(I + A^2)(I + A^4)...
-        (exact because A is nilpotent when strictly lower triangular)
-      - For n > base_block: recursive block inversion:
-          A = [[A11, 0],
-               [A21, A22]]
-          Inv = [[Inv11, 0],
-                 [Inv22 @ A21 @ Inv11, Inv22]]
+    This avoids materializing ``(I - A_strict)^-1`` in the hot path.
+
+    Strategy:
+    - For small tiles, apply the exact nilpotent doubling series directly to ``rhs``:
+      ``X = (I + A)(I + A^2)(I + A^4)... rhs``.
+    - For larger tiles, recurse on two block-triangular halves.
     """
-    import jax.numpy as jnp
+    if A_strict.ndim != 2 or rhs.ndim != 2:
+        raise ValueError(f"Expected 2D A/rhs, got A={A_strict.ndim}D rhs={rhs.ndim}D")
 
     n = A_strict.shape[0]
-    if A_strict.shape[0] != A_strict.shape[1]:
+    if A_strict.shape[1] != n:
         raise ValueError(f"A_strict must be square, got {A_strict.shape}")
+    if rhs.shape[0] != n:
+        raise ValueError(f"rhs leading dim must match A_strict, got rhs={rhs.shape} A={A_strict.shape}")
 
-    # Always do math in f32 internally for stability.
     A_strict = A_strict.astype(jnp.float32)
+    rhs = rhs.astype(jnp.float32)
 
-    # Hard-enforce strict-lower structure on the diagonal blocks.
-    # (This prevents tiny diagonal/upper-tri leaks from breaking nilpotency.)
+    # Hard-enforce strict-lower structure so nilpotency assumptions always hold.
     idx = jnp.arange(n)
     strict_mask = idx[:, None] > idx[None, :]
     A_strict = jnp.where(strict_mask, A_strict, 0.0)
 
-    # Base case: Neumann/doubling product on small blocks.
     if n <= base_block:
-        # Identity built without jnp.eye to avoid potential layout weirdness.
-        eye = (idx[:, None] == idx[None, :]).astype(jnp.float32)
-
-        Term = A_strict  # A^(1)
-        Inv = eye + A_strict  # I + A
-
-        # Number of steps needed so that highest exponent >= n-1.
-        # ceil_log2(n) = (n-1).bit_length()
-        steps = max(0, (n - 1).bit_length() - 1)
-
+        # After k rounds, this applies powers up to A^(2^k - 1). We need >= n - 1.
+        x = rhs
+        term = A_strict
+        steps = (n - 1).bit_length()
         for _ in range(steps):
-            Term = _mxu_matmul_f32(Term, Term, precision_mode=precision_mode)  # A^(2^i)
-            Inv = _mxu_matmul_f32(Inv, eye + Term, precision_mode=precision_mode)  # multiply by (I + A^(2^i))
+            x = x + _mxu_matmul_f32(term, x, precision_mode=precision_mode)
+            term = _mxu_matmul_f32(term, term, precision_mode=precision_mode)
+        return x.astype(jnp.float32)
 
-        return Inv.astype(jnp.float32)
-
-    # Recursive case
     if n % 2 != 0:
-        raise ValueError(f"Hybrid recursive inversion expects even n (power-of-two chunks recommended). Got n={n}.")
+        raise ValueError(f"Blockwise solve expects even n (power-of-two chunks recommended). Got n={n}.")
 
     m = n // 2
     A11 = A_strict[:m, :m]
     A21 = A_strict[m:, :m]
     A22 = A_strict[m:, m:]
 
-    Inv11 = _invert_I_minus_strict_lower_doubling(A11, precision_mode=precision_mode, base_block=base_block)
-    Inv22 = _invert_I_minus_strict_lower_doubling(A22, precision_mode=precision_mode, base_block=base_block)
+    rhs1 = rhs[:m, :]
+    rhs2 = rhs[m:, :]
 
-    # Inv21 = Inv22 @ A21 @ Inv11
-    tmp = _mxu_matmul_f32(Inv22, A21, precision_mode=precision_mode)
-    Inv21 = _mxu_matmul_f32(tmp, Inv11, precision_mode=precision_mode)
+    x1 = _solve_I_minus_strict_lower_blockwise(A11, rhs1, precision_mode=precision_mode, base_block=base_block)
+    rhs2_eff = rhs2 + _mxu_matmul_f32(A21, x1, precision_mode=precision_mode)
+    x2 = _solve_I_minus_strict_lower_blockwise(A22, rhs2_eff, precision_mode=precision_mode, base_block=base_block)
+    return jnp.concatenate([x1, x2], axis=0).astype(jnp.float32)
 
-    # Assemble:
-    # [[Inv11, 0],
-    #  [Inv21, Inv22]]
-    z12 = jnp.zeros_like(Inv11)  # layout-compatible zeros
-    top = jnp.concatenate([Inv11, z12], axis=1)
-    bot = jnp.concatenate([Inv21, Inv22], axis=1)
-    Inv = jnp.concatenate([top, bot], axis=0)
 
-    return Inv.astype(jnp.float32)
+def _solve_I_minus_strict_lower_transpose_blockwise(
+    A_strict: jnp.ndarray,
+    rhs: jnp.ndarray,
+    *,
+    precision_mode: str = "fp32",
+    base_block: int = 32,
+) -> jnp.ndarray:
+    """Solve ``(I - A_strict)^T @ X = rhs`` for strictly lower ``A_strict``.
+
+    Uses a block upper-triangular solve:
+      A = [[A11, 0],
+           [A21, A22]]
+      (I - A)^T = [[I - A11^T, -A21^T],
+                   [0,        I - A22^T]]
+    so we solve X2 first, then X1.
+    """
+    if A_strict.ndim != 2 or rhs.ndim != 2:
+        raise ValueError(f"Expected 2D A/rhs, got A={A_strict.ndim}D rhs={rhs.ndim}D")
+
+    n = A_strict.shape[0]
+    if A_strict.shape[1] != n:
+        raise ValueError(f"A_strict must be square, got {A_strict.shape}")
+    if rhs.shape[0] != n:
+        raise ValueError(f"rhs leading dim must match A_strict, got rhs={rhs.shape} A={A_strict.shape}")
+
+    A_strict = A_strict.astype(jnp.float32)
+    rhs = rhs.astype(jnp.float32)
+
+    idx = jnp.arange(n)
+    strict_mask = idx[:, None] > idx[None, :]
+    A_strict = jnp.where(strict_mask, A_strict, 0.0)
+
+    if n <= base_block:
+        x = rhs
+        term = jnp.transpose(A_strict)
+        steps = (n - 1).bit_length()
+        for _ in range(steps):
+            x = x + _mxu_matmul_f32(term, x, precision_mode=precision_mode)
+            term = _mxu_matmul_f32(term, term, precision_mode=precision_mode)
+        return x.astype(jnp.float32)
+
+    if n % 2 != 0:
+        raise ValueError(f"Blockwise transpose solve expects even n (power-of-two chunks recommended). Got n={n}.")
+
+    m = n // 2
+    A11 = A_strict[:m, :m]
+    A21 = A_strict[m:, :m]
+    A22 = A_strict[m:, m:]
+
+    rhs1 = rhs[:m, :]
+    rhs2 = rhs[m:, :]
+
+    x2 = _solve_I_minus_strict_lower_transpose_blockwise(
+        A22,
+        rhs2,
+        precision_mode=precision_mode,
+        base_block=base_block,
+    )
+    rhs1_eff = rhs1 + _mxu_matmul_f32(jnp.transpose(A21), x2, precision_mode=precision_mode)
+    x1 = _solve_I_minus_strict_lower_transpose_blockwise(
+        A11,
+        rhs1_eff,
+        precision_mode=precision_mode,
+        base_block=base_block,
+    )
+    return jnp.concatenate([x1, x2], axis=0).astype(jnp.float32)
 
 
 def _in_specs_chunk_segment_fwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):
@@ -1209,12 +1258,10 @@ def _gdn_chunk_segment_fwd_kernel_tpu(
         KKT = jnp.matmul(k_beta, k.T)
         A = -KKT * exp_diff * tril_strict
 
-        Inv = _invert_I_minus_strict_lower_doubling(A, precision_mode=precision_mode)
-
         # Solve both RHS at once: [βV | (βK ⊙ exp_g)]
         k_scaled = k_beta * exp_g[:, None]
         rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)  # (Ct, V+K)
-        sol_all = _mxu_matmul_f32(Inv, rhs_all, precision_mode=precision_mode)  # (Ct, V+K)
+        sol_all = _solve_I_minus_strict_lower_blockwise(A, rhs_all, precision_mode=precision_mode)  # (Ct, V+K)
 
         v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))  # (Ct, V)
         k_cumdecay = lax.slice(sol_all, (0, V_pad), (Ct, V_pad + K_pad))  # (Ct, K)
@@ -1454,11 +1501,9 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         KKT = jnp.matmul(k_beta, k.T)
         A = -KKT * exp_diff * tril_strict
 
-        Inv = _invert_I_minus_strict_lower_doubling(A, precision_mode=precision_mode)
-
         k_scaled = k_beta * exp_g[:, None]
         rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)
-        sol_all = _mxu_matmul_f32(Inv, rhs_all, precision_mode=precision_mode)
+        sol_all = _solve_I_minus_strict_lower_blockwise(A, rhs_all, precision_mode=precision_mode)
 
         v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))
         k_cumdecay = lax.slice(sol_all, (0, V_pad), (Ct, V_pad + K_pad))
@@ -1525,9 +1570,13 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         d_q = d_q + d_q_scaled * exp_g[:, None]
         d_exp_g = jnp.sum(d_q_scaled * q, axis=-1)
 
-        # solve adjoint via Inv (instead of TRSM loops)
+        # solve adjoint via transpose solve (without explicitly materializing Inv)
         d_sol_all = jnp.concatenate([d_v_pseudo, d_k_cumdecay], axis=1)  # (Ct,V+K)
-        tmp_all = _mxu_matmul_f32(jnp.transpose(Inv), d_sol_all, precision_mode=precision_mode)  # Inv^T d
+        tmp_all = _solve_I_minus_strict_lower_transpose_blockwise(
+            A,
+            d_sol_all,
+            precision_mode=precision_mode,
+        )
 
         d_v_beta = lax.slice(tmp_all, (0, 0), (Ct, V_pad))
         d_k_scaled = lax.slice(tmp_all, (0, V_pad), (Ct, V_pad + K_pad))
