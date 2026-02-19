@@ -40,6 +40,20 @@ def test_build_worker_bootstrap_script_requires_controller_address() -> None:
         build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
 
 
+def test_build_worker_bootstrap_script_includes_env_vars() -> None:
+    """Env vars in BootstrapConfig appear in the generated script."""
+    cfg = _bootstrap_config()
+    cfg.env_vars["IRIS_WORKER_ATTRIBUTES"] = '{"region": "us-west4"}'
+    cfg.env_vars["IRIS_SCALE_GROUP"] = "west-group"
+
+    script = build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
+
+    assert "IRIS_WORKER_ATTRIBUTES=" in script
+    assert "us-west4" in script
+    assert "IRIS_SCALE_GROUP=" in script
+    assert "west-group" in script
+
+
 def test_render_template_preserves_docker_templates() -> None:
     template = 'docker ps --format "{{.Names}} {{.Status}}" and {{ value }}'
     rendered = render_template(template, value="x")

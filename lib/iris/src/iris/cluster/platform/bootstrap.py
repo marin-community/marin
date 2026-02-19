@@ -167,14 +167,19 @@ exit 1
 """
 
 
-def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str:
+def build_worker_env_flags(
+    config: config_pb2.BootstrapConfig,
+    vm_address: str,
+) -> str:
     """Generate docker -e flags with proper escaping.
 
     TPU metadata is probed by the worker process via env_probe.py, so bootstrap
     only forwards explicit bootstrap env vars plus IRIS_VM_ADDRESS.
     """
+    env_vars = dict(config.env_vars)
+
     flags = []
-    for k, v in config.env_vars.items():
+    for k, v in env_vars.items():
         flags.append(f"-e {shlex.quote(k)}={shlex.quote(v)}")
     # Inject VM address so worker can include it in registration for autoscaler tracking
     if vm_address:
