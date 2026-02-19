@@ -70,14 +70,23 @@ DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; TPU slices are pre-warmed by earlier tes
 # =============================================================================
 
 
-def _run_iris(*args: str, config_path: Path) -> subprocess.CompletedProcess[str]:
+DEFAULT_CLI_TIMEOUT = 900  # 15 minutes; generous limit for image builds and cluster operations
+
+
+def _run_iris(*args: str, config_path: Path, timeout: float = DEFAULT_CLI_TIMEOUT) -> subprocess.CompletedProcess[str]:
     """Run `uv run iris --config {config} ...` and return the result.
 
-    Raises subprocess.CalledProcessError on non-zero exit.
+    Args:
+        *args: CLI arguments to pass after `iris --config {config}`.
+        config_path: Path to the cluster config YAML.
+        timeout: Maximum seconds to wait for the command to finish.
+
+    Raises subprocess.CalledProcessError on non-zero exit,
+    subprocess.TimeoutExpired if the command exceeds timeout.
     """
     cmd = ["uv", "run", "iris", "--config", str(config_path), *args]
-    logging.info("Running: %s", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(IRIS_ROOT))
+    logging.info("Running (timeout=%ds): %s", timeout, " ".join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(IRIS_ROOT), timeout=timeout)
     if result.returncode != 0:
         logging.error(
             "Command failed (exit %d): %s\nstdout: %s\nstderr: %s",
@@ -137,7 +146,7 @@ def _run_iris_background(
         stderr_fh: TextIO | int = open(stderr_path, "w")
         owned_fds.append(stderr_fh)  # type: ignore[arg-type]
     else:
-        stderr_fh = subprocess.DEVNULL
+        stderr_fh = subprocess.STDOUT
 
     try:
         proc = subprocess.Popen(
@@ -1024,12 +1033,21 @@ class SmokeTestRunner:
         return all_passed
 
     def _cleanup(self):
-        """Clean up cluster resources and background subprocesses."""
+        """Clean up cluster resources and background subprocesses.
+
+        Each cleanup phase is wrapped in its own try/except so that a failure
+        in one phase (e.g. terminating a background process) does not prevent
+        the cluster from being torn down.
+        """
         self.logger.section("CLEANUP")
 
-        # Terminate all background subprocesses and close their owned file handles
+        # Terminate all background subprocesses and close their owned file handles.
+        # Failures here must not prevent cluster teardown below.
         for bg in self._background_procs:
-            bg.terminate()
+            try:
+                bg.terminate()
+            except Exception as e:
+                self.logger.log(f"Error terminating {bg.name}: {e}", level="WARN")
         self._background_procs.clear()
         self.logger.log("Stopped background processes")
 
@@ -1054,7 +1072,7 @@ class SmokeTestRunner:
             except Exception as e:
                 self.logger.log(f"Error stopping remote cluster: {e}", level="WARN")
 
-            # Final resource cleanup
+            # Final resource cleanup — always attempted even if cluster stop failed
             self.logger.log("Running final resource cleanup...")
             try:
                 result = _run_iris("cluster", "debug", "cleanup", "--no-dry-run", config_path=self.config.config_path)
