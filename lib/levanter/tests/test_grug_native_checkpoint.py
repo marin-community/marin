@@ -80,7 +80,7 @@ def test_maybe_restore_checkpoint_forwards_args_and_sets_discover_latest(monkeyp
         calls["axis_mapping"] = axis_mapping
         calls["mesh"] = mesh
         calls["allow_partial"] = allow_partial
-        return {"restored": True}
+        return {"train_state": {"restored": True}}
 
     monkeypatch.setattr(grug_checkpoint, "load_checkpoint", fake_load_checkpoint)
 
@@ -93,9 +93,25 @@ def test_maybe_restore_checkpoint_forwards_args_and_sets_discover_latest(monkeyp
     )
 
     assert out == {"restored": True}
-    assert calls["state"] is sentinel_state
+    assert calls["state"]["train_state"] is sentinel_state
     assert calls["checkpoint_path"] == "gs://my-ckpt"
     assert calls["discover_latest"] is True
     assert calls["axis_mapping"] == {"embed": "model"}
     assert calls["mesh"] is None
     assert calls["allow_partial"] is True
+
+
+def test_maybe_restore_checkpoint_raises_if_train_state_key_missing(monkeypatch):
+    def fake_load_checkpoint(state, checkpoint_path, discover_latest, axis_mapping, mesh, allow_partial):
+        return {"wrong_key": 1}
+
+    monkeypatch.setattr(grug_checkpoint, "load_checkpoint", fake_load_checkpoint)
+
+    with pytest.raises(ValueError, match="did not contain expected 'train_state' key"):
+        grug_checkpoint.maybe_restore_checkpoint(
+            {"x": 1},
+            checkpoint_path="gs://my-ckpt",
+            axis_mapping=None,
+            mesh=None,
+            allow_partial=False,
+        )

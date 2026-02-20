@@ -19,14 +19,19 @@ def maybe_restore_checkpoint(
     mesh: Mesh | None,
     allow_partial: bool = False,
 ) -> PyTree:
-    return load_checkpoint(
-        state,
+    restored = load_checkpoint(
+        {"train_state": state},
         checkpoint_path,
         discover_latest=True,
         axis_mapping=axis_mapping,
         mesh=mesh,
         allow_partial=allow_partial,
     )
+
+    try:
+        return restored["train_state"]
+    except (TypeError, KeyError) as e:
+        raise ValueError("Checkpoint did not contain expected 'train_state' key.") from e
 
 
 @dataclass(frozen=True)
