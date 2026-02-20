@@ -33,6 +33,7 @@ from iris.cluster.platform.base import (
     RemoteWorkerHandle,
     SliceHandle,
 )
+from iris.cluster.platform.bootstrap import rewrite_artifact_registry_region
 from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -40,6 +41,14 @@ from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+
+def _zone_to_region(group: ScalingGroup) -> str | None:
+    """Extract the cloud region from a scale group's GCP zone (e.g. 'europe-west4-b' -> 'europe-west4')."""
+    template = group.config.slice_template
+    if template.HasField("gcp") and template.gcp.zone:
+        return template.gcp.zone.rsplit("-", 1)[0]
+    return None
 
 
 @dataclass
@@ -594,26 +603,46 @@ class Autoscaler:
             return False
 
     def _per_group_bootstrap_config(self, group: ScalingGroup) -> config_pb2.BootstrapConfig | None:
-        """Build a per-group BootstrapConfig by merging worker attributes into env vars.
+        """Build a per-group BootstrapConfig by merging worker attributes and rewriting docker image region.
 
-        Copies the base bootstrap config and injects IRIS_WORKER_ATTRIBUTES,
-        IRIS_TASK_DEFAULT_ENV_JSON, and IRIS_SCALE_GROUP from the group's
-        worker settings into env_vars. This allows per-region/per-group config
-        to flow through the platform's bootstrap path without platform API changes.
+        Copies the base bootstrap config and:
+        1. Rewrites docker_image's AR region to match the group's GCP zone
+        2. Injects IRIS_WORKER_ATTRIBUTES, IRIS_TASK_DEFAULT_ENV_JSON, and
+           IRIS_SCALE_GROUP from the group's worker settings into env_vars.
         """
         if not self._bootstrap_config:
             return None
-        if not group.config.HasField("worker"):
+
+        # Determine target region from the group's GCP zone
+        target_region = _zone_to_region(group)
+
+        has_worker = group.config.HasField("worker")
+        needs_image_rewrite = (
+            target_region is not None
+            and self._bootstrap_config.docker_image
+            and rewrite_artifact_registry_region(self._bootstrap_config.docker_image, target_region)
+            != self._bootstrap_config.docker_image
+        )
+
+        if not has_worker and not needs_image_rewrite:
             return self._bootstrap_config
+
         bc = config_pb2.BootstrapConfig()
         bc.CopyFrom(self._bootstrap_config)
-        attributes = dict(group.config.worker.attributes)
-        if attributes:
-            bc.env_vars["IRIS_WORKER_ATTRIBUTES"] = json.dumps(attributes, sort_keys=True)
-        if group.config.worker.env:
-            bc.env_vars["IRIS_TASK_DEFAULT_ENV_JSON"] = json.dumps(dict(group.config.worker.env))
+
+        if needs_image_rewrite:
+            bc.docker_image = rewrite_artifact_registry_region(bc.docker_image, target_region)
+
+        if has_worker:
+            attributes = dict(group.config.worker.attributes)
+            if attributes:
+                bc.env_vars["IRIS_WORKER_ATTRIBUTES"] = json.dumps(attributes, sort_keys=True)
+            if group.config.worker.env:
+                bc.env_vars["IRIS_TASK_DEFAULT_ENV_JSON"] = json.dumps(dict(group.config.worker.env))
+
         if group.config.name:
             bc.env_vars["IRIS_SCALE_GROUP"] = group.config.name
+
         return bc
 
     def _register_slice_workers(

@@ -21,6 +21,48 @@ from iris.rpc import config_pb2
 logger = logging.getLogger(__name__)
 
 
+def parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | None:
+    """Parse ``REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION``.
+
+    Returns:
+        (region, project, image_name, version) or None if not an AR tag.
+    """
+    if "-docker.pkg.dev/" not in image_tag:
+        return None
+    parts = image_tag.split("/")
+    if len(parts) < 4:
+        return None
+    registry = parts[0]
+    if not registry.endswith("-docker.pkg.dev"):
+        return None
+    region = registry.replace("-docker.pkg.dev", "")
+    project = parts[1]
+    image_and_version = parts[3]
+    if ":" in image_and_version:
+        image_name, version = image_and_version.split(":", 1)
+    else:
+        image_name = image_and_version
+        version = "latest"
+    return region, project, image_name, version
+
+
+def rewrite_artifact_registry_region(image_tag: str, target_region: str) -> str:
+    """Rewrite an Artifact Registry image tag to use a different region.
+
+    Non-AR images pass through unchanged. If the image is already in the
+    target region, returns the original tag.
+    """
+    parsed = parse_artifact_registry_tag(image_tag)
+    if parsed is None:
+        return image_tag
+    current_region = parsed[0]
+    if current_region == target_region:
+        return image_tag
+    parts = image_tag.split("/")
+    parts[0] = f"{target_region}-docker.pkg.dev"
+    return "/".join(parts)
+
+
 def render_template(template: str, **variables: str | int) -> str:
     """Render a template string with {{ variable }} placeholders.
 
@@ -90,9 +132,8 @@ sudo mkdir -p {{ cache_dir }}
 
 echo "[iris-init] Phase: docker_pull"
 echo "[iris-init] Configuring docker authentication"
-# Configure docker for common GCP Artifact Registry regions
-sudo gcloud auth configure-docker \\
-  europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
+WORKER_REGISTRY=$(echo "{{ docker_image }}" | cut -d'/' -f1)
+sudo gcloud auth configure-docker $WORKER_REGISTRY --quiet 2>/dev/null || true
 
 echo "[iris-init] Pulling image: {{ docker_image }}"
 sudo docker pull {{ docker_image }}
@@ -250,8 +291,8 @@ fi
 
 # Configure docker for GCP Artifact Registry
 echo "[iris-controller] [3/5] Configuring Docker for GCP Artifact Registry..."
-sudo gcloud auth configure-docker \\
-  europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
+CONTROLLER_REGISTRY=$(echo "{{ docker_image }}" | cut -d'/' -f1)
+sudo gcloud auth configure-docker $CONTROLLER_REGISTRY --quiet 2>/dev/null || true
 echo "[iris-controller] [3/5] Docker registry configuration complete"
 
 echo "[iris-controller] [4/5] Pulling image: {{ docker_image }}"

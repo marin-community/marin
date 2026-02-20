@@ -585,6 +585,7 @@ class Namespace(str):
 
 PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
 REGION_ATTRIBUTE_KEY = "region"
+ZONE_ATTRIBUTE_KEY = "zone"
 
 
 def preemptible_constraint(preemptible: bool = True) -> Constraint:
@@ -597,6 +598,13 @@ def region_constraint(region: str) -> Constraint:
     if not region:
         raise ValueError("region must be non-empty")
     return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=region)
+
+
+def zone_constraint(zone: str) -> Constraint:
+    """Constraint requiring workers to be in a given zone."""
+    if not zone:
+        raise ValueError("zone must be non-empty")
+    return Constraint(key=ZONE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=zone)
 
 
 @dataclass(frozen=True)

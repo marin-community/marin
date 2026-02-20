@@ -1832,3 +1832,76 @@ class TestPerGroupBootstrapConfig:
         autoscaler._per_group_bootstrap_config(group)
 
         assert "IRIS_WORKER_ATTRIBUTES" not in base_bc.env_vars
+
+    def test_rewrites_docker_image_region_for_gcp_group(self):
+        """AR image is rewritten to match the group's GCP zone region."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is not None
+        assert bc.docker_image == "europe-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        # Base config must not be mutated
+        assert base_bc.docker_image == "us-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+
+    def test_no_rewrite_for_non_ar_image(self):
+        """Non-AR images (e.g. ghcr.io) pass through unchanged."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="ghcr.io/org/iris-worker:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is base_bc
+
+    def test_no_rewrite_for_same_region(self):
+        """When the group zone matches the image region, returns base config."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="west-group", max_slices=5, zones=["us-west4-a"])
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is base_bc
+
+    def test_rewrite_combined_with_worker_attributes(self):
+        """Image rewrite and worker attribute injection both apply when both are needed."""
+        import json
+
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
+        sg_config.worker.attributes["region"] = "europe-west4"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is not None
+        assert bc.docker_image == "europe-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
+        assert attrs["region"] == "europe-west4"
