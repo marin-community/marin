@@ -622,3 +622,65 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / regression (failed attempt)**. MFU regressed beyond the 1% regression threshold and dominant hotspot category remained `custom-call`.
 - Why this did not unlock a large speedup: the lane-safe full-sequence forward path reduced one forward closed-call pallas site but introduced additional shard-map pallas time, leaving the dominant backward custom-call unchanged and raising total custom-call wall time.
 - Next bold hypothesis (escalation): implement a true FLA Experiment A backward decomposition (separate chunk-local adjoint/precompute kernel from recurrent `dS` apply kernel), then pipeline only the recurrent stage with `emit_pipeline` so launch count drops without creating extra forward shard-map pressure.
+
+### Iteration 16 - Macro Move C / FLA Experiment A extension: BF16 recurrent kernels with transpose-fused dot_general
+
+- Date: 2026-02-20T14:20:00Z
+- Commit: TO_FILL
+- Loop session/local index: `4/20`
+- Starting commit: `8e6459b4af2f6883c18729804c454037ddefe979`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_loopgate_iter004_130m_ch128_seg16_20steps-60161d/plugins/profile/2026_02_20_03_34_47/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `custom-call`: `174.246 ms` (dominant category).
+  - Top GDN callsites:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `85.705 ms`
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `75.050 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move C + Experiment A extension**: enforce BF16-input/FP32-accum policy in recurrent kernels and remove transpose materialization via fused `dot_general` in both fwd/bwd recurrent math (`+10-20%`, medium/high numerical risk).
+  2. **Macro Move D**: re-attempt full-sequence backward `emit_pipeline` to reduce recurrent launch count (`+15-30%`, high compile/layout risk).
+  3. **Macro Move F / Experiment B**: V-tiled backward recurrent decomposition with partial reductions (`+15-25%`, very high complexity and reduction-correctness risk).
+
+- Selected macro-move category: **C) Switch kernel math to BF16 inputs + FP32 accumulation**.
+- Selected decomposition experiment (directive alignment): **FLA Experiment A extension** (optimize the recurrent kernel side of the existing solve/recurrent split).
+- Selected hypothesis: speed up the dominant recurrent custom calls by using one transpose-fused MXU helper everywhere and BF16 VMEM operands with FP32 accumulation, while keeping small-tile paths on FP32 for correctness.
+
+- Change summary:
+  - Extended `_mxu_matmul_f32` to support transpose fusion (`transpose_a` / `transpose_b`) and explicit FP32 accumulation via `lax.dot_general(..., preferred_element_type=jnp.float32)`.
+  - Replaced explicit transpose materialization in hot recurrent fwd+bwd matmuls with fused helper calls.
+  - Switched segmented/fullseq recurrent kernels and segmented backward kernel to BF16 operand loads for large chunk tiles (`Ct >= 128`), with automatic FP32 fallback for smaller tiles to preserve test-level parity.
+  - Kept solve/prep path in FP32 by default (numerically sensitive triangular solve path).
+
+- Correctness checks:
+  - Dev TPU command attempted: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - Dev TPU result: unavailable (`SSH configuration for dev-tpu-calvinxu-gdn not found`).
+  - Ray fallback (final pass): `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+  - Ray job: `ray-run-calvinxu-levanter-20260220-220649`
+  - Result: `49 passed, 40 skipped`.
+
+- Profile run:
+  - Dev TPU command attempted: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bf16acc_i4_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - Dev TPU result: unavailable (`SSH configuration for dev-tpu-calvinxu-gdn not found`).
+  - Ray fallback submit: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bf16acc_i4_ray --no-wait`
+  - Ray profile job: `ray-run-calvinxu-bash-20260220-221107`
+  - Wait command: `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-bash-20260220-221107 --show-logs --tail 400`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_bf16acc_i4_ray_130m_ch128_seg16_20steps-3aba53`
+  - W&B profiler artifact: `run-gdn_bf16acc_i4_ray_130m_ch128_seg16_20steps-3aba53-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_bf16acc_i4_ray_130m_ch128_seg16_20steps-3aba53/plugins/profile/2026_02_20_14_17_21/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_loopgate_iter004_130m_ch128_seg16_20steps-60161d/plugins/profile/2026_02_20_03_34_47/perfetto_trace.json.gz`):
+  - `custom-call`: `174.246 ms -> 149.616 ms` (`-14.14%`), still dominant.
+  - Dominant backward GDN callsite got faster (same hotspot, not moved):
+    - `transpose(jvp(...))/closed_call/shard_map/pallas_call:` `85.705 ms -> 68.292 ms` (`-20.32%`).
+  - Dominant forward GDN callsite also improved:
+    - `jvp(...)/closed_call/shard_map/pallas_call:` `75.050 ms -> 67.830 ms` (`-9.62%`).
+  - Secondary recurrent shard-map path stayed flat:
+    - `jvp(...)/HackableDecoderLayer/shard_map/pallas_call:` `10.434 ms -> 10.430 ms` (`-0.03%`).
+  - `all-gather`: `32.687 ms -> 32.663 ms` (`-0.07%`).
+
+- MFU/throughput delta (vs baseline run `gdn_loopgate_iter004_130m_ch128_seg16_20steps-60161d`):
+  - `throughput/mfu`: `4.3667 -> 4.6080` (`+5.53%`).
+  - `throughput/tokens_per_second`: `141262.39 -> 149069.19` (`+5.53%`).
+  - `throughput/duration`: `0.23197s -> 0.21982s` (`-5.24%`).
+
+- Assessment: **meaningful win**. The dominant hotspot category remained `custom-call` but got materially faster at the same backward/forward recurrent callsites, yielding a >5% end-to-end MFU improvement.
+- Next bold hypothesis: combine this mixed-precision recurrent path with a launch-structure change (Macro Move D or F) to reduce remaining recurrent custom-call count and target another double-digit reduction in `custom-call` wall time.

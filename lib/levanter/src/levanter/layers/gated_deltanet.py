@@ -1014,44 +1014,64 @@ def _round_up_to(x: int, m: int) -> int:
     return ((x + m - 1) // m) * m
 
 
-def _mxu_matmul_f32(a, b, *, precision_mode: str = "fp32"):
+def _mxu_matmul_f32(
+    a,
+    b,
+    *,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
+    precision_mode: str = "bf16",
+):
     """
-    TPU/Pallas-safe matmul helper.
+    TPU/Pallas-safe matmul helper with optional transpose fusion.
 
     Parameters
     ----------
-    a : jnp.ndarray, shape [M, K]
-    b : jnp.ndarray, shape [K, N]
+    a : jnp.ndarray, shape [M, K] or [K, M] when transpose_a=True
+    b : jnp.ndarray, shape [K, N] or [N, K] when transpose_b=True
+    transpose_a : bool
+        If True, contracts over ``a`` axis 0 (equivalent to ``a.T @ b`` without explicit transpose).
+    transpose_b : bool
+        If True, contracts over ``b`` axis 1 (equivalent to ``a @ b.T`` without explicit transpose).
     precision_mode : {"fp32", "bf16"}
-        - "fp32" (default): uses float32 inputs and precision=lax.Precision.HIGHEST
-        - "bf16": casts inputs to bfloat16 and uses precision=lax.Precision.DEFAULT
+        - "fp32": uses float32 inputs and precision=lax.Precision.HIGHEST
+        - "bf16" (default): uses bfloat16 inputs with fp32 accumulation
 
     Returns
     -------
     out : jnp.ndarray, shape [M, N], dtype float32
     """
-    from jax import lax
-    import jax.numpy as jnp
-
     if a.ndim != 2 or b.ndim != 2:
         raise ValueError(f"_mxu_matmul_f32 expects 2D arrays, got {a.ndim}D and {b.ndim}D")
-    if a.shape[1] != b.shape[0]:
-        raise ValueError(f"shape mismatch: a={a.shape}, b={b.shape}")
+
+    a_contract = 0 if transpose_a else 1
+    b_contract = 1 if transpose_b else 0
+    if a.shape[a_contract] != b.shape[b_contract]:
+        raise ValueError(
+            "shape mismatch: "
+            f"a={a.shape} (contract axis {a_contract}), "
+            f"b={b.shape} (contract axis {b_contract})"
+        )
 
     if precision_mode == "bf16":
-        a_in = a.astype(jnp.bfloat16)
-        b_in = b.astype(jnp.bfloat16)
+        a_in = a.astype(jnp.bfloat16, copy=False)
+        b_in = b.astype(jnp.bfloat16, copy=False)
         prec = lax.Precision.DEFAULT
     elif precision_mode == "fp32":
-        a_in = a.astype(jnp.float32)
-        b_in = b.astype(jnp.float32)
+        a_in = a.astype(jnp.float32, copy=False)
+        b_in = b.astype(jnp.float32, copy=False)
         prec = lax.Precision.HIGHEST
     else:
         raise ValueError(f"precision_mode must be 'fp32' or 'bf16', got {precision_mode!r}")
 
-    # Standard matmul: contract a's last dim with b's first dim.
-    dn = (((1,), (0,)), ((), ()))
-    out = lax.dot_general(a_in, b_in, dn, precision=prec)
+    dn = (((a_contract,), (b_contract,)), ((), ()))
+    out = lax.dot_general(
+        a_in,
+        b_in,
+        dn,
+        precision=prec,
+        preferred_element_type=jnp.float32,
+    )
     return out.astype(jnp.float32)
 
 
@@ -1173,7 +1193,7 @@ def _solve_I_minus_strict_lower_transpose_blockwise(
         precision_mode=precision_mode,
         base_block=base_block,
     )
-    rhs1_eff = rhs1 + _mxu_matmul_f32(jnp.transpose(A21), x2, precision_mode=precision_mode)
+    rhs1_eff = rhs1 + _mxu_matmul_f32(A21, x2, transpose_a=True, precision_mode=precision_mode)
     x1 = _solve_I_minus_strict_lower_transpose_blockwise(
         A11,
         rhs1_eff,
@@ -1257,7 +1277,7 @@ def _gdn_chunk_segment_prepare_kernel_tpu(
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)  # (Ct, Ct)
 
-        KKT = _mxu_matmul_f32(k_beta, jnp.transpose(k), precision_mode=precision_mode)
+        KKT = _mxu_matmul_f32(k_beta, k, transpose_b=True, precision_mode=precision_mode)
         A = -KKT * exp_diff * tril_strict
 
         k_scaled = k_beta * exp_g[:, None]
@@ -1367,9 +1387,11 @@ def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
     Ct: int,
     K_pad: int,
     V_pad: int,
-    precision_mode: Literal["fp32", "bf16"] = "fp32",
+    precision_mode: Literal["fp32", "bf16"] = "bf16",
 ):
     """Apply the recurrent state update using precomputed solve outputs."""
+
+    matmul_dtype = jnp.bfloat16 if precision_mode == "bf16" else jnp.float32
 
     idx = jnp.arange(Ct, dtype=jnp.int32)
     ii = idx[:, None]
@@ -1396,23 +1418,23 @@ def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
 
         q = (
             q_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, K_pad)
         )
         k = (
             k_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, K_pad)
         )
         g_cum = gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
         v_pseudo = (
             vpseudo_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, V_pad)
         )
         k_cumdecay = (
             kcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, K_pad)
         )
 
@@ -1423,7 +1445,7 @@ def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)  # (Ct, Ct)
 
-        QK = _mxu_matmul_f32(q, jnp.transpose(k), precision_mode=precision_mode)
+        QK = _mxu_matmul_f32(q, k, transpose_b=True, precision_mode=precision_mode)
         attn = QK * exp_diff * causal_mask
 
         v_prime = _mxu_matmul_f32(k_cumdecay, S, precision_mode=precision_mode)
@@ -1438,7 +1460,7 @@ def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
 
         decay_w = jnp.exp(jnp.clip(g_tail - g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))  # (Ct,)
         k_w = k * decay_w[:, None]
-        add = _mxu_matmul_f32(jnp.transpose(k_w), v_new, precision_mode=precision_mode)  # (K, V)
+        add = _mxu_matmul_f32(k_w, v_new, transpose_a=True, precision_mode=precision_mode)  # (K, V)
         S = S * decay_tail + add
 
         out_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)] = out[
@@ -1463,12 +1485,14 @@ def _gdn_chunk_segment_recurrent_fwd_pallas(
     K_pad: int,
     V_pad: int,
 ):
+    precision_mode: Literal["fp32", "bf16"] = "bf16" if Ct >= _MXU_TILE else "fp32"
     kernel = functools.partial(
         _gdn_chunk_segment_recurrent_fwd_kernel_tpu,
         Seg=int(Seg),
         Ct=int(Ct),
         K_pad=int(K_pad),
         V_pad=int(V_pad),
+        precision_mode=precision_mode,
     )
 
     def _local_call(q_bhscK, k_bhscK, g_cum_bhsc, v_pseudo_bhscV, k_cumdecay_bhscK, S_prev_bhKV):
@@ -1567,9 +1591,11 @@ def _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu(
     Ct: int,
     K_pad: int,
     V_pad: int,
-    precision_mode: Literal["fp32", "bf16"] = "fp32",
+    precision_mode: Literal["fp32", "bf16"] = "bf16",
 ):
     """Sequential full-sequence recurrent apply over chunks using emit_pipeline."""
+
+    matmul_dtype = jnp.bfloat16 if precision_mode == "bf16" else jnp.float32
 
     idx = jnp.arange(Ct, dtype=jnp.int32)
     ii = idx[:, None]
@@ -1607,12 +1633,12 @@ def _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu(
 
         q = (
             q_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, K_pad)
         )
         k = (
             k_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, K_pad)
         )
         g_cum = (
@@ -1620,12 +1646,12 @@ def _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu(
         )
         v_pseudo = (
             vpseudo_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, V_pad)
         )
         k_cumdecay = (
             kcum_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, K_pad)
         )
 
@@ -1636,7 +1662,7 @@ def _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu(
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)
 
-        QK = _mxu_matmul_f32(q, jnp.transpose(k), precision_mode=precision_mode)
+        QK = _mxu_matmul_f32(q, k, transpose_b=True, precision_mode=precision_mode)
         attn = QK * exp_diff * causal_mask
 
         v_prime = _mxu_matmul_f32(k_cumdecay, S, precision_mode=precision_mode)
@@ -1651,7 +1677,7 @@ def _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu(
 
         decay_w = jnp.exp(jnp.clip(g_tail - g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
         k_w = k * decay_w[:, None]
-        add = _mxu_matmul_f32(jnp.transpose(k_w), v_new, precision_mode=precision_mode)
+        add = _mxu_matmul_f32(k_w, v_new, transpose_a=True, precision_mode=precision_mode)
         S_next = S * decay_tail + add
 
         out_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)] = out[
@@ -1707,12 +1733,14 @@ def _gdn_chunk_fullseq_recurrent_fwd_pallas(
     K_pad: int,
     V_pad: int,
 ):
+    precision_mode: Literal["fp32", "bf16"] = "bf16" if Ct >= _MXU_TILE else "fp32"
     kernel = functools.partial(
         _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu,
         N_chunks=int(N_chunks),
         Ct=int(Ct),
         K_pad=int(K_pad),
         V_pad=int(V_pad),
+        precision_mode=precision_mode,
     )
 
     def _local_call(q_bhncK, k_bhncK, g_cum_bhnc, v_pseudo_bhncV, k_cumdecay_bhncK, S_prev_bhKV):
@@ -1884,8 +1912,10 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
     Ct: int,
     K_pad: int,
     V_pad: int,
-    precision_mode: Literal["fp32", "bf16"] = "fp32",
+    precision_mode: Literal["fp32", "bf16"] = "bf16",
 ):
+    matmul_dtype = jnp.bfloat16 if precision_mode == "bf16" else jnp.float32
+
     # Precompute constant masks
     idx = jnp.arange(Ct, dtype=jnp.int32)
     ii = idx[:, None]
@@ -1920,15 +1950,15 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         # Recompute chunk-local KKT / attenuation terms; consume solve outputs from fwd tape.
         k_beta = k * beta[:, None]
 
-        QK = jnp.matmul(q, k.T)
+        QK = _mxu_matmul_f32(q, k, transpose_b=True, precision_mode=precision_mode)
         attn = QK * exp_diff * causal_mask
 
-        KKT = jnp.matmul(k_beta, k.T)
+        KKT = _mxu_matmul_f32(k_beta, k, transpose_b=True, precision_mode=precision_mode)
         A = -KKT * exp_diff * tril_strict
 
         sol_all = jnp.concatenate([v_pseudo, k_cumdecay], axis=1)
 
-        v_prime = jnp.matmul(k_cumdecay, S_prev)
+        v_prime = _mxu_matmul_f32(k_cumdecay, S_prev, precision_mode=precision_mode)
         v_new = v_pseudo - v_prime
 
         q_scaled = q * exp_g[:, None]
@@ -1949,11 +1979,11 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         d_inter = d_out
         d_intra = d_out
 
-        d_attn = jnp.matmul(d_intra, v_new.T)
-        d_v_new = jnp.matmul(attn.T, d_intra)
+        d_attn = _mxu_matmul_f32(d_intra, v_new, transpose_b=True, precision_mode=precision_mode)
+        d_v_new = _mxu_matmul_f32(attn, d_intra, transpose_a=True, precision_mode=precision_mode)
 
-        d_q_scaled = jnp.matmul(d_inter, S_prev.T)
-        dS_prev = jnp.matmul(q_scaled.T, d_inter)
+        d_q_scaled = _mxu_matmul_f32(d_inter, S_prev, transpose_b=True, precision_mode=precision_mode)
+        dS_prev = _mxu_matmul_f32(q_scaled, d_inter, transpose_a=True, precision_mode=precision_mode)
 
         # S_next = S_prev*decay_tail + add
         dS_prev = dS_prev + dS_next * decay_tail
@@ -1961,8 +1991,8 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
 
         # add = k_w^T @ v_new
         d_add = dS_next
-        d_k_w = jnp.matmul(v_new, d_add.T)
-        d_v_new = d_v_new + jnp.matmul(k_w, d_add)
+        d_k_w = _mxu_matmul_f32(v_new, d_add, transpose_b=True, precision_mode=precision_mode)
+        d_v_new = d_v_new + _mxu_matmul_f32(k_w, d_add, precision_mode=precision_mode)
 
         d_k = d_k_w * decay_w[:, None]
         d_decay_w = jnp.sum(d_k_w * k, axis=-1)
@@ -1978,14 +2008,14 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         d_v_pseudo = d_v_new
         d_v_prime = -d_v_new
 
-        d_k_cumdecay = jnp.matmul(d_v_prime, S_prev.T)
-        dS_prev = dS_prev + jnp.matmul(k_cumdecay.T, d_v_prime)
+        d_k_cumdecay = _mxu_matmul_f32(d_v_prime, S_prev, transpose_b=True, precision_mode=precision_mode)
+        dS_prev = dS_prev + _mxu_matmul_f32(k_cumdecay, d_v_prime, transpose_a=True, precision_mode=precision_mode)
 
         d_QK = d_attn * (exp_diff * causal_mask)
         d_exp_diff = d_attn * QK * causal_mask
 
-        d_q = jnp.matmul(d_QK, k)
-        d_k = d_k + jnp.matmul(d_QK.T, q)
+        d_q = _mxu_matmul_f32(d_QK, k, precision_mode=precision_mode)
+        d_k = d_k + _mxu_matmul_f32(d_QK, q, transpose_a=True, precision_mode=precision_mode)
 
         d_q = d_q + d_q_scaled * exp_g[:, None]
         d_exp_g = jnp.sum(d_q_scaled * q, axis=-1)
@@ -2001,7 +2031,7 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         d_v_beta = lax.slice(tmp_all, (0, 0), (Ct, V_pad))
         d_k_scaled = lax.slice(tmp_all, (0, V_pad), (Ct, V_pad + K_pad))
 
-        dA = _mxu_matmul_f32(tmp_all, jnp.transpose(sol_all), precision_mode=precision_mode)  # (Ct,Ct)
+        dA = _mxu_matmul_f32(tmp_all, sol_all, transpose_b=True, precision_mode=precision_mode)  # (Ct,Ct)
 
         d_k_beta = d_k_scaled * exp_g[:, None]
         d_exp_g = d_exp_g + jnp.sum(d_k_scaled * k_beta, axis=-1)
@@ -2010,8 +2040,8 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         dKKT = -dA * exp_diff
         d_exp_diff = d_exp_diff + (-dA * KKT)
 
-        d_k_beta = d_k_beta + jnp.matmul(dKKT, k)
-        d_k = d_k + jnp.matmul(dKKT.T, k_beta)
+        d_k_beta = d_k_beta + _mxu_matmul_f32(dKKT, k, precision_mode=precision_mode)
+        d_k = d_k + _mxu_matmul_f32(dKKT, k_beta, transpose_a=True, precision_mode=precision_mode)
 
         d_diff = (d_exp_diff * exp_diff) * diff_inrange
         d_g_cum = d_g_cum + jnp.sum(d_diff, axis=-1) - jnp.sum(d_diff, axis=-2)
@@ -2038,35 +2068,35 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         )
         q = (
             q_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, K_pad)
         )
         k = (
             k_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, K_pad)
         )
         v = (
             v_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, V_pad)
         )
         g_cum = gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
         beta = b_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
         v_pseudo = (
             vpseudo_chunks_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, V_pad)
         )
         k_cumdecay = (
             kcum_chunks_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, K_pad)
         )
 
         d_out = (
             dOut_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, V_pad)
         )
 
@@ -2110,12 +2140,14 @@ def _gdn_chunk_segment_bwd_pallas(
     K_pad: int,
     V_pad: int,
 ):
+    precision_mode: Literal["fp32", "bf16"] = "bf16" if Ct >= _MXU_TILE else "fp32"
     kernel = functools.partial(
         _gdn_chunk_segment_bwd_kernel_tpu,
         Seg=int(Seg),
         Ct=int(Ct),
         K_pad=int(K_pad),
         V_pad=int(V_pad),
+        precision_mode=precision_mode,
     )
 
     def _local_call(
