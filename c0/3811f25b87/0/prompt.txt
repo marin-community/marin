@@ -1,0 +1,68 @@
+below is an error that failed a zephyr task:
+
+```
+2026-02-19 22:38:24,488 - ERROR - Job ray-callable-tokenized-nemotron_cc-medium_high_f09e907a-08057f9a failed:
+Traceback (most recent call last):
+  File "REDACTED.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(ActorDiedError): ray::tokenized/nemotron_cc/medium_high_f09e907a() (pid=127746, ip=10.128.0.127)
+  File "REDACTED.py", line 296, in worker_fn
+    disk_cached(
+  File "REDACTED.py", line 59, in disk_cached
+    result = fn(output_path)
+             ^^^^^^^^^^^^^^^
+  File "REDACTED.py", line 69, in wrapper
+    return fn(output_path)
+           ^^^^^^^^^^^^^^^
+  File "REDACTED.py", line 207, in resolved_fn
+    return captured_fn(captured_config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "REDACTED.py", line 416, in tokenize
+    run_pipeline(ctx, train_paths, "train")
+  File "REDACTED.py", line 368, in run_pipeline
+    shard_paths = ctx.execute(temp_shards)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "REDACTED.py", line 976, in execute
+    results = self._coordinator.run_pipeline.remote(plan, self._shared_data, execution_id, hints).result()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "REDACTED.py", line 522, in result
+    return ray.get(self._object_ref, timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.
+        class_name: _RayActorHost
+        actor_id: 4b5027fa3c9c076ed6f2b92b2d000000
+        pid: 22407
+        name: zephyr-tokenize-43d026e8-coord-0
+        namespace: 3624ff23-951c-4c41-a83d-f238d7bce24f
+        ip: 10.128.0.98
+The actor died because its node has died. Node Id: c5cc0997fc7a4074b70b58f2e7052a58ad492a769d495db72e2cb4de
+        the actor's node was terminated expectedly: received SIGTERM
+```
+
+why was it not retired if we assume the node on which the task was running got preempted?
+
+---
+
+ok, we can assume that coordinator can be safely restarted, no need to reconstruct the coordinator state, just restart it say it. how would we do that?
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+abort, let's revert and pin the coordinator to the head node
