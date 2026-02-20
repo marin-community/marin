@@ -911,12 +911,10 @@ class ZephyrContext:
 
             self.client = current_client()
 
-        from fray.v2.local_backend import LocalClient
-
-        is_local_client = isinstance(self.client, LocalClient)
-
         if self.max_workers is None:
-            if is_local_client:
+            from fray.v2.local_backend import LocalClient
+
+            if isinstance(self.client, LocalClient):
                 self.max_workers = os.cpu_count() or 1
             else:
                 # Default to 128 for distributed, but allow override
@@ -929,16 +927,13 @@ class ZephyrContext:
         if self.chunk_storage_prefix is None:
             temp_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")
             if temp_prefix is None:
-                if is_local_client:
-                    temp_prefix = "/tmp/zephyr"
-                else:
-                    marin_prefix = os.environ.get("MARIN_PREFIX")
-                    if not marin_prefix:
-                        raise RuntimeError(
-                            "MARIN_PREFIX must be set when using a distributed backend.\n"
-                            "  Example: export MARIN_PREFIX=gs://marin-us-central2"
-                        )
-                    temp_prefix = f"{marin_prefix.rstrip('/')}/tmp/zephyr"
+                marin_prefix = os.environ.get("MARIN_PREFIX")
+                if not marin_prefix:
+                    raise RuntimeError(
+                        "MARIN_PREFIX must be set when using a distributed backend.\n"
+                        "  Example: export MARIN_PREFIX=gs://marin-us-central2"
+                    )
+                temp_prefix = f"{marin_prefix}/tmp/zephyr"
 
             self.chunk_storage_prefix = temp_prefix
 
