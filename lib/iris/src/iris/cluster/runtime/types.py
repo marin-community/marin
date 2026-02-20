@@ -23,7 +23,6 @@ from typing import Protocol
 
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
 
 
 @dataclass
@@ -93,6 +92,23 @@ class ImageInfo:
     created_at: str
 
 
+class RuntimeLogReader(Protocol):
+    """Opaque incremental log reader created by a ContainerHandle.
+
+    Each runtime owns the deduplication strategy (byte offsets, timestamps,
+    list indices, etc.). Callers simply call read() in a loop to get new
+    lines without duplicates.
+    """
+
+    def read(self) -> list[LogLine]:
+        """Return new log lines since the last read. Advances the cursor."""
+        ...
+
+    def read_all(self) -> list[LogLine]:
+        """Return all logs from the beginning (for error reporting)."""
+        ...
+
+
 class ContainerHandle(Protocol):
     """Handle for a logical container with build/run lifecycle.
 
@@ -152,8 +168,8 @@ class ContainerHandle(Protocol):
         """Check container status (running, exit code, error)."""
         ...
 
-    def logs(self, since: "Timestamp | None" = None) -> list[LogLine]:
-        """Get container logs since timestamp."""
+    def log_reader(self) -> RuntimeLogReader:
+        """Create an incremental log reader for this container."""
         ...
 
     def stats(self) -> ContainerStats:

@@ -385,11 +385,21 @@ class LogReader:
         """Read entries appended since the last call."""
         log_path = self._logs_path
         try:
-            chunk = self._fs.cat_file(log_path, start=self._offset)
+            # Avoid passing start=0; fsspec sends a Range header which GCS
+            # rejects with 416 when the file is empty.
+            if self._offset > 0:
+                chunk = self._fs.cat_file(log_path, start=self._offset)
+            else:
+                chunk = self._fs.cat_file(log_path)
             self._offset += len(chunk)
         except FileNotFoundError:
             return []
         except OSError:
+            return []
+        except Exception:
+            # gcsfs/s3fs raise backend-specific errors (e.g. HttpError 416
+            # for range-not-satisfiable) that don't inherit from OSError.
+            logger.warning("Failed to read log file %s (offset=%d)", log_path, self._offset, exc_info=True)
             return []
 
         if not chunk and not self._tail:
@@ -443,6 +453,11 @@ class LogReader:
         try:
             data = self._fs.cat_file(self._logs_path)
         except (FileNotFoundError, OSError):
+            self._offset = 0
+            self._tail = ""
+            return
+        except Exception:
+            logger.warning("Failed to seek in log file %s", self._logs_path, exc_info=True)
             self._offset = 0
             self._tail = ""
             return

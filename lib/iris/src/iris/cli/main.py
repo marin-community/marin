@@ -21,29 +21,28 @@ logger = _logging_module.getLogger(__name__)
 def _configure_client_s3(config) -> None:
     """Configure S3 env vars so client-side fsspec reads (log streaming) work.
 
-    The CLI reads task logs directly from S3 via LogReader/fsspec. On CoreWeave,
-    fsspec needs AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (mapped from
-    CW_KEY_ID/CW_KEY_SECRET), AWS_ENDPOINT_URL, and FSSPEC_S3 with
-    virtual-hosted addressing. Without these, log streaming fails with
-    NoCredentialsError.
+    The CLI reads task logs directly from S3 via LogReader/fsspec. fsspec needs
+    AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (mapped from R2_ACCESS_KEY_ID/
+    R2_SECRET_ACCESS_KEY), AWS_ENDPOINT_URL, and FSSPEC_S3 with the correct
+    endpoint. Without these, log streaming fails with NoCredentialsError.
     """
-    from iris.cluster.platform.coreweave import _is_coreweave_endpoint
+    from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
 
     endpoint = config.platform.coreweave.object_storage_endpoint
     if not endpoint:
         return
 
-    cw_key = os.environ.get("CW_KEY_ID", "")
-    cw_secret = os.environ.get("CW_KEY_SECRET", "")
-    if cw_key and cw_secret:
-        os.environ.setdefault("AWS_ACCESS_KEY_ID", cw_key)
-        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", cw_secret)
+    r2_key = os.environ.get("R2_ACCESS_KEY_ID", "")
+    r2_secret = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+    if r2_key and r2_secret:
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", r2_key)
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
 
     os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
 
     if "FSSPEC_S3" not in os.environ:
         fsspec_conf: dict = {"endpoint_url": endpoint}
-        if _is_coreweave_endpoint(endpoint):
+        if _needs_virtual_host_addressing(endpoint):
             fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
         os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
 

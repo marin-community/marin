@@ -27,6 +27,7 @@ import logging
 import os
 import subprocess
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,23 @@ DEFAULT_TIMEOUT: float = 60.0
 
 class KubectlError(RuntimeError):
     """Error raised for kubectl command failures."""
+
+
+@dataclass
+class KubectlLogLine:
+    """A single parsed log line from kubectl logs --timestamps."""
+
+    timestamp: datetime
+    stream: str  # "stdout" or "stderr"
+    data: str
+
+
+@dataclass
+class KubectlLogResult:
+    """Result of an incremental log fetch."""
+
+    lines: list[KubectlLogLine]
+    byte_offset: int
 
 
 @dataclass
@@ -288,6 +306,49 @@ class Kubectl:
         """Remove files inside a Pod container. Ignores missing files."""
         self.exec(pod_name, ["rm", "-f", *paths], container=container, timeout=10)
 
+    def stream_logs(
+        self,
+        pod_name: str,
+        *,
+        container: str | None = None,
+        byte_offset: int = 0,
+    ) -> KubectlLogResult:
+        """Fetch new log lines from a pod using byte-offset deduplication.
+
+        kubectl's --since-time only has second-level precision, which causes
+        duplicate log lines when polling at sub-second granularity. Instead,
+        we fetch all logs with --timestamps and skip already-seen bytes.
+
+        Args:
+            pod_name: The Pod to read logs from.
+            container: Target container name.
+            byte_offset: Number of bytes already consumed from previous calls.
+
+        Returns:
+            Parsed log lines and the new byte offset for the next call.
+        """
+        args = ["logs", pod_name, "--timestamps=true"]
+        if container:
+            args.extend(["-c", container])
+        result = self.run(args, namespaced=True)
+        if result.returncode != 0:
+            return KubectlLogResult(lines=[], byte_offset=byte_offset)
+
+        raw_bytes = result.stdout.encode("utf-8")
+        if len(raw_bytes) <= byte_offset:
+            return KubectlLogResult(lines=[], byte_offset=byte_offset)
+
+        new_content = raw_bytes[byte_offset:].decode("utf-8", errors="replace")
+        new_offset = len(raw_bytes)
+
+        lines: list[KubectlLogLine] = []
+        for line in new_content.splitlines():
+            if not line.strip():
+                continue
+            lines.append(_parse_kubectl_log_line(line))
+
+        return KubectlLogResult(lines=lines, byte_offset=new_offset)
+
     def popen(
         self,
         args: list[str],
@@ -310,3 +371,25 @@ class Kubectl:
             cmd.extend(["-n", self.namespace])
         cmd.extend(args)
         return subprocess.Popen(cmd, **kwargs)
+
+
+def _parse_kubectl_log_line(line: str) -> KubectlLogLine:
+    """Parse a ``kubectl logs --timestamps`` line.
+
+    Format: ``<RFC3339-timestamp> <message>``
+    e.g. ``2026-02-20T21:19:05.826882951Z Built haliax @ file:///app/lib/haliax``
+    """
+    parts = line.split(" ", 1)
+    if len(parts) == 2:
+        ts_str, payload = parts
+        try:
+            # Truncate nanoseconds → microseconds for fromisoformat
+            if len(ts_str) > 27 and ts_str.endswith("Z"):
+                ts_str = ts_str[:26] + "Z"
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            return KubectlLogLine(timestamp=ts, stream="stdout", data=payload)
+        except ValueError:
+            logger.warning("Failed to parse timestamp from kubectl log line: %r", line[:120])
+    else:
+        logger.warning("Unexpected kubectl log line format (no space-separated timestamp): %r", line[:120])
+    return KubectlLogLine(timestamp=datetime.now(timezone.utc), stream="stdout", data=line)

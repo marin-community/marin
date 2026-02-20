@@ -1595,32 +1595,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dupekit"
-version = "0.1.0"
-source = { editable = "lib/dupekit" }
-
-[package.metadata]
-requires-dist = [
-    { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
-    { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
-]
-provides-extras = ["benchmark"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "huggingface-hub" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-timeout" },
-]
-test = [
-    { name = "huggingface-hub" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-timeout" },
-]
-
-[[package]]
 name = "durationpy"
 version = "0.10"
 source = { registry = "https://pypi.org/simple" }
@@ -5009,7 +4983,6 @@ dependencies = [
     { name = "ddsketch" },
     { name = "deepdiff" },
     { name = "draccus" },
-    { name = "dupekit" },
     { name = "fasteners" },
     { name = "flask" },
     { name = "floret" },
@@ -5186,7 +5159,6 @@ requires-dist = [
     { name = "ddsketch" },
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
-    { name = "dupekit", editable = "lib/dupekit" },
     { name = "fasteners", specifier = ">=0.19" },
     { name = "flask" },
     { name = "floret" },

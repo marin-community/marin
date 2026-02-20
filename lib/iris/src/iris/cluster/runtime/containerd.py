@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus, RuntimeLogReader
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
@@ -222,6 +222,53 @@ def _parse_crictl_log_line(line: str) -> tuple[datetime, str, str]:
     return datetime.now(timezone.utc), "stdout", line
 
 
+class ContainerdLogReader:
+    """Incremental log reader for a containerd container using byte offsets.
+
+    Reads the CRI log file directly rather than through `crictl logs`, which
+    avoids the timestamp precision problem (crictl --since has only second
+    granularity and can miss or duplicate lines at boundaries).
+    """
+
+    def __init__(self, container_id: str, log_directory: str, endpoint: str | None) -> None:
+        self._container_id = container_id
+        self._log_directory = log_directory
+        self._endpoint = endpoint
+        self._byte_offset: int = 0
+        self._log_path: str | None = None
+
+    def _resolve_log_path(self) -> str | None:
+        if not self._log_path:
+            self._log_path = _get_log_path_from_inspect(self._container_id, endpoint=self._endpoint)
+        return self._log_path
+
+    def read(self) -> list[LogLine]:
+        """Return new log lines since the last read, advancing the byte cursor."""
+        log_path = self._resolve_log_path()
+        if not log_path:
+            return []
+        try:
+            data = Path(log_path).read_bytes()
+        except OSError:
+            return []
+        if len(data) <= self._byte_offset:
+            return []
+        new_content = data[self._byte_offset :]
+        self._byte_offset = len(data)
+        return _parse_log_bytes(new_content)
+
+    def read_all(self) -> list[LogLine]:
+        """Return all logs from the beginning without advancing the cursor."""
+        log_path = self._resolve_log_path()
+        if not log_path:
+            return []
+        try:
+            data = Path(log_path).read_bytes()
+        except OSError:
+            return []
+        return _parse_log_bytes(data)
+
+
 @dataclass
 class ContainerdContainerHandle:
     """ContainerHandle backed by crictl commands.
@@ -239,7 +286,6 @@ class ContainerdContainerHandle:
     _config_dir: Path | None = field(default=None, repr=False)
     _log_directory: str = field(default=_DEFAULT_LOG_DIR, repr=False)
     _endpoint: str | None = field(default=None, repr=False)
-    _cached_log_path: str | None = field(default=None, repr=False)
 
     @property
     def container_id(self) -> str | None:
@@ -371,20 +417,12 @@ exec {quoted_cmd}
             return ContainerStatus(running=False, error="Container not started")
         return _inspect_container(self._run_container_id, endpoint=self._endpoint)
 
-    def logs(self, since: Timestamp | None = None) -> list[LogLine]:
-        if not self._run_container_id:
-            return []
-        return _get_container_logs(
-            self._run_container_id,
-            self._log_directory,
-            since=since,
+    def log_reader(self) -> RuntimeLogReader:
+        return ContainerdLogReader(
+            container_id=self._run_container_id or "",
+            log_directory=self._log_directory,
             endpoint=self._endpoint,
-            cached_log_path=self._cached_log_path,
-            cache_log_path_callback=self._set_cached_log_path,
         )
-
-    def _set_cached_log_path(self, path: str) -> None:
-        self._cached_log_path = path
 
     def stats(self) -> ContainerStats:
         if not self._run_container_id:
@@ -482,21 +520,29 @@ def _get_log_path_from_inspect(container_id: str, *, endpoint: str | None = None
         return None
 
 
+def _parse_log_bytes(data: bytes) -> list[LogLine]:
+    """Parse raw CRI log file bytes into LogLine entries."""
+    logs: list[LogLine] = []
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        if not line:
+            continue
+        timestamp, source, msg = _parse_crictl_log_line(line)
+        logs.append(LogLine(timestamp=timestamp, source=source, data=msg))
+    return logs
+
+
 def _get_container_logs(
     container_id: str,
     log_directory: str,
     *,
     since: Timestamp | None = None,
     endpoint: str | None = None,
-    cached_log_path: str | None = None,
-    cache_log_path_callback: Callable[[str], None] | None = None,
 ) -> list[LogLine]:
-    """Fetch logs from a container.
+    """Fetch logs from a container via crictl logs (used by the build phase).
 
-    First tries `crictl logs` which reads from the CRI log file. If that fails
-    (e.g. due to file permissions when running as non-root), falls back to
-    reading the log file directly. The log path from inspect is cached via
-    cached_log_path/cache_log_path_callback to avoid repeated crictl inspect calls.
+    Uses `crictl logs --since` for timestamp-based filtering. This is acceptable
+    for the build phase because builds are short-lived and the one-second
+    precision of --since is tolerable there.
     """
     cmd = ["logs"]
     if since:
@@ -509,11 +555,7 @@ def _get_container_logs(
     if result.returncode == 0 and result.stdout.strip():
         raw_lines = result.stdout
     else:
-        log_path = cached_log_path
-        if not log_path:
-            log_path = _get_log_path_from_inspect(container_id, endpoint=endpoint)
-            if log_path and cache_log_path_callback:
-                cache_log_path_callback(log_path)
+        log_path = _get_log_path_from_inspect(container_id, endpoint=endpoint)
         if log_path:
             try:
                 raw_lines = Path(log_path).read_text()

@@ -476,9 +476,9 @@ def fake_kubectl() -> FakeKubectl:
 
 @pytest.fixture(autouse=True)
 def _s3_env_vars(monkeypatch):
-    """Set CW_KEY_ID / CW_KEY_SECRET so _ensure_s3_credentials_secret() succeeds."""
-    monkeypatch.setenv("CW_KEY_ID", "test-key-id")
-    monkeypatch.setenv("CW_KEY_SECRET", "test-key-secret")
+    """Set R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY so _ensure_s3_credentials_secret() succeeds."""
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "test-key-id")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "test-key-secret")
 
 
 # ============================================================================
@@ -1271,13 +1271,13 @@ def test_start_controller_errors_with_invalid_scale_group(fake_kubectl: FakeKube
 
 
 def test_start_controller_errors_without_s3_credentials(fake_kubectl: FakeKubectl, monkeypatch):
-    """start_controller raises when S3 storage is configured but CW_KEY_ID / CW_KEY_SECRET are not set."""
-    monkeypatch.delenv("CW_KEY_ID", raising=False)
-    monkeypatch.delenv("CW_KEY_SECRET", raising=False)
+    """start_controller raises when S3 storage is configured but R2 credentials are not set."""
+    monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
     platform = _make_platform()
     cluster_config = _make_cluster_config(bundle_prefix="s3://my-bucket/bundles")
 
-    with pytest.raises(PlatformError, match="CW_KEY_ID and CW_KEY_SECRET"):
+    with pytest.raises(PlatformError, match="R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY"):
         platform.start_controller(cluster_config)
     platform.shutdown()
 
@@ -1424,8 +1424,8 @@ def test_start_controller_crash_loop_includes_logs(fake_kubectl: FakeKubectl):
 
 def test_start_controller_skips_s3_for_gs_storage(fake_kubectl: FakeKubectl, monkeypatch):
     """start_controller succeeds without S3 credentials when using gs:// storage."""
-    monkeypatch.delenv("CW_KEY_ID", raising=False)
-    monkeypatch.delenv("CW_KEY_SECRET", raising=False)
+    monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
     platform = _make_platform()
     cluster_config = _make_cluster_config(bundle_prefix="gs://test-bucket/bundles")
 

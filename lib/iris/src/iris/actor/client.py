@@ -101,6 +101,7 @@ class ActorClient:
                     f"Resolved actor '{self._name}' to {len(result.endpoints)} endpoint(s) "
                     f"after {attempt} retries in {time.monotonic() - start_time:.2f}s"
                 )
+                logger.info("First endpoint: %s", result.first())
                 url = result.first().url
                 self._rpc_client = ActorServiceClientSync(
                     address=url,

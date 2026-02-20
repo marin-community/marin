@@ -184,5 +184,25 @@ def test_no_s3_env_when_unset(monkeypatch):
     handle.run()
 
     env = manifests[0]["spec"]["containers"][0]["env"]
-    secret_envs = [e for e in env if "valueFrom" in e]
+    secret_envs = [e for e in env if "valueFrom" in e and "secretKeyRef" in e.get("valueFrom", {})]
     assert len(secret_envs) == 0
+
+
+def test_advertise_host_uses_downward_api(monkeypatch):
+    """Task pods must use the K8s downward API for IRIS_ADVERTISE_HOST
+    instead of inheriting the worker's static value, since the task pod
+    may be scheduled on a different node."""
+    manifests = _capture_manifest(monkeypatch)
+
+    config = _make_config()
+    config.env["IRIS_ADVERTISE_HOST"] = "10.0.0.1"
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(config)
+    handle.run()
+
+    env = manifests[0]["spec"]["containers"][0]["env"]
+    advertise = [e for e in env if e["name"] == "IRIS_ADVERTISE_HOST"]
+    assert len(advertise) == 1
+    assert advertise[0] == {"name": "IRIS_ADVERTISE_HOST", "valueFrom": {"fieldRef": {"fieldPath": "status.hostIP"}}}
+    # The static value from config.env must NOT appear
+    assert not any(e.get("value") == "10.0.0.1" for e in env)

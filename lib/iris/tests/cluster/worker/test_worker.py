@@ -124,7 +124,12 @@ def create_mock_container_handle(
 
     handle.status = Mock(side_effect=status_side_effect)
     handle.stop = Mock()
-    handle.logs = Mock(return_value=[])
+
+    log_reader_mock = Mock()
+    log_reader_mock.read = Mock(return_value=[])
+    log_reader_mock.read_all = Mock(return_value=[])
+    handle.log_reader = Mock(return_value=log_reader_mock)
+
     handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
     handle.cleanup = Mock()
     return handle
