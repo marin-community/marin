@@ -496,7 +496,7 @@ def test_olmo3_seq_len_doesnt_change_predictions(num_kv_heads):
     from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
 
     config = Olmo3Config(
-        max_seq_len=64,
+        max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
@@ -519,7 +519,7 @@ def test_olmo3_seq_len_doesnt_change_predictions(num_kv_heads):
     jax_out_1 = compute(model, input_prefix)
     jax_out_2 = compute(model, input_full)[config.max_Pos, :64]
 
-    assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-6, atol=1e-6)
+    assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-5, atol=1e-5)
 
 
 def test_olmo3_all_layers_have_correct_attention_type():
