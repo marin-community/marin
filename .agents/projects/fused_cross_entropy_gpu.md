@@ -397,3 +397,48 @@ Custom-backward `logit_soft_cap` check:
   - Note: `loss_diff=0.0` is expected in this GB10 BF16 configuration because
     the pallas-gpu route intentionally reuses the same XLA forward implementation
     and only overrides backward via `custom_vjp`.
+
+## 2026-02-19 opt-in experiment: native GB10 Pallas forward
+
+### Code switch
+- Added a GB10-native forward opt-in in
+  `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
+  - env var: `LEVANTER_PALLAS_GPU_GB10_NATIVE_FORWARD=1`
+  - requires explicit `block_sizes=BlockSizes(...)` (fails fast otherwise)
+- Default behavior is unchanged (hybrid path remains default).
+
+### Bounded exercise (no large tile sweeps)
+- Shape: `B in {2048,4096}`, `H=1024`, `V=65536`, `fwd+bwd`
+- Native tiles tried:
+  - `b=128,h=128,v=256`
+  - `b=128,h=64,v=512`
+
+Results:
+- `B=2048`:
+  - `xla`: `~48.06 ms`
+  - `pallas native (128,128,256)`: `~358.20 ms` (`~0.13x` vs xla)
+  - `pallas native (128,64,512)`: `~446.53 ms` (`~0.11x` vs xla)
+- `B=4096`:
+  - `xla`: `~86.35 ms`
+  - `pallas native (128,128,256)`: `~698.65 ms` (`~0.12x` vs xla)
+  - `pallas native (128,64,512)`: `~886.46 ms` (`~0.10x` vs xla)
+
+Numerics on this native-forward config (`B=2048,H=1024,V=65536`, `b=128,h=128,v=256`):
+- `loss_diff`: `~1.23e-2`
+- `gx` diff: mean `~8.68e-5`, max `~1.68e-3`
+- sampled `gw` diff: mean `~5.65e-6`, max `~5.19e-4`
+
+Conclusion:
+- For target-like large-hidden/vocab regimes, native GB10 Pallas forward is currently
+  both slower and less numerically aligned than the hybrid path.
+- Keep native-forward as opt-in-only for experimentation.
+- Keep hybrid default (XLA forward + custom backward), which remains the best measured path.
+
+### Small-shape sanity
+- Shape: `B=4096,H=128,V=8192`
+- Forward-only:
+  - `xla`: `~1.301 ms`
+  - `native`: `~1.137 ms`
+  - `~1.15x` speedup
+- Full `fwd+bwd` at same shape:
+  - near parity (`~1.00x`).

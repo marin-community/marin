@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from functools import partial
+import os
 from typing import Optional
 
 import jax
@@ -24,6 +25,7 @@ _GB10_XLA_STREAMING_V_BLOCK_BATCH_4K = 3072
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
+_GB10_NATIVE_FORWARD_OPT_IN_ENV_VAR = "LEVANTER_PALLAS_GPU_GB10_NATIVE_FORWARD"
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -44,6 +46,11 @@ def _device_kind() -> str:
     if not jax.devices():
         return ""
     return jax.devices()[0].device_kind.lower()
+
+
+def _gb10_native_forward_opt_in_enabled() -> bool:
+    opt_in_raw = os.environ.get(_GB10_NATIVE_FORWARD_OPT_IN_ENV_VAR, "")
+    return opt_in_raw.lower() in {"1", "true", "yes", "on"}
 
 
 def _max_weight_tile_bytes_for_device(device_kind: str) -> Optional[int]:
@@ -345,6 +352,13 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
     """GPU Pallas implementation returning per-example loss and logsumexp."""
     device_kind = _device_kind()
     is_gb10_bf16 = "gb10" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
+    gb10_native_forward_opt_in = is_gb10_bf16 and _gb10_native_forward_opt_in_enabled()
+
+    if gb10_native_forward_opt_in and block_sizes is None:
+        raise PallasUnsupportedError(
+            "GB10 native Pallas forward opt-in requires explicit block sizes. "
+            "Set block_sizes=BlockSizes(...) to keep launch/memory behavior bounded."
+        )
 
     if _should_use_gb10_full_matmul_fallback(x, w):
         return linear_softmax_cross_entropy_loss_reference(
@@ -355,7 +369,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
             logit_soft_cap=logit_soft_cap,
             precision=precision,
         )
-    if is_gb10_bf16:
+    if is_gb10_bf16 and not gb10_native_forward_opt_in:
         # On GB10 BF16 we intentionally keep forward on the XLA streaming path and attach
         # the custom backward via custom_vjp. This means forward loss/lse parity against
         # explicit XLA calls is expected to be exact by construction.
