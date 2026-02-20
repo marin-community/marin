@@ -549,3 +549,20 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
     - `throughput/duration`: `0.25418s -> 0.23654s` (`-6.94%`).
 - Assessment: **partial recovery, not a new champion**. Reverting Iteration 6 materially improves over the Iteration 6 state, but underperforms Iteration 12 by ~2.6% MFU, so Iteration 12’s gain is not just an artifact of Iteration 6 regression.
 - Next hypothesis: keep Iteration 12 tape-reuse path and target the remaining backward and forward shard-map pallas callsites with launch/dataflow reductions (Macro Move D/E), not a full rollback of Iteration 6-era follow-on changes.
+
+### Iteration 14 - Re-apply Iteration 6 blockwise solve path (restore Iteration 12 baseline)
+
+- Date: 2026-02-20T13:09:08Z
+- Commit: 7f9b19a4c
+- Hypothesis: Continue optimization from the strongest known baseline (Iteration 12) instead of the Iteration 13 rollback branch state.
+- Change summary:
+  - Re-applied commit `2db3ad589` by reverting the Iteration 13 rollback commit (`git revert 4668d57aa`).
+  - Restored `lib/levanter/src/levanter/layers/gated_deltanet.py` to the same kernel code as Iteration 12 (`git diff 51c47da95..7f9b19a4c -- lib/levanter/src/levanter/layers/gated_deltanet.py` is empty).
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both --no-sync`
+  - Result: `87 passed, 2 skipped`.
+- Profile run:
+  - Not re-run in this reset iteration because the kernel code is identical to Iteration 12.
+  - Active baseline profile/metrics remain Iteration 12 run `gdn_prep_tape_i4_dev_130m_ch128_seg16_20steps-e4c03f`.
+- Assessment: **baseline reset**. This restores the known-better code path and should be treated as the launch point for subsequent optimization iterations (15+).
+- Next hypothesis: target the remaining forward closed-call shard-map `custom-call` hotspot with a macro-move change (D/E/F), keeping the Iteration 12 backward tape reuse intact.
