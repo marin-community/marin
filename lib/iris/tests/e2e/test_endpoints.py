@@ -231,7 +231,7 @@ def _register_and_hold(prefix):
             metadata={"purpose": "dashboard-test"},
         )
         client.register_endpoint(request)
-        time.sleep(30)
+        time.sleep(10)
     finally:
         client.close()
 

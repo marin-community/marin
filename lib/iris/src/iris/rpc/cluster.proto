@@ -18,6 +18,7 @@ package iris.cluster;
 
 import "time.proto";
 import "vm.proto";
+import "logging.proto";
 
 // ============================================================================
 // SHARED TYPES
@@ -128,6 +129,9 @@ message TaskStatus {
   // Scheduling diagnostics for pending tasks (dashboard display)
   string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
+
+  // Log storage location (e.g., "gs://bucket/path/worker-123/job/task/0")
+  string log_directory = 18;
 }
 
 // Record of a single task execution attempt
@@ -244,9 +248,6 @@ message ResourceSpecProto {
 
   // Device configuration
   DeviceConfig device = 5;
-
-  // Scheduling preferences
-  repeated string regions = 8; // Preferred cloud regions
 }
 
 // ============================================================================
@@ -519,6 +520,7 @@ message Controller {
     string task_id = 1;
     int32 attempt_id = 2;
     TaskState state = 3;
+    string log_directory = 4;  // Storage location for logs (e.g., "gs://bucket/path/worker/task/attempt")
   }
 
   // A task completion reported by the worker in its heartbeat response.
@@ -530,6 +532,7 @@ message Controller {
     string error = 6;
     iris.time.Timestamp finished_at = 7;
     int32 attempt_id = 8;
+    string log_directory = 9;  // Storage location for logs (e.g., "gs://bucket/path/worker/task/attempt")
   }
 
 
@@ -652,7 +655,7 @@ message Controller {
 
   message TaskLogBatch {
     string task_id = 1;
-    repeated Worker.LogEntry logs = 2;
+    repeated iris.logging.LogEntry logs = 2;
     string error = 3;                // If fetch failed for this task
     string worker_id = 4;            // Worker that produced these logs
   }
@@ -691,6 +694,7 @@ message Worker {
     iris.time.Duration timeout = 7;
     repeated string ports = 8;
     int32 attempt_id = 9;
+    repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
   }
 
   message GetTaskStatusRequest {
@@ -702,13 +706,6 @@ message Worker {
 
   message ListTasksResponse {
     repeated TaskStatus tasks = 1;
-  }
-
-  message LogEntry {
-    iris.time.Timestamp timestamp = 1;
-    string source = 2;  // "stdout", "stderr", or "build"
-    string data = 3;    // Log line content
-    int32 attempt_id = 4;  // Which attempt produced this log
   }
 
   message FetchLogsFilter {
@@ -726,7 +723,7 @@ message Worker {
   }
 
   message FetchTaskLogsResponse {
-    repeated LogEntry logs = 1;
+    repeated iris.logging.LogEntry logs = 1;
   }
 
   message KillTaskRequest {

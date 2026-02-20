@@ -14,6 +14,7 @@
 - Begin with the agent-friendly recipes in `docs/recipes/`.
 - The first step for dataset addition is schema inspection. See the [add_dataset.md](docs/recipes/add_dataset.md) recipe for details.
 - You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
+- For long-running benchmark/research threads, follow [agent_research.md](docs/recipes/agent_research.md).
 - When making significant changes to Grug/Grugformer, follow [change_grug.md](docs/recipes/change_grug.md).
 - For TPU hill-climbing work on Gated DeltaNet kernels, follow [optimize_gdn_pallas_tpu.md](docs/recipes/optimize_gdn_pallas_tpu.md).
 - Follow the rules and examples in each recipe to ensure compatibility and automation-friendliness.
@@ -59,6 +60,7 @@
 
 - Keep MkDocs content in sync with code. Docs live in `docs/` or in the subproject's `docs/` directory; use Markdown and mkdocs-style links when referencing symbols.
 - Public-facing modules and APIs need concise Google-style docstrings; align terminology across code and docs.
+- Write docs for readers who do not have conversational context: include enough problem framing, assumptions, commands, and results that the document stands on its own.
 
 ### Deprecation
 

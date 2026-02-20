@@ -36,8 +36,8 @@ def test_dispatch_permanent_failure(cluster):
     """
     cluster.wait_for_workers(1, timeout=15)
     enable_chaos("controller.heartbeat", failure_rate=1.0)
-    job = cluster.submit(_quick, "permanent-dispatch", scheduling_timeout=Duration.from_seconds(5))
-    status = cluster.wait(job, timeout=20)
+    job = cluster.submit(_quick, "permanent-dispatch", scheduling_timeout=Duration.from_seconds(2))
+    status = cluster.wait(job, timeout=10)
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
@@ -58,8 +58,8 @@ def test_heartbeat_permanent_failure(cluster):
     """
     cluster.wait_for_workers(1, timeout=15)
     enable_chaos("worker.heartbeat", failure_rate=1.0)
-    job = cluster.submit(_slow, "perm-hb-fail", scheduling_timeout=Duration.from_seconds(5))
-    status = cluster.wait(job, timeout=20)
+    job = cluster.submit(_slow, "perm-hb-fail", scheduling_timeout=Duration.from_seconds(2))
+    status = cluster.wait(job, timeout=10)
     assert status.state in (
         cluster_pb2.JOB_STATE_FAILED,
         cluster_pb2.JOB_STATE_WORKER_FAILED,

@@ -3,7 +3,9 @@
 
 """Click-based CLI for the Iris worker daemon."""
 
+import json
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -13,6 +15,28 @@ from iris.cluster.config import load_config
 from iris.cluster.platform.factory import create_platform
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.logging import configure_logging
+
+
+def _load_task_default_env() -> dict[str, str]:
+    """Load default task environment injected by bootstrap."""
+    raw = os.environ.get("IRIS_TASK_DEFAULT_ENV_JSON", "")
+    if not raw:
+        return {}
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("IRIS_TASK_DEFAULT_ENV_JSON must decode to a dictionary")
+    return {str(k): str(v) for k, v in parsed.items()}
+
+
+def _load_worker_attributes() -> dict[str, str]:
+    """Parse IRIS_WORKER_ATTRIBUTES JSON into a map."""
+    raw = os.environ.get("IRIS_WORKER_ATTRIBUTES", "")
+    if not raw:
+        return {}
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("IRIS_WORKER_ATTRIBUTES must decode to a dictionary")
+    return {str(k): str(v) for k, v in parsed.items()}
 
 
 @click.group()
@@ -31,26 +55,33 @@ def cli():
     "--config",
     "config_file",
     type=click.Path(exists=True),
-    required=True,
+    required=False,
     help="Cluster config for platform-based controller discovery",
 )
+@click.option("--controller-address", default=None, help="Controller address host:port (overrides --config discovery)")
 def serve(
     host: str,
     port: int,
     cache_dir: str,
     port_range: str,
     worker_id: str | None,
-    config_file: str,
+    config_file: str | None,
+    controller_address: str | None,
 ):
     """Start the Iris worker service."""
     configure_logging(level=logging.INFO)
 
-    cluster_config = load_config(Path(config_file))
-    platform = create_platform(
-        platform_config=cluster_config.platform,
-        ssh_config=cluster_config.defaults.ssh,
-    )
-    controller_address = f"http://{platform.discover_controller(cluster_config.controller)}"
+    if controller_address:
+        resolved_controller_address = f"http://{controller_address}"
+    else:
+        if not config_file:
+            raise click.ClickException("Either --controller-address or --config must be provided")
+        cluster_config = load_config(Path(config_file))
+        platform = create_platform(
+            platform_config=cluster_config.platform,
+            ssh_config=cluster_config.defaults.ssh,
+        )
+        resolved_controller_address = f"http://{platform.discover_controller(cluster_config.controller)}"
 
     port_start, port_end = map(int, port_range.split("-"))
 
@@ -59,15 +90,17 @@ def serve(
         port=port,
         cache_dir=Path(cache_dir).expanduser(),
         port_range=(port_start, port_end),
-        controller_address=controller_address,
+        controller_address=resolved_controller_address,
         worker_id=worker_id,
+        worker_attributes=_load_worker_attributes(),
+        default_task_env=_load_task_default_env(),
     )
 
     worker = Worker(config)
 
     click.echo(f"Starting Iris worker on {host}:{port}")
     click.echo(f"  Cache dir: {config.cache_dir}")
-    click.echo(f"  Controller: {controller_address}")
+    click.echo(f"  Controller: {resolved_controller_address}")
     worker.start()
     worker.wait()  # Block until worker is stopped
 

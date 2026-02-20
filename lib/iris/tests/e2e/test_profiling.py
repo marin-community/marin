@@ -44,7 +44,7 @@ def test_profile_running_task(cluster):
     def slow_task():
         # Busy-loop with real Python work so py-spy can capture stack frames
         # (time.sleep blocks in C, producing zero Python samples)
-        end = time.monotonic() + 5
+        end = time.monotonic() + 3
         while time.monotonic() < end:
             sum(range(1000))
 
@@ -53,7 +53,7 @@ def test_profile_running_task(cluster):
 
     request = cluster_pb2.ProfileTaskRequest(
         task_id=task_id,
-        duration_seconds=2,
+        duration_seconds=1,
         profile_type=cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH)),
     )
     response = cluster.controller_client.profile_task(request, timeout_ms=3000)
@@ -68,7 +68,7 @@ def test_profile_formats(cluster):
     """All three CPU profile formats return data."""
 
     def slow_task():
-        end = time.monotonic() + 5
+        end = time.monotonic() + 4
         while time.monotonic() < end:
             sum(range(1000))
 

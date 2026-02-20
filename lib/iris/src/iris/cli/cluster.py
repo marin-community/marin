@@ -15,7 +15,7 @@ from pathlib import Path
 import click
 from connectrpc.errors import ConnectError
 
-from iris.cli.build import _build_image, _find_iris_root, _find_marin_root, _push_to_registries
+from iris.cli.build import _build_image, _find_iris_root, _find_marin_root, _push_to_gcp_registries
 from iris.cli.debug import debug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
@@ -127,11 +127,13 @@ def _build_and_push_image(params: _ImageBuildParams) -> None:
         dockerfile=params.dockerfile,
         context=params.context,
         platform="linux/amd64",
-        region=(),
-        project=params.project,
+        registry="gcp",
+        ghcr_org="",
+        gcp_regions=(),
+        gcp_project=params.project,
     )
     click.echo()
-    _push_to_registries(
+    _push_to_gcp_registries(
         source_tag=params.local_tag,
         regions=(params.region,),
         project=params.project,

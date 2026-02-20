@@ -121,7 +121,7 @@ def test_create_slice_returns_handle_with_vms_and_scale_group(platform_env: Plat
     assert handle.slice_id
     assert handle.scale_group == "my-group"
     assert handle.zone
-    assert len(handle.describe().vms) >= 1
+    assert len(handle.describe().workers) >= 1
 
 
 def test_created_slice_appears_in_list_slices(platform_env: PlatformEnv):
