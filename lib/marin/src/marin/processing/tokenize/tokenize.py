@@ -32,7 +32,6 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
-from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.readers import load_file
 
@@ -239,7 +238,7 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
         yield current_group
 
 
-def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
+def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[Sequence[dict]]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
     tokenizer: transformers.PreTrainedTokenizer = zephyr_worker_ctx().get_shared("tokenizer")
     batch_processor = preprocessor_for_format(config.format, tokenizer)
@@ -255,7 +254,7 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
             record_count += 1
             token_count += len(record.get("input_ids", []))
             yield record
-        if batch_count % 100 == 0:
+        if batch_count % 10 == 0:
             elapsed = time.monotonic() - start_time
             tok_per_sec = token_count / elapsed if elapsed > 0 else 0
             doc_per_sec = record_count / elapsed if elapsed > 0 else 0
@@ -312,21 +311,8 @@ def tokenize(config: TokenizeConfigBase):
     if not train_paths and not validation_paths:
         raise ValueError("No input files specified. Nothing to do.")
 
-    def run_pipeline(ctx: ZephyrContext, paths: list[str], split_name: str) -> None:
-        prefix = os.path.join(config.cache_path, split_name)
-        ledger_path = os.path.join(prefix, "shard_ledger.json")
-
-        if fsspec_exists(ledger_path):
-            logger.info(
-                "Shard ledger already exists for %s at %s; skipping tokenization step",
-                split_name,
-                ledger_path,
-            )
-            return
-
-        pipeline_start = time.monotonic()
-
-        # Use local backend for lightweight file stats - no remote workers needed
+    def local_preprocess_paths(paths: list[str]) -> list[list[str]]:
+        """Scan file sizes locally and bundle into groups for distributed processing."""
         filescan_start = time.monotonic()
         with ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan") as local_ctx:
             file_stats = list(
@@ -341,6 +327,22 @@ def tokenize(config: TokenizeConfigBase):
             f"Grouped {len(paths):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
             f"in {time.monotonic() - filescan_start:.1f}s."
         )
+        return file_groups
+
+    def split_already_done(split_name: str) -> bool:
+        ledger_path = os.path.join(config.cache_path, split_name, "shard_ledger.json")
+        if fsspec_exists(ledger_path):
+            logger.info(
+                "Shard ledger already exists for %s at %s; skipping",
+                split_name,
+                ledger_path,
+            )
+            return True
+        return False
+
+    def run_pipeline(ctx: ZephyrContext, file_groups: list[list[str]], split_name: str) -> None:
+        prefix = os.path.join(config.cache_path, split_name)
+        pipeline_start = time.monotonic()
 
         ds = Dataset.from_list(file_groups).flat_map(lambda file_list: file_list).flat_map(load_file)
 
@@ -348,10 +350,13 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
+        batch_size = 1024
         temp_shards = (
-            ds.window(64)
+            ds.window(batch_size)
             .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
-            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}", metadata={}, skip_existing=True)
+            .write_levanter_cache(
+                f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}", metadata={}, batch_size=batch_size, skip_existing=True
+            )
         )
 
         # Broadcast the tokenizer to all workers via ZephyrContext
@@ -363,7 +368,7 @@ def tokenize(config: TokenizeConfigBase):
 
         logger.info("Computing exemplar for cache consolidation")
         exemplar = ctx.execute(
-            Dataset.from_list(paths[0:1])
+            Dataset.from_list(file_groups[0][0:1])
             .flat_map(load_file)
             .take_per_shard(1)
             .map_shard(lambda example: _tokenize_batches(config=config, batches=[example])),
@@ -372,14 +377,18 @@ def tokenize(config: TokenizeConfigBase):
 
         consolidate_start = time.monotonic()
         logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        ledger = consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
+        consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
         consolidate_elapsed = time.monotonic() - consolidate_start
 
-        # Read stats from the consolidated cache: total rows from the ledger,
-        # total tokens from the TreeStore's input_ids data size.
-        total_elements = ledger.total_num_rows
-        store = TreeStore.open(exemplar, prefix, mode="r", cache_metadata=True)
-        total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
+        # Aggregate token counts from shard stats
+        total_tokens = 0
+        total_elements = 0
+        for shard_path in shard_paths:
+            stats_path = f"{shard_path}/.stats.json"
+            with fsspec.open(stats_path) as f:
+                stats = json.load(f)
+                total_tokens += stats.get("token_count", 0)
+                total_elements += stats.get("num_rows", 0)
 
         stats_path = os.path.join(prefix, ".stats.json")
         with fsspec.open(stats_path, "w") as f:
@@ -395,17 +404,26 @@ def tokenize(config: TokenizeConfigBase):
             f"Wrote stats to {stats_path}"
         )
 
-    # TODO: expose ram/disk as a flag on TokenizeConfig and align with batch size
-    with ZephyrContext(
-        resources=ResourceConfig(ram="2g", disk="16g"),
-        max_workers=min(128, len(train_paths) + len(validation_paths)),
-        name="tokenize",
-    ) as ctx:
-        if train_paths:
-            run_pipeline(ctx, train_paths, "train")
+    # TODO (rav): both train and val could run at the same time
+    if train_paths and not split_already_done("train"):
+        train_groups = local_preprocess_paths(train_paths)
+        with ZephyrContext(
+            resources=ResourceConfig(ram="3g", disk="16g"),
+            max_workers=min(512, len(train_groups)),
+            name="tokenize-train",
+            no_workers_timeout=20 * 60,
+        ) as ctx:
+            run_pipeline(ctx, train_groups, "train")
 
-        if validation_paths:
-            run_pipeline(ctx, validation_paths, "validation")
+    if validation_paths and not split_already_done("validation"):
+        validation_groups = local_preprocess_paths(validation_paths)
+        with ZephyrContext(
+            resources=ResourceConfig(ram="3g", disk="16g"),
+            max_workers=min(512, len(validation_groups)),
+            name="tokenize-validation",
+            no_workers_timeout=20 * 60,
+        ) as ctx:
+            run_pipeline(ctx, validation_groups, "validation")
 
 
 @draccus.wrap()
