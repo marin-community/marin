@@ -707,14 +707,18 @@ class CoreweavePlatform:
         # When runtime is "kubernetes", task Pods claim GPU/RDMA resources
         # directly. The worker Pod must not also request them (the device
         # plugin would double-count and the task Pod would get nothing).
+        # CPU/memory requests are always set so the worker gets Burstable QoS
+        # and isn't starved by task Pods on the same node.
         resource_limits: dict = {}
         if runtime != "kubernetes":
             if config.gpu_count > 0:
                 resource_limits["nvidia.com/gpu"] = str(config.gpu_count)
             if cw.infiniband:
                 resource_limits["rdma/ib"] = "1"
+        resources: dict = {"requests": {"cpu": "2", "memory": "4Gi"}}
         if resource_limits:
-            container_spec["resources"] = {"limits": resource_limits}
+            resources["limits"] = resource_limits
+        container_spec["resources"] = resources
         logger.info(
             "CoreWeave pod %s: resource_limits=%s node_selector=%s",
             pod_name,
