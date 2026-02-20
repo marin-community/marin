@@ -42,11 +42,10 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus, RuntimeLogReader
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +290,22 @@ def _memory_profile_stub(memory_format: int) -> bytes:
         return b'{"error": "memray unavailable in local mode"}'
 
 
+class ProcessLogReader:
+    """Index-based incremental log reader for ProcessContainer._logs."""
+
+    def __init__(self, logs: list[LogLine]) -> None:
+        self._logs = logs
+        self._index: int = 0
+
+    def read(self) -> list[LogLine]:
+        new_lines = self._logs[self._index :]
+        self._index = len(self._logs)
+        return new_lines
+
+    def read_all(self) -> list[LogLine]:
+        return list(self._logs)
+
+
 @dataclass
 class ProcessContainerHandle:
     """Process implementation of ContainerHandle.
@@ -381,14 +396,9 @@ class ProcessContainerHandle:
             error=self._container._error,
         )
 
-    def logs(self, since: Timestamp | None = None) -> list[LogLine]:
-        """Get container logs since timestamp."""
-        if not self._container:
-            return []
-        if since:
-            since_dt = datetime.fromtimestamp(since.epoch_seconds(), tz=timezone.utc)
-            return [log for log in self._container._logs if log.timestamp > since_dt]
-        return self._container._logs
+    def log_reader(self) -> RuntimeLogReader:
+        """Create an incremental log reader for this container."""
+        return ProcessLogReader(self._container._logs if self._container else [])
 
     def stats(self) -> ContainerStats:
         """Get resource usage statistics."""

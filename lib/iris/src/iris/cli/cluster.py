@@ -91,7 +91,6 @@ def _parse_ghcr_tag(image_tag: str) -> tuple[str, str, str] | None:
     return org, image_name, version
 
 
-
 @dataclass
 class _ImageBuildParams:
     image_type: str

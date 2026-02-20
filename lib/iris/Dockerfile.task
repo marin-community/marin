@@ -24,6 +24,7 @@ ENV PATH="/root/.cargo/bin:$PATH"
 
 # uv cache location - actual cache is mounted as Docker named volume at runtime
 ENV UV_CACHE_DIR=/uv/cache
+ENV CARGO_TARGET_DIR=/root/.cargo/target
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # =============================================================================

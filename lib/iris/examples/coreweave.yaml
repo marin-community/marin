@@ -12,9 +12,9 @@
 #        kubectl apply -f infra/coreweave/k8s/
 #
 #   2. Set S3 object storage credentials (required for s3:// storage URIs):
-#        export CW_KEY_ID=<your-coreweave-key-id>
-#        export CW_KEY_SECRET=<your-coreweave-key-secret>
-#      These are created in the CoreWeave Console under API Access > Object Storage.
+#        export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
+#        export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
+#      These are created in the Cloudflare dashboard under R2 > Manage R2 API Tokens.
 #      `iris cluster start` creates a K8s Secret from these env vars automatically.
 #
 #   3. Start the cluster (creates shared NodePools, ConfigMap, Deployment, Service):
@@ -38,11 +38,11 @@ platform:
     region: US-WEST-04A
     namespace: iris
     kubeconfig_path: ~/.kube/coreweave-iris  # Set this to your local kubeconfig, or use KUBECONFIG env var
-    object_storage_endpoint: https://cwobject.com
+    object_storage_endpoint: https://a5a1f66f973e2196a26bae21c81b899b.r2.cloudflarestorage.com
 
 storage:
-  bundle_prefix: s3://marin-us-west-04a/iris/bundles
-  log_prefix: s3://marin-us-west-04a/iris/logs
+  bundle_prefix: s3://marin-test/iris/bundles
+  log_prefix: s3://marin-test/iris/logs
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

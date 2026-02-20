@@ -125,7 +125,8 @@ def test_create_and_run_simple_command(runtime: ContainerdRuntime):
         # non-root, logs may not be readable. This is a local dev limitation;
         # on CoreWeave the worker runs as root.
         if _can_read_cri_logs:
-            logs = handle.logs()
+            reader = handle.log_reader()
+            logs = reader.read_all()
             log_text = " ".join(entry.data for entry in logs)
             assert "hello" in log_text
     finally:

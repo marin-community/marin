@@ -2,34 +2,45 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TUI browser for the CoreWeave S3 bucket.
+"""Browser and CLI for the S3-compatible object storage bucket.
 
-Connects to the CoreWeave object storage endpoint and lets you
-interactively explore bucket contents. Press Enter on a file to
-view its contents; JSON files are rendered as tables via tabulate.
+Supports both an interactive curses TUI and non-interactive CLI commands
+for listing, viewing, and copying files.
 
 Usage:
-    export CW_KEY_ID=<your-key-id>
-    export CW_KEY_SECRET=<your-key-secret>
-    uv run python lib/iris/scripts/s3-browser.py [prefix]
+    export R2_ACCESS_KEY_ID=<your-key-id>
+    export R2_SECRET_ACCESS_KEY=<your-key-secret>
+
+    # Interactive TUI (default)
+    uv run lib/iris/scripts/s3-browser.py [prefix]
+
+    # CLI commands
+    uv run lib/iris/scripts/s3-browser.py ls [path]
+    uv run lib/iris/scripts/s3-browser.py cat <path>
+    uv run lib/iris/scripts/s3-browser.py cp [-R] <src> <dst>
 """
 
 import curses
 import json
 import os
+import pathlib
 import sys
 from dataclasses import dataclass
 
+import click
 import s3fs
+import yaml
 from tabulate import tabulate
 
-# CoreWeave Object Storage uses virtual-hosted-style addressing:
-# bucket-specific URLs look like https://<bucket>.cwobject.com.
-# s3fs needs the BASE endpoint so it can prepend the bucket name itself.
-ENDPOINT = "https://cwobject.com"
-BUCKET = "marin-us-west-04a"
+DEFAULT_CONFIG = str(pathlib.Path(__file__).parent.parent / "examples" / "coreweave.yaml")
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB — refuse to download files larger than this
+
+
+@dataclass
+class S3Config:
+    endpoint: str
+    bucket: str
 
 
 @dataclass
@@ -40,18 +51,36 @@ class Entry:
     is_dir: bool
 
 
-def connect() -> s3fs.S3FileSystem:
-    key_id = os.environ.get("CW_KEY_ID")
-    key_secret = os.environ.get("CW_KEY_SECRET")
+def load_s3_config(config_path: str) -> S3Config:
+    """Load S3 endpoint and bucket from an Iris YAML config file."""
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+    endpoint = cfg["platform"]["coreweave"]["object_storage_endpoint"]
+    # Derive the bucket from the first storage prefix (e.g. s3://marin-test/iris/bundles -> marin-test)
+    bundle_prefix = cfg["storage"]["bundle_prefix"]
+    bucket = bundle_prefix.removeprefix("s3://").split("/")[0]
+    return S3Config(endpoint=endpoint, bucket=bucket)
+
+
+def normalize_path(arg: str, bucket: str) -> str:
+    """Normalize an S3 path argument to bucket/key form."""
+    arg = arg.removeprefix("s3://")
+    if not arg.startswith(bucket):
+        return f"{bucket}/{arg.lstrip('/')}" if arg else bucket
+    return arg
+
+
+def connect(s3_config: S3Config) -> s3fs.S3FileSystem:
+    key_id = os.environ.get("R2_ACCESS_KEY_ID")
+    key_secret = os.environ.get("R2_SECRET_ACCESS_KEY")
     if not key_id or not key_secret:
-        print("ERROR: CW_KEY_ID and CW_KEY_SECRET must be set", file=sys.stderr)
+        print("ERROR: R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set", file=sys.stderr)
         sys.exit(1)
 
     return s3fs.S3FileSystem(
         key=key_id,
         secret=key_secret,
-        endpoint_url=ENDPOINT,
-        config_kwargs={"s3": {"addressing_style": "virtual"}},
+        endpoint_url=s3_config.endpoint,
     )
 
 
@@ -210,7 +239,7 @@ def show_file_viewer(stdscr: curses.window, path: str, lines: list[str]) -> None
             scroll = max(0, len(lines) - visible)
 
 
-def run_tui(stdscr: curses.window, fs: s3fs.S3FileSystem, initial_prefix: str) -> None:
+def run_tui(stdscr: curses.window, fs: s3fs.S3FileSystem, initial_prefix: str, bucket: str) -> None:
     curses.curs_set(0)
     curses.use_default_colors()
     curses.init_pair(1, curses.COLOR_CYAN, -1)  # directories
@@ -256,7 +285,7 @@ def run_tui(stdscr: curses.window, fs: s3fs.S3FileSystem, initial_prefix: str) -
         stdscr.clear()
 
         # Header
-        path_display = f"s3://{prefix}" if prefix else f"s3://{BUCKET}/"
+        path_display = f"s3://{prefix}" if prefix else f"s3://{bucket}/"
         stdscr.addnstr(0, 0, path_display, width - 1, curses.color_pair(2) | curses.A_BOLD)
 
         # Column header
@@ -352,20 +381,89 @@ def run_tui(stdscr: curses.window, fs: s3fs.S3FileSystem, initial_prefix: str) -
                 need_reload = True
 
 
-def main() -> None:
-    fs = connect()
+# ---------------------------------------------------------------------------
+# CLI commands
+# ---------------------------------------------------------------------------
 
-    initial_prefix = BUCKET
-    if len(sys.argv) > 1:
-        arg = sys.argv[1].removeprefix("s3://")
-        if not arg.startswith(BUCKET):
-            initial_prefix = f"{BUCKET}/{arg}"
+
+@click.group(invoke_without_command=True)
+@click.option(
+    "--config",
+    default=DEFAULT_CONFIG,
+    show_default=True,
+    help="Path to Iris YAML config file.",
+)
+@click.pass_context
+def cli(ctx: click.Context, config: str) -> None:
+    """Browser and CLI for the S3-compatible object storage bucket.
+
+    Without a subcommand, launches the interactive TUI browser.
+    """
+    ctx.ensure_object(dict)
+    ctx.obj["s3_config"] = load_s3_config(config)
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(cmd_browse)
+
+
+@cli.command("ls")
+@click.argument("path", default="")
+@click.pass_context
+def cmd_ls(ctx: click.Context, path: str) -> None:
+    """List entries under a path."""
+    s3_config: S3Config = ctx.obj["s3_config"]
+    fs = connect(s3_config)
+    prefix = normalize_path(path, s3_config.bucket)
+    entries = list_prefix(fs, prefix)
+    for entry in entries:
+        if entry.is_dir:
+            print(f"{'DIR':>12}  {entry.display}")
         else:
-            initial_prefix = arg
+            print(f"{format_size(entry.size or 0):>12}  {entry.display}")
 
-    print(f"Connecting to {ENDPOINT} ...")
-    print(f"Bucket: {BUCKET}")
 
+@cli.command("cat")
+@click.argument("path")
+@click.pass_context
+def cmd_cat(ctx: click.Context, path: str) -> None:
+    """Download and display a file's contents."""
+    s3_config: S3Config = ctx.obj["s3_config"]
+    fs = connect(s3_config)
+    s3_path = normalize_path(path, s3_config.bucket)
+    raw = fetch_file(fs, s3_path)
+    lines = render_file_content(s3_path, raw)
+    for line in lines:
+        print(line)
+
+
+@cli.command("cp")
+@click.argument("src")
+@click.argument("dst")
+@click.option("-R", "--recursive", is_flag=True, help="Copy directories recursively.")
+@click.pass_context
+def cmd_cp(ctx: click.Context, src: str, dst: str, recursive: bool) -> None:
+    """Copy files from S3 to the local filesystem."""
+    s3_config: S3Config = ctx.obj["s3_config"]
+    fs = connect(s3_config)
+    s3_src = normalize_path(src, s3_config.bucket)
+    info = fs.info(s3_src)
+    is_dir = info["type"] == "directory"
+    if is_dir and not recursive:
+        print(f"ERROR: s3://{s3_src} is a directory, use -R to copy recursively", file=sys.stderr)
+        sys.exit(1)
+    fs.get(s3_src, dst, recursive=recursive)
+    print(f"Copied s3://{s3_src} -> {dst}", file=sys.stderr)
+
+
+@cli.command("browse")
+@click.argument("prefix", default="")
+@click.pass_context
+def cmd_browse(ctx: click.Context, prefix: str) -> None:
+    """Launch the interactive TUI browser."""
+    s3_config: S3Config = ctx.obj["s3_config"]
+    fs = connect(s3_config)
+    initial_prefix = normalize_path(prefix, s3_config.bucket)
+    print(f"Connecting to {s3_config.endpoint} ...")
+    print(f"Bucket: {s3_config.bucket}")
     try:
         items = fs.ls(initial_prefix, detail=False)
     except Exception as e:
@@ -373,9 +471,8 @@ def main() -> None:
         sys.exit(1)
     if not items:
         print(f"WARNING: No objects found under s3://{initial_prefix}", file=sys.stderr)
-
-    curses.wrapper(lambda stdscr: run_tui(stdscr, fs, initial_prefix))
+    curses.wrapper(lambda stdscr: run_tui(stdscr, fs, initial_prefix, s3_config.bucket))
 
 
 if __name__ == "__main__":
-    main()
+    cli()

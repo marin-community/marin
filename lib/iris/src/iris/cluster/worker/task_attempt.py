@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from iris.chaos import chaos, chaos_raise
-from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, ContainerRuntime
+from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, ContainerRuntime, RuntimeLogReader
 from google.protobuf import json_format
 
 from iris.cluster.types import (
@@ -482,6 +482,7 @@ class TaskAttempt:
         # uv needs a writable directory for Python downloads.
         # Use a subdirectory of the cache which is bind-mounted from the worker.
         env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
+        env["CARGO_TARGET_DIR"] = "/root/.cargo/target"
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint
@@ -497,13 +498,16 @@ class TaskAttempt:
         # Pre-create cache mount directories so Docker doesn't create them as root
         uv_cache = self._cache_dir / "uv"
         cargo_cache = self._cache_dir / "cargo"
+        cargo_target = self._cache_dir / "cargo-target"
         uv_cache.mkdir(parents=True, exist_ok=True)
         cargo_cache.mkdir(parents=True, exist_ok=True)
+        cargo_target.mkdir(parents=True, exist_ok=True)
 
         mounts = [
             (str(self.workdir), "/app", "rw"),
             (str(uv_cache), "/uv/cache", "rw"),
             (str(cargo_cache), "/root/.cargo/registry", "rw"),
+            (str(cargo_target), "/root/.cargo/target", "rw"),
         ]
 
         config = ContainerConfig(
@@ -581,8 +585,7 @@ class TaskAttempt:
             timeout_seconds = self.request.timeout.milliseconds / 1000
             deadline = Deadline.from_seconds(timeout_seconds)
 
-        # Track last log timestamp for incremental fetching
-        last_log_time: Timestamp | None = None
+        log_reader = handle.log_reader()
 
         while True:
             if rule := chaos("worker.task_monitor"):
@@ -594,14 +597,14 @@ class TaskAttempt:
             if self.should_stop:
                 handle.stop(force=True)
                 logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
-                self._stream_logs(last_log_time)  # Capture final logs
+                self._stream_logs(log_reader)  # Capture final logs
                 self.transition_to(cluster_pb2.TASK_STATE_KILLED)
                 break
 
             # Check timeout
             if deadline and deadline.expired():
                 handle.stop(force=True)
-                self._stream_logs(last_log_time)  # Capture final logs
+                self._stream_logs(log_reader)  # Capture final logs
                 self.transition_to(
                     cluster_pb2.TASK_STATE_FAILED,
                     error="Timeout exceeded",
@@ -620,7 +623,7 @@ class TaskAttempt:
                     status.error,
                 )
                 # Final log fetch before container stops
-                last_log_time = self._stream_logs(last_log_time)
+                self._stream_logs(log_reader)
 
                 # Read result file only if container succeeded
                 if status.exit_code == 0 and self.workdir:
@@ -642,7 +645,7 @@ class TaskAttempt:
                     self.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
                     stderr_line = None
-                    for entry in reversed(handle.logs()):
+                    for entry in reversed(log_reader.read_all()):
                         if entry.source == "stderr" and entry.data:
                             stderr_line = entry.data
                             break
@@ -659,7 +662,7 @@ class TaskAttempt:
                 break
 
             # Stream logs incrementally
-            last_log_time = self._stream_logs(last_log_time)
+            self._stream_logs(log_reader)
 
             # Collect stats
             try:
@@ -679,30 +682,13 @@ class TaskAttempt:
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
 
-    def _stream_logs(self, since: Timestamp | None) -> Timestamp | None:
-        """Fetch new logs from container and append to log sink.
-
-        Args:
-            since: Timestamp to fetch logs after (None for all logs)
-
-        Returns:
-            Timestamp of the last log line + 1ms, or the input 'since' if no new logs.
-            We add 1ms because Docker's--since is inclusive at the timestamp boundary,
-            and we lose nanosecond precision when converting to milliseconds.
-        """
-        if not self._container_handle:
-            return since
+    def _stream_logs(self, reader: RuntimeLogReader) -> None:
+        """Fetch new logs from container and append to log sink."""
         try:
-            new_logs = self._container_handle.logs(since=since)
-            for log_line in new_logs:
+            for log_line in reader.read():
                 self._log_sink.append(source=log_line.source, data=log_line.data)
-
-            if new_logs:
-                last_ts = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp())
-                return last_ts.add_ms(1)
         except Exception:
             pass  # Don't fail task on log streaming errors
-        return since
 
     def _cleanup(self) -> None:
         """Clean up task resources: container, ports, image protection, workdir.

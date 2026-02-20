@@ -67,15 +67,19 @@ def build_runtime_entrypoint(
     # Use --link-mode symlink to reference cached wheels directly from .venv,
     # avoiding redundant installation. Symlinks work across bind mounts.
     link_mode_flag = "--link-mode symlink"
+    setup_commands.append("echo 'syncing deps'")
     if uv_sync_flags:
         setup_commands.append(f"uv sync {link_mode_flag} {python_flag} {uv_sync_flags}".strip())
     else:
         setup_commands.append(f"uv sync {link_mode_flag} {python_flag}".strip())
+    setup_commands.append("echo 'installing pip deps'")
     if pip_install_args:
         setup_commands.append(f"uv pip install {link_mode_flag} {pip_install_args}")
+    setup_commands.append("echo 'activating venv'")
     setup_commands.append("source .venv/bin/activate")
     setup_commands.append('echo "python=$(which python)"')
     setup_commands.append("python -c \"import sys; print('sys.path:', sys.path)\"")
+    setup_commands.append("echo 'running user command'")
 
     rt = cluster_pb2.RuntimeEntrypoint()
     rt.setup_commands[:] = setup_commands

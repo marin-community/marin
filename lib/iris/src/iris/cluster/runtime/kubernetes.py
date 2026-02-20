@@ -23,10 +23,9 @@ import shlex
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 
-from iris.cluster.k8s.kubectl import Kubectl
+from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
 from iris.cluster.types import get_gpu_count
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -38,7 +37,6 @@ from iris.cluster.runtime.profile import (
 from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -65,21 +63,6 @@ def _sanitize_label_value(value: str) -> str:
     if len(result) > _K8S_LABEL_MAX_LEN:
         result = result[:_K8S_LABEL_MAX_LEN].rstrip("-_.")
     return result or "unknown"
-
-
-def _parse_kubectl_timestamped_line(line: str) -> LogLine:
-    """Parse a kubectl logs line prefixed by RFC3339 timestamp."""
-    parts = line.split(" ", 1)
-    if len(parts) == 2:
-        ts_str, payload = parts
-        try:
-            if len(ts_str) > 27 and ts_str.endswith("Z"):
-                ts_str = ts_str[:26] + "Z"
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-            return LogLine(timestamp=ts, source="stdout", data=payload)
-        except ValueError:
-            pass
-    return LogLine(timestamp=datetime.now(timezone.utc), source="stdout", data=line)
 
 
 def _build_task_script(config: ContainerConfig) -> str:
@@ -151,6 +134,29 @@ def _build_tolerations(config: ContainerConfig) -> list[dict]:
     return tolerations
 
 
+def _kubectl_log_line_to_log_line(kll: KubectlLogLine) -> LogLine:
+    return LogLine(timestamp=kll.timestamp, source=kll.stream, data=kll.data)
+
+
+class KubernetesLogReader:
+    """Incremental log reader for a Kubernetes pod container using byte-offset deduplication."""
+
+    def __init__(self, kubectl: Kubectl, pod_name: str, container: str) -> None:
+        self._kubectl = kubectl
+        self._pod_name = pod_name
+        self._container = container
+        self._byte_offset: int = 0
+
+    def read(self) -> list[LogLine]:
+        result = self._kubectl.stream_logs(self._pod_name, container=self._container, byte_offset=self._byte_offset)
+        self._byte_offset = result.byte_offset
+        return [_kubectl_log_line_to_log_line(kll) for kll in result.lines]
+
+    def read_all(self) -> list[LogLine]:
+        result = self._kubectl.stream_logs(self._pod_name, container=self._container, byte_offset=0)
+        return [_kubectl_log_line_to_log_line(kll) for kll in result.lines]
+
+
 @dataclass
 class KubernetesContainerHandle:
     """ContainerHandle backed by a single Kubernetes Pod."""
@@ -185,7 +191,14 @@ class KubernetesContainerHandle:
         self._pod_name = f"iris-task-{uuid.uuid4().hex[:12]}"
         task_script = _build_task_script(self.config)
 
-        env_list: list[dict] = [{"name": k, "value": v} for k, v in self.config.env.items()]
+        env_list: list[dict] = [
+            {"name": k, "value": v} for k, v in self.config.env.items() if k != "IRIS_ADVERTISE_HOST"
+        ]
+
+        # The worker sets IRIS_ADVERTISE_HOST to its own host IP, but in the
+        # kubernetes runtime task pods can be scheduled on any node. Use the
+        # downward API to inject the actual node IP where the pod is running.
+        env_list.append({"name": "IRIS_ADVERTISE_HOST", "valueFrom": {"fieldRef": {"fieldPath": "status.hostIP"}}})
 
         # Pull S3 credentials from the K8s Secret so task containers can
         # access S3 object storage (e.g. for training data).
@@ -352,16 +365,8 @@ class KubernetesContainerHandle:
             oom_killed=oom_killed,
         )
 
-    def logs(self, since: Timestamp | None = None) -> list[LogLine]:
-        if not self._pod_name:
-            return []
-        args = ["logs", self._pod_name, "-c", "task", "--timestamps=true"]
-        if since is not None:
-            args.extend(["--since-time", since.as_formatted_date()])
-        result = self.kubectl.run(args, namespaced=True)
-        if result.returncode != 0:
-            return []
-        return [_parse_kubectl_timestamped_line(line) for line in result.stdout.splitlines() if line.strip()]
+    def log_reader(self) -> KubernetesLogReader:
+        return KubernetesLogReader(self.kubectl, self._pod_name, "task")
 
     def stats(self) -> ContainerStats:
         # This can be implemented via metrics.k8s.io when available.
@@ -381,10 +386,22 @@ class KubernetesContainerHandle:
         else:
             raise RuntimeError("ProfileType must specify either cpu or memory profiler")
 
+    def _wrap_in_venv_shell(self, cmd: list[str]) -> list[str]:
+        """Wrap a command to run inside the task venv via a login shell.
+
+        kubectl exec resolves the binary at the OCI layer before entering the
+        container mount namespace. With --link-mode symlink, venv binaries
+        (py-spy, memray) are symlinks into the uv cache which may not resolve
+        at the OCI stat() call. Running through bash with an explicit activate
+        lets the shell resolve the binary via PATH instead.
+        """
+        escaped = " ".join(shlex.quote(arg) for arg in cmd)
+        return ["bash", "-lc", f"source /app/.venv/bin/activate && {escaped}"]
+
     def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile, profile_id: str) -> bytes:
         spec = resolve_cpu_spec(cpu_config, duration_seconds, pid="1")
         output_path = f"/tmp/profile-cpu-{profile_id}.{spec.ext}"
-        cmd = build_pyspy_cmd(spec, py_spy_bin="/app/.venv/bin/py-spy", output_path=output_path)
+        cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path)
 
         logger.info(
             "CPU profiling pod %s for %ds (format=%s, rate=%dHz)",
@@ -394,7 +411,9 @@ class KubernetesContainerHandle:
             spec.rate_hz,
         )
         try:
-            result = self.kubectl.exec(self._pod_name, cmd, container="task", timeout=duration_seconds + 5)
+            result = self.kubectl.exec(
+                self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=duration_seconds + 5
+            )
             if result.returncode != 0:
                 raise RuntimeError(f"py-spy failed: {result.stderr}")
             return self.kubectl.read_file(self._pod_name, output_path, container="task")
@@ -403,12 +422,11 @@ class KubernetesContainerHandle:
 
     def _profile_memory(self, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile, profile_id: str) -> bytes:
         spec = resolve_memory_spec(memory_config, duration_seconds, pid="1")
-        memray_bin = "/app/.venv/bin/memray"
         trace_path = f"/tmp/memray-trace-{profile_id}.bin"
         output_path = f"/tmp/memray-output-{profile_id}.{spec.ext}"
 
-        attach_cmd = build_memray_attach_cmd(spec, memray_bin, trace_path)
-        transform_cmd = build_memray_transform_cmd(spec, memray_bin, trace_path, output_path)
+        attach_cmd = build_memray_attach_cmd(spec, "memray", trace_path)
+        transform_cmd = build_memray_transform_cmd(spec, "memray", trace_path, output_path)
 
         logger.info(
             "Memory profiling pod %s for %ds (format=%s, leaks=%s)",
@@ -418,11 +436,15 @@ class KubernetesContainerHandle:
             spec.leaks,
         )
         try:
-            result = self.kubectl.exec(self._pod_name, attach_cmd, container="task", timeout=duration_seconds + 10)
+            result = self.kubectl.exec(
+                self._pod_name, self._wrap_in_venv_shell(attach_cmd), container="task", timeout=duration_seconds + 10
+            )
             if result.returncode != 0:
                 raise RuntimeError(f"memray attach failed: {result.stderr}")
 
-            result = self.kubectl.exec(self._pod_name, transform_cmd, container="task", timeout=30)
+            result = self.kubectl.exec(
+                self._pod_name, self._wrap_in_venv_shell(transform_cmd), container="task", timeout=30
+            )
             if result.returncode != 0:
                 raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
 

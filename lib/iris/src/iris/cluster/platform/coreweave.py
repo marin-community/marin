@@ -80,15 +80,15 @@ _KUBECTL_TIMEOUT = 1800.0
 
 _S3_SECRET_NAME = "iris-s3-credentials"
 
-# CoreWeave Object Storage uses virtual-hosted-style addressing where the
+# S3-compatible endpoints that require virtual-hosted-style addressing where the
 # bucket name is a subdomain (https://<bucket>.cwobject.com). Path-style
 # requests are rejected with PathStyleRequestNotAllowed.
-_COREWEAVE_S3_DOMAINS = ("cwobject.com", "cwlota.com")
+_VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
 
 
-def _is_coreweave_endpoint(endpoint_url: str) -> bool:
+def _needs_virtual_host_addressing(endpoint_url: str) -> bool:
     hostname = urlparse(endpoint_url).hostname or ""
-    return any(hostname == domain or hostname.endswith("." + domain) for domain in _COREWEAVE_S3_DOMAINS)
+    return any(hostname == domain or hostname.endswith("." + domain) for domain in _VIRTUAL_HOST_ONLY_S3_DOMAINS)
 
 
 def _worker_pod_name(slice_id: str) -> str:
@@ -339,7 +339,7 @@ class CoreweavePlatform:
         self._executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="coreweave")
         self._s3_enabled = bool(os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"))
         if self._s3_enabled:
-            logger.info("CoreWeave S3 credentials detected in environment; enabling S3 env injection")
+            logger.info("S3 credentials detected in environment; enabling S3 env injection")
 
     # -- Storage Detection ----------------------------------------------------
 
@@ -350,16 +350,17 @@ class CoreweavePlatform:
     # -- S3 Credentials -------------------------------------------------------
 
     def _ensure_s3_credentials_secret(self) -> None:
-        """Create K8s Secret from operator's CW_KEY_ID / CW_KEY_SECRET env vars.
+        """Create K8s Secret from operator's R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY env vars.
 
         Called during start_controller(). Pods reference the secret via
         secretKeyRef so boto3/s3fs picks up credentials automatically.
         """
-        key_id = os.environ.get("CW_KEY_ID")
-        key_secret = os.environ.get("CW_KEY_SECRET")
+        key_id = os.environ.get("R2_ACCESS_KEY_ID")
+        key_secret = os.environ.get("R2_SECRET_ACCESS_KEY")
         if not key_id or not key_secret:
             raise PlatformError(
-                "CW_KEY_ID and CW_KEY_SECRET environment variables are required " "for CoreWeave S3 object storage"
+                "R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY environment variables are required "
+                "for S3-compatible object storage"
             )
         manifest = {
             "apiVersion": "v1",
@@ -377,11 +378,11 @@ class CoreweavePlatform:
         """K8s env var specs for S3 auth (secretKeyRef + endpoint).
 
         Used by both _build_controller_deployment() and _create_worker_pod()
-        so fsspec/s3fs can authenticate to CoreWeave object storage.
+        so fsspec/s3fs can authenticate to S3-compatible object storage.
 
         Sets FSSPEC_S3 so that all fsspec operations (in zephyr, marin,
-        levanter, etc.) automatically use the correct endpoint and
-        virtual-hosted addressing without per-call-site configuration.
+        levanter, etc.) automatically use the correct endpoint without
+        per-call-site configuration.
         """
         env = [
             {
@@ -397,7 +398,7 @@ class CoreweavePlatform:
         if endpoint:
             env.append({"name": "AWS_ENDPOINT_URL", "value": endpoint})
             fsspec_conf: dict = {"endpoint_url": endpoint}
-            if _is_coreweave_endpoint(endpoint):
+            if _needs_virtual_host_addressing(endpoint):
                 fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
             env.append({"name": "FSSPEC_S3", "value": json.dumps(fsspec_conf)})
         return env
