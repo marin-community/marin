@@ -1183,8 +1183,152 @@ def _solve_I_minus_strict_lower_transpose_blockwise(
     return jnp.concatenate([x1, x2], axis=0).astype(jnp.float32)
 
 
-def _in_specs_chunk_segment_fwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):
-    """One program per (b,h). Inputs carry Seg chunks inside the program."""
+def _insert_segment_axis(pspec):
+    tup = tuple(pspec) if pspec is not None else ()
+    if len(tup) < 4:
+        tup = (*tup, *([None] * (4 - len(tup))))
+    return P(tup[0], tup[1], None, tup[2], tup[3])
+
+
+def _in_specs_chunk_segment_prepare_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):
+    """Chunk-local solve kernel specs (per (b,h), Seg chunks per program)."""
+
+    def _bh(nh):
+        b = nh // H
+        h = nh - b * H
+        return (b, h)
+
+    in_specs = (
+        pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # k
+        pl.BlockSpec((1, 1, Seg, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # v
+        pl.BlockSpec((1, 1, Seg, Ct), lambda nh: (*_bh(nh), 0, 0)),  # g_cum
+        pl.BlockSpec((1, 1, Seg, Ct), lambda nh: (*_bh(nh), 0, 0)),  # beta
+    )
+
+    out_specs = (
+        pl.BlockSpec((1, 1, Seg, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # v_pseudo
+        pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # k_cumdecay
+    )
+    return in_specs, out_specs
+
+
+def _gdn_chunk_segment_prepare_kernel_tpu(
+    k_ref,
+    v_ref,
+    gcum_ref,
+    b_ref,
+    vpseudo_ref,
+    kcum_ref,
+    *,
+    Seg: int,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+    precision_mode: Literal["fp32", "bf16"] = "fp32",
+):
+    """Compute chunk-local solve outputs used by the recurrent kernel."""
+
+    idx = jnp.arange(Ct, dtype=jnp.int32)
+    ii = idx[:, None]
+    jj = idx[None, :]
+    tril_strict = (ii > jj).astype(jnp.float32)
+
+    for c in range(int(Seg)):
+        k = (
+            k_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, K_pad)
+        )
+        v = (
+            v_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, V_pad)
+        )
+        g_cum = gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
+        beta = b_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
+
+        v_beta = v * beta[:, None]  # (Ct, V)
+        k_beta = k * beta[:, None]  # (Ct, K)
+
+        g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+        exp_g = jnp.exp(g_cum_cl)  # (Ct,)
+
+        diff = g_cum[:, None] - g_cum[None, :]
+        diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+        exp_diff = jnp.exp(diff_cl)  # (Ct, Ct)
+
+        KKT = _mxu_matmul_f32(k_beta, jnp.transpose(k), precision_mode=precision_mode)
+        A = -KKT * exp_diff * tril_strict
+
+        k_scaled = k_beta * exp_g[:, None]
+        rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)  # (Ct, V+K)
+        sol_all = _solve_I_minus_strict_lower_blockwise(A, rhs_all, precision_mode=precision_mode)  # (Ct, V+K)
+
+        v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))  # (Ct, V)
+        k_cumdecay = lax.slice(sol_all, (0, V_pad), (Ct, V_pad + K_pad))  # (Ct, K)
+
+        vpseudo_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)] = v_pseudo[
+            None, None, None, :, :
+        ].astype(vpseudo_ref.dtype)
+        kcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)] = k_cumdecay[
+            None, None, None, :, :
+        ].astype(kcum_ref.dtype)
+
+
+def _gdn_chunk_segment_prepare_pallas(
+    k_bhscK: jnp.ndarray,
+    v_bhscV: jnp.ndarray,
+    g_cum_bhsc: jnp.ndarray,
+    b_bhsc: jnp.ndarray,
+    *,
+    Seg: int,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+):
+    kernel = functools.partial(
+        _gdn_chunk_segment_prepare_kernel_tpu,
+        Seg=int(Seg),
+        Ct=int(Ct),
+        K_pad=int(K_pad),
+        V_pad=int(V_pad),
+    )
+
+    def _local_call(k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc):
+        B, H = k_bhscK.shape[0], k_bhscK.shape[1]
+        NH = B * H
+
+        v_pseudo_struct = jax.ShapeDtypeStruct((B, H, Seg, Ct, V_pad), jnp.float32)
+        k_cumdecay_struct = jax.ShapeDtypeStruct((B, H, Seg, Ct, K_pad), jnp.float32)
+
+        in_specs, out_specs = _in_specs_chunk_segment_prepare_tpu(B, H, Seg, Ct, K_pad, V_pad)
+        return pl.pallas_call(
+            kernel,
+            grid=(NH,),
+            in_specs=in_specs,
+            out_specs=out_specs,
+            out_shape=(v_pseudo_struct, k_cumdecay_struct),
+            compiler_params=compiler_params,
+        )(k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc)
+
+    mesh, k_spec = _get_mesh_and_spec(k_bhscK)
+    _, v_spec = _get_mesh_and_spec(v_bhscV)
+    _, g_spec = _get_mesh_and_spec(g_cum_bhsc)  # rank-4
+    _, b_spec = _get_mesh_and_spec(b_bhsc)  # rank-4
+
+    if _mesh_size(mesh) > 1:
+        return _mk_shard_map(
+            _local_call,
+            mesh=mesh,
+            in_specs=(k_spec, v_spec, g_spec, b_spec),
+            out_specs=(v_spec, k_spec),
+        )(k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc)
+    else:
+        return _local_call(k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc)
+
+
+def _in_specs_chunk_segment_recurrent_fwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):
+    """Recurrent apply kernel specs (per (b,h), Seg chunks per program)."""
 
     def _bh(nh):
         b = nh // H
@@ -1194,9 +1338,9 @@ def _in_specs_chunk_segment_fwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: in
     in_specs = (
         pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # q
         pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # k
-        pl.BlockSpec((1, 1, Seg, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # v
         pl.BlockSpec((1, 1, Seg, Ct), lambda nh: (*_bh(nh), 0, 0)),  # g_cum
-        pl.BlockSpec((1, 1, Seg, Ct), lambda nh: (*_bh(nh), 0, 0)),  # beta
+        pl.BlockSpec((1, 1, Seg, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # v_pseudo
+        pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # k_cumdecay
         pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # S_prev
     )
 
@@ -1208,12 +1352,12 @@ def _in_specs_chunk_segment_fwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: in
     return in_specs, out_specs
 
 
-def _gdn_chunk_segment_fwd_kernel_tpu(
+def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
     q_ref,
     k_ref,
-    v_ref,
     gcum_ref,
-    b_ref,
+    vpseudo_ref,
+    kcum_ref,
     Sprev_ref,
     out_ref,
     Send_ref,
@@ -1225,70 +1369,20 @@ def _gdn_chunk_segment_fwd_kernel_tpu(
     V_pad: int,
     precision_mode: Literal["fp32", "bf16"] = "fp32",
 ):
-    """Compute a whole segment (Seg chunks) inside one TPU program (per b,h)."""
+    """Apply the recurrent state update using precomputed solve outputs."""
 
-    # Masks/constants (compile-time shapes)
     idx = jnp.arange(Ct, dtype=jnp.int32)
     ii = idx[:, None]
     jj = idx[None, :]
-    tril_strict = (ii > jj).astype(jnp.float32)
     causal_mask = (ii >= jj).astype(jnp.float32)
     mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
 
-    # Load initial state
     S = (
         Sprev_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)]
         .astype(jnp.float32)
         .reshape(K_pad, V_pad)
     )
 
-    def chunk_fwd(S_prev, q, k, v, g_cum, beta):
-        # g_cum: (Ct,), beta: (Ct,)
-        v_beta = v * beta[:, None]  # (Ct, V)
-        k_beta = k * beta[:, None]  # (Ct, K)
-
-        g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-        exp_g = jnp.exp(g_cum_cl)  # (Ct,)
-
-        diff = g_cum[:, None] - g_cum[None, :]
-        diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-        exp_diff = jnp.exp(diff_cl)  # (Ct, Ct)
-
-        # A = - (k_beta @ k^T) * exp_diff * tril_strict
-        KKT = jnp.matmul(k_beta, k.T)
-        A = -KKT * exp_diff * tril_strict
-
-        # Solve both RHS at once: [βV | (βK ⊙ exp_g)]
-        k_scaled = k_beta * exp_g[:, None]
-        rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)  # (Ct, V+K)
-        sol_all = _solve_I_minus_strict_lower_blockwise(A, rhs_all, precision_mode=precision_mode)  # (Ct, V+K)
-
-        v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))  # (Ct, V)
-        k_cumdecay = lax.slice(sol_all, (0, V_pad), (Ct, V_pad + K_pad))  # (Ct, K)
-
-        # Output
-        QK = jnp.matmul(q, k.T)
-        attn = QK * exp_diff * causal_mask
-
-        v_prime = jnp.matmul(k_cumdecay, S_prev)  # (Ct, V)
-        v_new = v_pseudo - v_prime
-
-        inter = jnp.matmul(q * exp_g[:, None], S_prev)
-        intra = jnp.matmul(attn, v_new)
-        out = inter + intra
-
-        # State update
-        g_tail = jnp.sum(g_cum * mask_last)
-        decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
-
-        decay_w = jnp.exp(jnp.clip(g_tail - g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))  # (Ct,)
-        k_w = k * decay_w[:, None]
-        add = jnp.matmul(k_w.T, v_new)  # (K, V)
-        S_next = S_prev * decay_tail + add
-
-        return out, S_next
-
-    # Process Seg chunks
     for c in range(int(Seg)):
         Schunkstarts_ref[
             dslice(0, 1),
@@ -1310,24 +1404,108 @@ def _gdn_chunk_segment_fwd_kernel_tpu(
             .astype(jnp.float32)
             .reshape(Ct, K_pad)
         )
-        v = (
-            v_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)]
+        g_cum = gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
+        v_pseudo = (
+            vpseudo_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)]
             .astype(jnp.float32)
             .reshape(Ct, V_pad)
         )
-        g_cum = gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
-        beta = b_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
+        k_cumdecay = (
+            kcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, K_pad)
+        )
 
-        out, S = chunk_fwd(S, q, k, v, g_cum, beta)
+        g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+        exp_g = jnp.exp(g_cum_cl)  # (Ct,)
+
+        diff = g_cum[:, None] - g_cum[None, :]
+        diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+        exp_diff = jnp.exp(diff_cl)  # (Ct, Ct)
+
+        QK = _mxu_matmul_f32(q, jnp.transpose(k), precision_mode=precision_mode)
+        attn = QK * exp_diff * causal_mask
+
+        v_prime = _mxu_matmul_f32(k_cumdecay, S, precision_mode=precision_mode)
+        v_new = v_pseudo - v_prime
+
+        inter = _mxu_matmul_f32(q * exp_g[:, None], S, precision_mode=precision_mode)
+        intra = _mxu_matmul_f32(attn, v_new, precision_mode=precision_mode)
+        out = inter + intra
+
+        g_tail = jnp.sum(g_cum * mask_last)
+        decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
+
+        decay_w = jnp.exp(jnp.clip(g_tail - g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))  # (Ct,)
+        k_w = k * decay_w[:, None]
+        add = _mxu_matmul_f32(jnp.transpose(k_w), v_new, precision_mode=precision_mode)  # (K, V)
+        S = S * decay_tail + add
 
         out_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)] = out[
             None, None, None, :, :
         ].astype(out_ref.dtype)
 
-    # Store final state for segment
     Send_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)] = S[None, None, :, :].astype(
         Send_ref.dtype
     )
+
+
+def _gdn_chunk_segment_recurrent_fwd_pallas(
+    q_bhscK: jnp.ndarray,
+    k_bhscK: jnp.ndarray,
+    g_cum_bhsc: jnp.ndarray,
+    v_pseudo_bhscV: jnp.ndarray,
+    k_cumdecay_bhscK: jnp.ndarray,
+    S_prev_bhKV: jnp.ndarray,
+    *,
+    Seg: int,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+):
+    kernel = functools.partial(
+        _gdn_chunk_segment_recurrent_fwd_kernel_tpu,
+        Seg=int(Seg),
+        Ct=int(Ct),
+        K_pad=int(K_pad),
+        V_pad=int(V_pad),
+    )
+
+    def _local_call(q_bhscK, k_bhscK, g_cum_bhsc, v_pseudo_bhscV, k_cumdecay_bhscK, S_prev_bhKV):
+        B, H = q_bhscK.shape[0], q_bhscK.shape[1]
+        NH = B * H
+
+        out_struct = jax.ShapeDtypeStruct((B, H, Seg, Ct, V_pad), jnp.float32)
+        st_struct = jax.ShapeDtypeStruct((B, H, K_pad, V_pad), jnp.float32)
+        chunk_starts_struct = jax.ShapeDtypeStruct((B, H, Seg, K_pad, V_pad), jnp.float32)
+
+        in_specs, out_specs = _in_specs_chunk_segment_recurrent_fwd_tpu(B, H, Seg, Ct, K_pad, V_pad)
+        return pl.pallas_call(
+            kernel,
+            grid=(NH,),
+            in_specs=in_specs,
+            out_specs=out_specs,
+            out_shape=(out_struct, st_struct, chunk_starts_struct),
+            compiler_params=compiler_params,
+        )(q_bhscK, k_bhscK, g_cum_bhsc, v_pseudo_bhscV, k_cumdecay_bhscK, S_prev_bhKV)
+
+    mesh, q_spec = _get_mesh_and_spec(q_bhscK)
+    _, k_spec = _get_mesh_and_spec(k_bhscK)
+    _, g_spec = _get_mesh_and_spec(g_cum_bhsc)  # rank-4
+    _, v_pseudo_spec = _get_mesh_and_spec(v_pseudo_bhscV)  # rank-5
+    _, k_cum_spec = _get_mesh_and_spec(k_cumdecay_bhscK)  # rank-5
+    _, S_spec = _get_mesh_and_spec(S_prev_bhKV)  # rank-4
+    Schunkstarts_spec = _insert_segment_axis(S_spec)
+
+    if _mesh_size(mesh) > 1:
+        return _mk_shard_map(
+            _local_call,
+            mesh=mesh,
+            in_specs=(q_spec, k_spec, g_spec, v_pseudo_spec, k_cum_spec, S_spec),
+            out_specs=(v_pseudo_spec, S_spec, Schunkstarts_spec),
+        )(q_bhscK, k_bhscK, g_cum_bhsc, v_pseudo_bhscV, k_cumdecay_bhscK, S_prev_bhKV)
+    else:
+        return _local_call(q_bhscK, k_bhscK, g_cum_bhsc, v_pseudo_bhscV, k_cumdecay_bhscK, S_prev_bhKV)
 
 
 def _gdn_chunk_segment_fwd_pallas(
@@ -1343,57 +1521,30 @@ def _gdn_chunk_segment_fwd_pallas(
     K_pad: int,
     V_pad: int,
 ):
-    kernel = functools.partial(
-        _gdn_chunk_segment_fwd_kernel_tpu,
-        Seg=int(Seg),
-        Ct=int(Ct),
-        K_pad=int(K_pad),
-        V_pad=int(V_pad),
+    # FLA-style 2-kernel split:
+    # 1) chunk-local solve prep, 2) recurrent state/output apply.
+    v_pseudo_bhscV, k_cumdecay_bhscK = _gdn_chunk_segment_prepare_pallas(
+        k_bhscK,
+        v_bhscV,
+        g_cum_bhsc,
+        b_bhsc,
+        Seg=Seg,
+        Ct=Ct,
+        K_pad=K_pad,
+        V_pad=V_pad,
     )
-
-    def _local_call(q_bhscK, k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc, S_prev_bhKV):
-        B, H = q_bhscK.shape[0], q_bhscK.shape[1]
-        NH = B * H
-
-        out_struct = jax.ShapeDtypeStruct((B, H, Seg, Ct, V_pad), jnp.float32)
-        st_struct = jax.ShapeDtypeStruct((B, H, K_pad, V_pad), jnp.float32)
-        chunk_starts_struct = jax.ShapeDtypeStruct((B, H, Seg, K_pad, V_pad), jnp.float32)
-
-        in_specs, out_specs = _in_specs_chunk_segment_fwd_tpu(B, H, Seg, Ct, K_pad, V_pad)
-
-        return pl.pallas_call(
-            kernel,
-            grid=(NH,),
-            in_specs=in_specs,
-            out_specs=out_specs,
-            out_shape=(out_struct, st_struct, chunk_starts_struct),
-            compiler_params=compiler_params,
-        )(q_bhscK, k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc, S_prev_bhKV)
-
-    def _insert_segment_axis(pspec):
-        tup = tuple(pspec) if pspec is not None else ()
-        if len(tup) < 4:
-            tup = (*tup, *([None] * (4 - len(tup))))
-        return P(tup[0], tup[1], None, tup[2], tup[3])
-
-    # shard_map wrapper
-    mesh, q_spec = _get_mesh_and_spec(q_bhscK)
-    _, k_spec = _get_mesh_and_spec(k_bhscK)
-    _, v_spec = _get_mesh_and_spec(v_bhscV)
-    _, g_spec = _get_mesh_and_spec(g_cum_bhsc)  # rank-4
-    _, b_spec = _get_mesh_and_spec(b_bhsc)  # rank-4
-    _, S_spec = _get_mesh_and_spec(S_prev_bhKV)  # rank-4
-    Schunkstarts_spec = _insert_segment_axis(S_spec)
-
-    if _mesh_size(mesh) > 1:
-        return _mk_shard_map(
-            _local_call,
-            mesh=mesh,
-            in_specs=(q_spec, k_spec, v_spec, g_spec, b_spec, S_spec),
-            out_specs=(v_spec, S_spec, Schunkstarts_spec),
-        )(q_bhscK, k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc, S_prev_bhKV)
-    else:
-        return _local_call(q_bhscK, k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc, S_prev_bhKV)
+    return _gdn_chunk_segment_recurrent_fwd_pallas(
+        q_bhscK,
+        k_bhscK,
+        g_cum_bhsc,
+        v_pseudo_bhscV,
+        k_cumdecay_bhscK,
+        S_prev_bhKV,
+        Seg=Seg,
+        Ct=Ct,
+        K_pad=K_pad,
+        V_pad=V_pad,
+    )
 
 
 def _in_specs_chunk_segment_bwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):

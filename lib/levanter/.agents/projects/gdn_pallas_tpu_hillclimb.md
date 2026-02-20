@@ -331,3 +331,46 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - `throughput/duration`: `0.25418s -> 0.25394s` (`-0.10%`).
 - Assessment: **low-impact**. Gain is below 3% and dominant hotspot is unchanged (`custom-call` in the same GDN shard-map path).
 - Next hypothesis: escalate to a more radical launch/dataflow move (Macro Move D or F), specifically a full-sequence pipeline kernel (`emit_pipeline`) or FLA-style 2-kernel split (solve kernel + recurrent kernel) to reduce GDN custom-call count and increase per-call arithmetic intensity.
+
+### Iteration 8 (loop 2/20) - FLA Experiment A: split forward into solve + recurrent kernels
+
+- Date: 2026-02-20T06:44:00Z
+- Commit: this commit
+- Dominant bottleneck carried in: GDN shard-map custom calls remained dominant in Iteration 7 TPU:0 XLA Ops aggregate (`shard_map/custom-call` `220.522 ms` total), with top callsites at `gated_deltanet.py:2357` (transpose/jvp path, `143.558 ms`) and `gated_deltanet.py:1368` (jvp path, `66.546 ms`).
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: full-sequence `emit_pipeline` kernel to keep recurrent state in VMEM across chunks (`+20-35%`, very high implementation risk).
+  2. **Macro Move F (Experiment A)**: 2-kernel split of forward segment path into chunk-local solve kernel + recurrent apply kernel (`+10-20%`, high risk from extra HBM traffic/launch overhead).
+  3. **Macro Move E**: tile recurrent state update by V-blocks (`+12-25%`, high risk from gradient path complexity and sharding changes).
+- Selected macro-move category: **F) Match FlashLinearAttention’s kernel decomposition**.
+- Selected hypothesis: implement Experiment A directly by splitting forward segmented kernel into:
+  - Kernel 1 (solve/prep): compute chunk-local `v_pseudo` and `k_cumdecay`.
+  - Kernel 2 (recurrent/apply): consume those tensors with recurrent `S_prev` to produce `out`, `S_end`, and `chunk_starts`.
+- Change summary:
+  - Replaced monolithic `_gdn_chunk_segment_fwd_kernel_tpu` with two TPU Pallas kernels:
+    - `_gdn_chunk_segment_prepare_kernel_tpu` + `_gdn_chunk_segment_prepare_pallas`
+    - `_gdn_chunk_segment_recurrent_fwd_kernel_tpu` + `_gdn_chunk_segment_recurrent_fwd_pallas`
+  - Kept segmented scan API and backward kernel structure unchanged so custom VJP wiring/correctness remained stable.
+  - Updated forward wrapper `_gdn_chunk_segment_fwd_pallas` to orchestrate the two-kernel decomposition each segment.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - First run: one transient failure in `test_gdn_layer_backward_matches_hf[False]` (`max_abs ~4.1e-05`); second run passed fully.
+  - Final result: `87 passed, 2 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_split2kernel_i2_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_split2kernel_i2_dev_130m_ch128_seg16_20steps-474c1f`
+  - W&B profiler artifact: `run-gdn_split2kernel_i2_dev_130m_ch128_seg16_20steps-474c1f-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_split2kernel_i2_dev/plugins/profile/2026_02_20_06_37_50/perfetto_trace.json.gz`
+- Hotspots observed (TPU:0 XLA Ops aggregate, compared to Iteration 7 baseline `gdn_rank4gb_i1_dev_130m_ch128_seg16_20steps-f2d508`):
+  - `shard_map` custom-call bucket: `220.522 ms -> 229.021 ms` (`+3.85%`), still dominant.
+  - Backward-dominant call remained unchanged:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `143.558 ms -> 143.560 ms` (`+0.00%`).
+  - Forward closed-call path worsened after split:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `66.546 ms -> 75.052 ms` (`+12.78%`).
+    - Source moved from one line to two kernels (`gated_deltanet.py:1368` -> `gated_deltanet.py:1305` + `gated_deltanet.py:1483`), confirming extra work/traffic in the split path.
+  - Other categories were effectively flat (`all-gather` `32.668 -> 32.684 ms`, `fusion` `46.341 -> 45.997 ms`).
+- MFU/throughput delta (vs Iteration 7 run):
+  - `throughput/mfu`: `3.9889 -> 3.8997` (`-2.24%`).
+  - `throughput/tokens_per_second`: `129039.34 -> 126155.06` (`-2.24%`).
+  - `throughput/duration`: `0.25394s -> 0.25974s` (`+2.29%`).
+- Assessment: **low-impact / regression**. MFU regressed and dominant hotspot category remained unchanged.
+- Next hypothesis: escalate to a more radical launch-reduction move, specifically Macro Move D with `pltpu.emit_pipeline` over full chunk axis (no Python unrolled chunk loops) and a matching backward pipeline so forward/backward shard-map call count drops instead of increasing.
