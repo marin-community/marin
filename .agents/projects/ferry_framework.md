@@ -146,6 +146,19 @@ if regression_investigation:
     selected = []  # allow identical rerun with explicit reason
 ```
 
+## Recipe Promotion Rule
+
+When a ferry variant is clearly better in a holistic sense, we should promote it as the new default recipe baseline.
+
+Promotion signals (examples):
+- most (or nearly all) key eval losses improve versus the prior baseline ferry
+- LM eval soft metrics improve in aggregate
+- no obvious regression in integration reliability (launch stability, checkpointing, monitoring behavior)
+
+Operationally:
+- open a follow-up PR that updates the canonical recipe/template (`experiments/ferries/daily.py` and recipe docs) to match the better variant
+- include a short comparison table in the PR showing before/after metrics and any tradeoffs
+
 ## Suggested Command Skeletons
 
 Context collection:

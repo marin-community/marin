@@ -14,21 +14,23 @@ Expected workflow:
 
 import datetime as dt
 import os
+from dataclasses import replace
 
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_mixture_data_config
 
 from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size, llama_150m
-from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
+from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 
 # ---------------------------
 # Daily ferry policy defaults
 # ---------------------------
 DEFAULT_MODEL_FLOPS_TARGET = int(1e19)
-DEFAULT_CROSS_ENTROPY_BLOCK_SIZE = 2048
 TRAIN_BATCH_SIZE = 512
-TRAIN_SEQ_LEN = llama_150m.max_seq_len
+TRAIN_SEQ_LEN = 4096
 
 
 def _int_env(name: str, default: int) -> int:
@@ -38,10 +40,23 @@ def _int_env(name: str, default: int) -> int:
     return int(value)
 
 
+def _build_nemotron_mix():
+    nemotron_steps = tokenize_nemotron()
+    proofpile_2 = dclm_components_llama3["proofpile_2"]
+    starcoderdata = dclm_components_llama3["starcoderdata"]
+    return lm_mixture_data_config(
+        components={**nemotron_steps, "starcoderdata": starcoderdata, "proofpile_2": proofpile_2},
+        weights={
+            **NEMOTRON_WEIGHTS,
+            "starcoderdata": 0.25,
+            "proofpile_2": 0.055,
+        },
+    )
+
+
 # Approximate FLOPs model used for scaling guidance:
 # total_flops ~= 6 * num_params * num_tokens
 MODEL_FLOPS_TARGET = _int_env("FERRY_MODEL_FLOPS_TARGET", DEFAULT_MODEL_FLOPS_TARGET)
-CROSS_ENTROPY_BLOCK_SIZE = _int_env("FERRY_CROSS_ENTROPY_BLOCK_SIZE", DEFAULT_CROSS_ENTROPY_BLOCK_SIZE)
 NUM_MODEL_PARAMS = compute_num_parameters(llama_150m, llama3_tokenizer_vocab_size)
 NUM_TRAIN_TOKENS = MODEL_FLOPS_TARGET // (6 * NUM_MODEL_PARAMS)
 NUM_TRAIN_STEPS = _int_env(
@@ -54,7 +69,7 @@ FERRY_DATE = os.environ.get("FERRY_DATE", dt.date.today().isoformat())
 RUN_NAME = f"ferry_daily_125m_{FERRY_DATE}"
 
 # Agent edit surface: keep daily changes small (usually 1-2 knobs).
-train_config = SimpleTrainConfig(
+train_config_kwargs = dict(
     resources=ResourceConfig.with_tpu("v5p-8"),
     train_batch_size=TRAIN_BATCH_SIZE,
     train_seq_len=TRAIN_SEQ_LEN,
@@ -66,17 +81,16 @@ train_config = SimpleTrainConfig(
     min_lr_ratio=0.1,
     warmup=1000,
     z_loss_weight=1e-4,
-    cross_entropy_block_size=CROSS_ENTROPY_BLOCK_SIZE,
 )
+
+train_config = SimpleTrainConfig(**train_config_kwargs)
 
 daily_ferry = default_train(
     name=RUN_NAME,
-    tokenized=dclm_mixture_config_llama3,
-    model_config=llama_150m,
+    tokenized=_build_nemotron_mix(),
+    model_config=replace(llama_150m, max_seq_len=TRAIN_SEQ_LEN),
     train_config=train_config,
-    tags=["ferry", "daily", "integration", "125m"],
-    eval_harness_tasks=[],
-    use_default_validation=False,
+    tags=["ferry", "daily", "integration", "125m", "nemotron", "seq4096"],
 )
 
 

@@ -1,56 +1,51 @@
-# Recipe: Daily Ferry (Integration Test First)
+# Recipe: Daily Ferry (Integration-Test First)
 
 ## Overview
+Use this recipe to propose, launch, and monitor a daily ferry run as a high-signal integration test on TPU infrastructure.
 
-Use this recipe to propose, launch, and monitor a **daily 125M ferry** as a high-signal integration test of Marin TPU training infrastructure.
+A ferry is a regularly scheduled run at roughly fixed scale. The daily ferry is intentionally conservative:
+- stable scale and architecture,
+- bounded day-over-day edits,
+- explicit human approval before launch,
+- strict monitoring and restart hygiene.
 
-A ferry is a regularly scheduled run at approximately the same scale. For daily ferries, the goal is reliability and regression detection first, with limited experimentation.
+## Current Baseline
+Canonical template:
+- `experiments/ferries/daily.py`
 
-Current defaults:
-- cadence: daily
-- scale: ~125M parameters, ~1e19 model FLOPs target
-- PR target branch: `main`
-- launch cluster: `us-central1` (maps to zone `us-central1-a`)
-- issue filter: label `experiment`
-- change budget: guidance only (not script-enforced), usually 1-2 knobs
+Current baseline defaults in that template:
+- data: Nemotron mix (Nemotron CC + StarCoderData + ProofPile2)
+- model size: Llama ~125M (`llama_150m`)
+- sequence length: 4096
+- train batch size: 512
+- FLOP target: ~1e19 (overrideable via env)
+- default cluster: `us-central1` (zone `us-central1-a`)
 
 ## Prerequisites
+- Local checkout with write access.
+- `uv` installed.
+- `gh` authenticated for issue/PR workflows.
+- Access to the Ray/TPU launch path used by `lib/marin/src/marin/run/ray_run.py`.
+- A canonical ferry issue and prior run/PR history.
 
-- Local checkout of this repository with write access.
-- `uv` available.
-- `gh` CLI authenticated (for issue/PR workflows).
-- Access to TPU launch environment used by `ray_run.py`.
-- Existing ferry template path: `experiments/ferries/daily.py`.
-
-## Inputs Required Before Proposing A Ferry
-
-Collect these first:
-1. Last ferry reference:
-- issue link
-- PR/commit link
-- run/job link
-2. Human objective for today:
-- normal daily integration check, or
-- targeted regression confirmation
+## Inputs Before Proposing
+Collect:
+1. Last ferry references:
+- issue URL
+- PR/commit URL
+- W&B run URL and Ray job ID
+2. Human objective for this interval:
+- standard integration pass
+- or explicit regression investigation
 3. Interval boundary:
-- since last ferry run (not fixed 24h)
+- use "since last ferry run", not fixed wall-clock day boundaries
 
-If objective is unclear, ask before editing.
+If objective is ambiguous, ask before editing.
 
-## Human Workflow
-
-1. Review last ferry outcome and choose today's objective.
-2. Let the agent propose a bounded update to `experiments/ferries/daily.py`.
-3. Review PR to confirm change size/risk is acceptable.
-4. Give explicit launch approval.
-5. Track run updates in the ferry issue.
-
-## Agent Workflow
+## Standard Workflow
 
 ### 1) Build context since last ferry
-
 ```bash
-# Set these from the last ferry PR/issue record.
 LAST_FERRY_SHA=<last_ferry_commit_sha>
 LAST_FERRY_DATE=<YYYY-MM-DD>
 
@@ -63,93 +58,95 @@ gh issue list \
 ```
 
 Notes:
-- Use `experiment` label only for now.
-- If `LAST_FERRY_SHA` is unavailable, use a date fallback and record that in the PR rationale.
+- Treat GitHub-tagged ferry PRs/issues as source of truth.
+- If `LAST_FERRY_SHA` is unavailable, use a date fallback and call that out in the PR text.
 
-### 2) Propose the next ferry
+### 2) Propose bounded ferry edits
+Edit `experiments/ferries/daily.py` directly.
 
-Edit `experiments/ferries/daily.py` by pattern-matching the last ferry.
+Guidelines:
+- usually change 1-2 knobs total,
+- avoid high-churn edits,
+- keep changes reversible,
+- allow identical rerun only for explicit regression confirmation.
 
-Rules:
-- Keep model scale stable unless human asks otherwise.
-- Usually change 1-2 knobs total.
-- Avoid "everything changed" proposals.
-- Identical rerun is allowed only for explicit regression checks.
-- Update run name with date (example: `daily-125m-2026-02-12`).
-
-### 3) Open PR to `main`
-
-PR must include:
-- link to last ferry issue/PR/run
-- what changed and why
-- risk level (`low`/`medium`/`high`)
-- explicit before/after config delta
+### 3) Open PR targeting `main`
+Include:
+- last ferry links,
+- exact config delta,
+- rationale and risk level (`low`/`medium`/`high`),
 - launch checklist:
   - [ ] human approval
-  - [ ] issue created/updated
+  - [ ] issue updated
   - [ ] monitoring loop started
-  - [ ] optional/manual Discord update posted
 
-### 4) Launch only after human approval
-
-Illustrative launch shape:
+### 4) Launch after explicit approval
+Use the canonical launch path:
 
 ```bash
 uv run lib/marin/src/marin/run/ray_run.py \
   --no_wait \
   --cluster us-central1 \
-  -- python experiments/ferries/daily.py --run_name "daily-125m-$(date +%F)"
+  -- python experiments/ferries/daily.py
 ```
 
-Capture and post:
-- `job_id`
-- cluster
-- run URL/log URLs
-- launch timestamp
+Optional deterministic naming for reruns:
 
-### 5) Monitor to completion
+```bash
+uv run lib/marin/src/marin/run/ray_run.py \
+  --no_wait \
+  --cluster us-central1 \
+  -e FERRY_DATE="$(date +%Y%m%d-%H%M%S)-daily-ferry" \
+  -- python experiments/ferries/daily.py
+```
 
-Follow `.agents/docs/job-monitoring-loop.md` using:
-- `job_id`
-- `cluster=us-central1`
-- `experiment=experiments/ferries/daily.py`
+Record in the issue:
+- Ray job ID,
+- cluster,
+- launch timestamp,
+- W&B link(s) when available.
 
-Escalation policy:
-- small obvious bug: fix + relaunch
-- repeated same failure after one fix: escalate
-- infra-wide failures (cluster/quotas/OOM instability): escalate immediately
+### 5) Monitor to terminal state
+Follow `.agents/docs/job-monitoring-loop.md` with:
+- `job_id`,
+- `cluster`,
+- `experiment=experiments/ferries/daily.py`.
 
-### 6) Close the loop in GitHub
+Hard rule:
+- do not restart/recreate/mutate cluster without explicit human consent in-thread.
 
-Post a final issue update with:
-- pass/fail status
-- key metrics (or links)
-- notable failures/fixes
-- next-step recommendation for tomorrow's ferry
+### 6) Close loop in issue
+Post:
+- final status,
+- key metrics and regressions,
+- links to PR/job/W&B,
+- recommendation for next ferry.
 
-Discord automation is deferred to Phase 2. Manual Discord posting is optional.
+## Recipe Promotion Rule
+If a ferry variant is clearly better holistically, promote it as the new baseline recipe/template.
 
-## Change Budget Guidance
+Promotion examples:
+- eval losses are broadly better across major validation slices,
+- LM eval soft metrics improve in aggregate,
+- no obvious reliability regressions (launch, checkpointing, monitoring behavior).
 
-For daily integration ferries:
-- Prefer infra/pipeline validation signal over high-variance model exploration.
-- Keep changes small and reversible.
-- Suggested buckets:
-  - datamix minor change
-  - optimizer/hyperparameter micro-tweak
-  - model architecture micro-adjustment
-  - training-system toggle (logging/checkpointing/loader behavior)
-  - observability instrumentation
+When promotion is warranted:
+- open follow-up PR updating `experiments/ferries/daily.py` and this recipe,
+- include a concise before/after metric table and tradeoffs.
+
+## Escalation Guidance
+- Small obvious launch/config bugs: fix and relaunch.
+- Same failure repeats after one fix: escalate.
+- Infra-wide instability (node churn, quota/resource contention, repeated TPU runtime failures): escalate immediately.
 
 ## Validation Checklist
-
-- `experiments/ferries/daily.py` diff is small and intentional.
+- Diff in `experiments/ferries/daily.py` is intentional and bounded.
 - PR targets `main`.
-- Ferry issue is updated before launch.
-- Launch command uses `us-central1`.
-- Monitoring loop started and maintained until terminal state.
+- Ferry issue has updated launch metadata.
+- Monitoring loop is active until terminal state.
+- Final issue comment includes links and recommendation.
 
 ## See Also
-
 - `.agents/docs/job-monitoring-loop.md`
 - `.agents/projects/ferry_framework.md`
+- `docs/recipes/agent_research.md`
