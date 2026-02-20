@@ -1267,8 +1267,6 @@ def _apply_resilient_defaults(args: argparse.Namespace) -> None:
     args.codex_retries = max(args.codex_retries, 2)
     args.post_check_retries = max(args.post_check_retries, 2)
     args.validation_mode = "required"
-    if args.validation_policy == "fail":
-        args.validation_policy = "count-failure"
     if args.validation_max_attempts >= 0:
         args.validation_max_attempts = -1
 
