@@ -566,3 +566,53 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - Active baseline profile/metrics remain Iteration 12 run `gdn_prep_tape_i4_dev_130m_ch128_seg16_20steps-e4c03f`.
 - Assessment: **baseline reset**. This restores the known-better code path and should be treated as the launch point for subsequent optimization iterations (15+).
 - Next hypothesis: target the remaining forward closed-call shard-map `custom-call` hotspot with a macro-move change (D/E/F), keeping the Iteration 12 backward tape reuse intact.
+
+### Iteration 15 - Macro Move E / FLA Experiment B: lane-packed full-sequence backward recurrence (reverted)
+
+- Date: 2026-02-20T16:12:00Z
+- Commit: none (failed attempt)
+- Loop session/local index: `3/20`
+- Starting commit: `02af17a4214534ba64321db011208804b7e9156b`
+- Dominant bottleneck carried in (from latest successful baseline trace `.profiles/wandb/gdn_emitpipe_i1_dev_130m_ch128_seg16_20steps-a499c1/plugins/profile/2026_02_20_13_35_37/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` aggregate: `171.172 ms` (dominant custom-call bucket).
+  - Top per-op shard-map slices: ~`4.295 ms` each (IDs `shard_map.3683/3691/3687/...`).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move E / Experiment B**: full-sequence backward recurrence with V-oriented layout and lane-packed K axis to keep pipeline active at `head_dim=64` (`+10-25%`, high compile/layout risk).
+  2. **Macro Move D**: full forward+backward full-sequence pipeline with transposed staging on all feature-carrying tensors (`+20-35%`, very high implementation risk).
+  3. **Macro Move F / Experiment A extension**: split backward into chunk-local adjoint kernel + recurrent dS apply kernel (`+12-20%`, high complexity and tape-I/O risk).
+- Selected macro-move category: **E) Tile the state/output along V**.
+- Selected hypothesis: apply a lane-safe full-sequence backward recurrent kernel using `emit_pipeline`, with state carried in `(V, K_lane)` layout and per-stage V tensors staged as `(..., V, Ct)`.
+
+- Change summary:
+  - Implemented a full-sequence backward pipeline path with reverse chunk staging via `pltpu.emit_pipeline`.
+  - Reworked pipeline in/out specs so V-bearing stage tensors use `(..., V, Ct)` layout (last axis `Ct=128`), while recurrent state uses `(V, K_lane)`.
+  - Added lane-packing in backward wrapper (`K_pipe = round_up(K_pad, 128)`) and padded `q/k/k_cumdecay/chunk_starts/dS` for the full-sequence path.
+  - Preserved segmented backward as fallback.
+  - Reverted the speculative kernel code after profiling regression; tree left without speculative kernel changes.
+
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - First run: one transient failure at `test_gdn_layer_backward_matches_hf[True]` (`max_abs 4.081428e-05`).
+  - Rerun result: `87 passed, 2 skipped, 1 warning`.
+
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_vtile_pack_i3_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_vtile_pack_i3_dev_130m_ch128_seg16_20steps-8884ed`
+  - W&B profiler artifact: `run-gdn_vtile_pack_i3_dev_130m_ch128_seg16_20steps-8884ed-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_vtile_pack_i3_dev_130m_ch128_seg16_20steps-8884ed/plugins/profile/2026_02_20_16_07_31/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, vs baseline trace `.profiles/wandb/gdn_emitpipe_i1_dev_130m_ch128_seg16_20steps-a499c1/plugins/profile/2026_02_20_13_35_37/perfetto_trace.json.gz`):
+  - `shard_map`: `171.172 ms -> 202.792 ms` (`+18.47%`), still dominant and worsened.
+  - `all-gather`: `32.731 ms -> 26.676 ms` (`-18.50%`).
+  - `fusion`: `55.403 ms -> 55.099 ms` (`-0.55%`).
+  - Dominant shard-map slices became larger (`~4.295 ms` top slice -> `~23.490 ms` top slice), indicating the new recurrent kernel did more per-call work but at worse wall time.
+
+- MFU/throughput delta (vs baseline run `gdn_emitpipe_i1_dev_130m_ch128_seg16_20steps-a499c1`):
+  - `throughput/mfu`: `4.41497 -> 4.13842` (`-6.26%`).
+  - `throughput/tokens_per_second`: `142823.53 -> 133876.99` (`-6.26%`).
+  - `throughput/duration`: `0.22943s -> 0.24476s` (`+6.68%`).
+
+- Assessment: **low-impact / regression (failed attempt)**. Dominant hotspot class stayed `shard_map` and got slower; MFU regressed materially.
+- Why this did not unlock a large speedup: lane-packing enabled the full-sequence backward path at `head_dim=64`, but padded-K overcompute and transposed V staging increased per-call wall time enough to outweigh launch-structure gains.
+- Next bold hypothesis: keep state in lane-safe layout without padded-K overcompute by decomposing backward into FLA-style kernels (chunk-local adjoint precompute + recurrent dS apply), so recurrent custom-calls shrink without forcing `K=128` math for `head_dim=64`.
