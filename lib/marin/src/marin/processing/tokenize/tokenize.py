@@ -33,6 +33,7 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
+from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.readers import load_file
 
@@ -379,18 +380,14 @@ def tokenize(config: TokenizeConfigBase):
 
         consolidate_start = time.monotonic()
         logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
+        ledger = consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
         consolidate_elapsed = time.monotonic() - consolidate_start
 
-        # Aggregate token counts from shard stats
-        total_tokens = 0
-        total_elements = 0
-        for shard_path in shard_paths:
-            stats_path = f"{shard_path}/.stats.json"
-            with fsspec.open(stats_path) as f:
-                stats = json.load(f)
-                total_tokens += stats.get("token_count", 0)
-                total_elements += stats.get("num_rows", 0)
+        # Read stats from the consolidated cache: total rows from the ledger,
+        # total tokens from the TreeStore's input_ids data size.
+        total_elements = ledger.total_num_rows
+        store = TreeStore.open(exemplar, prefix, mode="r", cache_metadata=True)
+        total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
 
         stats_path = os.path.join(prefix, ".stats.json")
         with fsspec.open(stats_path, "w") as f:
