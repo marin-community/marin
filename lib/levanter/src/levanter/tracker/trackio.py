@@ -33,7 +33,7 @@ class TrackioTracker(Tracker):
 
         if run is None:
             logger.warning("Trackio run is not initialized. Initializing a new run.")
-            self.run = trackio.init(project="levanter")
+            self.run = trackio.init(project="levanter", embed=False)
         else:
             self.run = run
 
@@ -145,5 +145,6 @@ class TrackioConfig(TrackerConfig):
             dataset_id=self.dataset_id,
             config=cfg or None,
             resume=resume,
+            embed=False,
         )
         return TrackioTracker(r)
