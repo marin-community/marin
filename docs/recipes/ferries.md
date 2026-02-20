@@ -1,37 +1,41 @@
-# Recipe: Daily Ferry (Integration-Test First)
+# Recipe: Ferries (Canary + Daily)
 
 ## Overview
-Use this recipe to propose, launch, and monitor a daily ferry run as a high-signal integration test on TPU infrastructure.
+Use this recipe to run the two ferry lanes:
+- `canary`: fast, low-cost always-on health check
+- `daily`: higher-scale integration run with bounded changes
 
-A ferry is a regularly scheduled run at roughly fixed scale. The daily ferry is intentionally conservative:
-- stable scale and architecture,
-- bounded day-over-day edits,
-- explicit human approval before launch,
-- strict monitoring and restart hygiene.
+Both ferries should keep core data assumptions aligned and share the same monitoring/triage discipline.
 
-## Current Baseline
-Canonical template:
+## Ferry Lanes
+Templates:
+- `experiments/ferries/canary.py`
 - `experiments/ferries/daily.py`
 
-Current baseline defaults in that template:
-- data: shared `nemotron_mix` baseline (same source used by `experiments/ferries/canary_ferry.py`)
+Current intent:
+- canary: catch infra/pretraining regressions early with a stable, mostly fixed config
+- daily: exercise a larger run envelope and test small, explicit changes
+
+Shared baseline:
+- data: shared `nemotron_mix` baseline
+- default cluster: `us-central1` (zone `us-central1-a`)
+
+Daily baseline defaults:
 - model size: Llama ~125M (`llama_150m`)
 - sequence length: 4096
 - train batch size: 512
 - FLOP target: ~1e19 (overrideable via env)
-- default cluster: `us-central1` (zone `us-central1-a`)
-
-Companion canary:
-- `experiments/ferries/canary_ferry.py` is the smaller always-on canary lane; keep data-mix assumptions aligned between daily and canary ferries.
 
 ## Prerequisites
 - Local checkout with write access.
 - `uv` installed.
 - `gh` authenticated for issue/PR workflows.
-- Access to the Ray/TPU launch path used by `lib/marin/src/marin/run/ray_run.py`.
+- Access to `lib/marin/src/marin/run/ray_run.py`.
 - A canonical ferry issue and prior run/PR history.
 
-## Inputs Before Proposing
+## Inputs Before Proposing (Daily Only)
+This section is for the daily lane. Canary runs normally do not require a proposal cycle or PR.
+
 Collect:
 1. Last ferry references:
 - issue URL
@@ -45,9 +49,20 @@ Collect:
 
 If objective is ambiguous, ask before editing.
 
-## Standard Workflow
+## Operating Policy
+- Keep canary stable; only change it for explicit reliability fixes.
+- Do not proactively edit canary; only touch it when diagnosing/fixing a concrete failure mode.
+- Canary launches usually do not require a PR if the script/config is unchanged.
+- Use daily for bounded evolution, usually 1-2 knobs.
+- If canary fails, treat as urgent infrastructure/training-health triage.
+- If daily fails, debug with one bounded fix attempt, then escalate.
+- Never restart/recreate/mutate cluster without explicit human consent in-thread.
 
-### 1) Build context since last ferry
+## Workflows
+
+### Daily lane (proposal + run)
+
+#### 1) Build context since last ferry
 ```bash
 LAST_FERRY_SHA=<last_ferry_commit_sha>
 LAST_FERRY_DATE=<YYYY-MM-DD>
@@ -62,30 +77,19 @@ gh issue list \
 
 Notes:
 - Treat GitHub-tagged ferry PRs/issues as source of truth.
-- If `LAST_FERRY_SHA` is unavailable, use a date fallback and call that out in the PR text.
+- Use "since last ferry run" rather than fixed wall-clock boundaries.
 
-### 2) Propose bounded ferry edits
-Edit `experiments/ferries/daily.py` directly.
+#### 2) Edit `experiments/ferries/daily.py`
+- Keep edits bounded (typically 1-2 knobs).
 
-Guidelines:
-- usually change 1-2 knobs total,
-- avoid high-churn edits,
-- keep changes reversible,
-- allow identical rerun only for explicit regression confirmation.
-
-### 3) Open PR targeting `main`
+#### 3) Open PR targeting `main`
 Include:
-- last ferry links,
-- exact config delta,
-- rationale and risk level (`low`/`medium`/`high`),
-- launch checklist:
-  - [ ] human approval
-  - [ ] issue updated
-  - [ ] monitoring loop started
+- last ferry links (issue + PR/commit + W&B/job link),
+- exact config delta and rationale,
+- risk level (`low`/`medium`/`high`),
+- launch checklist (human approval + monitoring started).
 
-### 4) Launch after explicit approval
-Use the canonical launch path:
-
+#### 4) Launch
 ```bash
 uv run lib/marin/src/marin/run/ray_run.py \
   --no_wait \
@@ -93,8 +97,7 @@ uv run lib/marin/src/marin/run/ray_run.py \
   -- python experiments/ferries/daily.py
 ```
 
-Optional deterministic naming for reruns:
-
+Optional deterministic daily rerun name:
 ```bash
 uv run lib/marin/src/marin/run/ray_run.py \
   --no_wait \
@@ -103,51 +106,52 @@ uv run lib/marin/src/marin/run/ray_run.py \
   -- python experiments/ferries/daily.py
 ```
 
-Record in the issue:
-- Ray job ID,
-- cluster,
-- launch timestamp,
-- W&B link(s) when available.
-
-### 5) Monitor to terminal state
+#### 5) Monitor to terminal state
 Follow `.agents/docs/job-monitoring-loop.md` with:
-- `job_id`,
-- `cluster`,
-- `experiment=experiments/ferries/daily.py`.
+- `job_id`
+- `cluster`
+- `experiment=<ferry script path>`
 
-Hard rule:
-- do not restart/recreate/mutate cluster without explicit human consent in-thread.
-
-### 6) Close loop in issue
-Post:
+#### 6) Close the loop
+Post in the ferry issue:
 - final status,
-- key metrics and regressions,
-- links to PR/job/W&B,
+- key metrics/regressions,
+- Ray job ID and W&B link(s),
 - recommendation for next ferry.
 
-## Recipe Promotion Rule
-If a ferry variant is clearly better holistically, promote it as the new baseline recipe/template.
+### Canary lane (steady-state run)
+Default mode: launch the existing canary script as-is and monitor. Do not run the daily proposal/PR loop unless you are intentionally changing canary.
 
-Promotion examples:
-- eval losses are broadly better across major validation slices,
+Launch:
+```bash
+uv run lib/marin/src/marin/run/ray_run.py \
+  --no_wait \
+  --cluster us-central1 \
+  -- python experiments/ferries/canary.py
+```
+
+If canary fails:
+- triage and identify root cause,
+- only then open a focused PR if a canary script/config change is necessary,
+- relaunch and monitor to terminal state.
+
+## Promotion Rule (Daily)
+If a daily variant is clearly better holistically, promote it as the new default daily recipe/template.
+
+Promotion signals:
+- eval losses are broadly better,
 - LM eval soft metrics improve in aggregate,
-- no obvious reliability regressions (launch, checkpointing, monitoring behavior).
+- no reliability regressions.
 
-When promotion is warranted:
-- open follow-up PR updating `experiments/ferries/daily.py` and this recipe,
-- include a concise before/after metric table and tradeoffs.
-
-## Escalation Guidance
-- Small obvious launch/config bugs: fix and relaunch.
-- Same failure repeats after one fix: escalate.
-- Infra-wide instability (node churn, quota/resource contention, repeated TPU runtime failures): escalate immediately.
+When promoting:
+- open a follow-up PR updating `experiments/ferries/daily.py` and this recipe,
+- include a concise before/after metrics table.
 
 ## Validation Checklist
-- Diff in `experiments/ferries/daily.py` is intentional and bounded.
-- PR targets `main`.
+- Diff is intentional and bounded for the selected lane.
+- If daily was edited, PR targets `main`.
 - Ferry issue has updated launch metadata.
-- Monitoring loop is active until terminal state.
-- Final issue comment includes links and recommendation.
+- Monitoring loop ran until terminal state.
 
 ## See Also
 - `.agents/docs/job-monitoring-loop.md`

@@ -53,7 +53,7 @@ jobs:
         run: |
           .venv/bin/python lib/marin/src/marin/run/ray_run.py \
             --cluster us-central1 \
-            -- python experiments/ferries/canary_ferry.py
+            -- python experiments/ferries/canary.py
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
