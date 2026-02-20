@@ -1862,6 +1862,145 @@ def _in_specs_chunk_segment_bwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: in
     return in_specs, out_specs
 
 
+def _gdn_chunk_bwd_math(
+    *,
+    S_prev: jnp.ndarray,
+    q: jnp.ndarray,
+    k: jnp.ndarray,
+    v: jnp.ndarray,
+    g_cum: jnp.ndarray,
+    beta: jnp.ndarray,
+    v_pseudo: jnp.ndarray,
+    k_cumdecay: jnp.ndarray,
+    d_out: jnp.ndarray,
+    dS_next: jnp.ndarray,
+    tril_strict: jnp.ndarray,
+    causal_mask: jnp.ndarray,
+    U_rev: jnp.ndarray,
+    mask_last: jnp.ndarray,
+    precision_mode: Literal["fp32", "bf16"] = "fp32",
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Backward math for one chunk of the flash GDN recurrence."""
+    gcum_inrange = ((g_cum >= -_GDN_EXP_CLIP) & (g_cum <= _GDN_EXP_CLIP)).astype(jnp.float32)
+
+    g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+    exp_g = jnp.exp(g_cum_cl)
+
+    diff = g_cum[:, None] - g_cum[None, :]
+    diff_inrange = ((diff >= -_GDN_EXP_CLIP) & (diff <= _GDN_EXP_CLIP)).astype(jnp.float32)
+    diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+    exp_diff = jnp.exp(diff_cl)
+
+    # Recompute chunk-local KKT / attenuation terms; consume solve outputs from fwd tape.
+    k_beta = k * beta[:, None]
+
+    QK = jnp.matmul(q, k.T)
+    attn = QK * exp_diff * causal_mask
+
+    KKT = jnp.matmul(k_beta, k.T)
+    A = -KKT * exp_diff * tril_strict
+
+    sol_all = jnp.concatenate([v_pseudo, k_cumdecay], axis=1)
+
+    v_prime = jnp.matmul(k_cumdecay, S_prev)
+    v_new = v_pseudo - v_prime
+
+    q_scaled = q * exp_g[:, None]
+
+    g_tail = jnp.sum(g_cum * mask_last)
+    gt_inrange = ((g_tail >= -_GDN_EXP_CLIP) & (g_tail <= _GDN_EXP_CLIP)).astype(jnp.float32)
+    decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
+
+    raw_decay_diff = g_tail - g_cum
+    decay_diff_inrange = ((raw_decay_diff >= -_GDN_EXP_CLIP) & (raw_decay_diff <= _GDN_EXP_CLIP)).astype(jnp.float32)
+    decay_diff_cl = jnp.clip(raw_decay_diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+    decay_w = jnp.exp(decay_diff_cl)
+    k_w = k * decay_w[:, None]
+
+    # --- backward ---
+    d_inter = d_out
+    d_intra = d_out
+
+    d_attn = jnp.matmul(d_intra, v_new.T)
+    d_v_new = jnp.matmul(attn.T, d_intra)
+
+    d_q_scaled = jnp.matmul(d_inter, S_prev.T)
+    dS_prev = jnp.matmul(q_scaled.T, d_inter)
+
+    # S_next = S_prev*decay_tail + add
+    dS_prev = dS_prev + dS_next * decay_tail
+    d_decay_tail = jnp.sum(dS_next * S_prev)
+
+    # add = k_w^T @ v_new
+    d_add = dS_next
+    d_k_w = jnp.matmul(v_new, d_add.T)
+    d_v_new = d_v_new + jnp.matmul(k_w, d_add)
+
+    d_k = d_k_w * decay_w[:, None]
+    d_decay_w = jnp.sum(d_k_w * k, axis=-1)
+
+    d_decay_diff = d_decay_w * decay_w
+    d_decay_diff = d_decay_diff * decay_diff_inrange
+    d_g_tail = jnp.sum(d_decay_diff)
+    d_g_cum = -d_decay_diff
+
+    d_g_tail = d_g_tail + d_decay_tail * decay_tail * gt_inrange
+    d_g_cum = d_g_cum + mask_last * d_g_tail
+
+    d_v_pseudo = d_v_new
+    d_v_prime = -d_v_new
+
+    d_k_cumdecay = jnp.matmul(d_v_prime, S_prev.T)
+    dS_prev = dS_prev + jnp.matmul(k_cumdecay.T, d_v_prime)
+
+    d_QK = d_attn * (exp_diff * causal_mask)
+    d_exp_diff = d_attn * QK * causal_mask
+
+    d_q = jnp.matmul(d_QK, k)
+    d_k = d_k + jnp.matmul(d_QK.T, q)
+
+    d_q = d_q + d_q_scaled * exp_g[:, None]
+    d_exp_g = jnp.sum(d_q_scaled * q, axis=-1)
+
+    # Solve adjoint via transpose solve (without explicitly materializing Inv).
+    d_sol_all = jnp.concatenate([d_v_pseudo, d_k_cumdecay], axis=1)  # (Ct,V+K)
+    tmp_all = _solve_I_minus_strict_lower_transpose_blockwise(
+        A,
+        d_sol_all,
+        precision_mode=precision_mode,
+    )
+
+    n_rows = tmp_all.shape[0]
+    d_v_beta = lax.slice(tmp_all, (0, 0), (n_rows, v.shape[-1]))
+    d_k_scaled = lax.slice(tmp_all, (0, v.shape[-1]), (n_rows, v.shape[-1] + k.shape[-1]))
+
+    dA = _mxu_matmul_f32(tmp_all, jnp.transpose(sol_all), precision_mode=precision_mode)  # (Ct,Ct)
+
+    d_k_beta = d_k_scaled * exp_g[:, None]
+    d_exp_g = d_exp_g + jnp.sum(d_k_scaled * k_beta, axis=-1)
+
+    dA = dA * tril_strict
+    dKKT = -dA * exp_diff
+    d_exp_diff = d_exp_diff + (-dA * KKT)
+
+    d_k_beta = d_k_beta + jnp.matmul(dKKT, k)
+    d_k = d_k + jnp.matmul(dKKT.T, k_beta)
+
+    d_diff = (d_exp_diff * exp_diff) * diff_inrange
+    d_g_cum = d_g_cum + jnp.sum(d_diff, axis=-1) - jnp.sum(d_diff, axis=-2)
+
+    d_g_cum = d_g_cum + d_exp_g * exp_g * gcum_inrange
+    d_g = _mxu_matmul_f32(U_rev, d_g_cum[:, None], precision_mode=precision_mode).reshape((d_g_cum.shape[0],))
+
+    d_v = d_v_beta * beta[:, None]
+    d_beta = jnp.sum(d_v_beta * v, axis=-1)
+
+    d_k = d_k + d_k_beta * beta[:, None]
+    d_beta = d_beta + jnp.sum(d_k_beta * k, axis=-1)
+
+    return d_q, d_k, d_v, d_g, d_beta, dS_prev
+
+
 def _gdn_chunk_segment_bwd_kernel_tpu(
     q_ref,
     k_ref,
@@ -1892,10 +2031,8 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
     jj = idx[None, :]
     tril_strict = (ii > jj).astype(jnp.float32)
     causal_mask = (ii >= jj).astype(jnp.float32)
+    U_rev = (jj >= ii).astype(jnp.float32)
     mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
-
-    # Upper-triangular ones for reverse-cumsum: d_g = U @ d_g_cum
-    U_rev = (jj >= ii).astype(jnp.float32)  # (Ct,Ct)
 
     # Load incoming dS_end
     dS_next = (
@@ -1903,131 +2040,6 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         .astype(jnp.float32)
         .reshape(K_pad, V_pad)
     )
-
-    # --- Chunk backward helper (matches per-chunk math, consuming forward prep tape) ---
-    def chunk_bwd(S_prev, q, k, v, g_cum, beta, v_pseudo, k_cumdecay, d_out, dS_next):
-        # masks for clipping derivatives
-        gcum_inrange = ((g_cum >= -_GDN_EXP_CLIP) & (g_cum <= _GDN_EXP_CLIP)).astype(jnp.float32)
-
-        g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-        exp_g = jnp.exp(g_cum_cl)
-
-        diff = g_cum[:, None] - g_cum[None, :]
-        diff_inrange = ((diff >= -_GDN_EXP_CLIP) & (diff <= _GDN_EXP_CLIP)).astype(jnp.float32)
-        diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-        exp_diff = jnp.exp(diff_cl)
-
-        # Recompute chunk-local KKT / attenuation terms; consume solve outputs from fwd tape.
-        k_beta = k * beta[:, None]
-
-        QK = jnp.matmul(q, k.T)
-        attn = QK * exp_diff * causal_mask
-
-        KKT = jnp.matmul(k_beta, k.T)
-        A = -KKT * exp_diff * tril_strict
-
-        sol_all = jnp.concatenate([v_pseudo, k_cumdecay], axis=1)
-
-        v_prime = jnp.matmul(k_cumdecay, S_prev)
-        v_new = v_pseudo - v_prime
-
-        q_scaled = q * exp_g[:, None]
-
-        g_tail = jnp.sum(g_cum * mask_last)
-        gt_inrange = ((g_tail >= -_GDN_EXP_CLIP) & (g_tail <= _GDN_EXP_CLIP)).astype(jnp.float32)
-        decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
-
-        raw_decay_diff = g_tail - g_cum
-        decay_diff_inrange = ((raw_decay_diff >= -_GDN_EXP_CLIP) & (raw_decay_diff <= _GDN_EXP_CLIP)).astype(
-            jnp.float32
-        )
-        decay_diff_cl = jnp.clip(raw_decay_diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-        decay_w = jnp.exp(decay_diff_cl)
-        k_w = k * decay_w[:, None]
-
-        # --- backward ---
-        d_inter = d_out
-        d_intra = d_out
-
-        d_attn = jnp.matmul(d_intra, v_new.T)
-        d_v_new = jnp.matmul(attn.T, d_intra)
-
-        d_q_scaled = jnp.matmul(d_inter, S_prev.T)
-        dS_prev = jnp.matmul(q_scaled.T, d_inter)
-
-        # S_next = S_prev*decay_tail + add
-        dS_prev = dS_prev + dS_next * decay_tail
-        d_decay_tail = jnp.sum(dS_next * S_prev)
-
-        # add = k_w^T @ v_new
-        d_add = dS_next
-        d_k_w = jnp.matmul(v_new, d_add.T)
-        d_v_new = d_v_new + jnp.matmul(k_w, d_add)
-
-        d_k = d_k_w * decay_w[:, None]
-        d_decay_w = jnp.sum(d_k_w * k, axis=-1)
-
-        d_decay_diff = d_decay_w * decay_w
-        d_decay_diff = d_decay_diff * decay_diff_inrange
-        d_g_tail = jnp.sum(d_decay_diff)
-        d_g_cum = -d_decay_diff
-
-        d_g_tail = d_g_tail + d_decay_tail * decay_tail * gt_inrange
-        d_g_cum = d_g_cum + mask_last * d_g_tail
-
-        d_v_pseudo = d_v_new
-        d_v_prime = -d_v_new
-
-        d_k_cumdecay = jnp.matmul(d_v_prime, S_prev.T)
-        dS_prev = dS_prev + jnp.matmul(k_cumdecay.T, d_v_prime)
-
-        d_QK = d_attn * (exp_diff * causal_mask)
-        d_exp_diff = d_attn * QK * causal_mask
-
-        d_q = jnp.matmul(d_QK, k)
-        d_k = d_k + jnp.matmul(d_QK.T, q)
-
-        d_q = d_q + d_q_scaled * exp_g[:, None]
-        d_exp_g = jnp.sum(d_q_scaled * q, axis=-1)
-
-        # solve adjoint via transpose solve (without explicitly materializing Inv)
-        d_sol_all = jnp.concatenate([d_v_pseudo, d_k_cumdecay], axis=1)  # (Ct,V+K)
-        tmp_all = _solve_I_minus_strict_lower_transpose_blockwise(
-            A,
-            d_sol_all,
-            precision_mode=precision_mode,
-        )
-
-        d_v_beta = lax.slice(tmp_all, (0, 0), (Ct, V_pad))
-        d_k_scaled = lax.slice(tmp_all, (0, V_pad), (Ct, V_pad + K_pad))
-
-        dA = _mxu_matmul_f32(tmp_all, jnp.transpose(sol_all), precision_mode=precision_mode)  # (Ct,Ct)
-
-        d_k_beta = d_k_scaled * exp_g[:, None]
-        d_exp_g = d_exp_g + jnp.sum(d_k_scaled * k_beta, axis=-1)
-
-        dA = dA * tril_strict
-        dKKT = -dA * exp_diff
-        d_exp_diff = d_exp_diff + (-dA * KKT)
-
-        d_k_beta = d_k_beta + jnp.matmul(dKKT, k)
-        d_k = d_k + jnp.matmul(dKKT.T, k_beta)
-
-        d_diff = (d_exp_diff * exp_diff) * diff_inrange
-        d_g_cum = d_g_cum + jnp.sum(d_diff, axis=-1) - jnp.sum(d_diff, axis=-2)
-
-        d_g_cum = d_g_cum + d_exp_g * exp_g * gcum_inrange
-
-        # reverse_cumsum(d_g_cum) via MXU: d_g = U_rev @ d_g_cum
-        d_g = _mxu_matmul_f32(U_rev, d_g_cum[:, None], precision_mode=precision_mode).reshape((Ct,))
-
-        d_v = d_v_beta * beta[:, None]
-        d_beta = jnp.sum(d_v_beta * v, axis=-1)
-
-        d_k = d_k + d_k_beta * beta[:, None]
-        d_beta = d_beta + jnp.sum(d_k_beta * k, axis=-1)
-
-        return d_q, d_k, d_v, d_g, d_beta, dS_prev
 
     # --- backward over chunks in reverse ---
     for c in range(int(Seg) - 1, -1, -1):
@@ -2070,7 +2082,23 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
             .reshape(Ct, V_pad)
         )
 
-        dq, dk, dv, dg, db, dS_prev = chunk_bwd(S_prev, q, k, v, g_cum, beta, v_pseudo, k_cumdecay, d_out, dS_next)
+        dq, dk, dv, dg, db, dS_prev = _gdn_chunk_bwd_math(
+            S_prev=S_prev,
+            q=q,
+            k=k,
+            v=v,
+            g_cum=g_cum,
+            beta=beta,
+            v_pseudo=v_pseudo,
+            k_cumdecay=k_cumdecay,
+            d_out=d_out,
+            dS_next=dS_next,
+            tril_strict=tril_strict,
+            causal_mask=causal_mask,
+            U_rev=U_rev,
+            mask_last=mask_last,
+            precision_mode=precision_mode,
+        )
 
         # Store grads
         dq_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)] = dq[
@@ -2208,6 +2236,347 @@ def _gdn_chunk_segment_bwd_pallas(
         )
 
 
+def _in_specs_chunk_fullseq_bwd_tpu(B: int, H: int, N_chunks: int, Ct: int, K_pad: int, V_pad: int):
+    """One program per (b,h). Backprop all chunks in one pipeline."""
+
+    def _bh(nh):
+        b = nh // H
+        h = nh - b * H
+        return (b, h)
+
+    in_specs = (
+        pl.BlockSpec((1, 1, N_chunks, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # q
+        pl.BlockSpec((1, 1, N_chunks, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # k
+        pl.BlockSpec((1, 1, N_chunks, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # v
+        pl.BlockSpec((1, 1, N_chunks, Ct), lambda nh: (*_bh(nh), 0, 0)),  # g_cum
+        pl.BlockSpec((1, 1, N_chunks, Ct), lambda nh: (*_bh(nh), 0, 0)),  # beta
+        pl.BlockSpec((1, 1, N_chunks, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # v_pseudo
+        pl.BlockSpec((1, 1, N_chunks, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # k_cumdecay
+        # State tensors are carried as (V, K) in this pipeline so the last axis stays
+        # 128-lane aligned even when V=64.
+        pl.BlockSpec((1, 1, N_chunks, V_pad, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # S_prev per chunk
+        pl.BlockSpec((1, 1, N_chunks, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # d_out
+        pl.BlockSpec((1, 1, V_pad, K_pad), lambda nh: (*_bh(nh), 0, 0)),  # dS_end
+    )
+
+    out_specs = (
+        pl.BlockSpec((1, 1, N_chunks, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # dq
+        pl.BlockSpec((1, 1, N_chunks, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # dk
+        pl.BlockSpec((1, 1, N_chunks, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # dv
+        pl.BlockSpec((1, 1, N_chunks, Ct), lambda nh: (*_bh(nh), 0, 0)),  # dg
+        pl.BlockSpec((1, 1, N_chunks, Ct), lambda nh: (*_bh(nh), 0, 0)),  # db
+        pl.BlockSpec((1, 1, V_pad, K_pad), lambda nh: (*_bh(nh), 0, 0)),  # dS_start
+    )
+    return in_specs, out_specs
+
+
+def _gdn_chunk_fullseq_bwd_pipeline_kernel_tpu(
+    q_ref,
+    k_ref,
+    v_ref,
+    gcum_ref,
+    b_ref,
+    vpseudo_chunks_ref,
+    kcum_chunks_ref,
+    Sprev_chunks_ref,
+    dOut_ref,
+    dSend_ref,
+    dq_ref,
+    dk_ref,
+    dv_ref,
+    dg_ref,
+    db_ref,
+    dSstart_ref,
+    dSscratch_ref,
+    *,
+    N_chunks: int,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+    precision_mode: Literal["fp32", "bf16"] = "fp32",
+):
+    """Full-sequence backward pipeline over chunks (reverse-time recurrence for dS)."""
+
+    idx = jnp.arange(Ct, dtype=jnp.int32)
+    ii = idx[:, None]
+    jj = idx[None, :]
+    tril_strict = (ii > jj).astype(jnp.float32)
+    causal_mask = (ii >= jj).astype(jnp.float32)
+    U_rev = (jj >= ii).astype(jnp.float32)
+    mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
+
+    dSscratch_ref[dslice(0, V_pad), dslice(0, K_pad)] = (
+        dSend_ref[dslice(0, 1), dslice(0, 1), dslice(0, V_pad), dslice(0, K_pad)]
+        .astype(jnp.float32)
+        .reshape(V_pad, K_pad)
+    ).astype(dSscratch_ref.dtype)
+
+    def _stage_body(
+        q_chunk_ref,
+        k_chunk_ref,
+        v_chunk_ref,
+        gcum_chunk_ref,
+        b_chunk_ref,
+        vpseudo_chunk_ref,
+        kcum_chunk_ref,
+        Sprev_chunk_ref,
+        dOut_chunk_ref,
+        dq_chunk_ref,
+        dk_chunk_ref,
+        dv_chunk_ref,
+        dg_chunk_ref,
+        db_chunk_ref,
+        dS_ref,
+    ):
+        dS_next_vk = dS_ref[dslice(0, V_pad), dslice(0, K_pad)].astype(jnp.float32).reshape(V_pad, K_pad)
+        dS_next = jnp.transpose(dS_next_vk)
+
+        S_prev_vk = (
+            Sprev_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, V_pad), dslice(0, K_pad)]
+            .astype(jnp.float32)
+            .reshape(V_pad, K_pad)
+        )
+        S_prev = jnp.transpose(S_prev_vk)
+        q = (
+            q_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, K_pad)
+        )
+        k = (
+            k_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, K_pad)
+        )
+        v = (
+            v_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, V_pad)
+        )
+        g_cum = (
+            gcum_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
+        )
+        beta = b_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
+        v_pseudo = (
+            vpseudo_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, V_pad)
+        )
+        k_cumdecay = (
+            kcum_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, K_pad)
+        )
+        d_out = (
+            dOut_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, V_pad)
+        )
+
+        dq, dk, dv, dg, db, dS_prev = _gdn_chunk_bwd_math(
+            S_prev=S_prev,
+            q=q,
+            k=k,
+            v=v,
+            g_cum=g_cum,
+            beta=beta,
+            v_pseudo=v_pseudo,
+            k_cumdecay=k_cumdecay,
+            d_out=d_out,
+            dS_next=dS_next,
+            tril_strict=tril_strict,
+            causal_mask=causal_mask,
+            U_rev=U_rev,
+            mask_last=mask_last,
+            precision_mode=precision_mode,
+        )
+
+        dq_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)] = dq[
+            None, None, None, :, :
+        ].astype(dq_chunk_ref.dtype)
+        dk_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)] = dk[
+            None, None, None, :, :
+        ].astype(dk_chunk_ref.dtype)
+        dv_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)] = dv[
+            None, None, None, :, :
+        ].astype(dv_chunk_ref.dtype)
+        dg_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct)] = dg[None, None, None, :].astype(
+            dg_chunk_ref.dtype
+        )
+        db_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct)] = db[None, None, None, :].astype(
+            db_chunk_ref.dtype
+        )
+
+        dS_ref[dslice(0, V_pad), dslice(0, K_pad)] = jnp.transpose(dS_prev).astype(dS_ref.dtype)
+
+    stage_in_specs = (
+        pl.BlockSpec((1, 1, 1, Ct, K_pad), lambda c: (0, 0, N_chunks - 1 - c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct, K_pad), lambda c: (0, 0, N_chunks - 1 - c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct, V_pad), lambda c: (0, 0, N_chunks - 1 - c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct), lambda c: (0, 0, N_chunks - 1 - c, 0)),
+        pl.BlockSpec((1, 1, 1, Ct), lambda c: (0, 0, N_chunks - 1 - c, 0)),
+        pl.BlockSpec((1, 1, 1, Ct, V_pad), lambda c: (0, 0, N_chunks - 1 - c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct, K_pad), lambda c: (0, 0, N_chunks - 1 - c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, V_pad, K_pad), lambda c: (0, 0, N_chunks - 1 - c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct, V_pad), lambda c: (0, 0, N_chunks - 1 - c, 0, 0)),
+    )
+    stage_out_specs = (
+        pl.BlockSpec((1, 1, 1, Ct, K_pad), lambda c: (0, 0, N_chunks - 1 - c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct, K_pad), lambda c: (0, 0, N_chunks - 1 - c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct, V_pad), lambda c: (0, 0, N_chunks - 1 - c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct), lambda c: (0, 0, N_chunks - 1 - c, 0)),
+        pl.BlockSpec((1, 1, 1, Ct), lambda c: (0, 0, N_chunks - 1 - c, 0)),
+    )
+
+    pipeline = pltpu.emit_pipeline(
+        _stage_body,
+        grid=(N_chunks,),
+        in_specs=stage_in_specs,
+        out_specs=stage_out_specs,
+        dimension_semantics=(pltpu.ARBITRARY,),
+    )
+    pipeline(
+        q_ref,
+        k_ref,
+        v_ref,
+        gcum_ref,
+        b_ref,
+        vpseudo_chunks_ref,
+        kcum_chunks_ref,
+        Sprev_chunks_ref,
+        dOut_ref,
+        dq_ref,
+        dk_ref,
+        dv_ref,
+        dg_ref,
+        db_ref,
+        scratches=(dSscratch_ref,),
+    )
+
+    dSstart_ref[dslice(0, 1), dslice(0, 1), dslice(0, V_pad), dslice(0, K_pad)] = dSscratch_ref[
+        dslice(0, V_pad), dslice(0, K_pad)
+    ][None, None, :, :].astype(dSstart_ref.dtype)
+
+
+def _gdn_chunk_fullseq_bwd_pallas(
+    q_bhncK: jnp.ndarray,
+    k_bhncK: jnp.ndarray,
+    v_bhncV: jnp.ndarray,
+    g_cum_bhnc: jnp.ndarray,
+    b_bhnc: jnp.ndarray,
+    v_pseudo_bhncV: jnp.ndarray,
+    k_cumdecay_bhncK: jnp.ndarray,
+    S_prev_chunks_bhnKV: jnp.ndarray,
+    d_out_bhncV: jnp.ndarray,
+    dS_end_bhKV: jnp.ndarray,
+    *,
+    N_chunks: int,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+):
+    kernel = functools.partial(
+        _gdn_chunk_fullseq_bwd_pipeline_kernel_tpu,
+        N_chunks=int(N_chunks),
+        Ct=int(Ct),
+        K_pad=int(K_pad),
+        V_pad=int(V_pad),
+    )
+
+    def _local_call(
+        q_bhncK,
+        k_bhncK,
+        v_bhncV,
+        g_cum_bhnc,
+        b_bhnc,
+        v_pseudo_bhncV,
+        k_cumdecay_bhncK,
+        S_prev_chunks_bhnKV,
+        d_out_bhncV,
+        dS_end_bhKV,
+    ):
+        B, H = q_bhncK.shape[0], q_bhncK.shape[1]
+        NH = B * H
+        S_prev_chunks_bhnVK = jnp.swapaxes(S_prev_chunks_bhnKV, -2, -1)
+        dS_end_bhVK = jnp.swapaxes(dS_end_bhKV, -2, -1)
+
+        out_shapes = (
+            jax.ShapeDtypeStruct((B, H, N_chunks, Ct, K_pad), jnp.float32),  # dq
+            jax.ShapeDtypeStruct((B, H, N_chunks, Ct, K_pad), jnp.float32),  # dk
+            jax.ShapeDtypeStruct((B, H, N_chunks, Ct, V_pad), jnp.float32),  # dv
+            jax.ShapeDtypeStruct((B, H, N_chunks, Ct), jnp.float32),  # dg
+            jax.ShapeDtypeStruct((B, H, N_chunks, Ct), jnp.float32),  # db
+            jax.ShapeDtypeStruct((B, H, V_pad, K_pad), jnp.float32),  # dS_start (V,K)
+        )
+
+        in_specs, out_specs = _in_specs_chunk_fullseq_bwd_tpu(B, H, N_chunks, Ct, K_pad, V_pad)
+
+        dq_bhncK, dk_bhncK, dv_bhncV, dg_bhnc, db_bhnc, dS_start_bhVK = pl.pallas_call(
+            kernel,
+            grid=(NH,),
+            in_specs=in_specs,
+            out_specs=out_specs,
+            out_shape=out_shapes,
+            scratch_shapes=(pltpu.VMEM((V_pad, K_pad), dtype=jnp.float32),),
+            compiler_params=compiler_params,
+        )(
+            q_bhncK,
+            k_bhncK,
+            v_bhncV,
+            g_cum_bhnc,
+            b_bhnc,
+            v_pseudo_bhncV,
+            k_cumdecay_bhncK,
+            S_prev_chunks_bhnVK,
+            d_out_bhncV,
+            dS_end_bhVK,
+        )
+        dS_start_bhKV = jnp.swapaxes(dS_start_bhVK, -2, -1)
+        return dq_bhncK, dk_bhncK, dv_bhncV, dg_bhnc, db_bhnc, dS_start_bhKV
+
+    mesh, q_spec = _get_mesh_and_spec(q_bhncK)
+    _, k_spec = _get_mesh_and_spec(k_bhncK)
+    _, v_spec = _get_mesh_and_spec(v_bhncV)
+    _, g_spec = _get_mesh_and_spec(g_cum_bhnc)  # rank-4
+    _, b_spec = _get_mesh_and_spec(b_bhnc)  # rank-4
+    _, v_pseudo_spec = _get_mesh_and_spec(v_pseudo_bhncV)  # rank-5
+    _, k_cum_spec = _get_mesh_and_spec(k_cumdecay_bhncK)  # rank-5
+    _, Sprev_spec = _get_mesh_and_spec(S_prev_chunks_bhnKV)  # rank-5
+    _, dO_spec = _get_mesh_and_spec(d_out_bhncV)  # rank-5
+    _, dS_spec = _get_mesh_and_spec(dS_end_bhKV)  # rank-4
+
+    if _mesh_size(mesh) > 1:
+        return _mk_shard_map(
+            _local_call,
+            mesh=mesh,
+            in_specs=(q_spec, k_spec, v_spec, g_spec, b_spec, v_pseudo_spec, k_cum_spec, Sprev_spec, dO_spec, dS_spec),
+            out_specs=(q_spec, k_spec, v_spec, g_spec, b_spec, dS_spec),
+        )(
+            q_bhncK,
+            k_bhncK,
+            v_bhncV,
+            g_cum_bhnc,
+            b_bhnc,
+            v_pseudo_bhncV,
+            k_cumdecay_bhncK,
+            S_prev_chunks_bhnKV,
+            d_out_bhncV,
+            dS_end_bhKV,
+        )
+    else:
+        return _local_call(
+            q_bhncK,
+            k_bhncK,
+            v_bhncV,
+            g_cum_bhnc,
+            b_bhnc,
+            v_pseudo_bhncV,
+            k_cumdecay_bhncK,
+            S_prev_chunks_bhnKV,
+            d_out_bhncV,
+            dS_end_bhKV,
+        )
+
+
 # -----------------------------------------------------------------------------
 # Chunkwise flash: TPU pallas forward + analytic backward (state-tape segmented)
 # -----------------------------------------------------------------------------
@@ -2320,7 +2689,10 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
         S0 = _pad_kv_state_bh(initial_state.astype(jnp.float32), K_pad=K_pad, V_pad=V_pad)
 
     n_segments = n_chunks_pad // seg
-    use_fullseq_pipeline = (K_pad >= _MXU_TILE) and (V_pad >= _MXU_TILE)
+    # Full-sequence forward currently fails TPU tile-alignment for some production
+    # shapes (Mosaic compile error on 64-lane slices). Keep forward on the stable
+    # segmented path while iterating on the backward full-sequence pipeline.
+    use_fullseq_pipeline = False
 
     if use_fullseq_pipeline:
         # Prepare is chunk-local and can remain segmented. Recurrent apply is moved
@@ -2592,82 +2964,103 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
     # g_cum per chunk (outside pallas)
     gcum_c = jnp.cumsum(g_c, axis=-1)  # (B,H,n_chunks_pad,Ct)
 
-    # segment view: (B,H,n_segments,seg,Ct,*)
-    q_s = q_c.reshape(B, H, n_segments, seg, Ct, K_pad)
-    k_s = k_c.reshape(B, H, n_segments, seg, Ct, K_pad)
-    v_s = v_c.reshape(B, H, n_segments, seg, Ct, V_pad)
-    g_s = gcum_c.reshape(B, H, n_segments, seg, Ct)
-    b_s = b_c.reshape(B, H, n_segments, seg, Ct)
-    vpseudo_s = v_pseudo_chunks.reshape(B, H, n_segments, seg, Ct, V_pad)
-    kcum_s = k_cumdecay_chunks.reshape(B, H, n_segments, seg, Ct, K_pad)
-    dO_s = dO_c.reshape(B, H, n_segments, seg, Ct, V_pad)
-    Sprev_s = chunk_starts.reshape(B, H, n_segments, seg, K_pad, V_pad)
-
-    # time-major segments
-    q_tm = jnp.moveaxis(q_s, 2, 0)
-    k_tm = jnp.moveaxis(k_s, 2, 0)
-    v_tm = jnp.moveaxis(v_s, 2, 0)
-    g_tm = jnp.moveaxis(g_s, 2, 0)
-    b_tm = jnp.moveaxis(b_s, 2, 0)
-    vpseudo_tm = jnp.moveaxis(vpseudo_s, 2, 0)
-    kcum_tm = jnp.moveaxis(kcum_s, 2, 0)
-    dO_tm = jnp.moveaxis(dO_s, 2, 0)
-    Sprev_tm = jnp.moveaxis(Sprev_s, 2, 0)
-
     dS_next0 = jnp.pad(dS_final, ((0, 0), (0, 0), (0, K_pad - dk), (0, V_pad - dv)))
+    # Full-sequence backward pipeline currently requires 128-lane aligned feature
+    # slices on both state axes.
+    use_fullseq_pipeline = (K_pad >= _MXU_TILE) and (V_pad >= _MXU_TILE)
 
-    def seg_bwd(dS_next, seg_inputs):
-        q_seg, k_seg, v_seg, g_seg, b_seg, vpseudo_seg, kcum_seg, dO_seg, Sprev_seg = seg_inputs
-        dq, dk, dv, dg, db, dS_start = _gdn_chunk_segment_bwd_pallas(
-            q_seg,
-            k_seg,
-            v_seg,
-            g_seg,
-            b_seg,
-            vpseudo_seg,
-            kcum_seg,
-            Sprev_seg,
-            dO_seg,
-            dS_next,
-            Seg=seg,
+    if use_fullseq_pipeline:
+        dq_c, dk_c, dv_c, dg_c, db_c, dS0 = _gdn_chunk_fullseq_bwd_pallas(
+            q_c,
+            k_c,
+            v_c,
+            gcum_c,
+            b_c,
+            v_pseudo_chunks,
+            k_cumdecay_chunks,
+            chunk_starts,
+            dO_c,
+            dS_next0,
+            N_chunks=n_chunks_pad,
             Ct=Ct,
             K_pad=K_pad,
             V_pad=V_pad,
         )
-        return dS_start, (dq, dk, dv, dg, db)
+    else:
+        # segment view: (B,H,n_segments,seg,Ct,*)
+        q_s = q_c.reshape(B, H, n_segments, seg, Ct, K_pad)
+        k_s = k_c.reshape(B, H, n_segments, seg, Ct, K_pad)
+        v_s = v_c.reshape(B, H, n_segments, seg, Ct, V_pad)
+        g_s = gcum_c.reshape(B, H, n_segments, seg, Ct)
+        b_s = b_c.reshape(B, H, n_segments, seg, Ct)
+        vpseudo_s = v_pseudo_chunks.reshape(B, H, n_segments, seg, Ct, V_pad)
+        kcum_s = k_cumdecay_chunks.reshape(B, H, n_segments, seg, Ct, K_pad)
+        dO_s = dO_c.reshape(B, H, n_segments, seg, Ct, V_pad)
+        Sprev_s = chunk_starts.reshape(B, H, n_segments, seg, K_pad, V_pad)
 
-    seg_inputs_rev = (
-        q_tm[::-1],
-        k_tm[::-1],
-        v_tm[::-1],
-        g_tm[::-1],
-        b_tm[::-1],
-        vpseudo_tm[::-1],
-        kcum_tm[::-1],
-        dO_tm[::-1],
-        Sprev_tm[::-1],
-    )
-    dS0, grads_rev = lax.scan(
-        seg_bwd,
-        dS_next0,
-        seg_inputs_rev,
-        length=n_segments,
-        unroll=_GDN_SEGMENT_SCAN_UNROLL,
-    )
-    grads = jax.tree_util.tree_map(lambda x: x[::-1], grads_rev)
+        # time-major segments
+        q_tm = jnp.moveaxis(q_s, 2, 0)
+        k_tm = jnp.moveaxis(k_s, 2, 0)
+        v_tm = jnp.moveaxis(v_s, 2, 0)
+        g_tm = jnp.moveaxis(g_s, 2, 0)
+        b_tm = jnp.moveaxis(b_s, 2, 0)
+        vpseudo_tm = jnp.moveaxis(vpseudo_s, 2, 0)
+        kcum_tm = jnp.moveaxis(kcum_s, 2, 0)
+        dO_tm = jnp.moveaxis(dO_s, 2, 0)
+        Sprev_tm = jnp.moveaxis(Sprev_s, 2, 0)
 
-    dq_seg, dk_seg, dv_seg, dg_seg, db_seg = grads  # each: (n_segments,B,H,seg,Ct,...)
+        def seg_bwd(dS_next, seg_inputs):
+            q_seg, k_seg, v_seg, g_seg, b_seg, vpseudo_seg, kcum_seg, dO_seg, Sprev_seg = seg_inputs
+            dq, dk, dv, dg, db, dS_start = _gdn_chunk_segment_bwd_pallas(
+                q_seg,
+                k_seg,
+                v_seg,
+                g_seg,
+                b_seg,
+                vpseudo_seg,
+                kcum_seg,
+                Sprev_seg,
+                dO_seg,
+                dS_next,
+                Seg=seg,
+                Ct=Ct,
+                K_pad=K_pad,
+                V_pad=V_pad,
+            )
+            return dS_start, (dq, dk, dv, dg, db)
 
-    def pack_chunks(x):
-        # (n_segments,B,H,seg,...) -> (B,H,n_segments,seg,...) -> (B,H,n_chunks_pad,...)
-        x = jnp.transpose(x, (1, 2, 0, 3) + tuple(range(4, x.ndim)))
-        return x.reshape(B, H, n_chunks_pad, *x.shape[4:])
+        seg_inputs_rev = (
+            q_tm[::-1],
+            k_tm[::-1],
+            v_tm[::-1],
+            g_tm[::-1],
+            b_tm[::-1],
+            vpseudo_tm[::-1],
+            kcum_tm[::-1],
+            dO_tm[::-1],
+            Sprev_tm[::-1],
+        )
+        dS0, grads_rev = lax.scan(
+            seg_bwd,
+            dS_next0,
+            seg_inputs_rev,
+            length=n_segments,
+            unroll=_GDN_SEGMENT_SCAN_UNROLL,
+        )
+        grads = jax.tree_util.tree_map(lambda x: x[::-1], grads_rev)
 
-    dq_c = pack_chunks(dq_seg)  # (B,H,n_chunks_pad,Ct,K_pad)
-    dk_c = pack_chunks(dk_seg)
-    dv_c = pack_chunks(dv_seg)
-    dg_c = pack_chunks(dg_seg)  # (B,H,n_chunks_pad,Ct)
-    db_c = pack_chunks(db_seg)
+        dq_seg, dk_seg, dv_seg, dg_seg, db_seg = grads  # each: (n_segments,B,H,seg,Ct,...)
+
+        def pack_chunks(x):
+            # (n_segments,B,H,seg,...) -> (B,H,n_segments,seg,...) -> (B,H,n_chunks_pad,...)
+            x = jnp.transpose(x, (1, 2, 0, 3) + tuple(range(4, x.ndim)))
+            return x.reshape(B, H, n_chunks_pad, *x.shape[4:])
+
+        dq_c = pack_chunks(dq_seg)  # (B,H,n_chunks_pad,Ct,K_pad)
+        dk_c = pack_chunks(dk_seg)
+        dv_c = pack_chunks(dv_seg)
+        dg_c = pack_chunks(dg_seg)  # (B,H,n_chunks_pad,Ct)
+        db_c = pack_chunks(db_seg)
 
     # drop Ct padding and chunk padding, flatten tokens, trim to original
     dq_flat = dq_c[:, :, :, :C, :].reshape(B, H, Lpad, K_pad)[:, :, :L, :dk]
