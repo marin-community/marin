@@ -18,6 +18,34 @@ The current baseline bottlenecks (from issue [#1884 comment 3714287157](https://
 - strict lower-triangular inversion is expensive on TPU; sequential dependencies hurt MXU occupancy,
 - dynamic slicing inside Pallas TPU kernels is not available, forcing static indexing and segmented loop structures.
 
+### TPU-specific gotchas that frequently cause 10-100× slowdowns
+
+These are easy to miss and can dominate performance even when the math is optimal:
+
+1) **Vector register layout: the last two axes are special.**
+   TPU vector registers are organized as `(sublanes=8, lanes=128)`.
+   Any elementwise operation is implicitly padded to these tile sizes.
+
+   Practical implication:
+   - A tensor shaped like `(..., 128, 1)` is extremely wasteful (the trailing `1` sits on the *lane* axis).
+   - Prefer `(..., 1, 128)` when you need a broadcastable extra dimension.
+
+   If you see shapes like `(Ct, 1)` or `(..., Ct, 1)` in Pallas kernels, assume it is a performance bug
+   unless proven otherwise.
+
+2) **Avoid explicit transposes of the last two axes.**
+   Transposes/reshapes that touch the last two axes tend to lower to expensive XLU ops.
+   For matmuls, use `lax.dot_general` dimension numbers to *fuse* the transpose.
+
+3) **Default matmul precision & dtypes matter.**
+   On TPU, the fast path is typically BF16 inputs with FP32 accumulation.
+   Casting everything to FP32 inside the kernel can add conversions without actually buying precision
+   unless FP32 matmul precision is explicitly requested.
+
+4) **Use pipelining instead of Python loops for long sequential dimensions.**
+   When you want a single kernel to “loop over” many blocks without unrolling, use
+   `pltpu.emit_pipeline` with dynamic `pl.ds(start, size)` slicing.
+
 ## Optimization Policy (Aggressive Phase)
 - Every iteration must target a meaningful reduction in dominant hotspot cost, not only parameter retuning.
 - Prefer changes that reduce Pallas custom-call launch count, increase work per call, improve tiling/layout, or remove serial dependencies.
@@ -26,6 +54,73 @@ The current baseline bottlenecks (from issue [#1884 comment 3714287157](https://
 - If an iteration delivers <3% MFU gain and hotspots are unchanged, the next iteration must escalate to a more radical design.
 - Use FlashLinearAttention and Pallas TPU docs as design references before implementing.
 - Failed or regressive attempts must not leave uncommitted working tree changes that block the next loop iteration.
+
+## The “Macro Move” Menu (pick one per iteration)
+
+Most local minima come from repeatedly tweaking `segment_size`, `unroll`, and small algebra.
+The loop should instead cycle through large, architectural moves.
+
+Pick **exactly one** of the following per Codex iteration and push it to a fully tested, benchmarked state:
+
+### A) Fix vector-layout pathologies
+Target: eliminate any `(..., 128, 1)` / `(..., Ct, 1)` patterns in Pallas kernels.
+
+Typical changes:
+- reshape `g_cum` / `beta` blocks as `(..., 1, Ct)` instead of `(..., Ct, 1)`
+- keep `g`/`beta` as rank-4 inputs (`(..., Ct)`) instead of rank-5 with trailing singleton
+- ensure gradient outputs (`dg`, `db`) use the same non-pathological layout
+
+### B) Replace `jnp.matmul(..., x.T)` with `lax.dot_general`
+Target: fuse transposes and control dtype/precision explicitly.
+
+Typical changes:
+- introduce a single helper `mxu_dot(a, b, transpose_b=True, preferred_dtype=f32, precision=...)`
+- systematically migrate all matmuls in both fwd and bwd kernels
+
+### C) Switch the kernel math to BF16 inputs + FP32 accumulation
+Target: reduce conversion overhead and increase MXU throughput.
+
+Typical changes:
+- keep `q/k/v` as bf16 in VMEM
+- use `preferred_element_type=jnp.float32` in dot_general
+- avoid eager `.astype(jnp.float32)` unless numerically required
+
+### D) Use `pltpu.emit_pipeline` to fuse across chunk/segment loops
+Target: remove the segmentation hierarchy (or make segments much larger) without VMEM blowups,
+by loading one chunk at a time from HBM.
+
+Typical changes:
+- outer `pallas_call` grid over `NH`
+- inside kernel: `emit_pipeline` with a sequential stage axis over chunks
+- use `pl.ds(chunk_idx * Ct, Ct)` dynamic slicing in `BlockSpec` index maps
+- keep `S_prev` in scratch across stages; write outputs per stage
+
+### E) Tile the state/output along V
+Target: shrink per-program state from `K×V` to `K×Vb` (e.g. `128×32`) so more programs can
+co-reside in VMEM and reduce spill risk.
+
+Typical changes:
+- add a `vblock` grid axis
+- make state scratch `K×Vb`
+- ensure any `K×K` intermediates are shared or recomputed cheaply
+
+### F) Match FlashLinearAttention’s kernel decomposition
+Target: split the fused kernel into 2-4 kernels (A-build, solve/invert, recurrence, output)
+so each kernel has a simple performance profile and lower register pressure.
+
+## Measurement: avoid “trace-only” optimization
+
+XProf traces are essential for hotspot attribution, but the loop also needs a **stable numeric score**
+that can be used for automated selection.
+
+Recommended scoring stack:
+1) **Microbench**: `chunk_gated_delta_rule` forward+backward for one realistic shape (e.g. Qwen3 Next).
+2) **Tiny profile**: the existing `dev-tpu-profile` / `ray-profile` run for end-to-end validation.
+
+If you add a new microbenchmark script/command, keep it:
+- deterministic (fixed PRNG),
+- short (<30s wall),
+- printing a single parseable line like `GDN_BENCH p50_ms=... mean_ms=...`.
 
 ## Infra Added For This Loop
 - `scripts/gdn/gdnctl.py`: one CLI for tests, profile submission, Ray wait/logs, HF trace downloads, and unattended Codex loops.
@@ -136,6 +231,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --model gpt-5.3-codex \
   --reasoning-effort xhigh \
   --resilient \
+  --directive-preset tpu-layout-and-dtypes \
   --directive-preset triangular-inversion \
   --dirty-policy stash \
   --no-commit-policy count-failure \
@@ -146,8 +242,6 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --dev-tpu-type v5p-8 \
   --dev-tpu-allocate-attempts 2 \
   --dev-tpu-allocate-retry-sleep 20 \
-  --validation-ray-cluster us-central1 \
-  --validation-ray-cluster us-east5-a \
   --prompt-file scripts/gdn/codex_iteration_prompt.md \
   --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name $USER-gdn --tests both" \
   --post-check "uv run python scripts/gdn/gdnctl.py lint-log"
@@ -159,16 +253,17 @@ Notes:
 - Use `--allow-dirty` or `--allow-no-commit` only when intentionally debugging the loop harness.
 - The default iteration prompt (`scripts/gdn/codex_iteration_prompt.md`) is intentionally aggressive; keep it aligned with this policy.
 - Use `--resilient` for unattended loops to keep running through transient failures (network, connectivity, allocation).
-- Keep `--validation-mode required` (default) so each iteration produces both TPU test and profile evidence.
 - `--directive`, `--directive-file`, and `--directive-preset` inject per-session guidance (for example triangular inversion focus) without editing prompt files.
 - Preset directives are stored as markdown docs under `scripts/gdn/session_directives/` (`triangular-inversion` maps to `scripts/gdn/session_directives/triangular-inversion.md`).
+  Useful presets:
+  - `tpu-layout-and-dtypes`: avoid TPU register-layout cliffs (singleton last-axis, transpose fusion, BF16/F32 policy).
+  - `emit-pipeline-fullseq`: design sketch for collapsing segmentation using `pltpu.emit_pipeline`.
 - Prefer `--dirty-policy stash --no-commit-policy count-failure` for unattended long runs so failed attempts do not permanently block progress.
 - `--dirty-policy stash` restores the stashed tree automatically after each iteration.
 - If stash restore conflicts with edits produced in the iteration, default `--stash-restore-policy warn-keep` keeps the stash and continues; use `--stash-restore-policy fail` for strict stop-on-conflict.
 - Add `--hold-dev-tpu --dev-tpu-name <name>` to make `codex-loop` allocate/hold/release a dev TPU allocation for the entire loop session.
 - In managed dev TPU mode, use `dev-tpu-test`/`dev-tpu-profile` (not Ray TPU test/profile commands) for loop validation/profiling.
 - Keep managed-mode `--post-check` commands aligned with the held allocation `--cluster` and `--tpu-name`.
-- For fallback robustness, provide Ray cluster candidates via repeatable `--validation-ray-cluster`.
 
 ## Logging Expectations
 After each meaningful iteration, append:

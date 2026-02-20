@@ -48,6 +48,9 @@ DEFAULT_HILLCLIMB_LOG = REPO_ROOT / "lib/levanter/.agents/projects/gdn_pallas_tp
 
 SESSION_DIRECTIVE_PRESET_FILES = {
     "triangular-inversion": REPO_ROOT / "scripts/gdn/session_directives/triangular-inversion.md",
+    "tpu-layout-and-dtypes": REPO_ROOT / "scripts/gdn/session_directives/tpu-layout-and-dtypes.md",
+    "emit-pipeline-fullseq": REPO_ROOT / "scripts/gdn/session_directives/emit-pipeline-fullseq.md",
+    "fla-style-decomposition": REPO_ROOT / "scripts/gdn/session_directives/fla-style-decomposition.md",
 }
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")

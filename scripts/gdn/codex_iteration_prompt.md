@@ -21,12 +21,14 @@ Repo context:
 Required behavior for this iteration:
 1. Read the latest entries in the running log and identify the dominant current bottleneck from traces.
 2. Generate a shortlist of 3 candidate optimizations with estimated upside and risk.
-3. Select 1 candidate with high expected impact (target >=10% MFU gain, or clear path to many-fold speedup if successful).
-4. Implement the selected change in code.
-5. Validate correctness on TPU by running GDN tests.
-6. Launch a lightweight profiled training run on TPU.
-7. Download trace/profiler artifact, analyze before/after hotspots, and update the running log.
-8. If validation passes, commit exactly one commit with the optimization and evidence.
+3. Select **exactly one** macro-move category from `docs/recipes/optimize_gdn_pallas_tpu.md` (“The Macro Move Menu”).
+   - The candidate you implement must clearly fit that category.
+   - If you cannot justify a macro-move, stop and record why.
+4. Select 1 concrete candidate with high expected impact (target >=10% MFU gain, or clear path to many-fold speedup if successful).
+5. Implement the selected change in code.
+6. Validate correctness on TPU by running GDN tests.
+7. Launch a lightweight profiled training run on TPU.
+8. Download trace/profiler artifact, analyze before/after hotspots, update the running log, and commit exactly one commit.
 
 Session directives:
 - If this prompt includes an extra "Session directives for this codex-loop run" block, treat it as mandatory guidance for this run.
@@ -78,3 +80,11 @@ Definition of done:
   - top hotspots before/after,
   - why this change did or did not unlock large speedup,
   - next bold hypothesis.
+
+Macro-move forcing function:
+- If your shortlist contains only “small” changes (tweaks to unroll/chunk/segment, removing a reshape, changing a constant), you must discard it and restart step (2).
+- Prioritize TPU-Pallas-specific wins that frequently unlock order-of-magnitude changes:
+  - Fix pathological last-axis singleton layouts (e.g., `(..., Ct, 1)` → `(..., 1, Ct)`).
+  - Remove explicit transpose ops by using `lax.dot_general` dimension numbers.
+  - Switch kernel math to BF16 inputs + FP32 accumulation.
+  - Use `pltpu.emit_pipeline` with dynamic `pl.ds(...)` slicing to fuse over long sequential dims without unrolling.

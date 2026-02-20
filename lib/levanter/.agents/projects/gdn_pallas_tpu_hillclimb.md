@@ -21,6 +21,20 @@ Each iteration should include:
 - Strict lower-triangular inversion is a TPU hotspot.
 - Pallas TPU kernels do not support dynamic slice indexing in-kernel, requiring static indexing/segmentation.
 
+## Macro Move Menu
+
+To avoid local-minimum micro-tuning, every **performance** iteration should explicitly pick one of these categories
+as the headline hypothesis:
+
+1) **Pipelined chunk loop inside one kernel (`pltpu.emit_pipeline`)**
+2) **TPU vector-layout fixes (singleton last-axis, transpose fusion, etc.)**
+3) **BF16-input / FP32-accum MXU policy + `dot_general` everywhere**
+4) **V/K tiling and parallelism re-map (add grid axes; reduce per-program state size)**
+5) **Kernel decomposition (FLA-style multi-kernel pipeline) or partial offloading to XLA**
+6) **Triangular solve/inversion redesign (hierarchical blocks / preconditioning)**
+
+See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
+
 ## Entry Template
 
 ```markdown
