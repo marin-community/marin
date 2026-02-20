@@ -1,7 +1,10 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reference small train: Qwen3 ~30M (hid512) with optimal AdamH hparams from mega sweep.
+"""Canary ferry: Qwen3 ~30M (hid512) daily pretraining canary.
+
+Trains to 1B tokens on v5p-8 with AdamH. Designed to run daily to catch infra
+and pretraining regressions early. See #2873 for the proposal.
 
 Optimal hyperparameters from mega-sweep-bs64-1b-hid512-v3 (trial 26, macro_loss=3.754):
   lr=0.00864, beta1=0.894, adam_lr=0.000502, beta2=0.999, eps=2.32e-07,
@@ -59,11 +62,11 @@ train_config = SimpleTrainConfig(
 )
 
 training_step = default_train(
-    name="reference-small-train",
+    name="canary-ferry",
     tokenized=nemotron_mix,
     model_config=model,
     train_config=train_config,
-    tags=["reference", "small-train", "qwen3", "adamh", "hid512", "1b"],
+    tags=["canary", "ferry", "qwen3", "adamh", "hid512", "1b"],
     eval_harness_tasks=[],
 )
 
