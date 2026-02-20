@@ -1,214 +1,254 @@
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=86148, ip=10.130.0.222)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
-    trainer.train(state, train_loader)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 541, in train
-    for info in self.training_steps(state, train_loader):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
-    info = self.train_step(state, example)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 478, in train_step
-    result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 753, in _maybe_save_jaxpr
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/partitioning.py", line 392, in __call__
-    return self._call(False, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__
-    return self.__func__(self.__self__, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/partitioning.py", line 464, in _call
-    out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm. Used 39.74G of 30.75G hbm. Exceeded hbm capacity by 8.99G.
-
-Total hbm usage >= 40.99G:
-    reserved          1.25G 
-    program          39.74G 
-    arguments            0B 
-
-Output size 0B; shares 0B with arguments.
-
-Program hbm requirement 39.74G:
-    global           384.5K
-    HLO temp         39.74G (100.0% utilization: Unpadded (39.73G) Padded (39.73G), 0.0% fragmentation (11.56M))
-
-  Largest program allocations in hbm:
-
-  1. Size: 17.66G
-     Operator: op_name="broadcast.252"
-     Shape: f32[8,4096,144640]{2,1,0:T(8,128)}
-     Unpadded size: 17.66G
-     XLA label: broadcast.451 = broadcast(constant.1184), dimensions={}
-     Allocation type: HLO temp
-     ==========================
-
-  2. Size: 17.66G
-     Operator: op_name="jit(_train_step)/jvp(contract embed -> batch, position, vocab)/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: f32[8,4096,144640]{2,1,0:T(8,128)}
-     Unpadded size: 17.66G
-     XLA label: fusion.531 = fusion(fusion.463, all-gather.27), kind=kOutput, calls=fused_computation.856
-     Allocation type: HLO temp
-     ==========================
-
-  3. Size: 4.41G
-     Operator: op_name="jit(_train_step)/jvp(jit(_one_hot))/eq" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/nn/__init__.py" source_line=64 source_end_line=64
-     Shape: pred[8,4096,144640]{2,1,0:T(8,128)(4,1)}
-     Unpadded size: 4.41G
-     XLA label: iota_compare_fusion = fusion(copy-done.72), kind=kLoop, calls=fused_computation.656
-     Allocation type: HLO temp
-     ==========================
-
-  4. Size: 128.0K
-     Operator: op_name="jit(_train_step)/transpose(jvp())/mul" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/__init__.py" source_line=1076 source_end_line=1076
-     Shape: f32[8,4096]{1,0:T(8,128)}
-     Unpadded size: 128.0K
-     XLA label: broadcast_multiply_fusion.3 = fusion(div.269, copy-done.77, copy-done.94), kind=kLoop, calls=fused_computation.736
-     Allocation type: HLO temp
-     ==========================
-
-  5. Size: 128.0K
-     Operator: op_name="jit(_train_step)/jvp()/reduce_max" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64
-     Shape: f32[8,4096]{1,0:T(8,128)}
-     Unpadded size: 128.0K
-     XLA label: reduce_max.11 = convert(copy-done.82)
-     Allocation type: HLO temp
-     ==========================
-
-  6. Size: 128.0K
-     Operator: op_name="jit(_train_step)/transpose(jvp())/add_any" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64
-     Shape: f32[8,4096]{1,0:T(8,128)}
-     Unpadded size: 128.0K
-     XLA label: negate_add_fusion = fusion(select_reduce_fusion.1, fusion.448), kind=kLoop, calls=fused_computation.733
-     Allocation type: HLO temp
-     ==========================
-
-  7. Size: 16.0K
-     Shape: f32[4096]{0:T(1024)}
-     Unpadded size: 16.0K
-     XLA label: constant literal
-     Allocation type: global
-     ==========================
-
-  8. Size: 2.5K
-     Shape: (f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=5*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=10*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=15*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=20*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=25*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=30*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=35*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=40*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=45*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=50*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=55*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=60*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=65*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=70*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=75*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=80*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=85*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=90*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=95*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=100*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=105*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=110*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=115*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=120*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=125*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=130*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=135*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=140*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=145*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=150*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=155*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=160*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=165*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=170*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=175*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=180*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=185*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=190*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=195*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=200*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=205*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=210*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=215*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=220*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=225*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=230*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=235*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=240*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=245*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=250*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=255*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=260*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=265*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=270*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=275*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=280*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=285*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=290*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=295*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=300*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=305*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=310*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=315*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=320*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=325*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=330*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=335*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=340*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=345*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=350*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=355*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=360*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=365*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=370*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=375*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=380*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=385*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=390*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=395*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=400*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=405*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=410*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=415*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=420*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=425*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=430*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=435*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=440*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=445*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=450*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=455*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=460*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=465*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=470*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=475*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=480*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=485*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=490*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=495*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=500*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=505*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=510*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=515*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=520*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=525*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=530*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=535*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=540*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=545*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=550*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=555*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=560*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=565*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=570*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=575*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=580*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=585*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=590*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=595*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=600*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=605*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=610*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=615*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=620*/f32[]{:T(128)}, f32[]{:T(128)})
-     Unpadded size: 2.5K
-     XLA label: tuple.1273 = tuple(copy.2417, copy.1072, copy.1073, copy.1074, ...(+618))
-     Allocation type: HLO temp
-     ==========================
-
-  9. Size: 1.0K
-     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
-     Unpadded size: 64B
-     Extra memory due to padding: 960B (16.0x expansion)
-     XLA label: constant literal
-     Allocation type: global
-     ==========================
-
-  10. Size: 1.0K
-     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
-     Unpadded size: 64B
-     Extra memory due to padding: 960B (16.0x expansion)
-     XLA label: constant literal
-     Allocation type: global
-     ==========================
-
-  11. Size: 1.0K
-     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
-     Unpadded size: 64B
-     Extra memory due to padding: 960B (16.0x expansion)
-     XLA label: constant literal
-     Allocation type: global
-     ==========================
-
-  12. Size: 512B
-     Shape: ((f32[28,8,64,32]{2,3,1,0:T(8,128)}), f32[7,8,64,32]{2,3,1,0:T(8,128)S(3)}, s32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: slice-start.175 = slice-start(get-tuple-element.4344), slice={[21:28], [0:8], [0:64], [0:32]}
-     Allocation type: HLO temp
-     ==========================
-
-  13. Size: 512B
-     Shape: s32[32]{0:T(128)}
-     Unpadded size: 128B
-     Extra memory due to padding: 384B (4.0x expansion)
-     XLA label: deduplicated constant
-     Allocation type: global
-     ==========================
-
-  14. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, head_size/0 1 2 , 3 4 2 -> 0 1 3 4/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.10 = collective-permute-start(get-tuple-element.7005), channel_id=11, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
-     Allocation type: HLO temp
-     ==========================
-
-  15. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, head_size/0 1 2 , 3 4 2 -> 0 1 3 4/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.11 = collective-permute-start(collective-permute-done.10), channel_id=13, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
-     Allocation type: HLO temp
-     ==========================
-
-  16. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.22 = collective-permute-start(get-tuple-element.7095), channel_id=36, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
-     Allocation type: HLO temp
-     ==========================
-
-  17. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.21 = collective-permute-start(collective-permute-done.20), channel_id=37, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
-     Allocation type: HLO temp
-     ==========================
-
-  18. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, q_heads_per_group, head_size/0 1 2 , 3 4 5 2 -> 0 1 3 4 5/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.4 = collective-permute-start(get-tuple-element.6973), channel_id=4, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
-     Allocation type: HLO temp
-     ==========================
-
-  19. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, q_heads_per_group, head_size/0 1 2 , 3 4 5 2 -> 0 1 3 4 5/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.5 = collective-permute-start(collective-permute-done.4), channel_id=6, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
-     Allocation type: HLO temp
-     ==========================
-
-  20. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.20 = collective-permute-start(get-tuple-element.7093), channel_id=35, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
-     Allocation type: HLO temp
-     ==========================
-
-
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-2026-02-19 03:40:38,827 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo-14c5067e failed:
+across cluster]
+(<lambda> pid=58728, ip=10.130.0.56) 2026-02-19T07:19:22 - 6 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 1.084.
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:21 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 132it/145it rate:2.1it/s remaining:00:06 elapsed:01:00 postfix:-
+(<lambda> pid=57297, ip=10.130.0.48) 2026-02-19T07:19:21 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/145 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
+(<lambda> pid=58492, ip=10.130.0.39) 2026-02-19T07:19:22 - 2 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 1.509. [repeated 7x across cluster]
+(<lambda> pid=64777, ip=10.130.0.44) 2026-02-19T07:20:27 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 145it/145it rate:2.1it/s remaining:00:00 elapsed:01:06 postfix:- [repeated 8x across cluster]
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:257 - INFO :: eval loss: 4.206
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 4.068
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 4.275
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:27 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 145it/145it rate:2.1it/s remaining:00:00 elapsed:01:06 postfix:- [repeated 7x across cluster]
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 4.141
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 4.358
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 5.050
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: understanding loss: 3.210
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 3.210
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: generation loss: 7.497
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 6.421
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: eval loss: 8.350
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: eval_cifar10_small loss: 7.748
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 8.470
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/4chan loss: 3.279
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/c4_100_domains loss: 3.784
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/c4_en loss: 3.889
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/dolma-v1_5 loss: 3.892
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_programing_languages loss: 3.940
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_subreddits loss: 4.126
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 3.989
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 5.292
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_s2orc_unsplit loss: 3.699
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_wikipedia_unsplit loss: 3.666
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 4.160
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/mc4 loss: 3.554
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 4.393
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 4.124
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 5.391
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/wikitext_103 loss: 3.917
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 3.599
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 5.381
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 4.816
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 3.678
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 4.000
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 4.057
+(<lambda> pid=58106, ip=10.130.0.32) 2026-02-19T07:20:35 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/ao3_english loss: 4.396
+(<lambda> pid=58106, ip=10.130.0.32) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7fccc01707c0>
+(<lambda> pid=58106, ip=10.130.0.32) Traceback (most recent call last):
+(<lambda> pid=58106, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=58106, ip=10.130.0.32)     conn.teardown(hooks.exit_code)
+(<lambda> pid=58106, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=58106, ip=10.130.0.32)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=58106, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
+(<lambda> pid=58106, ip=10.130.0.32)     return future.result()
+(<lambda> pid=58106, ip=10.130.0.32)            ^^^^^^^^^^^^^^^
+(<lambda> pid=58106, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=58106, ip=10.130.0.32)     return self.__get_result()
+(<lambda> pid=58106, ip=10.130.0.32)            ^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=58106, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=58106, ip=10.130.0.32)     raise self._exception
+(<lambda> pid=58106, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=58106, ip=10.130.0.32)     return await fn()
+(<lambda> pid=58106, ip=10.130.0.32)            ^^^^^^^^^^
+(<lambda> pid=58106, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=58106, ip=10.130.0.32)     await self._client.close()
+(<lambda> pid=58106, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=58106, ip=10.130.0.32)     await self._writer.wait_closed()
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: eval loss: 8.350 [repeated 14x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 4.068 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 4.275 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 4.141 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 4.358 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 5.050 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: understanding loss: 3.210 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 3.210 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: generation loss: 7.497 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 6.421 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/ao3_english loss: 4.396 [repeated 84x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 8.470 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 3.989 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 5.292 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 4.160 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 4.393 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 4.124 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 5.391 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 3.599 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 5.381 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 4.816 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 3.678 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 4.000 [repeated 7x across cluster]
+(<lambda> pid=60526, ip=10.130.0.45) 2026-02-19T07:20:35 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 4.057 [repeated 7x across cluster]
+(<lambda> pid=58106, ip=10.130.0.32) 
+(<lambda> pid=58106, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=58106, ip=10.130.0.32)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=58106, ip=10.130.0.32) BrokenPipeError: [Errno 32] Broken pipe
+(run_on_pod_ray pid=31283, ip=10.130.1.212) Task error ray::<lambda>() (pid=58106, ip=10.130.0.32)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     trainer.train(state, train_loader)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 541, in train
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     for info in self.training_steps(state, train_loader):
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     info = self.train_step(state, example)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 496, in train_step
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     self.run_hooks(info)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     self.hooks.run_hooks(info, force=force)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     hook.fn.on_step(info, force=force)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     self.fn(info)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/experiments/unified/vlm_mc_eval.py", line 917, in vlm_eval
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     worker.worker_message_loop()
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 322, in worker_message_loop
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     message = self._receive_message()
+(run_on_pod_ray pid=31283, ip=10.130.1.212)               ^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 334, in _receive_message
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     message = broadcast_shard(stop_message, PartitionSpec())
+(run_on_pod_ray pid=31283, ip=10.130.1.212)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 438, in broadcast_shard
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     x = jax.tree.map(pre_jit, x)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)         ^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree.py", line 155, in map
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return tree_util.tree_map(f, tree, *rest, is_leaf=is_leaf)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in tree_map
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in <genexpr>
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                              ^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 422, in pre_jit
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     out = jax.make_array_from_callback(shape, sharding, lambda _: inp)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 837, in make_array_from_callback
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     per_device_values = api.device_put(per_device_values, devices)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/api.py", line 2787, in device_put
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     out_flat = dispatch._batched_device_put_impl(
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 582, in _batched_device_put_impl
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     y = _device_put_impl(x, device=device, src=src, copy=cp, aval=aval)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 569, in _device_put_impl
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return _device_put_sharding_impl(x, aval, device, copy)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 511, in _device_put_sharding_impl
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     raise ValueError(
+(run_on_pod_ray pid=31283, ip=10.130.1.212) ValueError: device_put's first argument must be a fully addressable array, but got value with devices {TpuDevice(id=16, process_index=4, coords=(0,0,2), core_on_chip=0), TpuDevice(id=2, process_index=0, coords=(0,1,0), core_on_chip=0), TpuDevice(id=19, process_index=4, coords=(1,1,2), core_on_chip=0), TpuDevice(id=4, process_index=1, coords=(0,2,0), core_on_chip=0), TpuDevice(id=6, process_index=1, coords=(0,3,0), core_on_chip=0), TpuDevice(id=8, process_index=2, coords=(0,0,1), core_on_chip=0), TpuDevice(id=24, process_index=6, coords=(0,0,3), core_on_chip=0), TpuDevice(id=0, process_index=0, coords=(0,0,0), core_on_chip=0), TpuDevice(id=10, process_index=2, coords=(0,1,1), core_on_chip=0), TpuDevice(id=17, process_index=4, coords=(1,0,2), core_on_chip=0), TpuDevice(id=29, process_index=7, coords=(1,2,3), core_on_chip=0), TpuDevice(id=18, process_index=4, coords=(0,1,2), core_on_chip=0), TpuDevice(id=22, process_index=5, coords=(0,3,2), core_on_chip=0), TpuDevice(id=9, process_index=2, coords=(1,0,1), core_on_chip=0), TpuDevice(id=28, process_index=7, coords=(0,2,3), core_on_chip=0), TpuDevice(id=30, process_index=7, coords=(0,3,3), core_on_chip=0), TpuDevice(id=25, process_index=6, coords=(1,0,3), core_on_chip=0), TpuDevice(id=31, process_index=7, coords=(1,3,3), core_on_chip=0), TpuDevice(id=11, process_index=2, coords=(1,1,1), core_on_chip=0), TpuDevice(id=1, process_index=0, coords=(1,0,0), core_on_chip=0), TpuDevice(id=3, process_index=0, coords=(1,1,0), core_on_chip=0), TpuDevice(id=13, process_index=3, coords=(1,2,1), core_on_chip=0), TpuDevice(id=26, process_index=6, coords=(0,1,3), core_on_chip=0), TpuDevice(id=5, process_index=1, coords=(1,2,0), core_on_chip=0), TpuDevice(id=15, process_index=3, coords=(1,3,1), core_on_chip=0), TpuDevice(id=7, process_index=1, coords=(1,3,0), core_on_chip=0), TpuDevice(id=14, process_index=3, coords=(0,3,1), core_on_chip=0), TpuDevice(id=27, process_index=6, coords=(1,1,3), core_on_chip=0), TpuDevice(id=21, process_index=5, coords=(1,2,2), core_on_chip=0), TpuDevice(id=12, process_index=3, coords=(0,2,1), core_on_chip=0), TpuDevice(id=20, process_index=5, coords=(0,2,2), core_on_chip=0), TpuDevice(id=23, process_index=5, coords=(1,3,2), core_on_chip=0)}
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return func(*args, **kwargs)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=31283, ip=10.130.1.212) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=58106, ip=10.130.0.32)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     trainer.train(state, train_loader)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 541, in train
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     for info in self.training_steps(state, train_loader):
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     info = self.train_step(state, example)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 496, in train_step
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     self.run_hooks(info)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     self.hooks.run_hooks(info, force=force)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     hook.fn.on_step(info, force=force)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     self.fn(info)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/experiments/unified/vlm_mc_eval.py", line 917, in vlm_eval
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     worker.worker_message_loop()
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 322, in worker_message_loop
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     message = self._receive_message()
+(run_on_pod_ray pid=31283, ip=10.130.1.212)               ^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 334, in _receive_message
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     message = broadcast_shard(stop_message, PartitionSpec())
+(run_on_pod_ray pid=31283, ip=10.130.1.212)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 438, in broadcast_shard
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     x = jax.tree.map(pre_jit, x)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)         ^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree.py", line 155, in map
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return tree_util.tree_map(f, tree, *rest, is_leaf=is_leaf)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in tree_map
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in <genexpr>
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                              ^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 422, in pre_jit
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     out = jax.make_array_from_callback(shape, sharding, lambda _: inp)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 837, in make_array_from_callback
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     per_device_values = api.device_put(per_device_values, devices)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/api.py", line 2787, in device_put
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     out_flat = dispatch._batched_device_put_impl(
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 582, in _batched_device_put_impl
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     y = _device_put_impl(x, device=device, src=src, copy=cp, aval=aval)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 569, in _device_put_impl
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return _device_put_sharding_impl(x, aval, device, copy)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 511, in _device_put_sharding_impl
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     raise ValueError(
+(run_on_pod_ray pid=31283, ip=10.130.1.212) ValueError: device_put's first argument must be a fully addressable array, but got value with devices {TpuDevice(id=16, process_index=4, coords=(0,0,2), core_on_chip=0), TpuDevice(id=2, process_index=0, coords=(0,1,0), core_on_chip=0), TpuDevice(id=19, process_index=4, coords=(1,1,2), core_on_chip=0), TpuDevice(id=4, process_index=1, coords=(0,2,0), core_on_chip=0), TpuDevice(id=6, process_index=1, coords=(0,3,0), core_on_chip=0), TpuDevice(id=8, process_index=2, coords=(0,0,1), core_on_chip=0), TpuDevice(id=24, process_index=6, coords=(0,0,3), core_on_chip=0), TpuDevice(id=0, process_index=0, coords=(0,0,0), core_on_chip=0), TpuDevice(id=10, process_index=2, coords=(0,1,1), core_on_chip=0), TpuDevice(id=17, process_index=4, coords=(1,0,2), core_on_chip=0), TpuDevice(id=29, process_index=7, coords=(1,2,3), core_on_chip=0), TpuDevice(id=18, process_index=4, coords=(0,1,2), core_on_chip=0), TpuDevice(id=22, process_index=5, coords=(0,3,2), core_on_chip=0), TpuDevice(id=9, process_index=2, coords=(1,0,1), core_on_chip=0), TpuDevice(id=28, process_index=7, coords=(0,2,3), core_on_chip=0), TpuDevice(id=30, process_index=7, coords=(0,3,3), core_on_chip=0), TpuDevice(id=25, process_index=6, coords=(1,0,3), core_on_chip=0), TpuDevice(id=31, process_index=7, coords=(1,3,3), core_on_chip=0), TpuDevice(id=11, process_index=2, coords=(1,1,1), core_on_chip=0), TpuDevice(id=1, process_index=0, coords=(1,0,0), core_on_chip=0), TpuDevice(id=3, process_index=0, coords=(1,1,0), core_on_chip=0), TpuDevice(id=13, process_index=3, coords=(1,2,1), core_on_chip=0), TpuDevice(id=26, process_index=6, coords=(0,1,3), core_on_chip=0), TpuDevice(id=5, process_index=1, coords=(1,2,0), core_on_chip=0), TpuDevice(id=15, process_index=3, coords=(1,3,1), core_on_chip=0), TpuDevice(id=7, process_index=1, coords=(1,3,0), core_on_chip=0), TpuDevice(id=14, process_index=3, coords=(0,3,1), core_on_chip=0), TpuDevice(id=27, process_index=6, coords=(1,1,3), core_on_chip=0), TpuDevice(id=21, process_index=5, coords=(1,2,2), core_on_chip=0), TpuDevice(id=12, process_index=3, coords=(0,2,1), core_on_chip=0), TpuDevice(id=20, process_index=5, coords=(0,2,2), core_on_chip=0), TpuDevice(id=23, process_index=5, coords=(1,3,2), core_on_chip=0)}
+(SliceActor pid=28156, ip=10.130.0.44) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=58106, ip=10.130.0.32)
+(<lambda> pid=58106, ip=10.130.0.32) E0219 07:20:47.915441   58263 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=58106, ip=10.130.0.32) F0219 07:20:47.915551   58106 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to disconnect from coordination service with status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=58106, ip=10.130.0.32) 
+(<lambda> pid=58106, ip=10.130.0.32) RPC: /tensorflow.CoordinationService/ShutdownTask [type.googleapis.com/tensorflow.CoordinationServiceError='']
+(run_on_pod_ray pid=31283, ip=10.130.1.212) Failed 11 times. Continuing to retry.
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return func(*args, **kwargs)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=31283, ip=10.130.1.212) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=58106, ip=10.130.0.32)
+(run_on_pod_ray pid=31283, ip=10.130.1.212) Failed too many times
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return func(*args, **kwargs)
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=31283, ip=10.130.1.212) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=58106, ip=10.130.0.32)
+2026-02-19 07:20:48,787 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo2-7e2a87c2 failed:
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
     ray.get(self._ref)
   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
     return fn(*args, **kwargs)
@@ -221,347 +261,352 @@ Traceback (most recent call last):
                                   ^^^^^^^^^^^^^^^^^^^
   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
     raise value.as_instanceof_cause()
-ray.exceptions.RayTaskError(JaxRuntimeError): ray::run_levanter_train_lm() (pid=18883, ip=10.130.0.45)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
+ray.exceptions.RayTaskError(ValueError): ray::run_levanter_train_lm() (pid=31282, ip=10.130.1.212)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
     job.wait(raise_on_failure=True)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
     return self._wait_ref(timeout, raise_on_failure)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
     ray.get(self._ref, timeout=timeout)
            ^^^^^^^^^^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^^^
                                   ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(JaxRuntimeError): ray::run_on_pod_ray() (pid=18884, ip=10.130.0.45)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
+ray.exceptions.RayTaskError(ValueError): ray::run_on_pod_ray() (pid=31283, ip=10.130.1.212)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
     raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
                                                  ^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^
            ^^^^^^^^^^^^^^^^^^^^^
                                   ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=86148, ip=10.130.0.222)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=58106, ip=10.130.0.32)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
     trainer.train(state, train_loader)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 541, in train
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 541, in train
     for info in self.training_steps(state, train_loader):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
     info = self.train_step(state, example)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 478, in train_step
-    result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 753, in _maybe_save_jaxpr
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 496, in train_step
+    self.run_hooks(info)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
+    self.hooks.run_hooks(info, force=force)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
+    hook.fn.on_step(info, force=force)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
+    self.fn(info)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/experiments/unified/vlm_mc_eval.py", line 917, in vlm_eval
+    worker.worker_message_loop()
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 322, in worker_message_loop
+    message = self._receive_message()
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 334, in _receive_message
+    message = broadcast_shard(stop_message, PartitionSpec())
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 438, in broadcast_shard
+    x = jax.tree.map(pre_jit, x)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree.py", line 155, in map
+    return tree_util.tree_map(f, tree, *rest, is_leaf=is_leaf)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in tree_map
+    return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in <genexpr>
+    return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
+                             ^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 422, in pre_jit
+    out = jax.make_array_from_callback(shape, sharding, lambda _: inp)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 837, in make_array_from_callback
+    per_device_values = api.device_put(per_device_values, devices)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/api.py", line 2787, in device_put
+    out_flat = dispatch._batched_device_put_impl(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 582, in _batched_device_put_impl
+    y = _device_put_impl(x, device=device, src=src, copy=cp, aval=aval)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 569, in _device_put_impl
+    return _device_put_sharding_impl(x, aval, device, copy)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 511, in _device_put_sharding_impl
+    raise ValueError(
+ValueError: device_put's first argument must be a fully addressable array, but got value with devices {TpuDevice(id=16, process_index=4, coords=(0,0,2), core_on_chip=0), TpuDevice(id=2, process_index=0, coords=(0,1,0), core_on_chip=0), TpuDevice(id=19, process_index=4, coords=(1,1,2), core_on_chip=0), TpuDevice(id=4, process_index=1, coords=(0,2,0), core_on_chip=0), TpuDevice(id=6, process_index=1, coords=(0,3,0), core_on_chip=0), TpuDevice(id=8, process_index=2, coords=(0,0,1), core_on_chip=0), TpuDevice(id=24, process_index=6, coords=(0,0,3), core_on_chip=0), TpuDevice(id=0, process_index=0, coords=(0,0,0), core_on_chip=0), TpuDevice(id=10, process_index=2, coords=(0,1,1), core_on_chip=0), TpuDevice(id=17, process_index=4, coords=(1,0,2), core_on_chip=0), TpuDevice(id=29, process_index=7, coords=(1,2,3), core_on_chip=0), TpuDevice(id=18, process_index=4, coords=(0,1,2), core_on_chip=0), TpuDevice(id=22, process_index=5, coords=(0,3,2), core_on_chip=0), TpuDevice(id=9, process_index=2, coords=(1,0,1), core_on_chip=0), TpuDevice(id=28, process_index=7, coords=(0,2,3), core_on_chip=0), TpuDevice(id=30, process_index=7, coords=(0,3,3), core_on_chip=0), TpuDevice(id=25, process_index=6, coords=(1,0,3), core_on_chip=0), TpuDevice(id=31, process_index=7, coords=(1,3,3), core_on_chip=0), TpuDevice(id=11, process_index=2, coords=(1,1,1), core_on_chip=0), TpuDevice(id=1, process_index=0, coords=(1,0,0), core_on_chip=0), TpuDevice(id=3, process_index=0, coords=(1,1,0), core_on_chip=0), TpuDevice(id=13, process_index=3, coords=(1,2,1), core_on_chip=0), TpuDevice(id=26, process_index=6, coords=(0,1,3), core_on_chip=0), TpuDevice(id=5, process_index=1, coords=(1,2,0), core_on_chip=0), TpuDevice(id=15, process_index=3, coords=(1,3,1), core_on_chip=0), TpuDevice(id=7, process_index=1, coords=(1,3,0), core_on_chip=0), TpuDevice(id=14, process_index=3, coords=(0,3,1), core_on_chip=0), TpuDevice(id=27, process_index=6, coords=(1,1,3), core_on_chip=0), TpuDevice(id=21, process_index=5, coords=(1,2,2), core_on_chip=0), TpuDevice(id=12, process_index=3, coords=(0,2,1), core_on_chip=0), TpuDevice(id=20, process_index=5, coords=(0,2,2), core_on_chip=0), TpuDevice(id=23, process_index=5, coords=(1,3,2), core_on_chip=0)}
+2026-02-19 07:20:48,790 INFO executor.py:806 -- Waiting for ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo2-7e2a87c2 to finish for step checkpoints/unified-qwen3-0.6b-demo2
+2026-02-19 07:20:48,790 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo2-7e2a87c2 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
     return fn(*args, **kwargs)
            ^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/partitioning.py", line 392, in __call__
-    return self._call(False, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__
-    return self.__func__(self.__self__, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/partitioning.py", line 464, in _call
-    out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm. Used 39.74G of 30.75G hbm. Exceeded hbm capacity by 8.99G.
-
-Total hbm usage >= 40.99G:
-    reserved          1.25G 
-    program          39.74G 
-    arguments            0B 
-
-Output size 0B; shares 0B with arguments.
-
-Program hbm requirement 39.74G:
-    global           384.5K
-    HLO temp         39.74G (100.0% utilization: Unpadded (39.73G) Padded (39.73G), 0.0% fragmentation (11.56M))
-
-  Largest program allocations in hbm:
-
-  1. Size: 17.66G
-     Operator: op_name="broadcast.252"
-     Shape: f32[8,4096,144640]{2,1,0:T(8,128)}
-     Unpadded size: 17.66G
-     XLA label: broadcast.451 = broadcast(constant.1184), dimensions={}
-     Allocation type: HLO temp
-     ==========================
-
-  2. Size: 17.66G
-     Operator: op_name="jit(_train_step)/jvp(contract embed -> batch, position, vocab)/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: f32[8,4096,144640]{2,1,0:T(8,128)}
-     Unpadded size: 17.66G
-     XLA label: fusion.531 = fusion(fusion.463, all-gather.27), kind=kOutput, calls=fused_computation.856
-     Allocation type: HLO temp
-     ==========================
-
-  3. Size: 4.41G
-     Operator: op_name="jit(_train_step)/jvp(jit(_one_hot))/eq" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/nn/__init__.py" source_line=64 source_end_line=64
-     Shape: pred[8,4096,144640]{2,1,0:T(8,128)(4,1)}
-     Unpadded size: 4.41G
-     XLA label: iota_compare_fusion = fusion(copy-done.72), kind=kLoop, calls=fused_computation.656
-     Allocation type: HLO temp
-     ==========================
-
-  4. Size: 128.0K
-     Operator: op_name="jit(_train_step)/transpose(jvp())/mul" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/__init__.py" source_line=1076 source_end_line=1076
-     Shape: f32[8,4096]{1,0:T(8,128)}
-     Unpadded size: 128.0K
-     XLA label: broadcast_multiply_fusion.3 = fusion(div.269, copy-done.77, copy-done.94), kind=kLoop, calls=fused_computation.736
-     Allocation type: HLO temp
-     ==========================
-
-  5. Size: 128.0K
-     Operator: op_name="jit(_train_step)/jvp()/reduce_max" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64
-     Shape: f32[8,4096]{1,0:T(8,128)}
-     Unpadded size: 128.0K
-     XLA label: reduce_max.11 = convert(copy-done.82)
-     Allocation type: HLO temp
-     ==========================
-
-  6. Size: 128.0K
-     Operator: op_name="jit(_train_step)/transpose(jvp())/add_any" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64
-     Shape: f32[8,4096]{1,0:T(8,128)}
-     Unpadded size: 128.0K
-     XLA label: negate_add_fusion = fusion(select_reduce_fusion.1, fusion.448), kind=kLoop, calls=fused_computation.733
-     Allocation type: HLO temp
-     ==========================
-
-  7. Size: 16.0K
-     Shape: f32[4096]{0:T(1024)}
-     Unpadded size: 16.0K
-     XLA label: constant literal
-     Allocation type: global
-     ==========================
-
-  8. Size: 2.5K
-     Shape: (f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=5*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=10*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=15*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=20*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=25*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=30*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=35*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=40*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=45*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=50*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=55*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=60*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=65*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=70*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=75*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=80*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=85*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=90*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=95*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=100*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=105*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=110*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=115*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=120*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=125*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=130*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=135*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=140*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=145*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=150*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=155*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=160*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=165*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=170*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=175*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=180*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=185*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=190*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=195*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=200*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=205*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=210*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=215*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=220*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=225*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=230*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=235*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=240*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=245*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=250*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=255*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=260*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=265*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=270*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=275*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=280*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=285*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=290*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=295*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=300*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=305*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=310*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=315*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=320*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=325*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=330*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=335*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=340*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=345*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=350*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=355*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=360*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=365*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=370*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=375*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=380*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=385*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=390*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=395*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=400*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=405*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=410*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=415*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=420*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=425*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=430*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=435*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=440*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=445*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=450*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=455*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=460*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=465*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=470*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=475*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=480*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=485*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=490*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=495*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=500*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=505*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=510*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=515*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=520*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=525*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=530*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=535*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=540*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=545*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=550*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=555*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=560*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=565*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=570*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=575*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=580*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=585*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=590*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=595*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=600*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=605*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=610*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=615*/f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, f32[]{:T(128)}, /*index=620*/f32[]{:T(128)}, f32[]{:T(128)})
-     Unpadded size: 2.5K
-     XLA label: tuple.1273 = tuple(copy.2417, copy.1072, copy.1073, copy.1074, ...(+618))
-     Allocation type: HLO temp
-     ==========================
-
-  9. Size: 1.0K
-     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
-     Unpadded size: 64B
-     Extra memory due to padding: 960B (16.0x expansion)
-     XLA label: constant literal
-     Allocation type: global
-     ==========================
-
-  10. Size: 1.0K
-     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
-     Unpadded size: 64B
-     Extra memory due to padding: 960B (16.0x expansion)
-     XLA label: constant literal
-     Allocation type: global
-     ==========================
-
-  11. Size: 1.0K
-     Shape: s8[1,8,8]{2,1,0:T(8,128)(4,1)}
-     Unpadded size: 64B
-     Extra memory due to padding: 960B (16.0x expansion)
-     XLA label: constant literal
-     Allocation type: global
-     ==========================
-
-  12. Size: 512B
-     Shape: ((f32[28,8,64,32]{2,3,1,0:T(8,128)}), f32[7,8,64,32]{2,3,1,0:T(8,128)S(3)}, s32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: slice-start.175 = slice-start(get-tuple-element.4344), slice={[21:28], [0:8], [0:64], [0:32]}
-     Allocation type: HLO temp
-     ==========================
-
-  13. Size: 512B
-     Shape: s32[32]{0:T(128)}
-     Unpadded size: 128B
-     Extra memory due to padding: 384B (4.0x expansion)
-     XLA label: deduplicated constant
-     Allocation type: global
-     ==========================
-
-  14. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, head_size/0 1 2 , 3 4 2 -> 0 1 3 4/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.10 = collective-permute-start(get-tuple-element.7005), channel_id=11, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
-     Allocation type: HLO temp
-     ==========================
-
-  15. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, head_size/0 1 2 , 3 4 2 -> 0 1 3 4/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, bf16[8,64,1,32]{1,3,2,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.11 = collective-permute-start(collective-permute-done.10), channel_id=13, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
-     Allocation type: HLO temp
-     ==========================
-
-  16. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.22 = collective-permute-start(get-tuple-element.7095), channel_id=36, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,8},{8,9},{9,10},{10,11},{11,12},{12,13},{13,14},{14,15},{15,16},{16,17},{17,18},{18,19},{19,20},{20,21},{21,22},{22,23},{23,24},{24,25},{25,26},{26,27},{27,28},{28,29},{29,30},{30,31},{31,0}}
-     Allocation type: HLO temp
-     ==========================
-
-  17. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.21 = collective-permute-start(collective-permute-done.20), channel_id=37, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
-     Allocation type: HLO temp
-     ==========================
-
-  18. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, q_heads_per_group, head_size/0 1 2 , 3 4 5 2 -> 0 1 3 4 5/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.4 = collective-permute-start(get-tuple-element.6973), channel_id=4, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
-     Allocation type: HLO temp
-     ==========================
-
-  19. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, q_heads_per_group, head_size/0 1 2 , 3 4 5 2 -> 0 1 3 4 5/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.5 = collective-permute-start(collective-permute-done.4), channel_id=6, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
-     Allocation type: HLO temp
-     ==========================
-
-  20. Size: 512B
-     Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263
-     Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)})
-     Unpadded size: 512B
-     XLA label: collective-permute-start.20 = collective-permute-start(get-tuple-element.7093), channel_id=35, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}}
-     Allocation type: HLO temp
-     ==========================
-
-
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-2026-02-19 03:40:39,363 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-0.6b-demo failed
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(ValueError): ray::run_levanter_train_lm() (pid=31282, ip=10.130.1.212)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
+    job.wait(raise_on_failure=True)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
+    return self._wait_ref(timeout, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(ValueError): ray::run_on_pod_ray() (pid=31283, ip=10.130.1.212)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=58106, ip=10.130.0.32)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 541, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+    info = self.train_step(state, example)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 496, in train_step
+    self.run_hooks(info)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
+    self.hooks.run_hooks(info, force=force)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
+    hook.fn.on_step(info, force=force)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
+    self.fn(info)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/experiments/unified/vlm_mc_eval.py", line 917, in vlm_eval
+    worker.worker_message_loop()
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 322, in worker_message_loop
+    message = self._receive_message()
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 334, in _receive_message
+    message = broadcast_shard(stop_message, PartitionSpec())
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 438, in broadcast_shard
+    x = jax.tree.map(pre_jit, x)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree.py", line 155, in map
+    return tree_util.tree_map(f, tree, *rest, is_leaf=is_leaf)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in tree_map
+    return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in <genexpr>
+    return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
+                             ^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 422, in pre_jit
+    out = jax.make_array_from_callback(shape, sharding, lambda _: inp)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 837, in make_array_from_callback
+    per_device_values = api.device_put(per_device_values, devices)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/api.py", line 2787, in device_put
+    out_flat = dispatch._batched_device_put_impl(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 582, in _batched_device_put_impl
+    y = _device_put_impl(x, device=device, src=src, copy=cp, aval=aval)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 569, in _device_put_impl
+    return _device_put_sharding_impl(x, aval, device, copy)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 511, in _device_put_sharding_impl
+    raise ValueError(
+ValueError: device_put's first argument must be a fully addressable array, but got value with devices {TpuDevice(id=16, process_index=4, coords=(0,0,2), core_on_chip=0), TpuDevice(id=2, process_index=0, coords=(0,1,0), core_on_chip=0), TpuDevice(id=19, process_index=4, coords=(1,1,2), core_on_chip=0), TpuDevice(id=4, process_index=1, coords=(0,2,0), core_on_chip=0), TpuDevice(id=6, process_index=1, coords=(0,3,0), core_on_chip=0), TpuDevice(id=8, process_index=2, coords=(0,0,1), core_on_chip=0), TpuDevice(id=24, process_index=6, coords=(0,0,3), core_on_chip=0), TpuDevice(id=0, process_index=0, coords=(0,0,0), core_on_chip=0), TpuDevice(id=10, process_index=2, coords=(0,1,1), core_on_chip=0), TpuDevice(id=17, process_index=4, coords=(1,0,2), core_on_chip=0), TpuDevice(id=29, process_index=7, coords=(1,2,3), core_on_chip=0), TpuDevice(id=18, process_index=4, coords=(0,1,2), core_on_chip=0), TpuDevice(id=22, process_index=5, coords=(0,3,2), core_on_chip=0), TpuDevice(id=9, process_index=2, coords=(1,0,1), core_on_chip=0), TpuDevice(id=28, process_index=7, coords=(0,2,3), core_on_chip=0), TpuDevice(id=30, process_index=7, coords=(0,3,3), core_on_chip=0), TpuDevice(id=25, process_index=6, coords=(1,0,3), core_on_chip=0), TpuDevice(id=31, process_index=7, coords=(1,3,3), core_on_chip=0), TpuDevice(id=11, process_index=2, coords=(1,1,1), core_on_chip=0), TpuDevice(id=1, process_index=0, coords=(1,0,0), core_on_chip=0), TpuDevice(id=3, process_index=0, coords=(1,1,0), core_on_chip=0), TpuDevice(id=13, process_index=3, coords=(1,2,1), core_on_chip=0), TpuDevice(id=26, process_index=6, coords=(0,1,3), core_on_chip=0), TpuDevice(id=5, process_index=1, coords=(1,2,0), core_on_chip=0), TpuDevice(id=15, process_index=3, coords=(1,3,1), core_on_chip=0), TpuDevice(id=7, process_index=1, coords=(1,3,0), core_on_chip=0), TpuDevice(id=14, process_index=3, coords=(0,3,1), core_on_chip=0), TpuDevice(id=27, process_index=6, coords=(1,1,3), core_on_chip=0), TpuDevice(id=21, process_index=5, coords=(1,2,2), core_on_chip=0), TpuDevice(id=12, process_index=3, coords=(0,2,1), core_on_chip=0), TpuDevice(id=20, process_index=5, coords=(0,2,2), core_on_chip=0), TpuDevice(id=23, process_index=5, coords=(1,3,2), core_on_chip=0)}
+2026-02-19 07:20:48,791 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo2-7e2a87c2 failed:
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
-    runner.wait()
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 192, in wait
-    raise RuntimeError(f"Job {self.job_id} failed")
-RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo-14c5067e failed
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(ValueError): ray::run_levanter_train_lm() (pid=31282, ip=10.130.1.212)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
+    job.wait(raise_on_failure=True)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
+    return self._wait_ref(timeout, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(ValueError): ray::run_on_pod_ray() (pid=31283, ip=10.130.1.212)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=58106, ip=10.130.0.32)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 541, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+    info = self.train_step(state, example)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 496, in train_step
+    self.run_hooks(info)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
+    self.hooks.run_hooks(info, force=force)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
+    hook.fn.on_step(info, force=force)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
+    self.fn(info)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/experiments/unified/vlm_mc_eval.py", line 917, in vlm_eval
+    worker.worker_message_loop()
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 322, in worker_message_loop
+    message = self._receive_message()
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 334, in _receive_message
+    message = broadcast_shard(stop_message, PartitionSpec())
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 438, in broadcast_shard
+    x = jax.tree.map(pre_jit, x)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree.py", line 155, in map
+    return tree_util.tree_map(f, tree, *rest, is_leaf=is_leaf)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in tree_map
+    return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in <genexpr>
+    return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
+                             ^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 422, in pre_jit
+    out = jax.make_array_from_callback(shape, sharding, lambda _: inp)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 837, in make_array_from_callback
+    per_device_values = api.device_put(per_device_values, devices)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/api.py", line 2787, in device_put
+    out_flat = dispatch._batched_device_put_impl(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 582, in _batched_device_put_impl
+    y = _device_put_impl(x, device=device, src=src, copy=cp, aval=aval)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 569, in _device_put_impl
+    return _device_put_sharding_impl(x, aval, device, copy)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 511, in _device_put_sharding_impl
+    raise ValueError(
+ValueError: device_put's first argument must be a fully addressable array, but got value with devices {TpuDevice(id=16, process_index=4, coords=(0,0,2), core_on_chip=0), TpuDevice(id=2, process_index=0, coords=(0,1,0), core_on_chip=0), TpuDevice(id=19, process_index=4, coords=(1,1,2), core_on_chip=0), TpuDevice(id=4, process_index=1, coords=(0,2,0), core_on_chip=0), TpuDevice(id=6, process_index=1, coords=(0,3,0), core_on_chip=0), TpuDevice(id=8, process_index=2, coords=(0,0,1), core_on_chip=0), TpuDevice(id=24, process_index=6, coords=(0,0,3), core_on_chip=0), TpuDevice(id=0, process_index=0, coords=(0,0,0), core_on_chip=0), TpuDevice(id=10, process_index=2, coords=(0,1,1), core_on_chip=0), TpuDevice(id=17, process_index=4, coords=(1,0,2), core_on_chip=0), TpuDevice(id=29, process_index=7, coords=(1,2,3), core_on_chip=0), TpuDevice(id=18, process_index=4, coords=(0,1,2), core_on_chip=0), TpuDevice(id=22, process_index=5, coords=(0,3,2), core_on_chip=0), TpuDevice(id=9, process_index=2, coords=(1,0,1), core_on_chip=0), TpuDevice(id=28, process_index=7, coords=(0,2,3), core_on_chip=0), TpuDevice(id=30, process_index=7, coords=(0,3,3), core_on_chip=0), TpuDevice(id=25, process_index=6, coords=(1,0,3), core_on_chip=0), TpuDevice(id=31, process_index=7, coords=(1,3,3), core_on_chip=0), TpuDevice(id=11, process_index=2, coords=(1,1,1), core_on_chip=0), TpuDevice(id=1, process_index=0, coords=(1,0,0), core_on_chip=0), TpuDevice(id=3, process_index=0, coords=(1,1,0), core_on_chip=0), TpuDevice(id=13, process_index=3, coords=(1,2,1), core_on_chip=0), TpuDevice(id=26, process_index=6, coords=(0,1,3), core_on_chip=0), TpuDevice(id=5, process_index=1, coords=(1,2,0), core_on_chip=0), TpuDevice(id=15, process_index=3, coords=(1,3,1), core_on_chip=0), TpuDevice(id=7, process_index=1, coords=(1,3,0), core_on_chip=0), TpuDevice(id=14, process_index=3, coords=(0,3,1), core_on_chip=0), TpuDevice(id=27, process_index=6, coords=(1,1,3), core_on_chip=0), TpuDevice(id=21, process_index=5, coords=(1,2,2), core_on_chip=0), TpuDevice(id=12, process_index=3, coords=(0,2,1), core_on_chip=0), TpuDevice(id=20, process_index=5, coords=(0,2,2), core_on_chip=0), TpuDevice(id=23, process_index=5, coords=(1,3,2), core_on_chip=0)}
+2026-02-19 07:20:49,236 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-0.6b-demo2 failed
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
     runner.wait()
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 192, in wait
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/marin/src/marin/execution/executor.py", line 192, in wait
     raise RuntimeError(f"Job {self.job_id} failed")
-RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo-14c5067e failed
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo2-7e2a87c2 failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/marin/src/marin/execution/executor.py", line 192, in wait
+    raise RuntimeError(f"Job {self.job_id} failed")
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo2-7e2a87c2 failed
 
 The above exception was the direct cause of the following exception:
 
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/experiments/unified/unified_pretrain_demo.py", line 329, in <module>
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/experiments/unified/unified_pretrain_demo.py", line 330, in <module>
     executor_main(
   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
     response = fn(cfg, *args, **kwargs)
                ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
     executor.run(
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 747, in run
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/marin/src/marin/execution/executor.py", line 747, in run
     self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed, max_concurrent=max_concurrent)
-  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
     raise RuntimeError(message) from failure_exceptions[0]
-RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-0.6b-demo']
-(raylet) The node with node id: 30ca82a271e70fd323cbdcb009b7581340c92b4c0fb8ab6c33dbb1a9 and address: 10.130.0.58 and node name: 10.130.0.58 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a       (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 3x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45) Program hbm requirement 39.74G: [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     global           384.5K [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     HLO temp         39.74G (100.0% utilization: Unpadded (39.73G) Padded (39.73G), 0.0% fragmentation (11.56M)) [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)   Largest program allocations in hbm: [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)   20. Size: 512B [repeated 240x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="broadcast.252" [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Shape: (bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, bf16[3072,1,32]{0,2,1:T(8,128)(2,1)S(3)}, u32[]{:S(2)}, u32[]{:S(2)}) [repeated 240x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Unpadded size: 512B [repeated 240x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: broadcast.451 = broadcast(constant.1184), dimensions={} [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Allocation type: HLO temp [repeated 180x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      ========================== [repeated 240x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp(contract embed -> batch, position, vocab)/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263 [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: fusion.531 = fusion(fusion.463, all-gather.27), kind=kOutput, calls=fused_computation.856 [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp(jit(_one_hot))/eq" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/nn/__init__.py" source_line=64 source_end_line=64 [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: iota_compare_fusion = fusion(copy-done.72), kind=kLoop, calls=fused_computation.656 [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/transpose(jvp())/mul" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/__init__.py" source_line=1076 source_end_line=1076 [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: broadcast_multiply_fusion.3 = fusion(div.269, copy-done.77, copy-done.94), kind=kLoop, calls=fused_computation.736 [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp()/reduce_max" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64 [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: collective-permute-start.20 = collective-permute-start(get-tuple-element.7093), channel_id=35, source_target_pairs={{0,31},{1,0},{2,1},{3,2},{4,3},{5,4},{6,5},{7,6},{8,7},{9,8},{10,9},{11,10},{12,11},{13,12},{14,13},{15,14},{16,15},{17,16},{18,17},{19,18},{20,19},{21,20},{22,21},{23,22},{24,23},{25,24},{26,25},{27,26},{28,27},{29,28},{30,29},{31,30}} [repeated 120x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/transpose(jvp())/add_any" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/wrap.py" source_line=64 source_end_line=64 [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: negate_add_fusion = fusion(select_reduce_fusion.1, fusion.448), kind=kLoop, calls=fused_computation.733 [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: constant literal [repeated 48x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Allocation type: global [repeated 60x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Extra memory due to padding: 384B (4.0x expansion) [repeated 48x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      XLA label: deduplicated constant [repeated 12x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, head_size/0 1 2 , 3 4 2 -> 0 1 3 4/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263 [repeated 24x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/LlamaMlp/Linear/contract embed -> batch, position, mlp/0 1 2 , 3 2 -> 0 1 3/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263 [repeated 36x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)      Operator: op_name="jit(_train_step)/jvp(LlamaTransformer)/scan(layer)/while/body/closed_call/LlamaDecoderLayer/Attention/Attention._compute_qkv/Linear/contract embed -> batch, position, kv_head, q_heads_per_group, head_size/0 1 2 , 3 4 5 2 -> 0 1 3 4 5/dot_general" source_file="/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_jit.py" source_line=263 source_end_line=263 [repeated 24x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.731220   87011 2a886c8_compiler_base.cc:2613] add.4759 = u32[]{:T(128)S(6)} add(get-tuple-element.7126, partition-id.108) [repeated 6146x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.718126   87011 2a886c8_compiler_base.cc:2613] all-gather.27 = bf16[144640,1024]{0,1:T(8,128)(2,1)} all-gather(custom-call.96), channel_id=160, replica_groups=[1,32]<=[32], dimensions={1}, use_global_device_ids=true [repeated 14x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717272   87011 2a886c8_compiler_base.cc:2613] get-tuple-element.5787 = f32[8,4096]{1,0:T(8,128)S(3)} get-tuple-element(negate_add_fusion), index=0 [repeated 14x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.730653   87011 2a886c8_compiler_base.cc:2613] broadcast.819 = pred[8,4096,3072]{2,1,0:T(8,128)(4,1)} broadcast(param_2.2240), dimensions={} [repeated 147x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.723647   87011 2a886c8_compiler_base.cc:2613] all-reduce.96 = (bf16[1024]{0:T(1024)(128)(2,1)}, bf16[1024]{0:T(1024)(128)(2,1)}) all-reduce(dynamic-update-slice.77, dynamic-update-slice.78), channel_id=186, replica_groups=[1,32]<=[32], use_global_device_ids=true, to_apply=add.8 [repeated 14x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.730575   87011 2a886c8_compiler_base.cc:2613] fusion.801 = bf16[8,4096,2,32]{1,3,0,2:T(8,128)(2,1)} fusion(param_3.1703, param_4.1237, param_5.1120), kind=kLoop, calls=fused_computation.175.clone.clone.clone [repeated 455x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.731086   87011 2a886c8_compiler_base.cc:2613] fusion.802 = bf16[8,4096,3072,1]{2,1,0,3:T(8,128)(2,1)} fusion(multiply.497, bitcast.2019, multiply.498, get-tuple-element.7125, get-tuple-element.7123), kind=kOutput, calls=fused_computation.174.clone.clone [repeated 84x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717475   87011 2a886c8_compiler_base.cc:2613] pad_add_fusion = s32[8,4096]{1,0:T(8,128)S(3)} fusion(slice-done.204, slice.1957), kind=kLoop, calls=fused_computation.731 [repeated 7x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717525   87011 2a886c8_compiler_base.cc:2613] select_reduce_fusion.1 = f32[8,4096]{1,0:T(8,128)S(3)} fusion(get-tuple-element.5785, pad_add_fusion), kind=kLoop, calls=fused_computation.652 [repeated 7x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717539   87011 2a886c8_compiler_base.cc:2613] negate_add_fusion = (f32[8,4096]{1,0:T(8,128)S(3)}, f32[8,4096]{1,0:T(8,128)}) fusion(select_reduce_fusion.1, fusion.448), kind=kLoop, calls=fused_computation.733 [repeated 7x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717547   87011 2a886c8_compiler_base.cc:2613] copy-start.71 = (s32[8,4096]{1,0:T(8,128)}, s32[8,4096]{1,0:T(8,128)S(3)}, u32[]{:S(2)}) copy-start(pad_add_fusion) [repeated 7x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717580   87011 2a886c8_compiler_base.cc:2613] iota_compare_fusion = pred[8,4096,144640]{2,1,0:T(8,128)(4,1)} fusion(copy-done.72), kind=kLoop, calls=fused_computation.656 [repeated 7x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.717684   87011 2a886c8_compiler_base.cc:2613] constant.3203 = s8[1,8,8]{2,1,0:T(8,128)(4,1)} constant({ { { 0, 0, 0, 0, 0, 0, 0, 0 }, { 0, 1, 0, 0, 0, 0, 0, 0 }, { 0, 1, 2, 0, 0, 0, 0, 0 }, { 0, 1, 2, 3, 0, 0, 0, 0 }, { 0, 1, 2, 3, 4, 0, 0, 0 }, { 0, 1, 2, 3, 4, 5, 0, 0 }, { 0, 1, 2, 3, 4, 5, 6, 0 }, { 0, 1, 2, 3, 4, 5, 6, 7 } } }) [repeated 14x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.723636   87011 2a886c8_compiler_base.cc:2613] custom-call.75 = bf16[8,4096,8,2,64]{1,4,3,2,0:T(8,128)(2,1)} custom-call(), custom_call_target="AllocateBuffer" [repeated 35x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.718116   87011 2a886c8_compiler_base.cc:2613] custom-call.96 = bf16[144640,32]{0,1:T(8,128)(2,1)S(3)} custom-call(slice-done.64, slice-done.65, slice-done.66, slice-done.67), custom_call_target="ConcatBitcast" [repeated 7x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.718577   87011 2a886c8_compiler_base.cc:2613] iota.71 = s32[8,4096,144640]{2,1,0:T(8,128)} iota(), iota_dimension=2 [repeated 42x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.730927   87011 2a886c8_compiler_base.cc:2613] compare.112 = pred[]{:T(512)S(6)} compare(get-tuple-element.7126, constant.1240..sunk.17..sunk), direction=EQ [repeated 63x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.719085   87011 2a886c8_compiler_base.cc:2613] ge.3 = pred[8,4096]{1,0:T(8,128)(4,1)} compare(param_1.2531, broadcast.696), direction=GE [repeated 7x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.730408   87011 2a886c8_compiler_base.cc:2613] constant.3646 = bf16[]{:T(256)} constant(-inf) [repeated 245x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.720498   87011 2a886c8_compiler_base.cc:2608] wide.windowed_dot_general_cond_ag.clone [repeated 7x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.720729   87011 2a886c8_compiler_base.cc:2613] compare.87 = pred[]{:T(512)} compare(get-tuple-element.6053, constant.3029), direction=LT [repeated 35x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.723717   87011 2a886c8_compiler_base.cc:2613] while.122 = (bf16[8,4096,1024]{1,2,0:T(8,128)(2,1)S(3)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, bf16[8,4096,8,2,64]{1,4,3,2,0:T(8,128)(2,1)}, bf16[8,2,64,1,32]{2,4,3,1,0:T(8,128)(2,1)}, u32[]{:T(128)}, /*index=5*/u32[]{:T(128)}, u32[]{:T(128)}, u32[]{:T(128)}, s32[]{:T(128)}, u32[]{:T(128)}) while(tuple.1219), condition=wide.windowed_dot_general_cond_ag.clone, body=wide.windowed_dot_general_body_ag.sunk.clone.sunk [repeated 7x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.724865   87011 2a886c8_compiler_base.cc:2608] wide.windowed_dot_general_body_ag.sunk.clone.sunk [repeated 7x across cluster]
-(<lambda> pid=85803, ip=10.130.0.206) E0219 03:40:35.731233   87011 2a886c8_compiler_base.cc:2613] partition-id.108 = u32[]{:T(128)S(6)} partition-id() [repeated 35x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 8x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/main/train_lm.py", line 335, in main [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     trainer.train(state, train_loader) [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 541, in train [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     for info in self.training_steps(state, train_loader): [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 519, in training_steps [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     info = self.train_step(state, example) [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 478, in train_step [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs) [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/levanter/src/levanter/trainer.py", line 753, in _maybe_save_jaxpr [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     return fn(*args, **kwargs) [repeated 7x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)            ^^^^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__ [repeated 8x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     return self._call(False, *args, **kwargs) [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     return self.__func__(self.__self__, *args, **kwargs) [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_7f16cad84a078491/lib/haliax/src/haliax/partitioning.py", line 464, in _call [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static) [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45) jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm. Used 39.74G of 30.75G hbm. Exceeded hbm capacity by 8.99G. [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45) Total hbm usage >= 40.99G: [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     reserved          1.25G  [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     program          39.74G  [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)     arguments            0B  [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45) Output size 0B; shares 0B with arguments. [repeated 4x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45) -------------------- [repeated 7x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these. [repeated 7x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45) Traceback (most recent call last): [repeated 3x across cluster]
-(run_on_pod_ray pid=18884, ip=10.130.0.45)                                                  ^^^^^^^^^^ [repeated 3x across cluster]
+RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-0.6b-demo2']
+(run_on_pod_ray pid=31283, ip=10.130.1.212) Traceback (most recent call last): [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                                                  ^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/main/train_lm.py", line 335, in main [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     trainer.train(state, train_loader) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 541, in train [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     for info in self.training_steps(state, train_loader): [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 519, in training_steps [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     info = self.train_step(state, example) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 496, in train_step [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     self.run_hooks(info) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks [repeated 6x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     self.hooks.run_hooks(info, force=force) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     hook.fn.on_step(info, force=force) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     self.fn(info) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/experiments/unified/vlm_mc_eval.py", line 917, in vlm_eval [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     worker.worker_message_loop() [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 322, in worker_message_loop [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     message = self._receive_message() [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)               ^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/eval_harness.py", line 334, in _receive_message [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     message = broadcast_shard(stop_message, PartitionSpec()) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 438, in broadcast_shard [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     x = jax.tree.map(pre_jit, x) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)         ^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree.py", line 155, in map [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return tree_util.tree_map(f, tree, *rest, is_leaf=is_leaf) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in tree_map [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return treedef.unflatten(f(*xs) for xs in zip(*all_leaves)) [repeated 6x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in <genexpr> [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                              ^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_79182be82bf1915a/lib/levanter/src/levanter/utils/jax_utils.py", line 422, in pre_jit [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     out = jax.make_array_from_callback(shape, sharding, lambda _: inp) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 837, in make_array_from_callback [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     per_device_values = api.device_put(per_device_values, devices) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/api.py", line 2787, in device_put [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     out_flat = dispatch._batched_device_put_impl( [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 582, in _batched_device_put_impl [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     y = _device_put_impl(x, device=device, src=src, copy=cp, aval=aval) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 569, in _device_put_impl [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     return _device_put_sharding_impl(x, aval, device, copy) [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 511, in _device_put_sharding_impl [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212)     raise ValueError( [repeated 3x across cluster]
+(run_on_pod_ray pid=31283, ip=10.130.1.212) ValueError: device_put's first argument must be a fully addressable array, but got value with devices {TpuDevice(id=16, process_index=4, coords=(0,0,2), core_on_chip=0), TpuDevice(id=2, process_index=0, coords=(0,1,0), core_on_chip=0), TpuDevice(id=19, process_index=4, coords=(1,1,2), core_on_chip=0), TpuDevice(id=4, process_index=1, coords=(0,2,0), core_on_chip=0), TpuDevice(id=6, process_index=1, coords=(0,3,0), core_on_chip=0), TpuDevice(id=8, process_index=2, coords=(0,0,1), core_on_chip=0), TpuDevice(id=24, process_index=6, coords=(0,0,3), core_on_chip=0), TpuDevice(id=0, process_index=0, coords=(0,0,0), core_on_chip=0), TpuDevice(id=10, process_index=2, coords=(0,1,1), core_on_chip=0), TpuDevice(id=17, process_index=4, coords=(1,0,2), core_on_chip=0), TpuDevice(id=29, process_index=7, coords=(1,2,3), core_on_chip=0), TpuDevice(id=18, process_index=4, coords=(0,1,2), core_on_chip=0), TpuDevice(id=22, process_index=5, coords=(0,3,2), core_on_chip=0), TpuDevice(id=9, process_index=2, coords=(1,0,1), core_on_chip=0), TpuDevice(id=28, process_index=7, coords=(0,2,3), core_on_chip=0), TpuDevice(id=30, process_index=7, coords=(0,3,3), core_on_chip=0), TpuDevice(id=25, process_index=6, coords=(1,0,3), core_on_chip=0), TpuDevice(id=31, process_index=7, coords=(1,3,3), core_on_chip=0), TpuDevice(id=11, process_index=2, coords=(1,1,1), core_on_chip=0), TpuDevice(id=1, process_index=0, coords=(1,0,0), core_on_chip=0), TpuDevice(id=3, process_index=0, coords=(1,1,0), core_on_chip=0), TpuDevice(id=13, process_index=3, coords=(1,2,1), core_on_chip=0), TpuDevice(id=26, process_index=6, coords=(0,1,3), core_on_chip=0), TpuDevice(id=5, process_index=1, coords=(1,2,0), core_on_chip=0), TpuDevice(id=15, process_index=3, coords=(1,3,1), core_on_chip=0), TpuDevice(id=7, process_index=1, coords=(1,3,0), core_on_chip=0), TpuDevice(id=14, process_index=3, coords=(0,3,1), core_on_chip=0), TpuDevice(id=27, process_index=6, coords=(1,1,3), core_on_chip=0), TpuDevice(id=21, process_index=5, coords=(1,2,2), core_on_chip=0), TpuDevice(id=12, process_index=3, coords=(0,2,1), core_on_chip=0), TpuDevice(id=20, process_index=5, coords=(0,2,2), core_on_chip=0), TpuDevice(id=23, process_index=5, coords=(1,3,2), core_on_chip=0)} [repeated 3x across cluster]
 (base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ 
