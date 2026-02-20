@@ -199,7 +199,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
     lm_head = pred_lm_head.rearrange((Contract, Label))
 
-    def fused_impl(shard_embeddings: NamedArray, shard_labels: NamedArray, shard_lm_head: NamedArray) -> jax.Array:
+    def fused_impl(shard_embeddings: NamedArray, shard_labels: NamedArray, shard_lm_head: NamedArray) -> NamedArray:
         batch_axes = hax.axis.without_axes(shard_embeddings.axes, Contract)
         flat_embeddings, _ = flatten_all_axes_but(shard_embeddings, "__BATCH__", batch_axes, reorder_to_front=True)
         batch_axis = flat_embeddings.resolve_axis("__BATCH__")
