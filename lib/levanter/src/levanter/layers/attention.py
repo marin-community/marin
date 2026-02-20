@@ -2048,6 +2048,11 @@ def _do_tpu_ragged_paged_attention(
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
 ) -> NamedArray:
+    if tpu_ragged_paged_attention is None:
+        msg = "TPU ragged paged attention kernel is unavailable."
+        raise RuntimeError(msg)
+    kernel = tpu_ragged_paged_attention
+
     # Usual shardmap dance
     # Ensure last dimension (head_size) is a multiple of 128 for Pallas kernels
     orig_head_size = q.axis_size("head_size")
@@ -2092,7 +2097,7 @@ def _do_tpu_ragged_paged_attention(
         num_seqs_arg: jax.Array,
         sm_scale_arg: jax.Array,
     ) -> jax.Array:
-        return tpu_ragged_paged_attention(
+        return kernel(
             q_arg,
             kv_pages_arg,
             kv_lens_arg,
