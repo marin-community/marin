@@ -18,12 +18,11 @@ from dataclasses import replace
 
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
-from marin.processing.tokenize import lm_mixture_data_config
 
-from experiments.defaults import SimpleTrainConfig, default_train
+from experiments.defaults import default_train
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size, llama_150m
-from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
-from experiments.pretraining_datasets.dclm import dclm_components_llama3
+from experiments.simple_train_config import SimpleTrainConfig
+from experiments.tootsie.exp1295_32b import nemotron_mix
 
 # ---------------------------
 # Daily ferry policy defaults
@@ -38,20 +37,6 @@ def _int_env(name: str, default: int) -> int:
     if value is None:
         return default
     return int(value)
-
-
-def _build_nemotron_mix():
-    nemotron_steps = tokenize_nemotron()
-    proofpile_2 = dclm_components_llama3["proofpile_2"]
-    starcoderdata = dclm_components_llama3["starcoderdata"]
-    return lm_mixture_data_config(
-        components={**nemotron_steps, "starcoderdata": starcoderdata, "proofpile_2": proofpile_2},
-        weights={
-            **NEMOTRON_WEIGHTS,
-            "starcoderdata": 0.25,
-            "proofpile_2": 0.055,
-        },
-    )
 
 
 # Approximate FLOPs model used for scaling guidance:
@@ -87,7 +72,7 @@ train_config = SimpleTrainConfig(**train_config_kwargs)
 
 daily_ferry = default_train(
     name=RUN_NAME,
-    tokenized=_build_nemotron_mix(),
+    tokenized=nemotron_mix,
     model_config=replace(llama_150m, max_seq_len=TRAIN_SEQ_LEN),
     train_config=train_config,
     tags=["ferry", "daily", "integration", "125m", "nemotron", "seq4096"],

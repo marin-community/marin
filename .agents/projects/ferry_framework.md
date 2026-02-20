@@ -22,6 +22,7 @@ This plan maps to `.agents/the_plan.yaml` items:
 
 Focus only on **daily ferry as integration test**:
 - single canonical ferry template (`experiments/ferries/daily.py`)
+- keep daily and canary ferry data-mix assumptions aligned (`experiments/ferries/canary_ferry.py`)
 - one PR-generation workflow (agent/manual-triggered)
 - one launch flow on TPU infra
 - one monitoring loop using `.agents/docs/job-monitoring-loop.md`

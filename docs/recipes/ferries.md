@@ -14,12 +14,15 @@ Canonical template:
 - `experiments/ferries/daily.py`
 
 Current baseline defaults in that template:
-- data: Nemotron mix (Nemotron CC + StarCoderData + ProofPile2)
+- data: shared `nemotron_mix` baseline (same source used by `experiments/ferries/canary_ferry.py`)
 - model size: Llama ~125M (`llama_150m`)
 - sequence length: 4096
 - train batch size: 512
 - FLOP target: ~1e19 (overrideable via env)
 - default cluster: `us-central1` (zone `us-central1-a`)
+
+Companion canary:
+- `experiments/ferries/canary_ferry.py` is the smaller always-on canary lane; keep data-mix assumptions aligned between daily and canary ferries.
 
 ## Prerequisites
 - Local checkout with write access.
