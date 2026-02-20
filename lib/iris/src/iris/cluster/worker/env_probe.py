@@ -1,31 +1,132 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Environment probing for worker registration."""
 
+import json
 import logging
 import os
+import re
 import socket
 import subprocess
+import urllib.error
 import urllib.request
+from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
-from iris.cluster.types import get_tpu_topology
+from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.rpc import cluster_pb2
+from iris.temp_buckets import REGION_TO_TMP_BUCKET
 
 logger = logging.getLogger(__name__)
+
+_GCP_METADATA_ROOT = "http://metadata.google.internal/computeMetadata/v1/instance"
+_GCP_METADATA_HEADERS = {"Metadata-Flavor": "Google"}
+
+
+@lru_cache(maxsize=1)
+def _is_gcp_vm() -> bool:
+    """Return True when running on a GCP VM."""
+    dmi_paths = (
+        "/sys/class/dmi/id/product_name",
+        "/sys/class/dmi/id/sys_vendor",
+    )
+    for path in dmi_paths:
+        try:
+            value = Path(path).read_text().strip().lower()
+        except OSError:
+            continue
+        if "google" in value or "google compute engine" in value:
+            return True
+    return False
+
+
+def _get_gcp_metadata(path: str) -> str | None:
+    """Read GCP instance metadata path and return stripped text."""
+    try:
+        req = urllib.request.Request(
+            f"{_GCP_METADATA_ROOT}/{path}",
+            headers=_GCP_METADATA_HEADERS,
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            value = resp.read().decode().strip()
+            return value or None
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return None
+
+
+def _infer_worker_log_prefix() -> str | None:
+    """Infer worker log prefix from GCP metadata."""
+    if not _is_gcp_vm():
+        return None
+    zone = _get_gcp_metadata("zone")
+    if not zone:
+        return None
+    # zone format: projects/<project>/zones/us-central2-b
+    zone_name = zone.split("/")[-1]
+    if "-" not in zone_name:
+        return None
+    region = zone_name.rsplit("-", 1)[0]
+    bucket = REGION_TO_TMP_BUCKET.get(region)
+    if not bucket:
+        logger.warning("No tmp bucket mapping for region %s", region)
+        return None
+    return f"gs://{bucket}/ttl=30d/iris-logs"
+
+
+def _extract_tpu_name(instance_name: str) -> str:
+    """Derive TPU slice name by stripping worker suffix from instance name."""
+    return re.sub(r"-w-*[0-9]*$", "", instance_name.strip())
+
+
+def _extract_tpu_worker_hostnames(worker_endpoints: str) -> str:
+    """Extract comma-separated IP list from TPU worker-network-endpoints metadata."""
+    hostnames: list[str] = []
+    for entry in worker_endpoints.split(","):
+        for field in entry.split(":"):
+            candidate = field.strip()
+            if "." in candidate:
+                hostnames.append(candidate)
+                break
+    return ",".join(hostnames)
+
+
+def _extract_tpu_chips_per_host_bounds(tpu_env_raw: str) -> str:
+    """Extract CHIPS_PER_HOST_BOUNDS value from tpu-env metadata blob."""
+    match = re.search(r"^CHIPS_PER_HOST_BOUNDS:\s*'([^']+)'", tpu_env_raw, flags=re.MULTILINE)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _probe_tpu_metadata() -> tuple[str, str, str, str, str]:
+    """Probe TPU metadata from GCP metadata service.
+
+    Returns:
+        Tuple of (tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds).
+    """
+    if not _is_gcp_vm():
+        return "", "", "", "", ""
+
+    tpu_name = ""
+    tpu_worker_hostnames = ""
+    tpu_worker_id = ""
+    tpu_chips_per_host_bounds = ""
+    tpu_type = _get_gcp_metadata("attributes/accelerator-type") or ""
+
+    # Only collect TPU-specific metadata once we know this is a TPU VM.
+    has_tpu_signal = bool(tpu_type)
+    if has_tpu_signal:
+        if instance_name := _get_gcp_metadata("name"):
+            tpu_name = _extract_tpu_name(instance_name)
+        tpu_worker_id = _get_gcp_metadata("attributes/agent-worker-number") or ""
+        if worker_endpoints := _get_gcp_metadata("attributes/worker-network-endpoints"):
+            tpu_worker_hostnames = _extract_tpu_worker_hostnames(worker_endpoints)
+        if tpu_env_raw := _get_gcp_metadata("attributes/tpu-env"):
+            tpu_chips_per_host_bounds = _extract_tpu_chips_per_host_bounds(tpu_env_raw)
+
+    return tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds
 
 
 def _probe_gpu_info() -> tuple[int, str, int]:
@@ -55,31 +156,6 @@ def _probe_gpu_info() -> tuple[int, str, int]:
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError) as e:
         logger.debug("GPU probe failed (nvidia-smi not available or error): %s", type(e).__name__)
         return 0, "", 0
-
-
-def _probe_gce_metadata() -> tuple[str, str]:
-    """Query GCE metadata server.
-
-    Returns ("", "") if not on GCE.
-    """
-    try:
-        headers = {"Metadata-Flavor": "Google"}
-
-        def fetch(path: str) -> str:
-            req = urllib.request.Request(
-                f"http://169.254.169.254/computeMetadata/v1/{path}",
-                headers=headers,
-            )
-            with urllib.request.urlopen(req, timeout=1.0) as resp:
-                return resp.read().decode().strip()
-
-        instance_name = fetch("instance/name")
-        zone_full = fetch("instance/zone")
-        zone = zone_full.split("/")[-1] if zone_full else ""
-        return instance_name, zone
-    except Exception:
-        logger.debug("GCE metadata probe failed (not running on GCE or metadata server unavailable)")
-        return "", ""
 
 
 def _get_memory_total_bytes() -> int:
@@ -133,31 +209,38 @@ def collect_workdir_size_mb(workdir: Path) -> int:
     return int(size_str)
 
 
+def _detect_preemptible(extra_attributes: dict[str, str]) -> bool:
+    """Detect whether this worker is running on a preemptible/spot VM.
+
+    Checks the GCP metadata server first (authoritative for GCP VMs), then
+    falls back to IRIS_WORKER_ATTRIBUTES. Defaults to False for non-GCP
+    environments without explicit configuration.
+    """
+    if _is_gcp_vm():
+        try:
+            preemptible = _get_gcp_metadata("scheduling/preemptible")
+            if preemptible is not None:
+                return preemptible.upper() == "TRUE"
+            logger.debug("GCP metadata not available for preemptible detection, checking IRIS_WORKER_ATTRIBUTES")
+        except ValueError:
+            logger.debug("GCP metadata not available for preemptible detection, checking IRIS_WORKER_ATTRIBUTES")
+
+    return extra_attributes.get(PREEMPTIBLE_ATTRIBUTE_KEY, "false").lower() == "true"
+
+
 def _get_extra_attributes() -> dict[str, str]:
     """Get extra worker attributes from IRIS_WORKER_ATTRIBUTES env var.
 
-    Format: key1=value1,key2=value2,...
-    Example: taint:maintenance=true,pool=large-jobs
-
-    Values are always strings; the caller is responsible for type conversion if needed.
+    Format: JSON object, e.g. {"region":"us-west4","pool":"large-jobs"}.
+    Values are stringified.
     """
     attrs_env = os.environ.get("IRIS_WORKER_ATTRIBUTES", "")
     if not attrs_env:
         return {}
-    result: dict[str, str] = {}
-    for pair in attrs_env.split(","):
-        pair = pair.strip()
-        if not pair:
-            continue
-        if "=" not in pair:
-            logger.warning("Skipping malformed attribute (no '='): %s", pair)
-            continue
-        key, value = pair.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key:
-            result[key] = value
-    return result
+    parsed = json.loads(attrs_env)
+    if not isinstance(parsed, dict):
+        raise ValueError("IRIS_WORKER_ATTRIBUTES must decode to a dictionary")
+    return {str(key): str(value) for key, value in parsed.items() if str(key)}
 
 
 def _build_worker_attributes(
@@ -200,6 +283,10 @@ def _build_worker_attributes(
     for key, value in extra_attributes.items():
         attributes[key] = cluster_pb2.AttributeValue(string_value=value)
 
+    # Preemptible detection: GCP metadata server, then IRIS_WORKER_ATTRIBUTES fallback
+    is_preemptible = _detect_preemptible(extra_attributes)
+    attributes[PREEMPTIBLE_ATTRIBUTE_KEY] = cluster_pb2.AttributeValue(string_value=str(is_preemptible).lower())
+
     return attributes
 
 
@@ -207,6 +294,42 @@ class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
+    def log_prefix(self) -> str | None: ...
+
+
+class TPUSimEnvironmentProvider:
+    """Simulated TPU environment for testing multi-host JAX coordination.
+
+    Wraps DefaultEnvironmentProvider and adds fake TPU metadata so that
+    _build_device_env_vars() sets JAX_COORDINATOR_ADDRESS, JAX_PROCESS_ID,
+    and JAX_NUM_PROCESSES correctly.
+    """
+
+    def __init__(
+        self,
+        worker_id: int,
+        num_workers: int,
+        coordinator_host: str = "127.0.0.1",
+        tpu_variant: str = "v4-8-sim",
+    ):
+        self._worker_id = worker_id
+        self._num_workers = num_workers
+        self._coordinator_host = coordinator_host
+        self._tpu_variant = tpu_variant
+
+    def probe(self) -> cluster_pb2.WorkerMetadata:
+        base = DefaultEnvironmentProvider().probe()
+        # Simulate TPU slice membership
+        base.tpu_name = "sim-tpu-slice"
+        base.tpu_worker_id = str(self._worker_id)
+        base.tpu_worker_hostnames = self._coordinator_host
+        base.tpu_chips_per_host_bounds = "2,2,1"
+        # Mark device as TPU so _build_device_env_vars triggers
+        base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
+        return base
+
+    def log_prefix(self) -> str | None:
+        return None
 
 
 class DefaultEnvironmentProvider:
@@ -219,31 +342,25 @@ class DefaultEnvironmentProvider:
         memory_bytes = _get_memory_total_bytes()
         disk_bytes = _get_disk_bytes()
 
-        # TPU environment variables
-        tpu_name = os.environ.get("TPU_NAME", "")
-        tpu_worker_hostnames = os.environ.get("TPU_WORKER_HOSTNAMES", "")
-        tpu_worker_id = os.environ.get("TPU_WORKER_ID", "")
-        tpu_chips_per_host_bounds = os.environ.get("TPU_CHIPS_PER_HOST_BOUNDS", "")
+        # TPU metadata is resolved from env first, then GCP metadata endpoint.
+        tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds = _probe_tpu_metadata()
 
         # GPU info via nvidia-smi
         gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
 
-        # GCE metadata
-        gce_instance_name, gce_zone = _probe_gce_metadata()
-
-        # Build device config
+        # Build device config using TPU_TYPE for topology lookup
         device = cluster_pb2.DeviceConfig()
-        if tpu_name:
+        if tpu_type:
             tpu_chip_count = 0
             try:
-                topo = get_tpu_topology(tpu_name)
+                topo = get_tpu_topology(tpu_type)
                 tpu_chip_count = topo.chips_per_vm
             except ValueError:
-                logger.warning("Unknown TPU topology: %s", tpu_name)
+                logger.warning("Unknown TPU topology: %s", tpu_type)
 
             device.tpu.CopyFrom(
                 cluster_pb2.TpuDevice(
-                    variant=tpu_name,
+                    variant=tpu_type,
                     count=tpu_chip_count,
                 )
             )
@@ -272,8 +389,12 @@ class DefaultEnvironmentProvider:
             extra_attributes or "none",
         )
 
-        # Build worker attributes for constraint-based scheduling
+        # Build worker attributes for constraint-based scheduling.
+        # TPU_NAME is the slice name, used for coscheduling (group_by="tpu-name" groups workers by slice)
         attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
+
+        # VM address from environment (injected by Platform bootstrap)
+        vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
 
         return cluster_pb2.WorkerMetadata(
             hostname=hostname,
@@ -281,15 +402,20 @@ class DefaultEnvironmentProvider:
             cpu_count=cpu_count,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            tpu_name=tpu_name,
+            tpu_name=tpu_name,  # TPU slice name for coscheduling (from TPU_NAME env var)
             tpu_worker_hostnames=tpu_worker_hostnames,
             tpu_worker_id=tpu_worker_id,
             tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
             gpu_count=gpu_count,
             gpu_name=gpu_name,
             gpu_memory_mb=gpu_memory_mb,
-            gce_instance_name=gce_instance_name,
-            gce_zone=gce_zone,
             device=device,
             attributes=attributes,
+            vm_address=vm_address,
         )
+
+    def log_prefix(self) -> str | None:
+        explicit = os.environ.get("IRIS_LOG_PREFIX")
+        if explicit:
+            return explicit
+        return _infer_worker_log_prefix()

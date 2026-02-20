@@ -1,0 +1,349 @@
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Image build commands."""
+
+import subprocess
+from pathlib import Path
+
+import click
+
+GHCR_DEFAULT_ORG = "marin-community"
+
+
+def _find_marin_root() -> Path:
+    """Find the marin monorepo root (contains pyproject.toml + lib/iris)."""
+    iris_root = _find_iris_root()
+    # iris root is lib/iris, marin root is two levels up
+    marin_root = iris_root.parent.parent
+    if (marin_root / "pyproject.toml").exists() and (marin_root / "lib" / "iris").is_dir():
+        return marin_root
+    raise click.ClickException("Cannot find marin repo root. Expected lib/iris to be inside a marin workspace.")
+
+
+def _find_iris_root() -> Path:
+    """Find the iris package root directory containing Dockerfiles.
+
+    Searches in order:
+    1. Relative to this file (cli/build.py -> iris root is 4 levels up from src/iris/cli/build.py)
+    2. Current working directory
+    3. Walking up from cwd until Dockerfile.worker is found
+    """
+    build_path = Path(__file__).resolve()
+    # build.py is at src/iris/cli/build.py, so iris root is 4 levels up
+    iris_root = build_path.parent.parent.parent.parent
+    if (iris_root / "Dockerfile.worker").exists() and (iris_root / "Dockerfile.controller").exists():
+        return iris_root
+
+    cwd = Path.cwd()
+    if (cwd / "Dockerfile.worker").exists():
+        return cwd
+
+    for parent in cwd.parents:
+        if (parent / "Dockerfile.worker").exists():
+            return parent
+
+    raise click.ClickException(
+        "Cannot find Dockerfile.worker. Run from the iris directory or specify --dockerfile and --context."
+    )
+
+
+def _resolve_image_name_and_version(
+    source_tag: str,
+    image_name: str | None = None,
+    version: str | None = None,
+) -> tuple[str, str]:
+    """Extract image name and version from a source tag, using overrides if provided."""
+    parts = source_tag.split(":")
+    if not image_name:
+        image_name = parts[0].split("/")[-1]
+    if not version:
+        version = parts[1] if len(parts) > 1 else "latest"
+    return image_name, version
+
+
+def _push_to_ghcr(
+    source_tag: str,
+    ghcr_org: str = GHCR_DEFAULT_ORG,
+    image_name: str | None = None,
+    version: str | None = None,
+) -> None:
+    """Push a local Docker image to GitHub Container Registry (ghcr.io)."""
+    image_name, version = _resolve_image_name_and_version(source_tag, image_name, version)
+    dest_tag = f"ghcr.io/{ghcr_org}/{image_name}:{version}"
+
+    click.echo(f"Pushing {source_tag} to ghcr.io/{ghcr_org}...")
+
+    result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
+    if result.returncode != 0:
+        click.echo(f"Failed to tag image as {dest_tag}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Pushing to {dest_tag}...")
+    result = subprocess.run(["docker", "push", dest_tag], check=False)
+    if result.returncode != 0:
+        click.echo(f"Failed to push to {dest_tag}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Successfully pushed to {dest_tag}")
+    click.echo("\nDone!")
+
+
+def _push_to_gcp_registries(
+    source_tag: str,
+    regions: tuple[str, ...],
+    project: str,
+    image_name: str | None = None,
+    version: str | None = None,
+) -> None:
+    """Push a local Docker image to multiple GCP Artifact Registry regions."""
+    image_name, version = _resolve_image_name_and_version(source_tag, image_name, version)
+
+    click.echo(f"Pushing {source_tag} to {len(regions)} GCP region(s)...")
+
+    for r in regions:
+        dest_tag = f"{r}-docker.pkg.dev/{project}/marin/{image_name}:{version}"
+
+        click.echo(f"\nConfiguring {r}-docker.pkg.dev...")
+        result = subprocess.run(
+            ["gcloud", "auth", "configure-docker", f"{r}-docker.pkg.dev", "-q"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            click.echo(
+                f"Warning: Failed to configure docker auth for {r}-docker.pkg.dev: {result.stderr.strip()}", err=True
+            )
+
+        click.echo(f"Tagging as {dest_tag}")
+        result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
+        if result.returncode != 0:
+            click.echo(f"Failed to tag image for {r}", err=True)
+            continue
+
+        click.echo(f"Pushing to {r}...")
+        result = subprocess.run(["docker", "push", dest_tag], check=False)
+        if result.returncode != 0:
+            click.echo(f"Failed to push to {r}", err=True)
+            continue
+
+        click.echo(f"Successfully pushed to {dest_tag}")
+
+    click.echo("\nDone!")
+
+
+def _push_image(
+    source_tag: str,
+    registry: str,
+    image_name: str | None = None,
+    version: str | None = None,
+    ghcr_org: str = GHCR_DEFAULT_ORG,
+    gcp_regions: tuple[str, ...] = (),
+    gcp_project: str = "hai-gcp-models",
+) -> None:
+    """Push a local Docker image to the specified registry."""
+    if registry == "ghcr":
+        _push_to_ghcr(source_tag, ghcr_org=ghcr_org, image_name=image_name, version=version)
+    elif registry == "gcp":
+        if not gcp_regions:
+            raise click.ClickException("--region is required when pushing to GCP Artifact Registry")
+        _push_to_gcp_registries(source_tag, gcp_regions, gcp_project, image_name=image_name, version=version)
+    else:
+        raise click.ClickException(f"Unknown registry: {registry}. Use 'ghcr' or 'gcp'.")
+
+
+def _build_image(
+    image_type: str,
+    tag: str,
+    push: bool,
+    dockerfile: str | None,
+    context: str | None,
+    platform: str,
+    registry: str,
+    ghcr_org: str,
+    gcp_regions: tuple[str, ...],
+    gcp_project: str,
+) -> None:
+    """Build a Docker image for Iris (worker or controller)."""
+    dockerfile_name = f"Dockerfile.{image_type}"
+
+    iris_root = _find_iris_root()
+    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / dockerfile_name
+    context_path = Path(context) if context else iris_root
+
+    if not dockerfile_path.exists():
+        raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
+
+    click.echo(f"Using Dockerfile: {dockerfile_path}")
+
+    cmd = ["docker", "buildx", "build", "--platform", platform]
+    cmd.extend(["-t", tag])
+    cmd.extend(["-f", str(dockerfile_path)])
+    cmd.extend(["--output", f"type=docker,compression=zstd,compression-level=1,name={tag}"])
+    cmd.append(str(context_path))
+
+    click.echo(f"Building image: {tag}")
+    click.echo(f"Platform: {platform}")
+    click.echo(f"Context: {context_path}")
+    click.echo()
+
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        click.echo("Build failed", err=True)
+        raise SystemExit(1)
+
+    click.echo()
+    click.echo("Build successful!")
+    click.echo(f"Image available locally as: {tag}")
+
+    if push:
+        _push_image(
+            tag,
+            registry=registry,
+            ghcr_org=ghcr_org,
+            gcp_regions=gcp_regions,
+            gcp_project=gcp_project,
+        )
+
+
+_registry_options = [
+    click.option("--registry", type=click.Choice(["ghcr", "gcp"]), default="ghcr", help="Registry to push to"),
+    click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization"),
+    click.option("--region", multiple=True, help="GCP Artifact Registry regions (required for --registry gcp)"),
+    click.option("--project", default="hai-gcp-models", help="GCP project ID for registry"),
+]
+
+
+def _add_registry_options(fn):
+    for opt in reversed(_registry_options):
+        fn = opt(fn)
+    return fn
+
+
+@click.group()
+def build():
+    """Image build commands."""
+
+
+@build.command("worker-image")
+@click.option("--tag", "-t", default="iris-worker:latest", help="Image tag")
+@click.option("--push", is_flag=True, help="Push image to registry after building")
+@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
+@click.option("--context", type=click.Path(exists=True), help="Build context directory")
+@click.option("--platform", default="linux/amd64", help="Target platform")
+@_add_registry_options
+def build_worker_image(
+    tag: str,
+    push: bool,
+    dockerfile: str | None,
+    context: str | None,
+    platform: str,
+    registry: str,
+    ghcr_org: str,
+    region: tuple[str, ...],
+    project: str,
+):
+    """Build Docker image for Iris worker."""
+    _build_image("worker", tag, push, dockerfile, context, platform, registry, ghcr_org, region, project)
+
+
+@build.command("controller-image")
+@click.option("--tag", "-t", default="iris-controller:latest", help="Image tag")
+@click.option("--push", is_flag=True, help="Push image to registry after building")
+@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
+@click.option("--context", type=click.Path(exists=True), help="Build context directory")
+@click.option("--platform", default="linux/amd64", help="Target platform")
+@_add_registry_options
+def build_controller_image(
+    tag: str,
+    push: bool,
+    dockerfile: str | None,
+    context: str | None,
+    platform: str,
+    registry: str,
+    ghcr_org: str,
+    region: tuple[str, ...],
+    project: str,
+):
+    """Build Docker image for Iris controller."""
+    _build_image("controller", tag, push, dockerfile, context, platform, registry, ghcr_org, region, project)
+
+
+@build.command("task-image")
+@click.option("--tag", "-t", default="iris-task:latest", help="Image tag")
+@click.option("--push", is_flag=True, help="Push image to registry after building")
+@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
+@click.option("--platform", default="linux/amd64", help="Target platform")
+@_add_registry_options
+def build_task_image(
+    tag: str,
+    push: bool,
+    dockerfile: str | None,
+    platform: str,
+    registry: str,
+    ghcr_org: str,
+    region: tuple[str, ...],
+    project: str,
+):
+    """Build base task image with system deps and pre-synced marin core deps.
+
+    The build context is the marin repo root so that pyproject.toml and uv.lock
+    are available for COPY. The Dockerfile lives at lib/iris/Dockerfile.task.
+    """
+    marin_root = _find_marin_root()
+    iris_root = _find_iris_root()
+    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / "Dockerfile.task"
+
+    if not dockerfile_path.exists():
+        raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
+
+    _build_image(
+        "task",
+        tag,
+        push,
+        str(dockerfile_path),
+        str(marin_root),
+        platform,
+        registry,
+        ghcr_org,
+        region,
+        project,
+    )
+
+
+@build.command("push")
+@click.argument("source_tag")
+@click.option("--registry", type=click.Choice(["ghcr", "gcp"]), default="ghcr", help="Registry to push to")
+@click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
+@click.option("--region", "-r", multiple=True, help="GCP Artifact Registry region (required for --registry gcp)")
+@click.option("--project", default="hai-gcp-models", help="GCP project ID")
+@click.option("--image-name", help="Image name in registry (default: derived from source tag)")
+@click.option("--version", help="Version tag (default: derived from source tag)")
+def build_push(
+    source_tag: str,
+    registry: str,
+    ghcr_org: str,
+    region: tuple[str, ...],
+    project: str,
+    image_name: str | None,
+    version: str | None,
+):
+    """Push a local Docker image to a container registry.
+
+    By default pushes to ghcr.io. Use --registry gcp with --region for GCP Artifact Registry.
+
+    Examples:
+
+        iris build push iris-worker:latest --image-name iris-worker
+
+        iris build push iris-task:v1.0 --registry gcp --region us-central1
+    """
+    _push_image(
+        source_tag,
+        registry=registry,
+        image_name=image_name,
+        version=version,
+        ghcr_org=ghcr_org,
+        gcp_regions=region,
+        gcp_project=project,
+    )

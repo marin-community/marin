@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """WorkerService RPC implementation using Connect RPC."""
 
@@ -23,55 +12,38 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.worker.worker_types import Task
-from iris.rpc import cluster_pb2
+from iris.chaos import chaos
+from iris.cluster.worker.worker_types import TaskInfo
+from iris.logging import LogBuffer
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.errors import rpc_error_handler
+from iris.time_utils import Timer
 
 logger = logging.getLogger(__name__)
 
 
 class TaskProvider(Protocol):
-    """Protocol for task management operations."""
+    """Protocol for task management operations.
+
+    Returns TaskInfo (read-only view) to decouple service layer from TaskAttempt internals.
+    """
 
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str: ...
-    def get_task(self, task_id: str) -> Task | None: ...
-    def list_tasks(self) -> list[Task]: ...
+    def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None: ...
+    def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
-    def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]: ...
+    def get_logs(self, task_id: str, start_line: int = 0, attempt_id: int = -1) -> list[logging_pb2.LogEntry]: ...
+    def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse: ...
+    def profile_task(self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes: ...
 
 
 class WorkerServiceImpl:
     """Implementation of WorkerService RPC interface."""
 
-    def __init__(self, provider: TaskProvider):
+    def __init__(self, provider: TaskProvider, log_buffer: LogBuffer | None = None):
         self._provider = provider
-        self._start_time = time.time()
-
-    def run_task(
-        self,
-        request: cluster_pb2.Worker.RunTaskRequest,
-        _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.RunTaskResponse:
-        """Start execution of a task."""
-        with rpc_error_handler("running task"):
-            logger.info(
-                f"Received run_task RPC for task {request.task_id} "
-                f"(job={request.job_id}, attempt={request.attempt_id}, "
-                f"cpu={request.resources.cpu}, memory={request.resources.memory_bytes})"
-            )
-
-            task_id = self._provider.submit_task(request)
-            task = self._provider.get_task(task_id)
-
-            if not task:
-                raise ConnectError(Code.INTERNAL, f"Task {task_id} not found after submission")
-
-            logger.info(f"Task {task_id} submitted successfully with state {task.to_proto().state}")
-
-            return cluster_pb2.Worker.RunTaskResponse(
-                task_id=task_id,
-                state=task.to_proto().state,
-            )
+        self._log_buffer = log_buffer
+        self._timer = Timer()
 
     def get_task_status(
         self,
@@ -106,17 +78,20 @@ class WorkerServiceImpl:
         request: cluster_pb2.Worker.FetchTaskLogsRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.FetchTaskLogsResponse:
-        """Fetch logs for a task."""
+        """Fetch logs for a task, optionally filtered by attempt."""
         start_line = request.filter.start_line if request.filter.start_line else 0
-        logs = self._provider.get_logs(request.task_id, start_line=start_line)
+        # attempt_id=0 is valid (first attempt), so use the value directly
+        # Convention: -1 means "all attempts", caller sets explicitly
+        attempt_id = request.attempt_id
+        logs = self._provider.get_logs(request.task_id, start_line=start_line, attempt_id=attempt_id)
 
         # Apply additional filters
         result = []
         for entry in logs:
             # Time range filter (start_ms is exclusive for incremental polling)
-            if request.filter.start_ms and entry.timestamp_ms <= request.filter.start_ms:
+            if request.filter.start_ms and entry.timestamp.epoch_ms <= request.filter.start_ms:
                 continue
-            if request.filter.end_ms and entry.timestamp_ms > request.filter.end_ms:
+            if request.filter.end_ms and entry.timestamp.epoch_ms > request.filter.end_ms:
                 continue
             # TODO: Regex filter is vulnerable to DoS via catastrophic backtracking.
             # Malicious regex like (a+)+ can cause minutes of CPU time. Consider using
@@ -134,29 +109,6 @@ class WorkerServiceImpl:
 
         return cluster_pb2.Worker.FetchTaskLogsResponse(logs=result)
 
-    def kill_task(
-        self,
-        request: cluster_pb2.Worker.KillTaskRequest,
-        _ctx: RequestContext,
-    ) -> cluster_pb2.Empty:
-        """Kill a running task."""
-        task = self._provider.get_task(request.task_id)
-        if not task:
-            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
-
-        success = self._provider.kill_task(
-            request.task_id,
-            term_timeout_ms=request.term_timeout_ms or 5000,
-        )
-        if not success:
-            # Task exists but is already in terminal state
-            state_name = cluster_pb2.TaskState.Name(task.status)
-            raise ConnectError(
-                Code.FAILED_PRECONDITION,
-                f"Task {request.task_id} already completed with state {state_name}",
-            )
-        return cluster_pb2.Empty()
-
     def health_check(
         self,
         _request: cluster_pb2.Empty,
@@ -166,8 +118,76 @@ class WorkerServiceImpl:
         tasks = self._provider.list_tasks()
         running = sum(1 for t in tasks if t.status == cluster_pb2.TASK_STATE_RUNNING)
 
-        return cluster_pb2.Worker.HealthResponse(
+        response = cluster_pb2.Worker.HealthResponse(
             healthy=True,
-            uptime_ms=int((time.time() - self._start_time) * 1000),
             running_tasks=running,
         )
+        response.uptime.milliseconds = self._timer.elapsed_ms()
+        return response
+
+    def get_process_logs(
+        self,
+        request: cluster_pb2.Worker.GetProcessLogsRequest,
+        _ctx: RequestContext,
+    ) -> cluster_pb2.Worker.GetProcessLogsResponse:
+        """Get worker process logs from the in-memory ring buffer."""
+        if not self._log_buffer:
+            return cluster_pb2.Worker.GetProcessLogsResponse(records=[])
+        prefix = request.prefix or None
+        limit = request.limit if request.limit > 0 else 200
+        records = self._log_buffer.query(prefix=prefix, limit=limit)
+        return cluster_pb2.Worker.GetProcessLogsResponse(
+            records=[
+                cluster_pb2.ProcessLogRecord(
+                    timestamp=r.timestamp,
+                    level=r.level,
+                    logger_name=r.logger_name,
+                    message=r.message,
+                )
+                for r in records
+            ]
+        )
+
+    def heartbeat(
+        self,
+        request: cluster_pb2.HeartbeatRequest,
+        _ctx: RequestContext,
+    ) -> cluster_pb2.HeartbeatResponse:
+        """Handle controller-initiated heartbeat.
+
+        Processes tasks_to_run and tasks_to_kill, then returns current state.
+        """
+        with rpc_error_handler("heartbeat"):
+            # Chaos injection for testing heartbeat failures and delays
+            if rule := chaos("worker.heartbeat"):
+                if rule.delay_seconds > 0:
+                    time.sleep(rule.delay_seconds)
+                if rule.error:
+                    raise rule.error
+                # If no error specified, raise generic RuntimeError
+                if not rule.delay_seconds:
+                    raise RuntimeError("chaos: worker.heartbeat")
+
+            # Delegate to worker for reconciliation
+            return self._provider.handle_heartbeat(request)
+
+    def profile_task(
+        self,
+        request: cluster_pb2.ProfileTaskRequest,
+        _ctx: RequestContext,
+    ) -> cluster_pb2.ProfileTaskResponse:
+        """Profile a running task using py-spy (CPU) or memray (memory)."""
+        with rpc_error_handler("profile_task"):
+            try:
+                # Validate profile_type
+                if not request.HasField("profile_type"):
+                    raise ValueError("profile_type is required")
+
+                data = self._provider.profile_task(
+                    request.task_id,
+                    duration_seconds=request.duration_seconds or 10,
+                    profile_type=request.profile_type,
+                )
+                return cluster_pb2.ProfileTaskResponse(profile_data=data)
+            except Exception as e:
+                return cluster_pb2.ProfileTaskResponse(error=str(e))

@@ -1,18 +1,14 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "click",
+#     "pyyaml",
+# ]
+# ///
 """
 Run pre-commits and lint checks for Marin.
 
@@ -24,6 +20,7 @@ Marin application code).
 
 import ast
 import fnmatch
+import io
 import json
 import os
 import pathlib
@@ -46,6 +43,7 @@ HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 EXCLUDE_PATTERNS = [
     ".git/**",
     ".github/**",
+    "lib/harbor/**",
     "tests/snapshots/**",
     # grpc generated files
     "**/*_connect.py",
@@ -71,9 +69,19 @@ EXCLUDE_PATTERNS = [
 ]
 
 
+@dataclass
+class CheckResult:
+    name: str
+    exit_code: int
+    output: str
+
+
+# Collects all failure output to print at the end.
+_check_results: list[CheckResult] = []
+
+
 def run_cmd(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
-    click.echo(f"  $ {' '.join(cmd)[:200]}")
-    return subprocess.run(cmd, cwd=ROOT_DIR, check=check)
+    return subprocess.run(cmd, cwd=ROOT_DIR, capture_output=True, text=True, check=check)
 
 
 def get_all_files(all_files: bool, file_args: list[str]) -> list[pathlib.Path]:
@@ -136,29 +144,36 @@ def get_matching_files(
     return matched
 
 
+def _record(name: str, exit_code: int, output: str = "") -> int:
+    """Print a one-line status and stash failure details for the summary."""
+    status = "ok" if exit_code == 0 else "FAIL"
+    click.echo(f"  {name:.<40s} {status}")
+    _check_results.append(CheckResult(name=name, exit_code=exit_code, output=output.rstrip()))
+    return exit_code
+
+
 def check_ruff(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    click.echo("\nRuff linter:")
-    args = ["uv", "run", "--all-packages", "ruff", "check"]
+    args = ["uvx", "ruff@0.14.3", "check"]
     if fix:
         args.extend(["--fix", "--exit-non-zero-on-fix"])
 
     file_args = [str(f.relative_to(ROOT_DIR)) for f in files]
     args.extend(file_args)
 
-    return run_cmd(args).returncode
+    result = run_cmd(args)
+    output = (result.stdout + result.stderr).strip()
+    return _record("Ruff linter", result.returncode, output)
 
 
 def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | None = None) -> int:
     if not files:
         return 0
 
-    click.echo("\nBlack formatter:")
-    args = ["uv", "run", "--all-packages", "black", "--check"]
+    args = ["uvx", "black@25.9.0", "--check"]
     if fix:
-        # When fixing, use --diff to show changes but still exit non-zero if files would be formatted
         args.append("--diff")
     if config:
         args.extend(["--config", str(config)])
@@ -167,27 +182,30 @@ def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | Non
     args.extend(file_args)
 
     result = run_cmd(args)
+    output = (result.stdout + result.stderr).strip()
 
-    # If check failed (files need formatting) and fix is requested, format them
+    # If check failed and fix is requested, actually format them
     if result.returncode != 0 and fix:
-        format_args = ["uv", "run", "--all-packages", "black"]
+        format_args = ["uvx", "black@25.9.0"]
         if config:
             format_args.extend(["--config", str(config)])
         format_args.extend(file_args)
         run_cmd(format_args)
 
-    return result.returncode
+    label = "Black formatter"
+    if config:
+        label += f" ({config.relative_to(ROOT_DIR)})"
+    return _record(label, result.returncode, output)
 
 
 def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pathlib.Path) -> int:
     if not files:
         return 0
 
-    click.echo(f"\nLicense headers ({license_file.relative_to(ROOT_DIR)}):")
+    label = f"License headers ({license_file.relative_to(ROOT_DIR)})"
 
     if not license_file.exists():
-        click.echo(f"  Warning: License header file not found: {license_file}")
-        return 0
+        return _record(label, 0, f"Warning: License header file not found: {license_file}")
 
     with open(license_file) as f:
         license_template = f.read().strip()
@@ -196,6 +214,7 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
     expected_header = "\n".join(license_lines) + "\n"
 
     files_without_header = []
+    buf = io.StringIO()
 
     for file_path in files:
         with open(file_path) as f:
@@ -203,24 +222,20 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
 
         lines = content.split("\n")
 
-        # Scan forward until we find the first non-comment line
         comment_lines = []
-        start_idx = 1 if content.startswith("#!") else 0  # Skip shebang
+        start_idx = 1 if content.startswith("#!") else 0
 
         for line in lines[start_idx:]:
             stripped = line.lstrip()
             if stripped.startswith("#"):
-                # Strip comment marker and the single space after it if present
                 if len(stripped) > 1 and stripped[1] == " ":
                     comment_text = stripped[2:]
                 else:
                     comment_text = stripped[1:]
                 comment_lines.append(comment_text)
             elif stripped:
-                # Found first non-comment line
                 break
 
-        # Check if license text appears in the comments
         comment_block = "\n".join(comment_lines)
         if license_template not in comment_block:
             files_without_header.append(file_path)
@@ -238,40 +253,38 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
                     f.write(new_content)
 
     if files_without_header:
-        if not fix:
-            click.echo(f"  {len(files_without_header)} files missing license headers")
-            for f in files_without_header:
-                click.echo(f"    - {f.relative_to(ROOT_DIR)}")
-        return 1
+        buf.write(f"{len(files_without_header)} files missing license headers\n")
+        for f in files_without_header:
+            buf.write(f"  - {f.relative_to(ROOT_DIR)}\n")
+        return _record(label, 1, buf.getvalue())
 
-    click.echo("  All files have license headers")
-    return 0
+    return _record(label, 0)
 
 
 def check_mypy(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    click.echo("\nMypy type checker:")
-    args = ["uv", "run", "--all-packages", "mypy", "--ignore-missing-imports", "--python-version=3.11"]
+    args = ["uvx", "mypy@1.19.1", "--ignore-missing-imports", "--python-version=3.11"]
 
     test_excluded = [f for f in files if not str(f.relative_to(ROOT_DIR)).startswith("tests/")]
     if not test_excluded:
-        click.echo("  No files to check (all are tests)")
-        return 0
+        return _record("Mypy type checker", 0)
 
     file_args = [str(f.relative_to(ROOT_DIR)) for f in test_excluded]
     args.extend(file_args)
 
-    return run_cmd(args).returncode
+    result = run_cmd(args)
+    output = (result.stdout + result.stderr).strip()
+    return _record("Mypy type checker", result.returncode, output)
 
 
 def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    click.echo("\nLarge files:")
     max_size = 500 * 1024
+    buf = io.StringIO()
 
     large_files = []
     for file_path in files:
@@ -279,13 +292,11 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
             large_files.append((file_path, file_path.stat().st_size))
 
     if large_files:
-        click.echo("  Large files detected:")
         for path, size in large_files:
-            click.echo(f"    - {path.relative_to(ROOT_DIR)} ({size / 1024:.1f} KB)")
-        return 1
+            buf.write(f"  - {path.relative_to(ROOT_DIR)} ({size / 1024:.1f} KB)\n")
+        return _record("Large files", 1, buf.getvalue())
 
-    click.echo("  No large files")
-    return 0
+    return _record("Large files", 0)
 
 
 def check_python_ast(files: list[pathlib.Path], fix: bool) -> int:
@@ -293,7 +304,7 @@ def check_python_ast(files: list[pathlib.Path], fix: bool) -> int:
     if not py_files:
         return 0
 
-    click.echo("\nPython AST:")
+    buf = io.StringIO()
     invalid_files = []
 
     for file_path in py_files:
@@ -304,22 +315,20 @@ def check_python_ast(files: list[pathlib.Path], fix: bool) -> int:
             invalid_files.append((file_path, str(e)))
 
     if invalid_files:
-        click.echo("  Invalid Python syntax:")
         for path, error in invalid_files:
-            click.echo(f"    - {path.relative_to(ROOT_DIR)}: {error}")
-        return 1
+            buf.write(f"  - {path.relative_to(ROOT_DIR)}: {error}\n")
+        return _record("Python AST", 1, buf.getvalue())
 
-    click.echo("  All Python files have valid syntax")
-    return 0
+    return _record("Python AST", 0)
 
 
 def check_merge_conflicts(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    click.echo("\nMerge conflicts:")
     conflict_markers = [b"<<<<<<<", b">>>>>>>"]
     files_with_conflicts = []
+    buf = io.StringIO()
 
     for file_path in files:
         if "pre-commit" in str(file_path):
@@ -333,13 +342,11 @@ def check_merge_conflicts(files: list[pathlib.Path], fix: bool) -> int:
             continue
 
     if files_with_conflicts:
-        click.echo("  Merge conflict markers found:")
         for path in files_with_conflicts:
-            click.echo(f"    - {path.relative_to(ROOT_DIR)}")
-        return 1
+            buf.write(f"  - {path.relative_to(ROOT_DIR)}\n")
+        return _record("Merge conflicts", 1, buf.getvalue())
 
-    click.echo("  No merge conflicts")
-    return 0
+    return _record("Merge conflicts", 0)
 
 
 def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
@@ -347,13 +354,12 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
     if not config_files:
         return 0
 
-    click.echo("\nTOML and YAML:")
     errors = []
+    buf = io.StringIO()
 
     # levanter is weird
     def include_constructor(loader, node):
         filepath = loader.construct_scalar(node)
-        # Resolve relative to the current YAML file's directory
         base_dir = os.path.dirname(loader.name) if hasattr(loader, "name") else "."
         full_path = os.path.join(base_dir, filepath)
 
@@ -365,7 +371,6 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
     for file_path in config_files:
         if file_path.suffix == ".toml":
             try:
-
                 with open(file_path, "rb") as f:
                     tomllib.load(f)
             except Exception as e:
@@ -373,28 +378,25 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
 
         elif file_path.suffix in [".yaml", ".yml"]:
             try:
-
                 with open(file_path) as f:
                     yaml.safe_load(f)
             except Exception as e:
                 errors.append((file_path, str(e)))
 
     if errors:
-        click.echo("  Syntax errors:")
         for path, error in errors:
-            click.echo(f"    - {path.relative_to(ROOT_DIR)}: {error}")
-        return 1
+            buf.write(f"  - {path.relative_to(ROOT_DIR)}: {error}\n")
+        return _record("TOML and YAML", 1, buf.getvalue())
 
-    click.echo("  All files valid")
-    return 0
+    return _record("TOML and YAML", 0)
 
 
 def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    click.echo("\nTrailing whitespace:")
     files_with_whitespace = []
+    buf = io.StringIO()
 
     for file_path in files:
         try:
@@ -409,7 +411,6 @@ def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
             files_with_whitespace.append(file_path)
 
             if fix:
-                # Check if original file ended with newline
                 file_ended_with_newline = lines[-1].endswith("\n") if lines else True
 
                 with open(file_path, "w") as f:
@@ -418,29 +419,25 @@ def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
                         cleaned = line.rstrip()
 
                         if is_last_line and not file_ended_with_newline:
-                            # Last line didn't have newline, don't add one
                             f.write(cleaned)
                         else:
-                            # Normal case: preserve the newline
                             f.write(cleaned + "\n")
 
     if files_with_whitespace:
-        if not fix:
-            click.echo(f"  {len(files_with_whitespace)} files with trailing whitespace")
-            for f in files_with_whitespace:
-                click.echo(f"    - {f.relative_to(ROOT_DIR)}")
-        return 1
+        buf.write(f"{len(files_with_whitespace)} files with trailing whitespace\n")
+        for f in files_with_whitespace:
+            buf.write(f"  - {f.relative_to(ROOT_DIR)}\n")
+        return _record("Trailing whitespace", 1, buf.getvalue())
 
-    click.echo("  No trailing whitespace")
-    return 0
+    return _record("Trailing whitespace", 0)
 
 
 def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    click.echo("\nEnd-of-file newline:")
     files_missing_newline = []
+    buf = io.StringIO()
 
     for file_path in files:
         if file_path.stat().st_size == 0:
@@ -456,17 +453,15 @@ def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
                         with open(file_path, "ab") as f:
                             f.write(b"\n")
         except Exception:
-            click.echo(f"  Warning: Could not read file: {file_path}")
+            pass
 
     if files_missing_newline:
-        if not fix:
-            click.echo(f"  {len(files_missing_newline)} files missing newline")
-            for f in files_missing_newline:
-                click.echo(f"    - {f.relative_to(ROOT_DIR)}")
-        return 1
+        buf.write(f"{len(files_missing_newline)} files missing newline\n")
+        for f in files_missing_newline:
+            buf.write(f"  - {f.relative_to(ROOT_DIR)}\n")
+        return _record("End-of-file newline", 1, buf.getvalue())
 
-    click.echo("  All files have newlines")
-    return 0
+    return _record("End-of-file newline", 0)
 
 
 def check_notebooks(files: list[pathlib.Path], fix: bool) -> int:
@@ -480,20 +475,19 @@ def check_notebooks(files: list[pathlib.Path], fix: bool) -> int:
     if not nb_files:
         return 0
 
-    click.echo("\nJupyter notebooks:")
     notebooks_needing_clean = []
+    buf = io.StringIO()
 
     for nb_path in nb_files:
         try:
             with open(nb_path) as f:
                 notebook = json.load(f)
         except Exception as e:
-            click.echo(f"  Error reading {nb_path.relative_to(ROOT_DIR)}: {e}")
+            buf.write(f"Error reading {nb_path.relative_to(ROOT_DIR)}: {e}\n")
             continue
 
         needs_cleaning = False
 
-        # Check if any code cells have outputs or execution_count
         if "cells" in notebook:
             for cell in notebook["cells"]:
                 if cell.get("cell_type") == "code":
@@ -505,35 +499,32 @@ def check_notebooks(files: list[pathlib.Path], fix: bool) -> int:
             notebooks_needing_clean.append(nb_path)
 
             if fix:
-                # Clear outputs and execution counts from code cells
                 for cell in notebook.get("cells", []):
                     if cell.get("cell_type") == "code":
                         cell["outputs"] = []
                         cell["execution_count"] = None
 
-                # Write back with normalized formatting (indent=1, sorted keys like Jupyter does)
                 with open(nb_path, "w") as f:
                     json.dump(notebook, f, indent=1, ensure_ascii=False, sort_keys=True)
-                    f.write("\n")  # Jupyter adds trailing newline
+                    f.write("\n")
 
     if notebooks_needing_clean:
-        if not fix:
-            click.echo(f"  {len(notebooks_needing_clean)} notebooks with outputs or execution counts")
-            for f in notebooks_needing_clean:
-                click.echo(f"    - {f.relative_to(ROOT_DIR)}")
-        return 1
+        buf.write(f"{len(notebooks_needing_clean)} notebooks with outputs or execution counts\n")
+        for f in notebooks_needing_clean:
+            buf.write(f"  - {f.relative_to(ROOT_DIR)}\n")
+        return _record("Jupyter notebooks", 1, buf.getvalue())
 
-    click.echo("  All notebooks are clean")
-    return 0
+    return _record("Jupyter notebooks", 0)
 
 
 def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    click.echo("\nPyrefly type checker:")
-    args = ["uv", "run", "--all-packages", "pyrefly", "check", "--baseline", ".pyrefly-baseline.json"]
-    return run_cmd(args).returncode
+    args = ["uvx", "pyrefly@0.40.0", "check", "--baseline", ".pyrefly-baseline.json"]
+    result = run_cmd(args)
+    output = (result.stdout + result.stderr).strip()
+    return _record("Pyrefly type checker", result.returncode, output)
 
 
 @dataclass
@@ -613,7 +604,6 @@ def main(fix: bool, all_files: bool, files: tuple[str, ...]):
 
     for config in PRECOMMIT_CONFIGS:
         matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
-        # Filter out non-existent files before running checks
         matched_files = [f for f in matched_files if f.exists()]
         if not matched_files:
             continue
@@ -623,16 +613,26 @@ def main(fix: bool, all_files: bool, files: tuple[str, ...]):
                 exit_code = check(matched_files, fix)
                 exit_codes.append(exit_code)
             except Exception as e:
-                click.echo(f"\nError running check {check.__name__}: {e}")
+                click.echo(f"  Error running check {check.__name__}: {e}")
                 exit_codes.append(1)
 
-    click.echo("\n" + "=" * 60)
+    # Print failure details at the end
+    failures = [r for r in _check_results if r.exit_code != 0 and r.output]
+    if failures:
+        click.echo(f"\n{'=' * 60}")
+        click.echo("Failure details:\n")
+        for r in failures:
+            click.echo(f"--- {r.name} ---")
+            click.echo(r.output)
+            click.echo()
+
+    click.echo("=" * 60)
     if any(exit_codes):
-        click.echo("FAILED: Some checks failed or files were modified")
+        click.echo("FAILED")
         click.echo("=" * 60)
         sys.exit(1)
     else:
-        click.echo("SUCCESS: All checks passed")
+        click.echo("OK")
         click.echo("=" * 60)
         sys.exit(0)
 

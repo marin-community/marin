@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Readers for common input formats.
 
@@ -113,7 +102,6 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
         Parsed JSON records as dictionaries
 
     Example:
-        >>> from zephyr import Backend, Dataset
         >>> # Load from cloud storage
         >>> ds = (Dataset
         ...     .from_files("gs://bucket/data", "**/*.jsonl.gz")
@@ -121,12 +109,12 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(Backend.execute(ds, max_parallelism=10))
+        >>> output_files = list(ctx.execute(ds))
         >>>
         >>> # Load from HuggingFace Hub (requires HF_TOKEN env var)
         >>> hf_url = "hf://datasets/username/dataset@main/data/train.jsonl.gz"
         >>> ds = Dataset.from_list([hf_url]).flat_map(load_jsonl)
-        >>> records = list(Backend.execute(ds, max_parallelism=10))
+        >>> records = list(ctx.execute(ds))
     """
     spec = _as_spec(source)
     decoder = msgspec.json.Decoder()
@@ -154,14 +142,13 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
         Records as dictionaries
 
     Example:
-        >>> from zephyr import Backend, Dataset
         >>> ds = (Dataset
         ...     .from_files("/input", "**/*.parquet")
         ...     .load_parquet()
         ...     .map(lambda r: transform_record(r))
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(Backend.execute(ds, max_parallelism=10))
+        >>> output_files = list(ctx.execute(ds))
     """
     import pyarrow.dataset as pads
 
@@ -238,14 +225,13 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         Records as dictionaries
 
     Example:
-        >>> from zephyr import Backend, Dataset
         >>> ds = (Dataset
         ...     .from_files("/input/**/*.vortex")
         ...     .load_vortex()
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(Backend.execute(ds, max_parallelism=10))
+        >>> output_files = list(ctx.execute(ds))
     """
     import vortex
 
@@ -306,16 +292,16 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
         ValueError: If file extension is not supported
 
     Example:
-        >>> from zephyr import Backend, Dataset
         >>> ds = (Dataset
         ...     .from_files("/input/**/*.jsonl")
         ...     .load_file()
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(Backend.execute(ds, max_parallelism=10))
+        >>> output_files = list(ctx.execute(ds))
     """
     spec = _as_spec(source)
+    logger.info("Loading file: %s", spec.path)
 
     if not spec.path.endswith(SUPPORTED_EXTENSIONS):
         raise ValueError(f"Unsupported extension: {spec.path}.")
@@ -350,13 +336,12 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         Dicts with 'filename' (str) and 'content' (bytes)
 
     Example:
-        >>> from zephyr import Backend, Dataset
         >>> ds = (Dataset
         ...     .from_list(["gs://bucket/data.zip"])
         ...     .flat_map(lambda p: load_zip_members(p, pattern="test.jsonl"))
         ...     .map(lambda m: process_file(m["filename"], m["content"]))
         ... )
-        >>> output_files = list(Backend.execute(ds, max_parallelism=10))
+        >>> output_files = list(ctx.execute(ds))
     """
     spec = _as_spec(source)
     with fsspec.open(spec.path, "rb") as f:

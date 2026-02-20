@@ -167,8 +167,8 @@ class Checkpointer:
             return None
         return ret_dict["model"]
 
-    def on_step(self, info, force: bool = False):
-        step = info.step
+    def on_step(self, *, tree: PyTree, step: int, force: bool = False):
+        step = int(step)
 
         if step == 0:
             self._last_save_time = self._dt_now_injection()
@@ -242,7 +242,13 @@ class Checkpointer:
                         logger.warning(f"Could not load metadata for last temporary checkpoint {last_checkpoint}.")
                         # if we can't load the metadata, we can't delete it, so just log a warning
 
-            self.save_checkpoint(info, destination, commit_callback=callback, is_temporary=not save_permanent_ckpt)
+            self.save_checkpoint(
+                tree=tree,
+                step=step,
+                destination=destination,
+                commit_callback=callback,
+                is_temporary=not save_permanent_ckpt,
+            )
 
     def _get_current_step_save_interval(self, step):
         # binary search for the correct interval
@@ -278,25 +284,25 @@ class Checkpointer:
 
     def save_checkpoint(
         self,
-        info,
+        tree: PyTree,
+        step: int,
         destination: str,
         commit_callback: Optional[Callable[[], None]] = None,
         *,
         is_temporary: bool = False,
     ):
         path = os.path.join(self.base_path, destination)
-        logger.info(f"Saving checkpoint at step {info.step} to {path}")
-        state = info.state.saveable_state
+        logger.info(f"Saving checkpoint at step {step} to {path}")
 
         save_checkpoint(
-            state,
-            step=info.step,
+            tree,
+            step=step,
             checkpoint_path=path,
             manager=self._manager,
             commit_callback=commit_callback,
             is_temporary=is_temporary,
         )
-        self._last_save_step = info.step
+        self._last_save_step = step
         self._last_save_time = self._dt_now_injection()
 
     def _async_checkpoint_remover(self):
@@ -305,44 +311,6 @@ class Checkpointer:
             self._checkpoint_being_removed = checkpoint
             self._do_rm_checkpoint(checkpoint)
             self._checkpoint_being_removed = None
-
-
-# In callbacks.py - Add a new callback that handles epoch checkpointing
-class EpochCheckpointer:
-    """
-    A separate checkpointing system that saves based on epochs.
-    Works alongside the regular step-based checkpointer without modifying core state.
-    """
-
-    def __init__(
-        self,
-        checkpointer: Checkpointer,
-        every_n_epochs: int = 1,
-        total_dataset_size: Optional[int] = None,
-        batch_size: int = 1,
-    ):
-        self.checkpointer = checkpointer
-        self.every_n_epochs = every_n_epochs
-        self.total_dataset_size = total_dataset_size
-        self.batch_size = batch_size
-        self._last_saved_epoch = -1
-
-    def __call__(self, step_info):
-        if self.total_dataset_size is None:
-            return  # Can't calculate epochs without dataset size
-
-        # Calculate current epoch from steps without modifying StepInfo
-        current_epoch = (step_info.step * self.batch_size) // self.total_dataset_size
-
-        # Only save if we've moved to a new epoch and it matches our interval
-        if current_epoch > self._last_saved_epoch and current_epoch % self.every_n_epochs == 0:
-            # Use existing checkpointer's save_checkpoint method
-            self.checkpointer.save_checkpoint(
-                step_info,
-                f"epoch-{current_epoch}",
-                is_temporary=True,
-            )
-            self._last_saved_epoch = current_epoch
 
 
 def save_checkpoint(

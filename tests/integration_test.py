@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import logging
@@ -18,7 +7,7 @@ import os
 import sys
 
 import draccus
-from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
+from fray.v1.cluster import ResourceConfig, create_cluster, set_current_cluster
 import humanfriendly
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
@@ -221,7 +210,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             resources=pod_config,
             env_vars=train_env_vars,
             train_config=TrainLmConfig(
-                data=lm_data_config(tokenize_step, permutation_type="linear"),
+                data=lm_data_config(tokenize_step),
                 hf_save_steps=1,
                 model=Gpt2Config(
                     num_layers=2,
@@ -268,6 +257,8 @@ def main(config: ExecutorMainConfig):
             config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
         )
 
+        os.environ["MARIN_PREFIX"] = bucket_prefix
+
         # start Ray explicitly and set it as the current cluster
         # N.B. This script must not be launched via `uv run`, or Ray will prefer to use `uv` for all execution
         # ignoring package dependencies specified in each step.
@@ -275,7 +266,12 @@ def main(config: ExecutorMainConfig):
             raise RuntimeError("integration_test.py must not be launched via `uv run`. Please run it directly.")
         import ray
 
-        ray.init(resources={"head_node": 1}, runtime_env={"working_dir": None}, num_cpus=os.cpu_count())
+        ray.init(
+            resources={"head_node": 1},
+            runtime_env={"working_dir": None},
+            num_cpus=os.cpu_count(),
+            _memory=1024 * 1024 * 1024 * 1024,  # 1TB
+        )
         set_current_cluster(create_cluster("ray"))
 
         # path to synthetic test data

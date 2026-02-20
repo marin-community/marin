@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Generate ISOFlop sweep steps for varying model sizes on a target dataset.
 
@@ -265,7 +254,7 @@ class Marin2025Recipe:
     # --- Search step sizes for isoflop sweeps ---
     small_budget_step_size: int = 128
     large_budget_step_size: int = 256
-    budget_step_threshold: float = 9e18
+    budget_step_threshold: float = 2e19
 
     def _compute_learning_rate(self, batch_size: int, hidden_dim: int) -> float:
         """Compute learning rate from batch size and hidden dim."""
@@ -273,7 +262,7 @@ class Marin2025Recipe:
 
     def _compute_beta2(self, batch_size: int) -> float:
         """Compute beta2 from batch size."""
-        return self.beta2_base ** (batch_size / self.beta2_batch_divisor)
+        return max(0.95, self.beta2_base ** (batch_size / self.beta2_batch_divisor))
 
     def compute_num_layers(self, hidden_size: int) -> int:
         """Compute number of layers from hidden size using the depth-width formula."""
@@ -708,13 +697,13 @@ MARIN_SCALING_SUITES = {
         budgets=LEGACY_BUDGETS,
     ),
     "common_pile": create_isoflop_sweep_steps(
-        tokenized=comma_main_mixture(permutation_type="linear"),
+        tokenized=comma_main_mixture(),
         experiment_name="comma-mix",
         recipe=MARIN_2025_RECIPE,
         budgets=LEGACY_BUDGETS,
     ),
     "common_pile_feistel": create_isoflop_sweep_steps(
-        tokenized=comma_main_mixture(permutation_type="feistel"),
+        tokenized=comma_main_mixture(),
         experiment_name="comma-mix-feistel",
         recipe=MARIN_2025_RECIPE,
         budgets=LEGACY_BUDGETS,

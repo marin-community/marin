@@ -1,38 +1,52 @@
 # Agent Tips
 
 * Use the connect/RPC abstractions to implement and perform RPC calls. DO NOT use httpx or raw HTTP.
-* Use scripts/generate-protos.py to regenerate files after changing the `.proto` files.
-* Prefer shallow, functional interfaces which return control to the user, vs callbacks or inheritance.
+* Use scripts/generate_protos.py to regenerate files after changing the `.proto` files.
+* Prefer _shallow_, _functional_ code which returns control quickly to the user, vs callbacks or inheritance.
 
-e.g.
-
+```
 class Scheduler:
-  def add_job()
+  def add_job():
   def add_worker():
   def compute_schedule() -> ScheduledJobs:
 
+class Runner:
+  def run_jobs(ScheduledJobs)
+```
+
 is preferable to:
 
+```
 class Scheduler:
   def __init__(self, job_creator: JobCreator):
     self.job_creator = job_creator
   def run(self):
     ... self.job_creator.create_job()
+```
 
-It's acceptable to have a top-level class which implements the main loop of
-course, but prefer to keep other interfaces shallow and functional whenever
-possible.
+* Tests should test stable behavior, not implementation details.
 
-* Tests should evaluate _behavior_, not implementation. Don't test things that are trivially caught by the type checker. Explicitly that means:
+ABSOLUTELY DO NOT test things that are trivially caught by the type checker.
+Explicitly that means:
 
 - No tests for "constant = constant"
 - No tests for "method exists"
 - No tests for "create an object(x, y, z) and attributes are x, y, z"
 
-These tests have negative value - they make our code more brittle. Test
-_behavior_ instead. You can use mocks as needed to isolate environments (e.g.
-mock around a remote API). Prefer "fakes" -- e.g. create a real database but
-with fake data -- when reasonable.
+These tests have negative value - they make our code more brittle.
+
+Test _stable behavior_ instead. You can use mocks as needed to isolate
+environments (e.g.  mock around a remote API), but prefer "fakes" -- e.g. create
+a real database but with fake data -- when reasonable.
+
+## Documentation
+
+ALWAYS read the docs for the appropriate area.
+IF they disagree with the code, ALWAYS add a task to update them.
+
+Documentation should be kept up-to-date as code changes. When implementing new features or making significant changes, update the relevant documentation files:
+
+@README.md - Main overview, CLI reference, and quick start
 
 ## Protocols and Testing
 
@@ -63,21 +77,13 @@ the dashboard, rather than creating a scheduler and running it manually.
 
 ## Architecture Notes
 
-### Job vs Attempt
+### Concurrency Model
 
-- **Job**: A logical unit of work with a hierarchical `job_id` (e.g., "my-exp/worker-0/task-1")
-- **Attempt**: A single execution of a job, identified by `attempt_id` (0, 1, 2...)
-- Jobs may be retried on failure/preemption; each retry creates a new attempt
-- The controller tracks all attempts for history; workers execute individual attempts
-- `(job_id, attempt_id)` uniquely identifies an execution on the worker side
-
-### Key Environment Variables (injected into job containers)
-
-- `IRIS_JOB_ID` - Hierarchical job identifier
-- `IRIS_ATTEMPT_ID` - Current attempt number (0-indexed)
-- `IRIS_WORKER_ID` - Worker executing the job
-- `IRIS_CONTROLLER_ADDRESS` - Controller URL for sub-jobs/actors
-- `IRIS_PORT_<NAME>` - Allocated port numbers
+Platform operations (`terminate`, `create_slice`, etc.) shell out to `gcloud`
+via `subprocess.run` and are thread-safe. When multiple independent platform
+operations need to run (e.g. tearing down N slices), use
+`concurrent.futures.ThreadPoolExecutor` — not asyncio. Always apply a hard
+timeout so the CLI doesn't hang on a stuck gcloud call.
 
 ## Planning
 
@@ -101,3 +107,203 @@ That is _each stage of the plan_ should be a independently testable,
 self-contained unit of work. THis is preferable to plans which attempt to make
 all of the changes for one area (e.g. all proto changes, then all server
 changes, etc.)
+
+When adding new modules or significant features:
+1. Update the README with a brief overview and usage examples
+2. Add detailed documentation to the appropriate docs/ file
+3. Reference the documentation from this AGENTS.md file
+
+**Key documentation areas:**
+
+| Area | File | Description |
+|------|------|-------------|
+| Architecture | README.md | High-level architecture, CLI reference, quick start |
+| Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
+| Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
+| Original Design | docs/fray-zero.md | Rationale and design decisions |
+
+## Key Modules
+
+### Time Utilities
+
+Use `iris.time_utils` for all time-related operations instead of raw `datetime` or `time`:
+
+| Class | Purpose |
+|-------|---------|
+| `Timestamp` | Point in time (epoch-based). Use for created_at, timestamps in logs, etc. |
+| `Duration` | Time interval. Use for timeouts, intervals, configuration values. |
+| `Deadline` | Monotonic deadline for timeout checks. Use in polling loops. |
+| `Timer` | Elapsed time measurement. Use for performance tracking. |
+| `ExponentialBackoff` | Retry/polling with backoff. Use `wait_until()` for condition polling. |
+
+Example:
+```python
+from iris.time_utils import Timestamp, Duration, Deadline
+
+created_at = Timestamp.now()
+timeout = Duration.from_seconds(30.0)
+deadline = Deadline.from_now(timeout)
+deadline.wait_for(condition)
+
+while not deadline.expired():
+    if condition():
+        break
+    time.sleep(0.1)
+```
+
+### Deployment Topology
+
+The controller is a plain GCE VM with no zone affinity to workers — it can run
+in any zone and serve workers across all regions.
+
+**When changing the controller zone**, update in `examples/marin.yaml`:
+- `controller.gcp.zone` — the GCE zone
+- `controller.image` and `defaults.bootstrap.docker_image` — use a registry in
+  the same region (see below). `cluster start` auto-builds and pushes images to
+  the region parsed from the image tag, so no manual push is needed.
+
+**Docker registries** are configured in `platform/bootstrap.py` (both worker and
+controller bootstrap scripts). If you add a new region's Artifact Registry, add
+it to both `gcloud auth configure-docker` lines. List existing repos with:
+`gcloud artifacts repositories list --project=hai-gcp-models`
+
+**Bundle storage** (`controller.bundle_prefix`) is a GCS URI with no zone
+affinity — globally accessible.
+
+**Zone validation**: `cluster/config.py` validates that every scale group zone
+appears in `platform.gcp.zones`. Multi-zone scale groups are auto-expanded by
+`_expand_multi_zone_groups()`.
+
+### Architecture Layers
+
+Iris follows a clean layering architecture:
+
+**Controller layer** (`cluster/controller/`): Task scheduling, autoscaling, and demand routing
+- Depends on Platform layer for VM abstractions (Platform, SliceHandle, VmHandle)
+- Owns autoscaling logic and scaling group state
+
+**Platform layer** (`cluster/platform/`): Platform abstractions for managing VMs
+- Provides VM lifecycle management (GCP, manual, local, CoreWeave)
+- Does NOT depend on controller layer
+
+**Cluster layer** (`cluster/`): High-level orchestration
+- `connect_cluster()` and `stop_all()` free functions for cluster lifecycle
+- `stop_all()` terminates controller + all slices in parallel via ThreadPoolExecutor
+  with a 60s hard timeout. Timed-out operations are logged at WARNING and abandoned.
+- Configuration and platform abstractions
+
+Key files:
+
+```
+src/iris/
+├── cli/                         # CLI package (cluster, build, run, debug commands)
+│   ├── main.py                  # Top-level iris group
+│   ├── cluster.py               # Cluster lifecycle, controller, VM ops, dashboard
+│   ├── build.py                 # Image build commands
+│   ├── debug.py                 # Debugging & validation
+│   ├── run.py                   # Command passthrough job submission
+│   └── rpc.py                   # Dynamic RPC CLI
+├── cluster/
+│   ├── config.py                # General Iris configuration (load_config, IrisConfig)
+│   ├── manager.py               # connect_cluster() + stop_all() free functions
+│   ├── controller/
+│   │   ├── controller.py        # Controller with integrated autoscaler
+│   │   ├── main.py              # Controller daemon CLI (serve command)
+│   │   ├── autoscaler.py        # Core autoscaling logic and demand routing
+│   │   ├── scaling_group.py     # Per-group state tracking and lifecycle
+│   │   ├── config.py            # Autoscaler factory functions
+│   │   ├── local.py             # LocalController for in-process testing
+│   │   └── lifecycle.py         # Controller lifecycle (start/stop/reload via Platform)
+│   └── platform/
+│       ├── base.py              # Platform protocol and SliceHandle/VmHandle
+│       ├── gcp.py               # GCP TPU platform
+│       ├── manual.py            # Pre-existing host platform
+│       ├── local.py             # Local development platform
+│       ├── coreweave.py         # CoreWeave stub
+│       ├── bootstrap.py         # Worker bootstrap script generation
+│       ├── ssh.py               # SSH connection management
+│       ├── factory.py           # Platform factory from config
+│       └── debug.py             # Platform debugging utilities
+```
+
+See [README.md](README.md) for CLI usage and configuration examples.
+
+### Dashboard Frontend
+
+The controller and worker dashboards are client-side SPAs using Preact + HTM.
+
+**Directory structure:**
+```
+src/iris/cluster/static/
+├── controller/          # Controller dashboard
+│   ├── app.js           # Main app (tabs, state, data fetching)
+│   ├── jobs-tab.js      # Jobs table with pagination/sorting/tree view
+│   ├── job-detail.js    # Job detail page with task list
+│   ├── workers-tab.js   # Workers table
+│   └── vms-tab.js       # VM management table
+├── shared/              # Shared utilities
+│   ├── rpc.js           # Connect RPC client wrapper
+│   ├── utils.js         # Formatting (dates, durations)
+│   └── styles.css       # Consolidated CSS
+├── vendor/              # Third-party ES modules
+│   ├── preact.mjs       # UI framework
+│   └── htm.mjs          # HTML template literals
+└── worker/              # Worker dashboard components
+```
+
+**Key patterns:**
+- All data fetched via Connect RPC (e.g., `ListJobs`, `GetJobStatus`)
+- No REST endpoints - RPC only
+- State management with Preact hooks (`useState`, `useEffect`)
+- HTML templates via `htm.bind(h)` tagged template literals
+- Jobs displayed as a hierarchical tree based on name structure
+
+**When modifying the dashboard:**
+1. Run dashboard tests: `uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="`
+2. Ensure any new UI features have corresponding RPC endpoints
+3. Follow existing component patterns (functional components, hooks)
+
+## Testing
+
+All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
+Tests use three core fixtures:
+
+- `cluster`: Booted local cluster with `IrisClient` and RPC access
+- `page`: Playwright page pointed at the dashboard (request only when needed)
+- `screenshot`: Capture labeled screenshots to `IRIS_SCREENSHOT_DIR`
+
+Chaos injection is auto-reset between tests. Call `enable_chaos()` directly.
+Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
+
+Run all E2E tests:
+    uv run pytest lib/iris/tests/e2e/ -m e2e -o "addopts="
+
+Run E2E tests without Docker (fast):
+    uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker" -o "addopts="
+
+Run Docker-only tests:
+    uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
+
+Run dashboard tests with saved screenshots:
+    IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_dashboard.py -o "addopts="
+
+When modifying the dashboard:
+    uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="
+
+## Debugging Container Failures
+
+**Exit code 137** = 128 + 9 = SIGKILL, typically OOM. Check:
+- `ContainerStatus.oom_killed` field (from `docker inspect .State.OOMKilled`)
+- Job's `resources.memory_bytes` vs what was requested
+- Resource flow: `JobRequest.resources` → Iris protobuf → `ContainerConfig` → `docker --memory`
+
+**Resource propagation path:**
+```
+fray.v2.ResourceConfig → iris.cluster.types.ResourceSpec.to_proto()
+  → cluster_pb2.ResourceSpecProto → docker.py _docker_create() --memory/--cpus
+```
+
+**Key files for container debugging:**
+- `cluster/runtime/docker.py`: Docker CLI wrapper, resource limits at lines 396-403
+- `cluster/runtime/types.py`: ContainerStatus with oom_killed field
+- `cluster/worker/task_attempt.py`: _format_exit_error() interprets signals

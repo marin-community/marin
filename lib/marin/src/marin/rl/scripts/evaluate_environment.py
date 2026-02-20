@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Utility functions for evaluating RL environments."""
 
@@ -28,7 +17,7 @@ import jax.random as jrandom
 import jmp
 import levanter
 import numpy
-from fray.cluster import (
+from fray.v1.cluster import (
     CpuConfig,
     EnvironmentConfig,
     Entrypoint,
@@ -103,6 +92,10 @@ class EnvironmentEvalConfig:
     n_generations: int = 1
     """Number of generations per prompt."""
 
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to len(tokenizer)."""
+
 
 def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     """Run environment evaluation."""
@@ -158,7 +151,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             logger.info(f"Model config: {model_config}")
 
             key = jrandom.PRNGKey(42)
-            vocab_size = tokenizer.vocab_size
+            vocab_size = config.vocab_size if config.vocab_size is not None else len(tokenizer)
             Vocab = hax.Axis("vocab", vocab_size)
             logger.info(f"Vocab size: {vocab_size}")
 

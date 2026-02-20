@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 from typing import Callable
 import typing
 
@@ -159,6 +158,13 @@ def test_where(use_jit):
     unnamed_7 = named7.array
     unnamed_8, unnamed_9, unnamed_10 = jnp.where(unnamed_7 > 0.5, size=Volume.size, fill_value=-1)
     assert jnp.all(unnamed_8 == named8.array)
+
+    # unnamed arrays should behave like jnp.where
+    arr1 = jnp.arange(12, dtype=jnp.float32).reshape((3, 4))
+    arr2 = jnp.flip(arr1, axis=1)
+    cond = arr1 > arr2
+    arr3 = hax_where(cond, arr1, arr2)
+    assert jnp.all(jnp.isclose(arr3, jnp.where(cond, arr1, arr2)))
 
 
 @pytest.mark.parametrize("use_jit", [False, True])

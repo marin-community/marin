@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import dataclasses
 import functools
 import re
@@ -494,6 +493,7 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
         @functools.wraps(module)
         def fn(*args, **kwargs):
             stacked = haliax.vmap(module.init, Block)(*args, **kwargs)
+            stacked = haliax.auto_sharded(stacked)
             return Stacked(stacked, Block, gradient_checkpointing)
 
         return fn

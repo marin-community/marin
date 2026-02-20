@@ -1,8 +1,19 @@
 cache_dir: gs://levanter-data/tokenized/redpajama_v1_llama_mixture
-tokenizer: "NousResearch/Llama-2-7b-hf"
-configs:
+tokenizer: NousResearch/Llama-2-7b-hf
+train_weights:
+  arxiv: 28
+  book: 26
+  c4: 175
+  common_crawl: 878
+  github: 59
+  StackExchange: 20
+  wikipedia: 24
+stop_strategy: all_exhausted
+components:
   arxiv:
-    train_urls:
+    source:
+      type: url
+      train_urls:
       - gs://levanter-data/dev/redpajama/arxiv/arxiv_023827cd-7ee8-42e6-aa7b-661731f4c70f.jsonl
       - gs://levanter-data/dev/redpajama/arxiv/arxiv_024de5df-1b7f-447c-8c3a-51407d8d6732.jsonl
       - gs://levanter-data/dev/redpajama/arxiv/arxiv_03232e26-be3f-4a28-a5d2-ee1d8c0e9831.jsonl
@@ -104,15 +115,21 @@ configs:
       - gs://levanter-data/dev/redpajama/arxiv/arxiv_fbc62949-624d-4943-9731-f5c46242ba55.jsonl
       - gs://levanter-data/dev/redpajama/arxiv/arxiv_fd572627-cce7-4667-a684-fef096dfbeb7.jsonl
   book:
-    train_urls:
+    source:
+      type: url
+      train_urls:
       - gs://levanter-data/dev/redpajama/book/book.jsonl
   c4:
-    train_urls:
+    source:
+      type: url
+      train_urls:
       - gs://levanter-data/dev/redpajama/c4/c4-train.{00000..01022}-of-01024.jsonl
-    validation_urls:
+      validation_urls:
       - https://data.together.xyz/redpajama-data-1T/v1.0.0/c4/c4-train.01023-of-01024.jsonl
   common_crawl:
-    train_urls:
+    source:
+      type: url
+      train_urls:
       - gs://levanter-data/dev/redpajama/2019-30/en_head_{0000..0055}.json.gz.dedup.classifier.jsonl.zst
       - gs://levanter-data/dev/redpajama/2019-30/en_middle_{0060..0096}.json.gz.dedup.classifier.jsonl.zst
       - gs://levanter-data/dev/redpajama/2020-05/en_head_{0000..0068}.json.gz.dedup.classifier.jsonl.zst
@@ -123,10 +140,12 @@ configs:
       - gs://levanter-data/dev/redpajama/2022-05/en_middle_{0000..0096}.json.gz.dedup.classifier.jsonl.zst
       - gs://levanter-data/dev/redpajama/2023-06/en_head_{0000..0069}.json.gz.dedup.classifier.jsonl.zst
       - gs://levanter-data/dev/redpajama/2023-06/en_middle_{0000..0103}.json.gz.dedup.classifier.jsonl.zst
-    validation_urls:
+      validation_urls:
       - https://data.together.xyz/redpajama-data-1T/v1.0.0/common_crawl/2023-06/en_middle_0104.json.gz.dedup.classifier.jsonl.zst
   github:
-    train_urls:
+    source:
+      type: url
+      train_urls:
       - gs://levanter-data/dev/redpajama/github/filtered_08cdfa755e6d4d89b673d5bd1acee5f6.sampled.jsonl
       - gs://levanter-data/dev/redpajama/github/filtered_0f27d10d846a473b96070c3394832f32.sampled.jsonl
       - gs://levanter-data/dev/redpajama/github/filtered_0f979046c8e64e0fb5843d2634a9957d.sampled.jsonl
@@ -226,17 +245,12 @@ configs:
       - gs://levanter-data/dev/redpajama/github/filtered_fbfc552e48164acda6605fa31fc2f563.sampled.jsonl
       - gs://levanter-data/dev/redpajama/github/filtered_fc817e4c16494957bcb89b166e91434f.sampled.jsonl
   StackExchange:
-    train_urls:
+    source:
+      type: url
+      train_urls:
       - gs://levanter-data/dev/redpajama/stackexchange/stackexchange.jsonl
   wikipedia:
-    train_urls:
+    source:
+      type: url
+      train_urls:
       - gs://levanter-data/dev/redpajama/wikipedia/wiki.jsonl
-train_weights:
-  arxiv: 28
-  book: 26
-  c4: 175
-  common_crawl: 878
-  github: 59
-  StackExchange: 20
-  wikipedia: 24
-stop_strategy: all_exhausted

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import os
 import random
@@ -18,7 +7,7 @@ import time
 from dataclasses import dataclass
 
 import fsspec
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 
 from marin.utils import fsspec_exists, fsspec_glob
 
@@ -72,7 +61,8 @@ def transfer_files(config: TransferConfig) -> None:
 
     # Always use parallel copying via zephyr
     pipeline = Dataset.from_list(selected_files).map(copy_file)
-    Backend.execute(pipeline)
+    with ZephyrContext(name="fs-transfer") as ctx:
+        ctx.execute(pipeline)
 
     elapsed_time_seconds: float = time.time() - start_time
     print(f"Downloaded {input_path} to {config.output_path} ({elapsed_time_seconds}s).")
