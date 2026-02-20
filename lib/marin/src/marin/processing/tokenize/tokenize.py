@@ -19,7 +19,6 @@ from collections.abc import Iterator, Sequence
 
 import draccus
 import fsspec
-import humanfriendly
 import transformers
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
@@ -33,6 +32,7 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
+from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.readers import load_file
 
@@ -85,9 +85,6 @@ class TokenizeConfig(TokenizeConfigBase):
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
     'test' or 'validation' in the file names, but are not actually test or validation sets.
     """
-    # TODO (rav): remove this once there's better way to capture this in datakit
-    zephyr_num_cpus: int = 2
-    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -144,10 +141,6 @@ class HfTokenizeConfig(TokenizeConfigBase):
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
-
-    # TODO (rav): remove this once there's better way to capture this in datakit
-    zephyr_num_cpus: int = 2
-    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -358,7 +351,7 @@ def tokenize(config: TokenizeConfigBase):
         temp_shards = (
             ds.window(64)
             .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
-            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
+            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}", metadata={}, skip_existing=True)
         )
 
         # Broadcast the tokenizer to all workers via ZephyrContext
@@ -379,18 +372,14 @@ def tokenize(config: TokenizeConfigBase):
 
         consolidate_start = time.monotonic()
         logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
+        ledger = consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
         consolidate_elapsed = time.monotonic() - consolidate_start
 
-        # Aggregate token counts from shard stats
-        total_tokens = 0
-        total_elements = 0
-        for shard_path in shard_paths:
-            stats_path = f"{shard_path}/.stats.json"
-            with fsspec.open(stats_path) as f:
-                stats = json.load(f)
-                total_tokens += stats.get("token_count", 0)
-                total_elements += stats.get("num_rows", 0)
+        # Read stats from the consolidated cache: total rows from the ledger,
+        # total tokens from the TreeStore's input_ids data size.
+        total_elements = ledger.total_num_rows
+        store = TreeStore.open(exemplar, prefix, mode="r", cache_metadata=True)
+        total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
 
         stats_path = os.path.join(prefix, ".stats.json")
         with fsspec.open(stats_path, "w") as f:
@@ -406,8 +395,9 @@ def tokenize(config: TokenizeConfigBase):
             f"Wrote stats to {stats_path}"
         )
 
+    # TODO: expose ram/disk as a flag on TokenizeConfig and align with batch size
     with ZephyrContext(
-        resources=ResourceConfig(ram="16g", disk="16g"),
+        resources=ResourceConfig(ram="2g", disk="16g"),
         max_workers=min(128, len(train_paths) + len(validation_paths)),
         name="tokenize",
     ) as ctx:
