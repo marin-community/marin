@@ -57,3 +57,7 @@ jobs:
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Validate canary metrics
+        shell: bash -l {0}
+        run: .venv/bin/python scripts/canary/validate_canary_metrics.py
