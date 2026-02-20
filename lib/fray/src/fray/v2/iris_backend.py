@@ -89,17 +89,18 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
         memory=resources.ram,
         disk=resources.disk,
         device=_convert_device(resources.device),
-        regions=resources.regions,
     )
 
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     """Build Iris scheduling constraints from fray v2 ResourceConfig."""
-    from iris.cluster.types import preemptible_constraint
+    from iris.cluster.types import preemptible_constraint, region_constraint
 
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
+    if resources.regions:
+        constraints.append(region_constraint(resources.regions))
     return constraints
 
 

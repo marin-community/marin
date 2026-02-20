@@ -1,0 +1,59 @@
+name: Marin - Canary Ferry
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6 AM UTC
+  workflow_dispatch:
+
+jobs:
+  canary-ferry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: canary-ferry
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=tpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Write SSH key and Ray token
+        run: |
+          mkdir -p ~/.ssh ~/.ray
+          echo "${{ secrets.MARIN_SSH_KEY }}" > ~/.ssh/marin_ray_cluster.pem
+          chmod 600 ~/.ssh/marin_ray_cluster.pem
+          echo "${{ secrets.RAY_AUTH_TOKEN }}" > ~/.ray/auth_token
+          chmod 600 ~/.ray/auth_token
+
+      - name: Submit canary ferry to Ray cluster
+        shell: bash -l {0}
+        run: |
+          .venv/bin/python lib/marin/src/marin/run/ray_run.py \
+            --cluster us-central1 \
+            -- python experiments/ferries/canary_ferry.py
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
