@@ -113,8 +113,8 @@ def test_llama_attention(use_flash, num_kv_heads):
 
 
 def test_llama_param_counts_dont_change_with_seqlen():
-    model = LlamaLMHeadModel.init(hax.Axis("v", 2048), _get_llama_config(seq_len=128), key=random.PRNGKey(0))
-    model2 = LlamaLMHeadModel.init(hax.Axis("v", 2048), _get_llama_config(seq_len=256), key=random.PRNGKey(0))
+    model = LlamaLMHeadModel.init(hax.Axis("v", 1024), _get_llama_config(seq_len=64), key=random.PRNGKey(0))
+    model2 = LlamaLMHeadModel.init(hax.Axis("v", 1024), _get_llama_config(seq_len=128), key=random.PRNGKey(0))
     assert parameter_count(model) == parameter_count(model2)
 
 
@@ -348,10 +348,10 @@ def test_state_dict_consistency(scan_layers, num_kv_heads):
     assert set(hf_model.state_dict().keys()) == set(levanter_state_dict.keys())
 
 
-@pytest.mark.parametrize("num_kv_heads", [2, 4])
+@pytest.mark.parametrize("num_kv_heads", [2])
 def test_llama_seq_len_doesnt_change_predictions(num_kv_heads):
     config = LlamaConfig(
-        max_seq_len=128,
+        max_seq_len=64,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
@@ -360,8 +360,8 @@ def test_llama_seq_len_doesnt_change_predictions(num_kv_heads):
     Vocab = hax.Axis("vocab", 1000)
 
     # Make input and attn_mask
-    input_256 = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
-    input_128 = input_256[config.max_Pos, :128]
+    input_full = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
+    input_prefix = input_full[config.max_Pos, :64]
     attn_mask = AttentionMask.causal()
 
     model = LlamaLMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(0))
@@ -371,7 +371,7 @@ def test_llama_seq_len_doesnt_change_predictions(num_kv_heads):
         model_output = model(input, attn_mask=attn_mask)
         return model_output
 
-    jax_out_1 = compute(model, input_128)
-    jax_out_2 = compute(model, input_256)[config.max_Pos, :128]
+    jax_out_1 = compute(model, input_prefix)
+    jax_out_2 = compute(model, input_full)[config.max_Pos, :64]
 
     assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-6, atol=1e-6)

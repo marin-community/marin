@@ -79,8 +79,8 @@ def test_gemma_config():
 
 
 def test_gemma_param_counts_dont_change_with_seqlen():
-    model = GemmaLMHeadModel.init(hax.Axis("v", 2048), _get_gemma_config(seq_len=128), key=random.PRNGKey(0))
-    model2 = GemmaLMHeadModel.init(hax.Axis("v", 2048), _get_gemma_config(seq_len=256), key=random.PRNGKey(0))
+    model = GemmaLMHeadModel.init(hax.Axis("v", 1024), _get_gemma_config(seq_len=64), key=random.PRNGKey(0))
+    model2 = GemmaLMHeadModel.init(hax.Axis("v", 1024), _get_gemma_config(seq_len=128), key=random.PRNGKey(0))
     assert parameter_count(model) == parameter_count(model2)
 
 
