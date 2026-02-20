@@ -8,13 +8,13 @@ Given an experiment file and a step number, dump the decoded training examples
 for that step's batch to JSONL. Requires a Ray cluster (--cluster).
 
 Usage:
-  uv run scripts/training/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2
-  uv run scripts/training/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --output step_100.jsonl
-  uv run scripts/training/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --var training_step
-  uv run scripts/training/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --summary
-  uv run scripts/training/inspect_data.py experiments/references/canary_train.py --steps 0,100,500 --cluster us-central2 --summary
-  uv run scripts/training/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --truncate 200
-  uv run scripts/training/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --tui
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --output step_100.jsonl
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --var training_step
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --summary
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --steps 0,100,500 --cluster us-central2 --summary
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --truncate 200
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --tui
 """
 
 import importlib.util
@@ -84,7 +84,7 @@ def _submit_to_cluster(
 
     config = _resolve_cluster_config(cluster)
 
-    parts = ["python", "scripts/training/inspect_data.py", experiment]
+    parts = ["python", "scripts/debug/inspect_data.py", experiment]
     if steps:
         parts.extend(["--steps", steps])
     else:
@@ -404,12 +404,14 @@ def _run_tui(fetch_fn, start_step: int):
                     step -= 1
                     load_step(scr)
             elif key == curses.KEY_NPAGE:  # Page Down
-                h = scr.getmaxyx()[0]
+                h, w = scr.getmaxyx()
                 body_h = h - 1 - (2 if show_stats else 1)
                 if examples:
                     text = examples[doc_idx]["text"]
-                    total = len(text.split("\n")) * 2
-                    scroll_offset = min(scroll_offset + body_h, max(0, total))
+                    total = 0
+                    for ln in text.split("\n"):
+                        total += len(textwrap.wrap(ln, w - 1)) if ln else 1
+                    scroll_offset = min(scroll_offset + body_h, max(0, total - body_h))
             elif key == curses.KEY_PPAGE:  # Page Up
                 h = scr.getmaxyx()[0]
                 body_h = h - 1 - (2 if show_stats else 1)
