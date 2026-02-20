@@ -414,3 +414,45 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - `throughput/duration`: `0.25974s -> 0.26481s` (`+1.95%`).
 - Assessment: **low-impact / regression** under current governance. Despite lower per-hotspot trace times, end-to-end MFU regressed by >1% and dominant hotspot category remained `custom-call`, so this attempt is marked failed and code reverted.
 - Next hypothesis (escalation): take a more radical launch/dataflow redesign that removes duplicated chunk-local K-only work and reduces backward launch pressure, e.g. Macro Move D (`emit_pipeline` full-sequence recurrent state carry) or a backward decomposition that computes chunk-local factors once and applies recurrent updates in a separate V-tiled stage.
+
+### Iteration 2 (loop 2/20) - Macro Move B: transpose-fused MXU dot_general in flash kernels
+
+- Date: 2026-02-20T10:07:26Z
+- Commit: 090aedbe384ccbe23302ad410310a860534fb4a6
+- Starting commit: `090aedbe384ccbe23302ad410310a860534fb4a6`
+- Dominant bottleneck carried in: GDN shard-map `custom-call` remained dominant from the latest validated baseline (Iteration 8), with TPU:0 XLA Ops `custom-call` `232.081 ms` and top callsites:
+  - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `143.560 ms`
+  - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `75.052 ms`
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move B**: fuse explicit transpose matmuls into one `dot_general` helper across flash kernels (`+10-15%`, medium risk from broad math-path touchpoints).
+  2. **Macro Move D**: full-sequence `emit_pipeline` forward kernel with VMEM recurrent carry (`+20-35%`, very high TPU-lowering and implementation risk).
+  3. **Macro Move C**: BF16-input / FP32-accum kernel-wide matmul policy (`+8-15%`, medium/high numerical stability risk).
+- Selected macro-move category: **B) Replace `jnp.matmul(..., x.T)` with `lax.dot_general`**.
+- Selected hypothesis: remove explicit transpose materialization in hot flash forward/solve TPU kernels by extending one MXU helper to fuse transpose via `dot_general` dimension numbers.
+- Change summary:
+  - Extended `_mxu_matmul_f32` to accept `transpose_a` / `transpose_b` and always use `lax.dot_general(..., preferred_element_type=jnp.float32)`.
+  - Replaced hot explicit-transpose matmuls in:
+    - `_solve_I_minus_strict_lower_transpose_blockwise`
+    - `_gdn_chunk_segment_prepare_kernel_tpu`
+    - `_gdn_chunk_segment_recurrent_fwd_kernel_tpu`
+  - Kept backward kernel math unchanged after validation/profiling checks showed no upside from broader substitution.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - Result: `87 passed, 2 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_dotfuse2_i2_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_dotfuse2_i2_dev_130m_ch128_seg16_20steps-457c69`
+  - W&B profiler artifact: `run-gdn_dotfuse2_i2_dev_130m_ch128_seg16_20steps-457c69-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_dotfuse2_i2_dev/plugins/profile/2026_02_20_10_04_56/perfetto_trace.json.gz`
+- Hotspots observed (TPU:0 XLA Ops aggregate, compared to Iteration 8 baseline trace `.profiles/wandb/gdn_split2kernel_i2_dev/plugins/profile/2026_02_20_06_37_50/perfetto_trace.json.gz`):
+  - `custom-call`: `232.081 ms -> 232.092 ms` (`+0.01%`), still dominant.
+  - `all-gather`: `32.684 ms -> 32.613 ms` (`-0.22%`).
+  - Dominant GDN custom-call tf_ops effectively unchanged:
+    - `transpose(jvp(...))/closed_call/shard_map/pallas_call:` `143.560 ms -> 143.560 ms` (`~0.00%`).
+    - `jvp(...)/closed_call/shard_map/pallas_call:` `75.052 ms -> 75.052 ms` (`~0.00%`).
+- MFU/throughput delta (vs Iteration 8 baseline run):
+  - `throughput/mfu`: `3.8997 -> 3.9135` (`+0.35%`).
+  - `throughput/tokens_per_second`: `126155.06 -> 126600.07` (`+0.35%`).
+  - `throughput/duration`: `0.25974s -> 0.25883s` (`-0.35%`).
+- Assessment: **low-impact**. Gain is below 3% and dominant hotspot is unchanged (`custom-call` in the same GDN shard-map path).
+- Next hypothesis: escalate to a radical launch/dataflow move (Macro Move D or F), prioritizing a full-sequence pipelined kernel plan that respects TPU lane-alignment constraints (128-lane DMA slices) to reduce shard-map custom-call count.

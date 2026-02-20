@@ -1014,14 +1014,25 @@ def _round_up_to(x: int, m: int) -> int:
     return ((x + m - 1) // m) * m
 
 
-def _mxu_matmul_f32(a, b, *, precision_mode: str = "fp32"):
+def _mxu_matmul_f32(
+    a,
+    b,
+    *,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
+    precision_mode: str = "fp32",
+):
     """
-    TPU/Pallas-safe matmul helper.
+    TPU/Pallas-safe 2D dot helper with optional transpose fusion.
 
     Parameters
     ----------
-    a : jnp.ndarray, shape [M, K]
-    b : jnp.ndarray, shape [K, N]
+    a : jnp.ndarray, shape [M, K] (or [K, M] if transpose_a=True)
+    b : jnp.ndarray, shape [K, N] (or [N, K] if transpose_b=True)
+    transpose_a : bool
+        Contract the first axis of ``a`` instead of the second (equivalent to using ``a.T``).
+    transpose_b : bool
+        Contract the second axis of ``b`` instead of the first (equivalent to using ``b.T``).
     precision_mode : {"fp32", "bf16"}
         - "fp32" (default): uses float32 inputs and precision=lax.Precision.HIGHEST
         - "bf16": casts inputs to bfloat16 and uses precision=lax.Precision.DEFAULT
@@ -1030,13 +1041,15 @@ def _mxu_matmul_f32(a, b, *, precision_mode: str = "fp32"):
     -------
     out : jnp.ndarray, shape [M, N], dtype float32
     """
-    from jax import lax
-    import jax.numpy as jnp
-
     if a.ndim != 2 or b.ndim != 2:
         raise ValueError(f"_mxu_matmul_f32 expects 2D arrays, got {a.ndim}D and {b.ndim}D")
-    if a.shape[1] != b.shape[0]:
-        raise ValueError(f"shape mismatch: a={a.shape}, b={b.shape}")
+
+    lhs_contract = 0 if transpose_a else 1
+    rhs_contract = 1 if transpose_b else 0
+    if a.shape[lhs_contract] != b.shape[rhs_contract]:
+        raise ValueError(
+            f"shape mismatch with transpose_a={transpose_a} transpose_b={transpose_b}: a={a.shape}, b={b.shape}"
+        )
 
     if precision_mode == "bf16":
         a_in = a.astype(jnp.bfloat16)
@@ -1049,9 +1062,8 @@ def _mxu_matmul_f32(a, b, *, precision_mode: str = "fp32"):
     else:
         raise ValueError(f"precision_mode must be 'fp32' or 'bf16', got {precision_mode!r}")
 
-    # Standard matmul: contract a's last dim with b's first dim.
-    dn = (((1,), (0,)), ((), ()))
-    out = lax.dot_general(a_in, b_in, dn, precision=prec)
+    dn = (((lhs_contract,), (rhs_contract,)), ((), ()))
+    out = lax.dot_general(a_in, b_in, dn, precision=prec, preferred_element_type=jnp.float32)
     return out.astype(jnp.float32)
 
 
@@ -1173,7 +1185,7 @@ def _solve_I_minus_strict_lower_transpose_blockwise(
         precision_mode=precision_mode,
         base_block=base_block,
     )
-    rhs1_eff = rhs1 + _mxu_matmul_f32(jnp.transpose(A21), x2, precision_mode=precision_mode)
+    rhs1_eff = rhs1 + _mxu_matmul_f32(A21, x2, transpose_a=True, precision_mode=precision_mode)
     x1 = _solve_I_minus_strict_lower_transpose_blockwise(
         A11,
         rhs1_eff,
@@ -1257,7 +1269,7 @@ def _gdn_chunk_segment_prepare_kernel_tpu(
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)  # (Ct, Ct)
 
-        KKT = _mxu_matmul_f32(k_beta, jnp.transpose(k), precision_mode=precision_mode)
+        KKT = _mxu_matmul_f32(k_beta, k, transpose_b=True, precision_mode=precision_mode)
         A = -KKT * exp_diff * tril_strict
 
         k_scaled = k_beta * exp_g[:, None]
@@ -1423,7 +1435,7 @@ def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)  # (Ct, Ct)
 
-        QK = _mxu_matmul_f32(q, jnp.transpose(k), precision_mode=precision_mode)
+        QK = _mxu_matmul_f32(q, k, transpose_b=True, precision_mode=precision_mode)
         attn = QK * exp_diff * causal_mask
 
         v_prime = _mxu_matmul_f32(k_cumdecay, S, precision_mode=precision_mode)
@@ -1438,7 +1450,7 @@ def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
 
         decay_w = jnp.exp(jnp.clip(g_tail - g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))  # (Ct,)
         k_w = k * decay_w[:, None]
-        add = _mxu_matmul_f32(jnp.transpose(k_w), v_new, precision_mode=precision_mode)  # (K, V)
+        add = _mxu_matmul_f32(k_w, v_new, transpose_a=True, precision_mode=precision_mode)  # (K, V)
         S = S * decay_tail + add
 
         out_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)] = out[
