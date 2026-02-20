@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
-#
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 # /// script
 # dependencies = [
 #   "click",
@@ -227,7 +217,7 @@ udevadm control --reload-rules
 udevadm trigger --subsystem-match=pci
 
 echo "Installing GitHub Actions runner..."
-RUNNER_VERSION="2.311.0"
+RUNNER_VERSION="2.331.0"
 RUNNER_USER="github-runner"
 
 if ! id -u $RUNNER_USER > /dev/null 2>&1; then
@@ -257,6 +247,13 @@ REGISTRATION_TOKEN=$(curl -s -X POST \\
   -H "Authorization: Bearer $GITHUB_TOKEN" \\
   https://api.github.com/repos/marin-community/marin/actions/runners/registration-token \\
   | jq -r .token)
+
+if [ "$REGISTRATION_TOKEN" = "null" ] || [ -z "$REGISTRATION_TOKEN" ]; then
+    echo "ERROR: Failed to obtain runner registration token from GitHub API."
+    echo "The PAT in Secret Manager likely expired or lacks the 'Administration' repository permission."
+    echo "Update it with: MARIN_CI_TOKEN=<new-token> uv run infra/tpu-ci/setup.py update-token"
+    exit 1
+fi
 
 echo "Configuring GitHub Actions runner..."
 cd /home/$RUNNER_USER

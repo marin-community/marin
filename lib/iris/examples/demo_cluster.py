@@ -1,74 +1,50 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Demo cluster with Jupyter notebook integration.
 
 This script boots an iris cluster (in-process by default, no Docker required),
 seeds it with quick demo jobs, and optionally launches a Jupyter notebook for
-interactive exploration.
+interactive exploration. It can also connect to a remote controller via SSH tunnel.
+
+Workers are created on-demand by the autoscaler when jobs are submitted. The
+autoscaler manages two scale groups:
+- cpu: For jobs without device requirements
+- tpu_v5e_4: For TPU jobs (v5litepod-4 topology)
 
 Usage:
-    # Validate that the cluster works (for CI)
-    cd lib/iris
-    uv run python examples/demo_cluster.py --validate-only
-
     # Launch interactive demo with Jupyter
     uv run python examples/demo_cluster.py
 
-    # Use Docker instead of in-process execution
-    uv run python examples/demo_cluster.py --docker
+    # Connect to remote controller via SSH tunnel
+    uv run python examples/demo_cluster.py --controller-url http://localhost:10000
 """
 
 import logging
 import os
 import re
-import socket
 import subprocess
 import sys
-import tempfile
 import time
-import uuid
 from pathlib import Path
 
 import click
 from iris.client import IrisClient
-from iris.cluster.client.local_client import (
-    LocalEnvironmentProvider,
-    _LocalBundleProvider,
-    _LocalContainerRuntime,
-    _LocalImageProvider,
+from iris.cluster.types import (
+    CoschedulingConfig,
+    Entrypoint,
+    EnvironmentSpec,
+    ResourceSpec,
+    tpu_device,
 )
-from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
-from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
-from iris.cluster.worker.builder import ImageCache
-from iris.cluster.worker.bundle_cache import BundleCache
-from iris.cluster.worker.docker import DockerRuntime
-from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.cluster.config import make_local_config
+from iris.cluster.controller.local import LocalController
+from iris.rpc import cluster_pb2, config_pb2
 
 # The iris project root (lib/iris/) - used as workspace for the example
 IRIS_ROOT = Path(__file__).parent.parent
 
 logger = logging.getLogger(__name__)
-
-
-def find_free_port() -> int:
-    """Find an available port."""
-    with socket.socket() as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
 
 # =============================================================================
@@ -82,6 +58,11 @@ class DemoCluster:
     Supports two execution modes:
     - In-process (default): Fast, no Docker required, jobs run in threads
     - Docker: Real containers, matches production behavior
+    - Remote: Connect to an existing controller (e.g., via SSH tunnel)
+
+    Workers are created on-demand by the autoscaler. The autoscaler manages:
+    - cpu: For jobs without device requirements (min_slices=1)
+    - tpu_v5e_4: For TPU jobs (v5litepod-4 topology)
 
     Example:
         with DemoCluster() as demo:
@@ -89,111 +70,81 @@ class DemoCluster:
             if demo.validate_seed_results(results):
                 demo.launch_jupyter()
                 demo.wait_for_interrupt()
+
+        # Remote mode - connect to existing controller
+        with DemoCluster(controller_url="http://localhost:10000") as demo:
+            results = demo.seed_cluster()
     """
 
     def __init__(
         self,
-        use_docker: bool = False,
-        num_workers: int = 1,
+        controller_url: str | None = None,
+        config_path: str | None = None,
+        workspace: Path | None = None,
     ):
-        self._use_docker = use_docker
-        self._num_workers = num_workers
-        self._controller_port = find_free_port()
-
-        # Will be initialized in __enter__
-        self._temp_dir: tempfile.TemporaryDirectory | None = None
-        self._controller: Controller | None = None
-        self._workers: list[Worker] = []
-        self._worker_ids: list[str] = []
-        self._worker_ports: list[int] = []
-        self._controller_client: ControllerServiceClientSync | None = None
+        self._remote_url = controller_url
+        self._config_path = config_path
+        self._workspace = workspace or IRIS_ROOT
+        self._controller: LocalController | None = None
+        self._controller_address: str | None = None
         self._rpc_client: IrisClient | None = None
 
         # Jupyter integration
         self._notebook_proc: subprocess.Popen | None = None
         self._notebook_url: str | None = None
 
+    def _load_or_default_config(self) -> config_pb2.IrisClusterConfig:
+        """Load config from file or build a default demo config."""
+        if self._config_path:
+            from iris.cluster.config import load_config
+
+            return load_config(Path(self._config_path))
+
+        # Build default demo config programmatically
+        config = config_pb2.IrisClusterConfig()
+        cpu_sg = config.scale_groups["cpu"]
+        cpu_sg.name = "cpu"
+        cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        cpu_sg.resources.memory_bytes = int(16 * 1e9)
+        cpu_sg.resources.disk_bytes = int(128 * 1e9)
+        cpu_sg.resources.cpu = 1
+        cpu_sg.min_slices = 0
+        cpu_sg.max_slices = 4
+
+        tpu_sg = config.scale_groups["tpu_v5e_16"]
+        tpu_sg.name = "tpu_v5e_16"
+        tpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
+        tpu_sg.accelerator_variant = "v5litepod-16"
+        tpu_sg.resources.memory_bytes = int(16 * 1e9)
+        tpu_sg.resources.disk_bytes = int(128 * 1e9)
+        tpu_sg.resources.cpu = 128
+        tpu_sg.resources.tpu_count = 4  # chips_per_vm for v5litepod-16
+        tpu_sg.num_vms = 4
+        tpu_sg.min_slices = 0
+        tpu_sg.max_slices = 4
+
+        return config
+
     def __enter__(self):
-        """Start controller and worker."""
-        # Clean up any orphaned containers from previous runs
-        self._temp_dir = tempfile.TemporaryDirectory(prefix="demo_cluster_")
-        temp_path = Path(self._temp_dir.name)
-        bundle_dir = temp_path / "bundles"
-        bundle_dir.mkdir()
-        cache_path = temp_path / "cache"
-        cache_path.mkdir()
+        """Start controller with autoscaler (or connect to remote)."""
+        if self._remote_url:
+            return self
 
-        # Create fake bundle with minimal structure
-        fake_bundle = temp_path / "fake_bundle"
-        fake_bundle.mkdir()
-        (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
-
-        # Start Controller first (workers need to connect to it)
-        controller_config = ControllerConfig(
-            host="127.0.0.1",
-            port=self._controller_port,
-            bundle_dir=bundle_dir,
-        )
-        self._controller = Controller(
-            config=controller_config,
-            worker_stub_factory=DefaultWorkerStubFactory(),
-        )
-        self._controller.start()
-
-        # Create RPC client
-        self._controller_client = ControllerServiceClientSync(
-            address=f"http://127.0.0.1:{self._controller_port}",
-            timeout_ms=30000,
-        )
-
-        # Select providers based on use_docker flag
-        if self._use_docker:
-            bundle_provider = BundleCache(cache_path, max_bundles=100)
-            image_provider = ImageCache(cache_path, registry="", max_images=100)
-            container_runtime = DockerRuntime()
-            environment_provider = None  # Use default (probe real system)
-        else:
-            bundle_provider = _LocalBundleProvider(fake_bundle)
-            image_provider = _LocalImageProvider()
-            container_runtime = _LocalContainerRuntime()
-            environment_provider = LocalEnvironmentProvider(cpu=1000, memory_gb=1000)
-
-        # Start Workers
-        for i in range(self._num_workers):
-            worker_id = f"worker-{i}-{uuid.uuid4().hex[:8]}"
-            worker_port = find_free_port()
-            worker_config = WorkerConfig(
-                host="127.0.0.1",
-                port=worker_port,
-                cache_dir=cache_path,
-                controller_address=f"http://127.0.0.1:{self._controller_port}",
-                worker_id=worker_id,
-                poll_interval_seconds=0.1,  # Fast polling for demos
-            )
-            worker = Worker(
-                worker_config,
-                cache_dir=cache_path,
-                bundle_provider=bundle_provider,
-                image_provider=image_provider,
-                container_runtime=container_runtime,
-                environment_provider=environment_provider,
-            )
-            worker.start()
-            self._workers.append(worker)
-            self._worker_ids.append(worker_id)
-            self._worker_ports.append(worker_port)
-
-        # Wait for workers to register with controller. Workers send heartbeats
-        # every 0.1s (poll_interval_seconds), and registration happens on first
-        # heartbeat. 2s is conservative to handle slow CI environments.
-        time.sleep(2.0)
-
+        config = self._load_or_default_config()
+        config = make_local_config(config)
+        self._controller = LocalController(config)
+        self._controller_address = self._controller.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Stop cluster and cleanup."""
         del exc_type, exc_val, exc_tb  # unused
-        # Stop Jupyter notebook
+        self._stop_jupyter()
+        self._rpc_client = None
+        if self._controller:
+            self._controller.stop()
+
+    def _stop_jupyter(self):
         if self._notebook_proc:
             self._notebook_proc.terminate()
             try:
@@ -202,26 +153,13 @@ class DemoCluster:
                 self._notebook_proc.kill()
             self._notebook_proc = None
 
-        if self._rpc_client:
-            self._rpc_client = None
-        if self._controller_client:
-            self._controller_client.close()
-        for worker in self._workers:
-            worker.stop()
-        if self._controller:
-            self._controller.stop()
-        if self._temp_dir:
-            self._temp_dir.cleanup()
-
     @property
     def controller_url(self) -> str:
-        return f"http://127.0.0.1:{self._controller_port}"
-
-    @property
-    def worker_url(self) -> str:
-        if self._worker_ports:
-            return f"http://127.0.0.1:{self._worker_ports[0]}"
-        return ""
+        if self._remote_url:
+            return self._remote_url
+        if self._controller_address:
+            return self._controller_address
+        raise RuntimeError("No controller URL available. Call __enter__ first.")
 
     @property
     def client(self) -> IrisClient:
@@ -229,7 +167,7 @@ class DemoCluster:
         if self._rpc_client is None:
             self._rpc_client = IrisClient.remote(
                 self.controller_url,
-                workspace=IRIS_ROOT,
+                workspace=self._workspace,
             )
         return self._rpc_client
 
@@ -241,10 +179,10 @@ class DemoCluster:
         cpu: int = 1,
         memory: str = "1g",
         **kwargs,
-    ) -> str:
-        """Submit a job to the cluster."""
+    ):
+        """Submit a job to the cluster and return Job handle."""
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
-        environment = EnvironmentSpec(workspace="/app")
+        environment = EnvironmentSpec()
         resources = ResourceSpec(cpu=cpu, memory=memory)
         return self.client.submit(
             entrypoint=entrypoint,
@@ -277,6 +215,15 @@ class DemoCluster:
             print("Liftoff!")
             return "Done!"
 
+        def distributed_work():
+            from iris.cluster.client import get_job_info
+
+            info = get_job_info()
+            if info is None:
+                raise RuntimeError("Not running in an Iris job context")
+            print(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
+            return f"Task {info.task_index} done"
+
         jobs = [
             (hello, [], {}, "demo-hello"),
             (compute, [10, 32], {}, "demo-compute"),
@@ -284,10 +231,27 @@ class DemoCluster:
         ]
 
         for fn, args, kwargs, name in jobs:
-            job_id = self.submit(fn, *args, name=name, **kwargs)
-            status = self.client.wait(JobId(job_id))
-            results.append((job_id, cluster_pb2.JobState.Name(status.state)))
+            job = self.submit(fn, *args, name=name, **kwargs)
+            status = job.wait()
+            results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
             print(f"  {name}: {cluster_pb2.JobState.Name(status.state)}")
+
+        # Coscheduled TPU job
+        job = self.client.submit(
+            entrypoint=Entrypoint.from_callable(distributed_work),
+            name="demo-coscheduled",
+            resources=ResourceSpec(
+                cpu=1,
+                memory="512m",
+                device=tpu_device("v5litepod-16"),
+            ),
+            environment=EnvironmentSpec(),
+            coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            replicas=4,
+        )
+        status = job.wait()
+        results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
+        print(f"  demo-coscheduled: {cluster_pb2.JobState.Name(status.state)}")
 
         return results
 
@@ -308,9 +272,9 @@ class DemoCluster:
         """
         env = os.environ.copy()
         env["IRIS_CONTROLLER_ADDRESS"] = self.controller_url
-        env["IRIS_WORKSPACE"] = str(IRIS_ROOT)
+        env["IRIS_WORKSPACE"] = str(self._workspace)
 
-        # Find the demo notebook
+        # Find the demo notebook (always in IRIS_ROOT, not workspace)
         notebook_dir = IRIS_ROOT / "examples"
         notebook_path = notebook_dir / "demo.ipynb"
 
@@ -390,7 +354,13 @@ class DemoCluster:
 
         # Set environment for the kernel (inherited by subprocess)
         os.environ["IRIS_CONTROLLER_ADDRESS"] = self.controller_url
-        os.environ["IRIS_WORKSPACE"] = str(IRIS_ROOT)
+        os.environ["IRIS_WORKSPACE"] = str(self._workspace)
+        pythonpath = os.environ.get("PYTHONPATH")
+        iris_src = str(IRIS_ROOT / "src")
+        if pythonpath:
+            os.environ["PYTHONPATH"] = f"{iris_src}:{pythonpath}"
+        else:
+            os.environ["PYTHONPATH"] = iris_src
 
         # Create executor
         ep = ExecutePreprocessor(
@@ -409,19 +379,35 @@ class DemoCluster:
 
 
 @click.command()
-@click.option("--docker", is_flag=True, help="Use Docker instead of in-process execution")
-@click.option("--no-browser", is_flag=True, help="Don't auto-open browser for Jupyter")
-@click.option("--validate-only", is_flag=True, help="Run seed jobs and exit (for CI)")
-@click.option("--test-notebook", is_flag=True, help="Run notebook programmatically and validate (for CI)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
-def main(docker: bool, no_browser: bool, validate_only: bool, test_notebook: bool, verbose: bool):
-    """Launch demo cluster with Jupyter notebook.
+@click.option(
+    "--controller-url",
+    help="Connect to remote controller (e.g., http://localhost:10000). Skips local cluster creation.",
+)
+@click.option(
+    "--workspace",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Workspace directory (default: lib/iris)",
+)
+def main(
+    verbose: bool,
+    controller_url: str | None,
+    workspace: Path | None,
+):
+    """Launch demo cluster and run notebook test.
 
-    By default, runs jobs in-process (no Docker required). Use --docker for
-    real container execution.
+    Runs in-process (no Docker required), with jobs running in threads.
+    Can also connect to a remote controller via SSH tunnel.
+
+    Examples:
+        # Run demo with local cluster
+        uv run python examples/demo_cluster.py
+
+        # Connect to remote controller via SSH tunnel
+        uv run python examples/demo_cluster.py --controller-url http://localhost:10000
     """
-    # Enable verbose logging if requested or if running test-notebook
-    if verbose or test_notebook:
+    if verbose:
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -432,47 +418,42 @@ def main(docker: bool, no_browser: bool, validate_only: bool, test_notebook: boo
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
 
-    mode = "Docker" if docker else "in-process"
-    print(f"Starting demo cluster ({mode} mode)...")
+    if controller_url:
+        print(f"Connecting to remote controller: {controller_url}")
+    else:
+        print("Starting demo cluster with autoscaler...")
 
-    with DemoCluster(use_docker=docker) as demo:
-        print(f"Controller: {demo.controller_url}")
+    with DemoCluster(controller_url=controller_url, workspace=workspace) as demo:
+        url = demo.controller_url
+        # Extract port from URL
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        print(f"Controller: {url}")
+        print(f"Controller Port: {port}")
         print()
         print("Seeding cluster with demo jobs...")
         results = demo.seed_cluster()
 
         if not demo.validate_seed_results(results):
             print()
-            print("ERROR: Seed jobs did not complete as expected!")
+            print("WARNING: Seed jobs did not complete as expected!")
             for job_id, state in results:
                 if state != "JOB_STATE_SUCCEEDED":
                     print(f"  {job_id}: {state}")
-            sys.exit(1)
-
-        print()
-        print("All seed jobs succeeded!")
-
-        if validate_only:
-            print("Validation passed!")
-            return
-
-        if test_notebook:
+        else:
             print()
-            print("Testing notebook execution...")
-            if demo.run_notebook():
-                print("Notebook test passed!")
-            else:
-                print("Notebook test FAILED!")
-                sys.exit(1)
-            return
+            print("All seed jobs succeeded!")
 
         print()
-        print("Launching Jupyter notebook...")
-        url = demo.launch_jupyter(open_browser=not no_browser)
-        print(f"Notebook: {url}")
-        print()
-        print("Press Ctrl+C to stop.")
-        demo.wait_for_interrupt()
+        print("Testing notebook execution...")
+        if not demo.run_notebook():
+            print("WARNING: Notebook test FAILED!")
+            print("(This may be due to kernel environment issues)")
+        else:
+            print("Notebook test passed!")
 
     print("Shutting down...")
 

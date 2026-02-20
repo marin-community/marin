@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Transforming the Huggingface dataset lavita/medical-qa-datasets to dolma format.
 
@@ -31,7 +20,7 @@ import os
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Backend, Dataset, load_parquet
+from zephyr import Dataset, ZephyrContext, load_parquet
 
 
 @dataclass
@@ -157,7 +146,8 @@ def convert_lavita_split_to_dolma(cfg: LavitaToDolmaConfig) -> None:
         .filter(lambda record: record is not None)
         .write_parquet(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
-    list(Backend.execute(pipeline))
+    with ZephyrContext(name="lavita-to-dolma") as ctx:
+        list(ctx.execute(pipeline))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-docs:
     runs-on: ubuntu-latest
@@ -28,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --package marin --group dev
 
+      - name: Validate docs source links
+        run: uv run python infra/check_docs_source_links.py
+
       - name: Build documentation
         run: |
-          uv run mkdocs build --strict 
+          uv run mkdocs build --strict

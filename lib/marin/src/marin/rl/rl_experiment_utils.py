@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import datetime
@@ -183,6 +172,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
     # Create RLJobConfig using the unified interface
     job_config = RLJobConfig(
         model=model_config,
+        vocab_size=hf_config.vocab_size,
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
@@ -211,6 +201,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
                 logprobs=1,
                 top_k=config.inference_top_k,
             ),
+            load_format="dummy",
         ),
         initial_checkpoint=config.model_config.checkpoint,
         rollout_storage=rollout_storage,

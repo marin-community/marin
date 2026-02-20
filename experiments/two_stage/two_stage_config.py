@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import os
 from dataclasses import dataclass, field
@@ -31,7 +20,8 @@ from experiments.two_stage.data import data_dict
 from experiments.two_stage.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, this_output_path
-from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_varying_mixture_data_config
+from levanter.data.text import LMMixtureDatasetConfig
+from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from fray.cluster import ResourceConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
@@ -256,7 +246,6 @@ class TwoStageConfig:
         data_config = lm_varying_mixture_data_config(
             components=components,
             weights_list=weights_list,
-            permutation_type="linear",
             max_train_batches=max_train_batches,
             num_validation_sequences=num_validation_sequences,
         )

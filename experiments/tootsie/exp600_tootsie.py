@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 This is @dlwh's "YOLO"/vibes run described in https://github.com/marin-community/marin/issues/600.
@@ -26,16 +15,17 @@ For now, we're training on DCLM's best mix, but that will change.
 
 # You will see in many, many places in this file that I (dlwh) made many, many mistakes.
 # I'm leaving them in for posterity.
+# NOTE: Marin now always uses Feistel permutation in mixture configs. Historical runs in this file that originally
+# used linear permutation will not reproduce exactly if re-run today.
 
 import dataclasses
 
 from levanter.schedule import ScheduleStep
 
-from experiments.cooldown_anneal import dolmino_dclm
 from experiments.pretraining_datasets.dclm import (
     DCLM_MIXTURE_WEIGHTS,
     dclm_components_llama3,
-    dclm_mixture_config_llama3_old,
+    dclm_mixture_config_llama3,
 )
 from experiments.defaults import default_train
 from experiments.pretraining_datasets import tokenize_dolma
@@ -90,7 +80,7 @@ tootsie_phase1_config = SimpleTrainConfig(
 llama_8b_tootsie_phase1 = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-0.001",
-        tokenized=dclm_mixture_config_llama3_old,
+        tokenized=dclm_mixture_config_llama3,
         # I am a dummy and use old rotary config
         model_config=llama_8b_old_rotary,
         train_config=tootsie_phase1_config,
@@ -137,7 +127,7 @@ llama_8b_train_config_phase2 = SimpleTrainConfig(
 llama_8b_tootsie_phase2 = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-phase2",
-        tokenized=dclm_mixture_config_llama3_old,
+        tokenized=dclm_mixture_config_llama3,
         model_config=llama_8b,
         train_config=llama_8b_train_config_phase2,
         tags=["llama", "8b", "ema", "exp600"],
@@ -209,7 +199,7 @@ dolma_splits = [
 all_dolma_steps = tokenize_dolma(tokenizer=llama3_tokenizer)
 phase_3_tokenized.update({dataset: step for dataset, step in all_dolma_steps.items() if dataset in dolma_splits})
 phase_3_tokenized["finemath_3_plus"] = finemath_3_plus_tokenized
-phase_3_tokenized["dolmino_dclm"] = dolmino_dclm
+phase_3_tokenized["dolmino_dclm"] = tokenize_dolmino_subset("dclm")
 
 
 # Dolma counts are done with llama 3 tokens (https://docs.google.com/spreadsheets/d/1ykVJ1EGJvA1zwF67FZGFBzlm7P0ZBIMuCpBW9Pqp7cY/edit?gid=0#gid=0)
@@ -259,7 +249,6 @@ phase_3_data_mixture = lm_varying_mixture_data_config(
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3_START, cooldown_mixture_weights_v1),
     ],
-    permutation_type="linear",
 )
 
 llama_8b_tootsie_phase3 = dataclasses.replace(
@@ -343,7 +332,6 @@ bad_dessert_data_mixture_v1 = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, bad_dessert_weights_v1),
     ],
-    permutation_type="linear",
 )
 
 # we're aiming to do 1 pass through the new mixes, which is another ~212e9 tokens
@@ -416,7 +404,6 @@ dessert_data_mixture_v3 = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, dessert_weights_v2),
     ],
-    permutation_type="linear",
 )
 
 llama_8b_tootsie_dessert_v3 = dataclasses.replace(
@@ -478,7 +465,6 @@ cooldown_config_v2 = lm_varying_mixture_data_config(
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3_START, cooldown_mixture_weights_v2),
     ],
-    permutation_type="linear",
 )
 
 # deliberately using same number of steps as the previous run
@@ -553,7 +539,6 @@ phase_4_data_mixture = lm_varying_mixture_data_config(
         (PHASE_4_START, phase_4_warmup_weights),
         (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
     ],
-    permutation_type="linear",
 )
 
 llama_8b_tootsie_adept_phoenix = dataclasses.replace(
@@ -662,7 +647,6 @@ starling_cooldown_mixture = lm_varying_mixture_data_config(
         (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
         (PHASE_4_END, starling_cooldown_weights),
     ],
-    permutation_type="linear",
 )
 
 tootsie_8b_sensible_starling = default_train(

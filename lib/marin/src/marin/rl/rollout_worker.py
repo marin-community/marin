@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Inference worker for RL/post-training rollout generation.
@@ -45,7 +34,7 @@ from transformers import PreTrainedTokenizer
 from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
-from fray.job import get_default_job_ctx
+from fray.v1.job import get_default_job_ctx
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
@@ -57,6 +46,7 @@ from marin.rl.environments.inference_ctx import (
     AsyncvLLMInferenceContext,
     BaseInferenceContext,
 )
+from marin.rl.metrics import pass_at_k_estimator
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
@@ -151,6 +141,10 @@ class RolloutWorkerConfig:
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to len(tokenizer)."""
+
     system_prompt: str | None = None
     """System prompt to use for inference."""
 
@@ -190,7 +184,9 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
 
     for group in batch.groups:
         pass_at_k_for_current_group = 0.0
+        pass_at_one_for_current_group = 0.0
         avg_at_k_for_current_group = 0.0
+        correct_flags: list[bool] = []
         for rollout in group.rollouts:
             rollout_stats_list.append(
                 RolloutStats(
@@ -203,17 +199,22 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
             )
 
             if rollout.correctness_reward is not None:
-                pass_at_k_for_current_group = max(pass_at_k_for_current_group, rollout.correctness_reward)
                 avg_at_k_for_current_group += rollout.correctness_reward
+                correct_flags.append(rollout.correctness_reward > 0.0)
+            else:
+                correct_flags.append(False)
 
             total_count += 1
             if rollout.episode_reward > 0:
                 success_count += 1
             reward_sum += rollout.episode_reward
 
+        if correct_flags:
+            pass_at_k_for_current_group = pass_at_k_estimator(correct_flags, len(correct_flags))
+            pass_at_one_for_current_group = pass_at_k_estimator(correct_flags, 1)
+
         pass_at_k += pass_at_k_for_current_group
-        if group.rollouts[0].correctness_reward is not None:
-            pass_at_one += group.rollouts[0].correctness_reward
+        pass_at_one += pass_at_one_for_current_group
 
         avg_at_k += avg_at_k_for_current_group / len(group.rollouts)
 
@@ -412,7 +413,7 @@ class RolloutWorker:
 
         if self.config.inference_type == "levanter":
             key = jrandom.PRNGKey(self.config.seed)
-            vocab_size = self._tokenizer.vocab_size
+            vocab_size = self.config.vocab_size if self.config.vocab_size is not None else len(self._tokenizer)
             Vocab = hax.Axis("vocab", vocab_size)
 
             initial_model = load_model_from_checkpoint(

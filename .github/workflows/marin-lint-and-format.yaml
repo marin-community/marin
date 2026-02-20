@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-format:
     runs-on: ubuntu-latest
@@ -21,8 +25,5 @@ jobs:
         python-version: "3.11"
         enable-cache: true
 
-    - name: Set up Python
-      run: uv python install
-
     - name: Run pre-commit checks
-      run: uv run python infra/pre-commit.py --all-files
+      run: ./infra/pre-commit.py --all-files

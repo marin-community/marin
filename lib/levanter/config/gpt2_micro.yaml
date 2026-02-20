@@ -1,5 +1,9 @@
 data:
-  id: dlwh/wikitext_103_detokenized
+  components:
+    main:
+      source:
+        type: hf
+        id: dlwh/wikitext_103_detokenized
 model:
   type: gpt2
   hidden_dim: 128
@@ -7,9 +11,10 @@ model:
   num_layers: 4
 trainer:
   tracker:
-    project: "levanter"
-    tags: [ "openwebtext", "gpt2"]
-
+    project: levanter
+    tags:
+    - openwebtext
+    - gpt2
   mp: p=f32,c=bfloat16
   num_train_steps: 100
   per_device_eval_parallelism: 1

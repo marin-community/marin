@@ -1,27 +1,12 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
-import logging
 from abc import ABC
 
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster import ResourceConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.utils import remove_tpu_lockfile_on_exit
-
-logger = logging.getLogger(__name__)
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
 
 
 class LevanterTpuEvaluator(Evaluator, ABC):
@@ -33,16 +18,6 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         if model.path is None:
             return model.name
         return model.path
-
-    @staticmethod
-    def cleanup(model: ModelConfig) -> None:
-        """
-        Clean up resources.
-        """
-        logger.info("Cleaning up resources.")
-
-        # Delete the checkpoint
-        model.destroy()
 
     def launch_evaluate_with_ray(
         self,
@@ -56,20 +31,15 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
         Launches the evaluation run with Fray.
         """
-
-        def _run():
-            with remove_tpu_lockfile_on_exit():
-                self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
-
-        job_request = JobRequest(
-            name="levanter-tpu-eval",
-            entrypoint=Entrypoint.from_callable(_run),
-            resources=resource_config,
-            environment=EnvironmentConfig.create(
-                extras=["eval", "tpu"],
-            ),
+        launch_evaluate_with_ray(
+            evaluator=self,
+            job_name="levanter-tpu-eval",
+            model=model,
+            evals=evals,
+            output_path=output_path,
+            resource_config=resource_config,
+            max_eval_instances=max_eval_instances,
+            wandb_tags=wandb_tags,
+            extras=("eval", "tpu"),
+            configure_logging=False,
         )
-
-        cluster = current_cluster()
-        job_id = cluster.launch(job_request)
-        cluster.wait(job_id, raise_on_failure=True)

@@ -76,7 +76,6 @@ python marin/run/ray_run.py -- python experiments/hello_world.py
 This script ensure that:
 - All the relevant libraries (specified above) are installed.
 - The working directory is set appropriately.
-- Any subpaths under submodules are appended to PYTHONPATH, which is useful
-  when [co-developing with another submodule](../tutorials/co-develop.md) (e.g., levanter).
+- Any subpaths under submodules are appended to PYTHONPATH.
 
 > **New:** Agent-friendly recipes are now available in `docs/recipes/`. See [add_dataset.md](../recipes/add_dataset.md) for a guide to dataset schema inspection and addition.

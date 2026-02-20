@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Instruction datasets are streamed from Hugging Face and transformed into OpenAI messages
@@ -45,6 +34,7 @@ Current datasets:
 19. nvidia/Nemotron-Post-Training-Dataset-v1
 20. nvidia/Nemotron-Post-Training-Dataset-v2
 21. HuggingFaceH4/no_robots
+22. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 """
 
 import dataclasses
@@ -452,6 +442,20 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ],
         name="GeneralReasoning/GeneralThought-195K-modelreasoning",
         splits=["train"],
+    ),
+    "open-thoughts/OpenThoughts3-1.2M": InstructionDatasetConfig(
+        hf_dataset_id="open-thoughts/OpenThoughts3-1.2M",
+        revision="61bcf9d",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["difficulty", "source", "domain"],
+        name="open-thoughts/OpenThoughts3-1.2M",
+        max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
     ),
     # nvidia/OpenMathReasoning - CoT split (Chain of Thought reasoning)
     "nvidia/OpenMathReasoning/cot": InstructionDatasetConfig(

@@ -21,8 +21,6 @@ In general, you should reach for the default steps before writing your own.
 
 ::: experiments.defaults.default_train
 
-::: experiments.defaults.default_anneal
-
 ::: experiments.defaults.default_sft
 
 ::: experiments.defaults.simulated_epoching_train

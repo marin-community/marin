@@ -9,12 +9,15 @@ description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
+    # workspaces
     "iris",
     "fray",
     "haliax",
     "levanter",
     "marin",
     "zephyr",
+    # top level deps. try to keep these small.
+    "watchdog",
 ]
 
 [tool.uv]
@@ -22,6 +25,9 @@ fork-strategy = "fewest"
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
+    "python-multipart>=0.0.22",
+    "wheel>=0.46.2",
+    "datasets>=3.1.0,<4.0.0",
 ]
 
 [tool.uv.workspace]
@@ -41,9 +47,11 @@ haliax = { workspace = true }
 levanter = { workspace = true }
 marin = { workspace = true }
 zephyr = { workspace = true }
-# NOTE: dupekit is an optional dependency, it could be a workspace member but declaring
-# it as a path dependency makes it less likely to trigger unnecessary build
+# NOTE: dupekit and harbor are optional dependencies. Declaring them as path
+# dependencies (not workspace members) avoids pulling their dev dependency
+# groups into workspace resolution.
 dupekit = { path = "lib/dupekit", editable = true }
+harbor = { path = "lib/harbor", editable = true }
 
 [tool.black]
 line-length = 121
@@ -81,7 +89,14 @@ exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
-project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
+project-includes = [
+    "lib/marin/src/**/*.py",
+    "lib/levanter/src/**/*.py",
+    "lib/haliax/src/**/*.py",
+    "lib/fray/src/**/*.py",
+    "lib/iris/src/**/*.py",
+    "lib/zephyr/src/**/*.py",
+]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
 # against the library sources instead of the top-level `src` directory, which only
@@ -92,12 +107,14 @@ search-path = [
     "lib/haliax/src",
     "lib/zephyr/src",
     "lib/fray/src",
+    "lib/iris/src",
 ]
 disable-search-path-heuristics = true
 
 # Prevent pyrefly from querying the Python interpreter for site-packages
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
+use-ignore-files = false
 
 # Exclude non-production code from type checking
 project-excludes = [
@@ -106,7 +123,10 @@ project-excludes = [
     "tests/**",
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
-    "lib/marin/src/marin/processing/classification/deduplication/vendor", # Exclude vendor stuff in dedupe
+    "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
+    # Do not exclude all hidden-path ancestors; this repo is often checked out under
+    # directories such as `.codex/worktrees/...`, and pyrefly evaluates globs on
+    # absolute paths during project mode.
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs
@@ -183,5 +203,5 @@ markers = [
 ]
 testpaths = ["tests", "experiments"]
 
-# Make sure we timeout before CI kills us, and don't run TPU or slow tests by default
+# Don't run TPU or slow tests by default
 addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"

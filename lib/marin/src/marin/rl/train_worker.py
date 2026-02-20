@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Training worker for RL/post-training tasks.
@@ -39,7 +28,7 @@ from levanter.trainer import Trainer, TrainerConfig
 from transformers import PreTrainedTokenizer
 
 from marin.rl import weight_transfer
-from fray.job import get_default_job_ctx
+from fray.v1.job import get_default_job_ctx
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
@@ -69,6 +58,10 @@ class TrainWorkerConfig:
 
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
+
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to len(tokenizer)."""
 
     seed: int = 0
     """Random seed for replay buffer sampling and model construction."""
@@ -234,7 +227,8 @@ class TrainWorker:
         """Build reference and initial policy models."""
         config = self.config
         model_key = jrandom.PRNGKey(config.seed)
-        Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
+        vocab_size = config.vocab_size if config.vocab_size is not None else len(self.tokenizer)
+        Vocab = hax.Axis("vocab", vocab_size)
 
         if config.initial_checkpoint is not None:
             logger.info(f"Loading initial model from checkpoint: {config.initial_checkpoint}")
@@ -372,7 +366,7 @@ class TrainWorker:
         trainer.add_hook(_log_samples_hook, every=1)
 
         # Add MFU (Model FLOPs Utilization) logging
-        vocab_size = len(self.tokenizer)
+        vocab_size = self.config.vocab_size if self.config.vocab_size is not None else len(self.tokenizer)
         tokens_per_example = self.config.curriculum_config.max_seq_len
         flops_per_token = self.config.model.flops_per_token(vocab_size, tokens_per_example)
         flops_per_example = 3 * flops_per_token * tokens_per_example if flops_per_token is not None else None

@@ -85,29 +85,48 @@ jobs:
           username: oauth2accesstoken
           password: ${{ steps.auth.outputs.access_token }}
 
-      - name: Build and push Marin cluster image
+      - name: Build Marin cluster image
         run: |
           docker buildx build --file docker/marin/Dockerfile.cluster \
             --provenance=false \
-            --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
-            --tag us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
-            --push .
+            --load \
+            --tag marin_cluster:local \
+            .
+
+      - name: Verify Marin cluster image
+        # TODO (rav): should we just run tests inside the container?
+        run: |
+          echo "Verifying critical imports work correctly..."
+          docker run --rm marin_cluster:local python -c "
+          import sys
+          print(f'Python: {sys.version}')
+
+          import numpy
+          print(f'numpy: {numpy.__version__}')
+
+          import pandas
+          print(f'pandas: {pandas.__version__}')
+
+          import ray
+          print(f'ray: {ray.__version__}')
+
+          import torch
+          print(f'torch: {torch.__version__}')
+
+          print('All critical imports verified successfully!')
+          "
+
+      - name: Push Marin cluster image
+        run: |
+          REGISTRIES="europe-west4 us-central1 us-central2 us-east1 us-east5 us-west4"
+          TAGS="latest ${{ steps.set-tags.outputs.DATE_TAG }} ${{ steps.set-tags.outputs.HASH_TAG }}"
+
+          for registry in $REGISTRIES; do
+            for tag in $TAGS; do
+              docker tag marin_cluster:local ${registry}-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${tag}
+              docker push ${registry}-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${tag}
+            done
+          done
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -128,6 +147,54 @@ jobs:
           title: Update Docker image tag
           branch: actions/update-docker-image-tag
           body: Auto-generated from GitHub Actions.
+
+  # Iris Images - Worker, controller, and task images pushed to GHCR
+  iris-images:
+    # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: iris-worker
+            dockerfile: lib/iris/Dockerfile.worker
+            context: lib/iris
+          - image: iris-controller
+            dockerfile: lib/iris/Dockerfile.controller
+            context: lib/iris
+          - image: iris-task
+            dockerfile: lib/iris/Dockerfile.task
+            context: .
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set tags
+        id: set-tags
+        run: |
+          echo "DATE_TAG=`date -u +"%Y%m%d"`" >> "$GITHUB_OUTPUT"
+          echo "HASH_TAG=`git rev-parse --short HEAD`" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push ${{ matrix.image }}
+        run: |
+          docker buildx build --file ${{ matrix.dockerfile }} \
+            --provenance=false \
+            --tag ghcr.io/marin-community/${{ matrix.image }}:latest \
+            --tag ghcr.io/marin-community/${{ matrix.image }}:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --tag ghcr.io/marin-community/${{ matrix.image }}:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --push ${{ matrix.context }}
 
   # Marin TPU CI Images - For self-hosted TPU CI runners
   marin-tpu-ci-images:

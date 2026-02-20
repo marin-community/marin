@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -64,6 +63,16 @@ def test_pspec_for_plain_array_axis_names():
         specs: ArrayModule = pspec_for(mod)
 
         assert specs.arr == PartitionSpec(ResourceAxis.DATA, ResourceAxis.MODEL)
+
+
+def test_pspec_for_namedarray_with_missing_array():
+    mesh = Mesh(np.array(jax.devices()).reshape(-1, 1), (ResourceAxis.DATA, ResourceAxis.MODEL))
+    with axis_mapping(resource_map), mesh:
+        named = NamedArray(None, ("dim2", "dim3"))
+
+        spec = pspec_for(named)
+
+        assert spec == PartitionSpec(ResourceAxis.DATA, ResourceAxis.MODEL)
 
 
 def test_pspec_for_plain_array_uses_typeof_sharding():

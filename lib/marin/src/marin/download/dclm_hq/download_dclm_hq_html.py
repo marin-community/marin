@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Download DCLM HQ HTML data by fetching HTML content from Common Crawl.
@@ -37,7 +26,7 @@ import requests
 import warcio
 from marin.utils import fsspec_glob
 from tqdm import tqdm
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 from zephyr.writers import ensure_parent_dir
 
 CC_IDX_HOST_URL = "http://34.72.201.218:8080"
@@ -213,6 +202,7 @@ def extract_dclm_hq_dump(cfg: DCLMHQDownloadConfig) -> None:
     # Single-level parallelism over all files
     pipeline = Dataset.from_list(all_files).map(process_file)
 
-    Backend.execute(pipeline)
+    with ZephyrContext(name="download-dclm-html") as ctx:
+        ctx.execute(pipeline)
 
     logger.info("Processing completed successfully!")

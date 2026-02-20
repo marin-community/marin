@@ -105,16 +105,6 @@ This page includes only experiments that have at least one run or report.
 
 ## Data Experiments
 
-### Datashop
-- MEDU filtering across MMLU subsets [![#923](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/923)](https://github.com/marin-community/marin/issues/923)
-   - [GitHub Issue #923](https://github.com/marin-community/marin/issues/923)
-   - [WandB Report](https://api.wandb.ai/links/marin-community/9b1v0zwa)
-   - [Data Browser](https://crfm.stanford.edu/marin/data_browser/experiment?path=gs%3A%2F%2Fmarin-us-east1%2Fexperiments%2Fmedu_mmlu-051285.json)
-- Reproduce Finemath performance using Datashop [![#939](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/939)](https://github.com/marin-community/marin/issues/939) [![#939](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/939)](https://github.com/marin-community/marin/issues/939)
-   - [GitHub Issue #939](https://github.com/marin-community/marin/issues/939)
-   - [WandB Report](https://wandb.ai/marin-community/marin/reports/Reproducing-Finemath--VmlldzoxMjc2NDMyNg?accessToken=xnwbosaz2es5lkoyjmtclq0xoqbbqzyyg7gjt8qkmjz7zs0vx1p4g8t5nloyx9ft)
-
-
 ### High Quality Data Ablations
 
 - Ablations on Cooldown for Markdownified Wikipedia [![#845](https://img.shields.io/github/issues/detail/state/marin-community/marin/845)](https://github.com/marin-community/marin/issues/845)

@@ -21,6 +21,7 @@ from haliax.partitioning import ResourceAxis
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
 from levanter.layers.attention import (
+    Attention,
     AttentionBackend,
     AttentionConfig,
     AttentionMask,
@@ -128,6 +129,79 @@ def test_attention_with_sink_module():
     out = attn(x, None)
 
     expected = np.full((2, 1), 2.0 / 3)
+    assert_trees_all_close(out.array, expected)
+
+
+def test_attention_with_gating_module():
+    """Test elementwise gated attention.
+
+    When gated="elementwise", a separate gate_proj outputs [kv_head, q_heads_per_group, head_size].
+
+    With zero weights/biases for Q and gate, the gate output is sigmoid(0) = 0.5.
+    With v_proj bias=1 and o_proj weight=1, the attention output before gating is 1.
+    After gating: 1 * 0.5 = 0.5
+    """
+    Pos = hax.Axis("position", 2)
+    Embed = hax.Axis("embed", 1)
+
+    config = AttentionConfig(Embed=Embed, num_heads=1, num_kv_heads=1, use_bias=True, gated="elementwise")
+    attn = Attention.init(config, key=jrandom.PRNGKey(0))
+
+    # q_proj has shape [embed, kv_head, q_heads_per_group, head_size]
+    # gate_proj is a separate projection with same output shape
+    attn = eqx.tree_at(lambda a: a.q_proj.weight, attn, hax.zeros(attn.q_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.q_proj.bias, attn, hax.zeros(attn.q_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.k_proj.weight, attn, hax.zeros(attn.k_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.k_proj.bias, attn, hax.zeros(attn.k_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.v_proj.weight, attn, hax.zeros(attn.v_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.v_proj.bias, attn, hax.ones(attn.v_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.o_proj.weight, attn, hax.ones(attn.o_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.o_proj.bias, attn, hax.zeros(attn.o_proj.bias.axes))
+    # Zero out gate_proj so sigmoid(0) = 0.5
+    attn = eqx.tree_at(lambda a: a.gate_proj.weight, attn, hax.zeros(attn.gate_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.gate_proj.bias, attn, hax.zeros(attn.gate_proj.bias.axes))
+
+    x = hax.zeros((Pos, Embed))
+    out = attn(x, None)
+
+    expected = np.full((2, 1), 0.5)
+    assert_trees_all_close(out.array, expected)
+
+
+def test_attention_with_headwise_gating_module():
+    """Test headwise gated attention.
+
+    When gated="headwise", a separate gate_proj outputs [kv_head, q_heads_per_group, 1]
+    (one scalar per head).
+
+    With zero weights/biases for Q and gate, the gate output is sigmoid(0) = 0.5.
+    With v_proj bias=1 and o_proj weight=1, the attention output before gating is 1.
+    After gating: 1 * 0.5 = 0.5
+    """
+    Pos = hax.Axis("position", 2)
+    Embed = hax.Axis("embed", 1)
+
+    config = AttentionConfig(Embed=Embed, num_heads=1, num_kv_heads=1, use_bias=True, gated="headwise")
+    attn = Attention.init(config, key=jrandom.PRNGKey(0))
+
+    # q_proj has shape [embed, kv_head, q_heads_per_group, head_size]
+    # gate_proj is a separate projection with output [kv_head, q_heads_per_group, 1]
+    attn = eqx.tree_at(lambda a: a.q_proj.weight, attn, hax.zeros(attn.q_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.q_proj.bias, attn, hax.zeros(attn.q_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.k_proj.weight, attn, hax.zeros(attn.k_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.k_proj.bias, attn, hax.zeros(attn.k_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.v_proj.weight, attn, hax.zeros(attn.v_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.v_proj.bias, attn, hax.ones(attn.v_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.o_proj.weight, attn, hax.ones(attn.o_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.o_proj.bias, attn, hax.zeros(attn.o_proj.bias.axes))
+    # Zero out gate_proj so sigmoid(0) = 0.5
+    attn = eqx.tree_at(lambda a: a.gate_proj.weight, attn, hax.zeros(attn.gate_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.gate_proj.bias, attn, hax.zeros(attn.gate_proj.bias.axes))
+
+    x = hax.zeros((Pos, Embed))
+    out = attn(x, None)
+
+    expected = np.full((2, 1), 0.5)
     assert_trees_all_close(out.array, expected)
 
 
@@ -350,7 +424,7 @@ def test_tpu_splash_attention():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
 
-    BLOCK_SIZE = 512
+    BLOCK_SIZE = 256
 
     Head = hax.Axis("Head", 8)
     Key = hax.Axis("Key", 128)  # splash only supports 128
@@ -385,7 +459,7 @@ def test_tpu_splash_attention_sliding_window():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
 
-    BLOCK_SIZE = 512
+    BLOCK_SIZE = 256
 
     Head = hax.Axis("Head", 8)
     Key = hax.Axis("Key", 128)  # splash only supports 128

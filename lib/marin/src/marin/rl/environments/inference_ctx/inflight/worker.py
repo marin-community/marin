@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import logging
 
@@ -188,7 +177,13 @@ class SyncVLLMWrapper:
     """
 
     def __init__(
-        self, model: str, max_model_len: int = 1024, tensor_parallel_size: int = 1, gpu_memory_utilization: float = 0.95
+        self,
+        model: str,
+        max_model_len: int = 1024,
+        tensor_parallel_size: int = 1,
+        gpu_memory_utilization: float = 0.95,
+        load_format: str = "auto",
+        enforce_eager: bool = True,
     ):
         if AsyncEngineArgs is None:
             raise RuntimeError("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
@@ -203,6 +198,8 @@ class SyncVLLMWrapper:
             worker_extension_cls="marin.rl.environments.inference_ctx.inflight.worker.WorkerExtension",
             tensor_parallel_size=tensor_parallel_size,
             gpu_memory_utilization=gpu_memory_utilization,
+            load_format=load_format,
+            enforce_eager=enforce_eager,
         )
 
         self.engine = self.bridge.run(self._init_engine(engine_args))

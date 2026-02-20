@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 This is a tutorial on how to train a tiny model on a small dataset using TPU.
@@ -19,7 +8,7 @@ For CPU training, see train_tiny_model_cpu.py
 For GPU training, see train_tiny_model_gpu.py
 """
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main, versioned
 
@@ -28,7 +17,13 @@ from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 
-RESOURCES = ResourceConfig.with_tpu("v4-8")
+RESOURCES = ResourceConfig.with_tpu(
+    "v5litepod-16",
+    slice_count=1,
+    cpu=32,
+    ram="128g",
+    disk="50g",
+)
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"

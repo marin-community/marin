@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Configuration helpers, tokenizer, worker runners, and rollout utilities for integration tests."""
 
@@ -267,9 +256,12 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
                 ),
-                sampling_params=SamplingParams(temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_tokens=32),
+                sampling_params=SamplingParams(
+                    temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_output_tokens=32
+                ),
             )
         },
+        max_seq_len=64,
         eval_frequency=100,
         eval_n_examples=4,
         micro_eval_frequency=10,

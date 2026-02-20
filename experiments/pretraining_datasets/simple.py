@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Simple single-corpus dataset definitions and tokenization.
@@ -81,18 +70,23 @@ downloads = {
         override_output_path="raw/fineweb",
     ),
     "fineweb_edu": (
-        ExecutorStep(
-            name="raw/fineweb-edu",
-            fn=download_hf,
-            config=DownloadConfig(
-                hf_dataset_id="HuggingFaceFW/fineweb-edu",
-                revision="3c452cb",
-                gcs_output_path=this_output_path(),
-                wait_for_completion=True,
-            ),
-            override_output_path="raw/fineweb-edu-c2beb4",
-        ).cd("3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb")
+        (
+            fineweb_edu_base_step := ExecutorStep(
+                name="raw/fineweb-edu",
+                fn=download_hf,
+                config=DownloadConfig(
+                    hf_dataset_id="HuggingFaceFW/fineweb-edu",
+                    revision=versioned((revision := "87f0914")),
+                    gcs_output_path=this_output_path(),
+                    wait_for_completion=True,
+                ),
+                override_output_path=f"raw/fineweb-edu-{revision}",
+            )
+        ).cd("data")
     ),
+    "fineweb_edu_sample_10bt": fineweb_edu_base_step.cd("sample/10BT"),
+    "fineweb_edu_sample_100bt": fineweb_edu_base_step.cd("sample/100BT"),
+    "fineweb_edu_sample_350bt": fineweb_edu_base_step.cd("sample/350BT"),
     "slimpajama": (
         ExecutorStep(
             name="raw/SlimPajama-627B",

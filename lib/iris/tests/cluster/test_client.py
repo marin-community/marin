@@ -1,24 +1,13 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for cluster client hierarchical name handling."""
 
 import pytest
-from connectrpc.errors import ConnectError
 
 from iris.client import IrisClient, LocalClientConfig
-from iris.cluster.types import Entrypoint, ResourceSpec
+from iris.client.client import JobAlreadyExists
+from iris.cluster.types import Entrypoint, JobName, ResourceSpec
 from iris.rpc import cluster_pb2
 
 
@@ -47,19 +36,22 @@ def test_submit_rejects_name_with_slash(local_client):
 
 
 def test_submit_rejects_duplicate_name(local_client):
-    """Verify submit rejects duplicate job names."""
+    """Verify submit raises JobAlreadyExists with a valid job handle for duplicate names."""
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
     # First submit should succeed
-    job_id = local_client.submit(entrypoint, "duplicate-job", resources)
-    assert job_id == "duplicate-job"
+    job = local_client.submit(entrypoint, "duplicate-job", resources)
+    assert job.job_id == JobName.root("duplicate-job")
 
-    # Second submit with same name should fail with RPC conflict error
-    with pytest.raises(ConnectError) as exc_info:
+    # Second submit with same name should raise JobAlreadyExists
+    with pytest.raises(JobAlreadyExists) as exc_info:
         local_client.submit(entrypoint, "duplicate-job", resources)
 
-    assert "already exists" in str(exc_info.value)
+    assert "already exists" in str(exc_info.value).lower()
+    # The exception carries a Job handle that can be used to adopt the existing job
+    assert exc_info.value.job is not None
+    assert exc_info.value.job.job_id == JobName.root("duplicate-job")
 
 
 def test_list_jobs_returns_all_jobs(local_client):
@@ -73,8 +65,8 @@ def test_list_jobs_returns_all_jobs(local_client):
     jobs = local_client.list_jobs()
     job_ids = {j.job_id for j in jobs}
 
-    assert job1 in job_ids
-    assert job2 in job_ids
+    assert job1.job_id.to_wire() in job_ids
+    assert job2.job_id.to_wire() in job_ids
 
 
 def test_list_jobs_filter_by_state(local_client):
@@ -82,16 +74,16 @@ def test_list_jobs_filter_by_state(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    job_id = local_client.submit(entrypoint, "state-filter-job", resources)
-    local_client.wait(job_id)  # Wait for completion
+    job = local_client.submit(entrypoint, "state-filter-job", resources)
+    job.wait()  # Wait for completion
 
     # Filter for SUCCEEDED only
     succeeded_jobs = local_client.list_jobs(states=[cluster_pb2.JOB_STATE_SUCCEEDED])
-    assert any(j.job_id == job_id for j in succeeded_jobs)
+    assert any(j.job_id == job.job_id.to_wire() for j in succeeded_jobs)
 
     # Filter for PENDING only - should not include completed job
     pending_jobs = local_client.list_jobs(states=[cluster_pb2.JOB_STATE_PENDING])
-    assert not any(j.job_id == job_id for j in pending_jobs)
+    assert not any(j.job_id == job.job_id.to_wire() for j in pending_jobs)
 
 
 def test_list_jobs_filter_by_prefix(local_client):
@@ -104,12 +96,12 @@ def test_list_jobs_filter_by_prefix(local_client):
     local_client.submit(entrypoint, "other-job", resources)
 
     # Filter by prefix
-    jobs = local_client.list_jobs(prefix="exp-")
+    jobs = local_client.list_jobs(prefix=JobName.root("exp-"))
     job_ids = {j.job_id for j in jobs}
 
-    assert "exp-a-job" in job_ids
-    assert "exp-b-job" in job_ids
-    assert "other-job" not in job_ids
+    assert JobName.root("exp-a-job").to_wire() in job_ids
+    assert JobName.root("exp-b-job").to_wire() in job_ids
+    assert JobName.root("other-job").to_wire() not in job_ids
 
 
 def test_terminate_prefix_basic(local_client):
@@ -123,12 +115,12 @@ def test_terminate_prefix_basic(local_client):
     local_client.submit(entrypoint, "exp-b-job1", resources)
 
     # Terminate exp-a jobs
-    terminated = local_client.terminate_prefix("exp-a")
+    terminated = local_client.terminate_prefix(JobName.root("exp-a"))
 
     assert len(terminated) == 2
-    assert "exp-a-job1" in terminated
-    assert "exp-a-job2" in terminated
-    assert "exp-b-job1" not in terminated
+    assert JobName.root("exp-a-job1") in terminated
+    assert JobName.root("exp-a-job2") in terminated
+    assert JobName.root("exp-b-job1") not in terminated
 
 
 def test_terminate_prefix_excludes_finished(local_client):
@@ -136,13 +128,13 @@ def test_terminate_prefix_excludes_finished(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    job_id = local_client.submit(entrypoint, "finished-test", resources)
-    local_client.wait(job_id)  # Wait for completion
+    job = local_client.submit(entrypoint, "finished-test", resources)
+    job.wait()  # Wait for completion
 
     # Job should be SUCCEEDED now
-    status = local_client.status(job_id)
+    status = job.status()
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # terminate_prefix should not include it
-    terminated = local_client.terminate_prefix("finished-test")
-    assert job_id not in terminated
+    terminated = local_client.terminate_prefix(JobName.root("finished-test"))
+    assert job.job_id not in terminated
