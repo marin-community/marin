@@ -414,3 +414,45 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - `throughput/duration`: `0.25974s -> 0.26481s` (`+1.95%`).
 - Assessment: **low-impact / regression** under current governance. Despite lower per-hotspot trace times, end-to-end MFU regressed by >1% and dominant hotspot category remained `custom-call`, so this attempt is marked failed and code reverted.
 - Next hypothesis (escalation): take a more radical launch/dataflow redesign that removes duplicated chunk-local K-only work and reduces backward launch pressure, e.g. Macro Move D (`emit_pipeline` full-sequence recurrent state carry) or a backward decomposition that computes chunk-local factors once and applies recurrent updates in a separate V-tiled stage.
+
+### Iteration 3 (loop 3/20) - Backward-wide transpose fusion with dot_general (reverted)
+
+- Date: 2026-02-20T10:46:00Z
+- Commit: none (failed attempt)
+- Starting commit: `17333cc4b0ed82d887315ca41b9eb40c9152fabb`
+- Dominant bottleneck carried in: GDN shard-map `custom-call` remained dominant in the latest governed baseline trace (`232.093 ms` in TPU:0 XLA Ops aggregate), with top callsites:
+  - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` (`143.559 ms`)
+  - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` (`75.051 ms`)
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move B**: migrate transpose-heavy matmuls in forward+backward flash kernels to a single transpose-fused `lax.dot_general` helper (`+10-18%`, medium risk from math-path churn).
+  2. **Macro Move D**: full-sequence `pltpu.emit_pipeline` recurrent carry over chunk axis (`+20-35%`, very high implementation and validation risk).
+  3. **Macro Move F (Experiment B)**: V-tiled recurrent backward decomposition with separated chunk-local/recurrent stages (`+15-30%`, high complexity and reduction-correctness risk).
+- Selected macro-move category: **B) Replace `jnp.matmul(..., x.T)` with `lax.dot_general`**.
+- Selected hypothesis: eliminate explicit transpose paths in the dominant backward shard-map kernel by routing transpose matmuls (and matching forward callsites) through one MXU helper that uses `dot_general` dimension numbers.
+- Change summary:
+  - Implemented a transpose-aware `_mxu_matmul_f32(..., transpose_a/transpose_b)` helper and migrated transposed matmuls across solve/forward/backward flash kernels.
+  - Attempted a BF16-default variant first (BF16 inputs + FP32 accumulation), but it failed TPU correctness broadly; reverted precision default to FP32 to recover parity before profiling.
+  - Profiled the FP32 transpose-fused variant, then reverted code because end-to-end and hotspot metrics regressed.
+- Correctness checks:
+  - Initial command (BF16-default variant): `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Result: failed (`32 failed, 55 passed, 2 skipped`).
+  - Final validated command (FP32-default variant): `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_dotfusebwd_i3_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_dotfusebwd_i3_dev_130m_ch128_seg16_20steps-84ddf0`
+  - W&B profiler artifact: `run-gdn_dotfusebwd_i3_dev_130m_ch128_seg16_20steps-84ddf0-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_dotfusebwd_i3_dev_130m_ch128_seg16_20steps-84ddf0/plugins/profile/2026_02_20_10_39_53/perfetto_trace.json.gz`
+- Hotspots observed (TPU:0 XLA Ops aggregate, compared to governed baseline trace `.profiles/wandb/gdn_loopgate_iter002_130m_ch128_seg16_20steps-51ecc9/plugins/profile/2026_02_19_23_03_33/perfetto_trace.json.gz`):
+  - `custom-call`: `232.093 ms -> 276.800 ms` (`+19.26%`), still dominant.
+  - Dominant backward GDN callsite worsened:
+    - `transpose(jvp(...))/closed_call/shard_map/pallas_call:` `143.559 ms -> 188.271 ms` (`+31.14%`).
+  - Forward closed-call GDN path was flat:
+    - `jvp(...)/closed_call/shard_map/pallas_call:` `75.051 ms -> 75.052 ms` (`+0.00%`).
+  - `all-gather`: `32.643 ms -> 32.667 ms` (`+0.07%`).
+- MFU/throughput delta (vs governed baseline run `gdn_loopgate_iter002_130m_ch128_seg16_20steps-51ecc9`):
+  - `throughput/mfu`: `3.8574 -> 3.6081` (`-6.46%`).
+  - `throughput/tokens_per_second`: `124787.53 -> 116721.09` (`-6.46%`).
+  - `throughput/duration`: `0.26259s -> 0.28074s` (`+6.91%`).
+- Assessment: **low-impact / regression**. MFU dropped materially and the dominant hotspot category stayed `custom-call`, with the main backward GDN callsite getting slower.
+- Next hypothesis (escalation): move to a more radical launch/dataflow redesign (Macro Move D or Macro Move F with full decomposition), specifically a full-sequence `emit_pipeline` recurrent design that reduces shard-map custom-call pressure rather than retuning matmul forms.
