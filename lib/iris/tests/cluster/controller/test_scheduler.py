@@ -1,22 +1,11 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for task scheduler.
 
 The scheduler is a shallow interface that takes inputs (pending tasks, workers,
-current time) and returns outputs (assignments, timed-out tasks). It does not
-dispatch tasks, modify state, or run threads.
+job requirements) and returns outputs (assignments). It does not dispatch tasks,
+modify state, or run threads.
 """
 
 import pytest
@@ -26,9 +15,9 @@ from iris.cluster.controller.events import (
     TaskStateChangedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.scheduler import Scheduler, SchedulingResult
-from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingResult
+from iris.cluster.controller.state import ControllerState, ControllerTask
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
@@ -38,6 +27,16 @@ def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
     entrypoint = cluster_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
+
+
+def _job_requirements_from_job(job) -> JobRequirements:
+    """Convert a ControllerJob to JobRequirements for testing."""
+    return JobRequirements(
+        resources=job.request.resources,
+        constraints=list(job.request.constraints),
+        is_coscheduled=job.is_coscheduled,
+        coscheduling_group_by=job.coscheduling_group_by,
+    )
 
 
 # =============================================================================
@@ -104,6 +103,32 @@ def transition_task_to_running(state: ControllerState, task: ControllerTask) -> 
     )
 
 
+def _build_context(scheduler, state):
+    """Build a SchedulingContext from state, including pending tasks and job requirements."""
+    pending_tasks = state.peek_pending_tasks()
+    workers = state.get_available_workers()
+    building_counts = state.snapshot_building_counts()
+
+    # Build task IDs and job requirements from pending tasks
+    task_ids = []
+    jobs = {}
+    for task in pending_tasks:
+        if not task.can_be_scheduled():
+            continue
+        task_ids.append(task.task_id)
+        if task.job_id not in jobs:
+            job = state.get_job(task.job_id)
+            if job:
+                jobs[task.job_id] = _job_requirements_from_job(job)
+
+    return scheduler.create_scheduling_context(
+        workers,
+        building_counts=building_counts,
+        pending_tasks=task_ids,
+        jobs=jobs,
+    )
+
+
 def schedule_until_done(
     scheduler: Scheduler,
     state: ControllerState,
@@ -114,24 +139,27 @@ def schedule_until_done(
     Runs scheduling cycles, applying assignments to state between cycles,
     until no progress is made. Returns aggregated results.
     """
-    all_assignments: list[tuple[ControllerTask, ControllerWorker]] = []
-    all_timed_out: list[ControllerTask] = []
+    all_assignments: list[tuple[JobName, WorkerId]] = []
 
     for _ in range(max_cycles):
-        pending = state.peek_pending_tasks()
-        workers = state.get_available_workers()
-        result = scheduler.find_assignments(pending, workers)
+        context = _build_context(scheduler, state)
 
-        if not result.assignments and not result.timed_out_tasks:
+        if not context.pending_tasks:
+            break
+
+        result = scheduler.find_assignments(context)
+
+        if not result.assignments:
             break
 
         all_assignments.extend(result.assignments)
-        all_timed_out.extend(result.timed_out_tasks)
 
-        for task, worker in result.assignments:
-            assign_task_to_worker(state, task, worker.worker_id)
+        for task_id, worker_id in result.assignments:
+            task = state.get_task(task_id)
+            if task:
+                assign_task_to_worker(state, task, worker_id)
 
-    return SchedulingResult(assignments=all_assignments, timed_out_tasks=all_timed_out)
+    return SchedulingResult(assignments=all_assignments)
 
 
 # =============================================================================
@@ -243,9 +271,9 @@ def state():
 
 
 @pytest.fixture
-def scheduler(state):
+def scheduler():
     """Create a Scheduler instance."""
-    return Scheduler(state)
+    return Scheduler()
 
 
 def test_scheduler_finds_assignment_for_task(scheduler, state, job_request, worker_metadata):
@@ -255,28 +283,22 @@ def test_scheduler_finds_assignment_for_task(scheduler, state, job_request, work
     tasks = submit_job(state, "j1", job_request())
     task = tasks[0]
 
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
-
-    result = scheduler.find_assignments(pending_tasks, workers)
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     assert len(result.assignments) == 1
-    assert result.assignments[0][0] == task
-    assert result.assignments[0][1].worker_id == WorkerId("w1")
-    assert len(result.timed_out_tasks) == 0
+    assert result.assignments[0][0] == task.task_id
+    assert result.assignments[0][1] == WorkerId("w1")
 
 
 def test_scheduler_returns_empty_when_no_workers(scheduler, state, job_request):
     """Verify scheduler returns empty result when no workers available."""
     submit_job(state, "j1", job_request())
 
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()  # Empty
-
-    result = scheduler.find_assignments(pending_tasks, workers)
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     assert len(result.assignments) == 0
-    assert len(result.timed_out_tasks) == 0
 
 
 def test_scheduler_round_robins_tasks_across_workers(scheduler, state, job_request, worker_metadata):
@@ -293,7 +315,7 @@ def test_scheduler_round_robins_tasks_across_workers(scheduler, state, job_reque
 
     # All 3 tasks assigned, each to a different worker (round-robin)
     assert len(result.assignments) == 3
-    assigned_worker_ids = {worker.worker_id for _, worker in result.assignments}
+    assigned_worker_ids = {worker_id for _, worker_id in result.assignments}
     assert len(assigned_worker_ids) == 3
 
 
@@ -309,10 +331,10 @@ def test_scheduler_assigns_multiple_tasks_to_single_worker(scheduler, state, job
 
     # All 3 tasks eventually assigned to the single worker
     assert len(result.assignments) == 3
-    assigned_task_ids = {task.task_id for task, _ in result.assignments}
+    assigned_task_ids = {task_id for task_id, _ in result.assignments}
     assert assigned_task_ids == {tasks1[0].task_id, tasks2[0].task_id, tasks3[0].task_id}
     # All assigned to the same worker
-    assert all(worker.worker_id == WorkerId("w1") for _, worker in result.assignments)
+    assert all(worker_id == WorkerId("w1") for _, worker_id in result.assignments)
 
 
 def test_scheduler_skips_tasks_that_dont_fit(scheduler, state, job_request, worker_metadata):
@@ -325,18 +347,21 @@ def test_scheduler_skips_tasks_that_dont_fit(scheduler, state, job_request, work
     # Job 2: needs 2 CPUs (will fit)
     tasks2 = submit_job(state, "j2", job_request(cpu=2))
 
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
-
-    result = scheduler.find_assignments(pending_tasks, workers)
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # Only job2's task should be assigned
     assert len(result.assignments) == 1
-    assert result.assignments[0][0] == tasks2[0]
+    assert result.assignments[0][0] == tasks2[0].task_id
 
 
-def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
-    """Verify scheduler identifies tasks that exceeded scheduling timeout and logs the event."""
+def test_scheduler_detects_timed_out_tasks(state, worker_metadata):
+    """Verify timed-out tasks are handled by the controller (not the scheduler).
+
+    The scheduler no longer handles timeouts -- the controller filters them out
+    before calling find_assignments. This test verifies the overall behavior
+    by testing the controller-level flow.
+    """
     import time
 
     from iris.time_utils import Deadline, Duration
@@ -358,15 +383,28 @@ def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
     job = state.get_job(JobName.root("j1"))
     job.scheduling_deadline = Deadline(time.monotonic() - 2.0)
 
+    # When building context, the timed-out task should be filtered out
     pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
 
-    result = scheduler.find_assignments(pending_tasks, workers)
+    # Simulate controller-level timeout filtering
+    schedulable_task_ids = []
+    jobs = {}
+    timed_out_tasks = []
+    for task in pending_tasks:
+        if not task.can_be_scheduled():
+            continue
+        j = state.get_job(task.job_id)
+        if j and j.scheduling_deadline is not None and j.scheduling_deadline.expired():
+            timed_out_tasks.append(task)
+            continue
+        schedulable_task_ids.append(task.task_id)
+        if task.job_id not in jobs:
+            jobs[task.job_id] = _job_requirements_from_job(j)
 
-    # Primary observable behavior: task is marked as timed out
-    assert len(result.assignments) == 0
-    assert len(result.timed_out_tasks) == 1
-    assert result.timed_out_tasks[0] == tasks[0]
+    # The task is timed out, so no schedulable tasks
+    assert len(timed_out_tasks) == 1
+    assert timed_out_tasks[0] == tasks[0]
+    assert len(schedulable_task_ids) == 0
 
 
 def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
@@ -384,14 +422,11 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
     # No timeout set (field not present)
     submit_job(state, "j1", request, timestamp_ms=Timestamp.now().epoch_ms() - 10000)
 
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
-    result = scheduler.find_assignments(pending_tasks, workers)
-
-    # Task should not be in timed_out_tasks (just skipped, no assignment)
+    # Task should not be assigned (just skipped, no assignment)
     assert len(result.assignments) == 0
-    assert len(result.timed_out_tasks) == 0
 
 
 def test_scheduler_respects_worker_capacity_across_assignments(scheduler, state, job_request, worker_metadata):
@@ -423,14 +458,11 @@ def test_scheduler_skips_unhealthy_workers(scheduler, state, job_request, worker
 
     submit_job(state, "j1", job_request())
 
-    pending_tasks = state.peek_pending_tasks()
-    # get_available_workers() already filters unhealthy workers
-    workers = state.get_available_workers()
-
-    result = scheduler.find_assignments(pending_tasks, workers)
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w1")
+    assert result.assignments[0][1] == WorkerId("w1")
 
 
 def test_scheduler_considers_running_tasks_for_capacity(scheduler, state, job_request, worker_metadata):
@@ -446,30 +478,22 @@ def test_scheduler_considers_running_tasks_for_capacity(scheduler, state, job_re
     # Try to schedule a job that needs 2 CPUs (won't fit, only 1 CPU available)
     submit_job(state, "j1", job_request(cpu=2))
 
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
-
-    result = scheduler.find_assignments(pending_tasks, workers)
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     assert len(result.assignments) == 0
 
 
 def test_scheduler_reports_task_too_large_for_cluster(scheduler, state, job_request, worker_metadata):
-    """Verify scheduler reports when a task requires more resources than any worker can provide.
-
-    This is distinct from temporary capacity unavailability - the task will *never* be
-    schedulable on the current cluster configuration.
-    """
-    # Worker with only 2 CPUs - this is the largest worker in our "cluster"
+    """Verify scheduler reports when a task requires more resources than any worker can provide."""
+    # Worker with only 2 CPUs
     register_worker(state, "w1", "addr", worker_metadata(cpu=2))
 
-    # Job that needs 4 CPUs - exceeds the capacity of any single worker
+    # Job that needs 4 CPUs
     submit_job(state, "j1", job_request(cpu=4))
 
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
-
-    result = scheduler.find_assignments(pending_tasks, workers)
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # Primary observable behavior: task cannot be assigned
     assert len(result.assignments) == 0
@@ -500,14 +524,12 @@ def test_constraint_filters_workers_by_attribute(scheduler, state, job_request, 
     constraint.value.string_value = "tpu-a"
     tasks = submit_job(state, "j1", req)
 
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
-
-    result = scheduler.find_assignments(pending_tasks, workers)
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     assert len(result.assignments) == 1
-    assert result.assignments[0][0] == tasks[0]
-    assert result.assignments[0][1].worker_id == WorkerId("w1")
+    assert result.assignments[0][0] == tasks[0].task_id
+    assert result.assignments[0][1] == WorkerId("w1")
 
 
 @pytest.mark.parametrize(
@@ -542,11 +564,12 @@ def test_constraint_string_operators(
     constraint.value.string_value = constraint_value
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     if should_match:
         assert len(result.assignments) == 1
-        assert result.assignments[0][1].worker_id == WorkerId("w1")
+        assert result.assignments[0][1] == WorkerId("w1")
     else:
         assert len(result.assignments) == 0
 
@@ -581,11 +604,12 @@ def test_constraint_existence_operators(
     constraint.op = op
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     if should_match:
         assert len(result.assignments) == 1
-        assert result.assignments[0][1].worker_id == WorkerId("w1")
+        assert result.assignments[0][1] == WorkerId("w1")
     else:
         assert len(result.assignments) == 0
 
@@ -640,11 +664,12 @@ def test_constraint_numeric_operators(
     constraint.value.int_value = constraint_value
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     if should_match:
         assert len(result.assignments) == 1
-        assert result.assignments[0][1].worker_id == WorkerId("w1")
+        assert result.assignments[0][1] == WorkerId("w1")
     else:
         assert len(result.assignments) == 0
 
@@ -662,10 +687,63 @@ def test_constraint_numeric_operators_with_floats(scheduler, state, job_request,
     constraint.value.float_value = 0.5
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w1")
+    assert result.assignments[0][1] == WorkerId("w1")
+
+
+def test_constraint_in_operator_matches_any_value(scheduler, state, job_request, worker_metadata):
+    """IN constraint matches workers whose attribute value is in the provided set."""
+    meta1 = worker_metadata()
+    meta1.attributes["region"].string_value = "us-central1"
+    register_worker(state, "w1", "addr1", meta1)
+
+    meta2 = worker_metadata()
+    meta2.attributes["region"].string_value = "us-central2"
+    register_worker(state, "w2", "addr2", meta2)
+
+    meta3 = worker_metadata()
+    meta3.attributes["region"].string_value = "eu-west4"
+    register_worker(state, "w3", "addr3", meta3)
+
+    # Job with IN constraint: region IN (us-central1, us-central2)
+    req = job_request()
+    constraint = req.constraints.add()
+    constraint.key = "region"
+    constraint.op = cluster_pb2.CONSTRAINT_OP_IN
+    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central1"))
+    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central2"))
+
+    submit_job(state, "j1", req)
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    # Only w1 and w2 match the IN constraint (not w3 in eu-west4)
+    assert len(result.assignments) == 1
+    assert result.assignments[0][1] in {WorkerId("w1"), WorkerId("w2")}
+
+
+def test_constraint_in_operator_no_match(scheduler, state, job_request, worker_metadata):
+    """IN constraint with no matching workers produces no assignments."""
+    meta = worker_metadata()
+    meta.attributes["region"].string_value = "eu-west4"
+    register_worker(state, "w1", "addr1", meta)
+
+    req = job_request()
+    constraint = req.constraints.add()
+    constraint.key = "region"
+    constraint.op = cluster_pb2.CONSTRAINT_OP_IN
+    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central1"))
+    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central2"))
+    submit_job(state, "j1", req)
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    assert len(result.assignments) == 0
 
 
 def test_multiple_constraints_all_must_match(scheduler, state, job_request, worker_metadata):
@@ -700,11 +778,12 @@ def test_multiple_constraints_all_must_match(scheduler, state, job_request, work
     c2.value.int_value = 0
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # Only w1 matches both constraints
     assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w1")
+    assert result.assignments[0][1] == WorkerId("w1")
 
 
 def test_constraint_with_missing_attribute_fails(scheduler, state, job_request, worker_metadata):
@@ -721,7 +800,8 @@ def test_constraint_with_missing_attribute_fails(scheduler, state, job_request, 
     constraint.value.string_value = "tpu-a"
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # Worker doesn't have tpu-name attribute, so constraint fails
     assert len(result.assignments) == 0
@@ -742,7 +822,8 @@ def test_job_without_constraints_schedules_anywhere(scheduler, state, job_reques
     req = job_request()
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # Should be assigned to either worker
     assert len(result.assignments) == 1
@@ -773,22 +854,24 @@ def test_coscheduled_job_assigns_all_tasks_atomically(scheduler, state, worker_m
     req.coscheduling.group_by = "tpu-name"
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # All 4 tasks should be assigned
     assert len(result.assignments) == 4
 
     # All assigned to workers with same tpu-name
-    assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
-    assert assigned_tpu_names == {"tpu-a"}
+    assigned_worker_ids = {worker_id for _, worker_id in result.assignments}
+    # Verify all workers are in the tpu-a group
+    for worker_id in assigned_worker_ids:
+        worker = state.get_worker(worker_id)
+        assert worker.attributes["tpu-name"].value == "tpu-a"
 
     # Tasks assigned in order: task-0 -> worker-0, task-1 -> worker-1, etc.
-    for task, worker in result.assignments:
+    for task_id, worker_id in result.assignments:
+        task = state.get_task(task_id)
         expected_worker_id = f"w{task.task_index}"
-        assert worker.worker_id == WorkerId(expected_worker_id)
+        assert worker_id == WorkerId(expected_worker_id)
 
 
 def test_coscheduled_job_waits_when_insufficient_workers(scheduler, state, worker_metadata):
@@ -811,10 +894,8 @@ def test_coscheduled_job_waits_when_insufficient_workers(scheduler, state, worke
     req.coscheduling.group_by = "tpu-name"
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # No assignments - job stays pending
     assert len(result.assignments) == 0
@@ -864,15 +945,14 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     req.coscheduling.group_by = "tpu-name"
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # Job should be assigned to tpu-b (has 4 free workers)
     assert len(result.assignments) == 4
-    assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
-    assert assigned_tpu_names == {"tpu-b"}
+    for _, worker_id in result.assignments:
+        worker = state.get_worker(worker_id)
+        assert worker.attributes["tpu-name"].value == "tpu-b"
 
 
 def test_coscheduled_job_assigns_tasks_in_order(scheduler, state, worker_metadata):
@@ -896,15 +976,15 @@ def test_coscheduled_job_assigns_tasks_in_order(scheduler, state, worker_metadat
     req.coscheduling.group_by = "tpu-name"
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     assert len(result.assignments) == 4
 
     # Verify task-0 -> worker with tpu-worker-id=0, task-1 -> worker with tpu-worker-id=1, etc.
-    for task, worker in result.assignments:
+    for task_id, worker_id in result.assignments:
+        task = state.get_task(task_id)
+        worker = state.get_worker(worker_id)
         worker_tpu_id = worker.attributes["tpu-worker-id"].value
         assert (
             task.task_index == worker_tpu_id
@@ -944,15 +1024,14 @@ def test_coscheduled_job_with_constraints(scheduler, state, worker_metadata):
     constraint.value.string_value = "us-east"
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # Should be assigned to tpu-b (only group matching region=us-east)
     assert len(result.assignments) == 4
-    assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
-    assert assigned_tpu_names == {"tpu-b"}
+    for _, worker_id in result.assignments:
+        worker = state.get_worker(worker_id)
+        assert worker.attributes["tpu-name"].value == "tpu-b"
 
 
 def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata):
@@ -976,10 +1055,8 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
     req.coscheduling.group_by = "tpu-name"
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # No assignments - only 2 workers have sufficient capacity
     assert len(result.assignments) == 0
@@ -992,15 +1069,14 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
         register_worker(state, f"wb{i}", f"addrb{i}", meta)
 
     # Re-run the scheduler - job should now be assigned to the new group
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # All 4 tasks should now be assigned to tpu-b
     assert len(result.assignments) == 4
-    assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
-    assert assigned_tpu_names == {"tpu-b"}
+    for _, worker_id in result.assignments:
+        worker = state.get_worker(worker_id)
+        assert worker.attributes["tpu-name"].value == "tpu-b"
 
 
 # =============================================================================
@@ -1040,15 +1116,14 @@ def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_me
     c.op = cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # All 4 tasks should be assigned to tpu-b (tpu-a has a tainted worker)
     assert len(result.assignments) == 4
-    assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
-    assert assigned_tpu_names == {"tpu-b"}
+    for _, worker_id in result.assignments:
+        worker = state.get_worker(worker_id)
+        assert worker.attributes["tpu-name"].value == "tpu-b"
 
 
 # =============================================================================
@@ -1087,12 +1162,10 @@ def test_tpu_chip_count_deducted_from_capacity(scheduler, state):
     tasks1 = submit_job(state, "j1", req1)
 
     # First scheduling cycle - task should be assigned
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
     assert len(result.assignments) == 1
-    assert result.assignments[0][0] == tasks1[0]
+    assert result.assignments[0][0] == tasks1[0].task_id
 
     # Commit the assignment
     assign_task_to_worker(state, tasks1[0], WorkerId("w1"))
@@ -1113,10 +1186,8 @@ def test_tpu_chip_count_deducted_from_capacity(scheduler, state):
     submit_job(state, "j2", req2)
 
     # Second scheduling cycle - no TPU chips available
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
     assert len(result.assignments) == 0
 
 
@@ -1150,10 +1221,8 @@ def test_tpu_job_rejected_when_insufficient_chips(scheduler, state):
     )
     submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # Task should not be scheduled - not enough TPU chips
     assert len(result.assignments) == 0
@@ -1206,10 +1275,8 @@ def test_tpu_count_released_after_task_completion(scheduler, state):
     submit_job(state, "j2", req2)
 
     # Second job can't be scheduled yet
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
     assert len(result.assignments) == 0
 
     # Complete first task
@@ -1222,12 +1289,10 @@ def test_tpu_count_released_after_task_completion(scheduler, state):
     )
 
     # Now second job can be scheduled
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
     assert len(result.assignments) == 1
-    assert result.assignments[0][0].job_id == JobName.root("j2")
+    assert result.assignments[0][0].parent == JobName.root("j2")
 
 
 # =============================================================================
@@ -1236,40 +1301,611 @@ def test_tpu_count_released_after_task_completion(scheduler, state):
 
 
 def test_preemptible_constraint_routes_to_matching_worker(scheduler, state, job_request, worker_metadata):
-    """Job constrained to non-preemptible workers is only scheduled on a matching worker.
-
-    Users construct preemptible constraints via the helper::
-
-        from iris.cluster.types import preemptible_constraint
-        job = client.launch(
-            ...,
-            constraints=[preemptible_constraint(False)],
-        )
-
-    This test exercises the wire format directly (attribute key + EQ op) to
-    verify the scheduler routes correctly regardless of how the constraint
-    is constructed.
-    """
+    """Job constrained to non-preemptible workers is only scheduled on a matching worker."""
     # Preemptible worker
     meta_preemptible = worker_metadata()
-    meta_preemptible.attributes["preemptible"].string_value = "true"
+    meta_preemptible.attributes[PREEMPTIBLE_ATTRIBUTE_KEY].string_value = "true"
     register_worker(state, "w-preemptible", "addr1", meta_preemptible)
 
     # On-demand worker
     meta_ondemand = worker_metadata()
-    meta_ondemand.attributes["preemptible"].string_value = "false"
+    meta_ondemand.attributes[PREEMPTIBLE_ATTRIBUTE_KEY].string_value = "false"
     register_worker(state, "w-ondemand", "addr2", meta_ondemand)
 
     # Job requiring non-preemptible worker
     req = job_request()
     constraint = req.constraints.add()
-    constraint.key = "preemptible"
+    constraint.key = PREEMPTIBLE_ATTRIBUTE_KEY
     constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
     constraint.value.string_value = "false"
     tasks = submit_job(state, "j1", req)
 
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     assert len(result.assignments) == 1
-    assert result.assignments[0][0] == tasks[0]
-    assert result.assignments[0][1].worker_id == WorkerId("w-ondemand")
+    assert result.assignments[0][0] == tasks[0].task_id
+    assert result.assignments[0][1] == WorkerId("w-ondemand")
+
+
+# =============================================================================
+# Depth-First Scheduling Priority Assignment Tests
+# =============================================================================
+
+
+def test_scheduler_assigns_deeper_job_before_shallow(scheduler, state, job_request, worker_metadata):
+    """Scheduler assigns deeper jobs before shallow ones when both fit."""
+    # Worker with enough resources for both jobs
+    register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+
+    # Submit root job and child job (both with 1 CPU)
+    submit_job(state, "root", job_request("root", cpu=1))
+    submit_job(state, "/root/child", job_request("child", cpu=1))
+
+    # Run scheduler
+    result = schedule_until_done(scheduler, state)
+
+    # Both tasks assigned, child first
+    assert len(result.assignments) == 2
+    assert result.assignments[0][0].parent == JobName.from_string("/root/child")
+    assert result.assignments[1][0].parent == JobName.root("root")
+
+
+def test_scheduler_assigns_older_root_tree_first(scheduler, state, job_request, worker_metadata):
+    """At same depth, scheduler assigns older root tree first."""
+    register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+
+    # Submit two root jobs
+    submit_job(state, "user-a-job", job_request("user-a-job", cpu=1))
+    submit_job(state, "user-b-job", job_request("user-b-job", cpu=1))
+
+    result = schedule_until_done(scheduler, state)
+
+    assert len(result.assignments) == 2
+    # user-a-job submitted first
+    assert result.assignments[0][0].parent == JobName.root("user-a-job")
+    assert result.assignments[1][0].parent == JobName.root("user-b-job")
+
+
+def test_scheduler_child_of_older_tree_beats_newer_root(scheduler, state, job_request, worker_metadata):
+    """Child of older tree is assigned before root of newer tree."""
+    register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+
+    # Submit old tree
+    submit_job(state, "old-tree", job_request("old-tree", cpu=1))
+
+    # Submit new tree
+    submit_job(state, "new-tree", job_request("new-tree", cpu=1))
+
+    # Submit child of old tree
+    submit_job(state, "/old-tree/child", job_request("child", cpu=1))
+
+    result = schedule_until_done(scheduler, state)
+
+    assert len(result.assignments) == 3
+    # Order: child (depth 2), old-tree (depth 1, older), new-tree (depth 1, newer)
+    assert result.assignments[0][0].parent == JobName.from_string("/old-tree/child")
+    assert result.assignments[1][0].parent == JobName.root("old-tree")
+    assert result.assignments[2][0].parent == JobName.root("new-tree")
+
+
+# =============================================================================
+# Error Message Tests
+# =============================================================================
+
+
+def test_scheduler_reports_device_variant_mismatch(scheduler, state, worker_metadata):
+    """Scheduler reports device variant mismatch in error message."""
+    # Worker with v5litepod-16
+    meta = worker_metadata(tpu_name="v5litepod-16")
+    meta.device.tpu.variant = "v5litepod-16"
+    register_worker(state, "w1", "addr", meta)
+
+    # Job requesting v5litepod-32
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-32", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    job_req = _job_requirements_from_job(job)
+    schedulable_task_id = next((t.task_id for t in state.get_job_tasks(job.job_id) if t.can_be_scheduled()), None)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(
+        job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
+    )
+
+    assert "variant" in diagnostics.lower()
+    assert "v5litepod-32" in diagnostics
+    assert "v5litepod-16" in diagnostics
+
+
+def test_scheduler_reports_tpu_count_exceeded(scheduler, state, worker_metadata):
+    """Scheduler reports TPU count exceeded in error message."""
+    # Worker with 4 TPU chips
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="127.0.0.1",
+        cpu_count=10,
+        memory_bytes=10 * 1024**3,
+        disk_bytes=10 * 1024**3,
+        tpu_name="v5litepod-16",
+    )
+    device = cluster_pb2.DeviceConfig()
+    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+    meta.device.CopyFrom(device)
+    register_worker(state, "w1", "addr1", meta)
+
+    # Job requesting 8 TPU chips
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=8)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    job_req = _job_requirements_from_job(job)
+    schedulable_task_id = next((t.task_id for t in state.get_job_tasks(job.job_id) if t.can_be_scheduled()), None)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(
+        job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
+    )
+
+    assert "tpu" in diagnostics.lower()
+    assert "8" in diagnostics
+    assert "4" in diagnostics
+
+
+def test_scheduler_reports_device_type_mismatch(scheduler, state, worker_metadata):
+    """Scheduler reports device type mismatch in error message."""
+    # CPU-only worker
+    meta = worker_metadata()
+    register_worker(state, "w1", "addr", meta)
+
+    # Job requesting TPU
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    job_req = _job_requirements_from_job(job)
+    schedulable_task_id = next((t.task_id for t in state.get_job_tasks(job.job_id) if t.can_be_scheduled()), None)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(
+        job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
+    )
+
+    assert "device" in diagnostics.lower()
+    assert "tpu" in diagnostics.lower()
+
+
+def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worker_metadata):
+    """Scheduler reports detailed coscheduling capacity issues."""
+    # Create 4 workers but only 2 have sufficient CPU
+    for i in range(4):
+        cpu = 4 if i < 2 else 1  # First 2 have 4 CPU, last 2 have only 1
+        meta = worker_metadata(cpu=cpu)
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    # Coscheduled job requiring 4 replicas, 2 CPUs each
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    tasks = submit_job(state, "j1", req)
+
+    # Get job-level scheduling diagnostics
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    job_req = _job_requirements_from_job(job)
+    schedulable_task_id = next((t.task_id for t in state.get_job_tasks(job.job_id) if t.can_be_scheduled()), None)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(
+        job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
+    )
+
+    # Should mention it's a coscheduling issue with capacity details
+    assert "coscheduling" in diagnostics.lower() or "group" in diagnostics.lower()
+    # Should indicate how many workers have capacity vs needed
+    assert "2" in diagnostics or "4" in diagnostics
+
+
+def test_diagnostics_for_schedulable_job_does_not_say_unknown_failure(scheduler, state, job_request, worker_metadata):
+    """When a job can be scheduled, diagnostics should not say 'Unknown scheduling failure'."""
+    register_worker(state, "w1", "addr1", worker_metadata())
+    tasks = submit_job(state, "j1", job_request())
+
+    context = scheduler.create_scheduling_context(state.get_available_workers())
+    job = state.get_job(tasks[0].job_id)
+    job_req = _job_requirements_from_job(job)
+    schedulable_task_id = next((t.task_id for t in state.get_job_tasks(job.job_id) if t.can_be_scheduled()), None)
+    diagnostics = scheduler.get_job_scheduling_diagnostics(
+        job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
+    )
+
+    assert "unknown" not in diagnostics.lower()
+    assert "schedulable" in diagnostics.lower()
+
+
+def test_coscheduled_tpu_jobs_cannot_double_book_group(scheduler, state):
+    """Two coscheduled TPU jobs cannot use the same TPU group simultaneously."""
+    # Create 4 workers in tpu-group "tpu-a", each with 4 TPU chips
+    for i in range(4):
+        meta = cluster_pb2.WorkerMetadata(
+            hostname=f"tpu-worker-{i}",
+            ip_address="127.0.0.1",
+            cpu_count=10,
+            memory_bytes=10 * 1024**3,
+            disk_bytes=10 * 1024**3,
+            tpu_name="v5litepod-16",
+        )
+        device = cluster_pb2.DeviceConfig()
+        device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+        meta.device.CopyFrom(device)
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    tpu_resource = cluster_pb2.ResourceSpecProto(
+        cpu=1,
+        memory_bytes=1024**3,
+        device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+    )
+
+    # Job 1: coscheduled across all 4 workers
+    req1 = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job-1",
+        entrypoint=_make_test_entrypoint(),
+        resources=tpu_resource,
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=4,
+    )
+    req1.coscheduling.group_by = "tpu-name"
+    tasks1 = submit_job(state, "j1", req1)
+
+    # Schedule and commit job 1
+    result1 = schedule_until_done(scheduler, state)
+    assert len(result1.assignments) == 4
+    for task in tasks1:
+        transition_task_to_running(state, task)
+
+    # Job 2: same shape, should be blocked because TPU chips are exhausted
+    req2 = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job-2",
+        entrypoint=_make_test_entrypoint(),
+        resources=tpu_resource,
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=4,
+    )
+    req2.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j2", req2)
+
+    context = _build_context(scheduler, state)
+    result2 = scheduler.find_assignments(context)
+    assert len(result2.assignments) == 0
+
+    # Complete all job 1 tasks
+    for task in tasks1:
+        state.handle_event(
+            TaskStateChangedEvent(
+                task_id=task.task_id,
+                new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+                attempt_id=task.current_attempt_id,
+            )
+        )
+
+    # Job 2 should now be schedulable
+    result3 = schedule_until_done(scheduler, state)
+    assert len(result3.assignments) == 4
+    assigned_jobs = {task_id.parent for task_id, _ in result3.assignments}
+    assert assigned_jobs == {JobName.root("j2")}
+
+
+def test_scheduler_fifo_within_same_depth_and_tree(scheduler, state, job_request, worker_metadata):
+    """Scheduler respects FIFO within same depth and tree."""
+    register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+
+    # Submit parent
+    submit_job(state, "tree", job_request("tree", cpu=1))
+
+    # Submit two children
+    submit_job(state, "/tree/child-a", job_request("child-a", cpu=1))
+    submit_job(state, "/tree/child-b", job_request("child-b", cpu=1))
+
+    result = schedule_until_done(scheduler, state)
+
+    assert len(result.assignments) == 3
+
+    # Find child assignments
+    child_assignments = [
+        (task_id, worker_id)
+        for task_id, worker_id in result.assignments
+        if task_id.parent.parent == JobName.root("tree")
+    ]
+    assert len(child_assignments) == 2
+    # child-a submitted first
+    assert child_assignments[0][0].parent == JobName.from_string("/tree/child-a")
+    assert child_assignments[1][0].parent == JobName.from_string("/tree/child-b")
+
+
+# =============================================================================
+# Device Index / Variant Scheduling Tests
+# =============================================================================
+
+
+def test_mixed_variant_cluster_schedules_all_matching_jobs(scheduler, state, worker_metadata):
+    """Jobs targeting different TPU variants each land on the correct worker."""
+    variants = ["v5litepod-4", "v5litepod-16", "v5litepod-32"]
+    for i, variant in enumerate(variants):
+        meta = worker_metadata(tpu_name=variant)
+        meta.device.tpu.variant = variant
+        meta.device.tpu.count = 4
+        register_worker(state, f"w-{variant}", f"addr{i}", meta)
+
+    for variant in variants:
+        req = cluster_pb2.Controller.LaunchJobRequest(
+            name=f"job-{variant}",
+            entrypoint=_make_test_entrypoint(),
+            resources=cluster_pb2.ResourceSpecProto(
+                cpu=1,
+                memory_bytes=1024**3,
+                device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant=variant, count=2)),
+            ),
+            environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        submit_job(state, f"job-{variant}", req)
+
+    result = schedule_until_done(scheduler, state)
+
+    assert len(result.assignments) == 3
+    for task_id, worker_id in result.assignments:
+        # The job name encodes the variant it targets; the worker should match
+        expected_variant = str(task_id.parent).split("job-")[1]
+        worker = state.get_worker(worker_id)
+        assert worker.device_variant == expected_variant
+
+
+def test_variant_none_job_schedules_on_any_tpu_worker(scheduler, state, worker_metadata):
+    """A TPU job with no specific variant schedules on any TPU worker."""
+    meta = worker_metadata(tpu_name="v5litepod-16")
+    meta.device.tpu.variant = "v5litepod-16"
+    meta.device.tpu.count = 4
+    register_worker(state, "w-tpu", "addr1", meta)
+
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="auto", count=2)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    assert len(result.assignments) == 1
+    assert result.assignments[0][1] == WorkerId("w-tpu")
+
+
+def test_cpu_job_schedules_on_tpu_worker(scheduler, state, job_request, worker_metadata):
+    """A CPU job can run on a TPU worker since every host has a CPU."""
+    meta = worker_metadata(tpu_name="v5litepod-16")
+    meta.device.tpu.variant = "v5litepod-16"
+    meta.device.tpu.count = 4
+    register_worker(state, "w-tpu", "addr1", meta)
+
+    submit_job(state, "j1", job_request(cpu=1))
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    assert len(result.assignments) == 1
+    assert result.assignments[0][1] == WorkerId("w-tpu")
+
+
+def test_multiple_jobs_across_variants_in_single_cycle(scheduler, state, worker_metadata):
+    """Multiple jobs targeting different variants are all assigned in a single find_assignments call."""
+    for variant in ["v5litepod-4", "v5litepod-16", "v5litepod-32"]:
+        meta = worker_metadata(tpu_name=variant)
+        meta.device.tpu.variant = variant
+        meta.device.tpu.count = 4
+        register_worker(state, f"w-{variant}", f"addr-{variant}", meta)
+
+    for variant in ["v5litepod-4", "v5litepod-16", "v5litepod-32"]:
+        req = cluster_pb2.Controller.LaunchJobRequest(
+            name=f"job-{variant}",
+            entrypoint=_make_test_entrypoint(),
+            resources=cluster_pb2.ResourceSpecProto(
+                cpu=1,
+                memory_bytes=1024**3,
+                device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant=variant, count=2)),
+            ),
+            environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        submit_job(state, f"job-{variant}", req)
+
+    # Single call, not schedule_until_done
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    # All 3 assigned in one cycle (round-robin gives each its own worker)
+    assert len(result.assignments) == 3
+    assigned_variants = set()
+    for _, worker_id in result.assignments:
+        worker = state.get_worker(worker_id)
+        assigned_variants.add(worker.device_variant)
+    assert assigned_variants == {"v5litepod-4", "v5litepod-16", "v5litepod-32"}
+
+
+def test_scheduler_tries_all_workers_before_rejecting(scheduler, state, worker_metadata):
+    """Scheduler must try all matching workers, not give up on first rejection."""
+    # Register many workers with the wrong variant
+    for i in range(10):
+        meta = worker_metadata(tpu_name="v5litepod-32")
+        meta.device.tpu.variant = "v5litepod-32"
+        meta.device.tpu.count = 4
+        register_worker(state, f"wrong-{i}", f"addr-wrong-{i}", meta)
+
+    # Register one worker with the correct variant
+    meta = worker_metadata(tpu_name="v5litepod-4")
+    meta.device.tpu.variant = "v5litepod-4"
+    meta.device.tpu.count = 4
+    register_worker(state, "correct", "addr-correct", meta)
+
+    # Job requesting v5litepod-4
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-4", count=2)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    assert len(result.assignments) == 1, (
+        f"Job should be scheduled on the v5litepod-4 worker regardless of iteration order, "
+        f"got {len(result.assignments)} assignments"
+    )
+    assert result.assignments[0][1] == WorkerId("correct")
+
+
+def test_many_jobs_on_single_variant_all_scheduled(state, worker_metadata):
+    """25 jobs targeting 8 workers of the same variant all get scheduled across cycles."""
+    # High building limit so back-pressure doesn't interfere with the test
+    sched = Scheduler(max_building_tasks_per_worker=1000)
+    num_workers = 8
+    num_jobs = 25
+
+    for i in range(num_workers):
+        meta = worker_metadata(cpu=100, memory_bytes=100 * 1024**3, tpu_name="v5litepod-8")
+        meta.device.tpu.variant = "v5litepod-8"
+        meta.device.tpu.count = 4
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    for i in range(num_jobs):
+        req = cluster_pb2.Controller.LaunchJobRequest(
+            name=f"job-{i}",
+            entrypoint=_make_test_entrypoint(),
+            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+            environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        submit_job(state, f"job-{i}", req)
+
+    result = schedule_until_done(sched, state)
+
+    assert len(result.assignments) == num_jobs, (
+        f"Expected all {num_jobs} jobs scheduled, got {len(result.assignments)}. "
+        f"Remaining pending: {len(state.peek_pending_tasks())}"
+    )
+    assert len(state.peek_pending_tasks()) == 0
+
+
+def test_mixed_variant_cluster_many_jobs_all_scheduled(state, worker_metadata):
+    """Mixed-variant cluster schedules all jobs to the correct device variant across cycles."""
+    sched = Scheduler(max_building_tasks_per_worker=1000)
+    # 10 v5litepod-4, 8 v5litepod-8, 20 v5litepod-16
+    variant_workers = [
+        ("v5litepod-4", 10),
+        ("v5litepod-8", 8),
+        ("v5litepod-16", 20),
+    ]
+    for variant, count in variant_workers:
+        for i in range(count):
+            meta = worker_metadata(cpu=100, memory_bytes=100 * 1024**3, tpu_name=variant)
+            meta.device.tpu.variant = variant
+            meta.device.tpu.count = 100
+            register_worker(state, f"w-{variant}-{i}", f"addr-{variant}-{i}", meta)
+
+    variant_jobs = [
+        ("v5litepod-4", 60),
+        ("v5litepod-8", 25),
+        ("v5litepod-16", 40),
+    ]
+    total_jobs = 0
+    for variant, count in variant_jobs:
+        for i in range(count):
+            req = cluster_pb2.Controller.LaunchJobRequest(
+                name=f"job-{variant}-{i}",
+                entrypoint=_make_test_entrypoint(),
+                resources=cluster_pb2.ResourceSpecProto(
+                    cpu=1,
+                    memory_bytes=1024**3,
+                    device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant=variant, count=1)),
+                ),
+                environment=cluster_pb2.EnvironmentConfig(),
+                replicas=1,
+            )
+            submit_job(state, f"job-{variant}-{i}", req)
+            total_jobs += 1
+
+    result = schedule_until_done(sched, state)
+
+    assert len(result.assignments) == total_jobs, (
+        f"Expected all {total_jobs} jobs scheduled, got {len(result.assignments)}. "
+        f"Remaining pending: {len(state.peek_pending_tasks())}"
+    )
+    assert len(state.peek_pending_tasks()) == 0
+
+    # Verify each job landed on a worker with the correct variant
+    for task_id, worker_id in result.assignments:
+        job_name = str(task_id.parent)
+        worker = state.get_worker(worker_id)
+        if "v5litepod-4" in job_name:
+            assert (
+                worker.device_variant == "v5litepod-4"
+            ), f"Job {job_name} assigned to {worker.device_variant}, expected v5litepod-4"
+        elif "v5litepod-8" in job_name:
+            assert (
+                worker.device_variant == "v5litepod-8"
+            ), f"Job {job_name} assigned to {worker.device_variant}, expected v5litepod-8"
+        elif "v5litepod-16" in job_name:
+            assert (
+                worker.device_variant == "v5litepod-16"
+            ), f"Job {job_name} assigned to {worker.device_variant}, expected v5litepod-16"

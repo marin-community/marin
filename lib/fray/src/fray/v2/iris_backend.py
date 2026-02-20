@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Iris backend for fray v2.
 
@@ -32,6 +21,7 @@ from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
 from iris.client.client import Job as IrisJob
+from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import Constraint, EnvironmentSpec, ResourceSpec
@@ -39,6 +29,7 @@ from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
 from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
     CpuConfig,
     DeviceConfig,
@@ -98,17 +89,18 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
         memory=resources.ram,
         disk=resources.disk,
         device=_convert_device(resources.device),
-        regions=resources.regions,
     )
 
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     """Build Iris scheduling constraints from fray v2 ResourceConfig."""
-    from iris.cluster.types import preemptible_constraint
+    from iris.cluster.types import preemptible_constraint, region_constraint
 
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
+    if resources.regions:
+        constraints.append(region_constraint(resources.regions))
     return constraints
 
 
@@ -177,6 +169,7 @@ class IrisJobHandle:
         except Exception:
             if raise_on_failure:
                 raise
+            logger.warning("Job %s failed with exception (raise_on_failure=False)", self.job_id, exc_info=True)
         return self.status()
 
     def terminate(self) -> None:
@@ -361,6 +354,8 @@ class IrisActorGroup:
         allowing the caller to start work immediately and discover more
         workers later via discover_new().
         """
+        from iris.cluster.types import is_job_finished
+
         target = count if count is not None else self._count
         start = time.monotonic()
         sleep_secs = 0.5
@@ -370,6 +365,19 @@ class IrisActorGroup:
 
             if len(self._discovered_names) >= target:
                 return list(self._handles[:target])
+
+            # Fail fast if the underlying job has terminated (e.g. crash, OOM,
+            # missing interpreter). Without this check we'd spin for the full
+            # timeout waiting for endpoints that will never appear.
+            client = self._get_client()
+            job_status = client.status(self._job_id)
+            if is_job_finished(job_status.state):
+                error = job_status.error or "unknown error"
+                raise RuntimeError(
+                    f"Actor job {self._job_id} finished before all actors registered "
+                    f"({len(self._discovered_names)}/{target} ready). "
+                    f"Job state={job_status.state}, error={error}"
+                )
 
             elapsed = time.monotonic() - start
             if elapsed >= timeout:
@@ -416,7 +424,7 @@ class FrayIrisClient:
         instance._iris = iris_client
         return instance
 
-    def submit(self, request: JobRequest) -> IrisJobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> IrisJobHandle:
         from iris.cluster.types import CoschedulingConfig
 
         iris_resources = convert_resources(request.resources)
@@ -432,15 +440,21 @@ class FrayIrisClient:
         if isinstance(request.resources.device, TpuConfig) and replicas > 1:
             coscheduling = CoschedulingConfig(group_by="tpu-name")
 
-        job = self._iris.submit(
-            entrypoint=iris_entrypoint,
-            name=request.name,
-            resources=iris_resources,
-            environment=iris_environment,
-            constraints=iris_constraints if iris_constraints else None,
-            coscheduling=coscheduling,
-            replicas=replicas,
-        )
+        try:
+            job = self._iris.submit(
+                entrypoint=iris_entrypoint,
+                name=request.name,
+                resources=iris_resources,
+                environment=iris_environment,
+                constraints=iris_constraints if iris_constraints else None,
+                coscheduling=coscheduling,
+                replicas=replicas,
+            )
+        except IrisJobAlreadyExists as e:
+            if adopt_existing:
+                logger.info("Job %s already exists, adopting existing job", request.name)
+                return IrisJobHandle(e.job)
+            raise FrayJobAlreadyExists(request.name, handle=IrisJobHandle(e.job)) from e
         return IrisJobHandle(job)
 
     def create_actor(

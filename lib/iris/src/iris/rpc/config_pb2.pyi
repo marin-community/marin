@@ -14,35 +14,18 @@ class AcceleratorType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACCELERATOR_TYPE_CPU: _ClassVar[AcceleratorType]
     ACCELERATOR_TYPE_GPU: _ClassVar[AcceleratorType]
     ACCELERATOR_TYPE_TPU: _ClassVar[AcceleratorType]
-
-class VmType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    VM_TYPE_UNSPECIFIED: _ClassVar[VmType]
-    VM_TYPE_TPU_VM: _ClassVar[VmType]
-    VM_TYPE_GCE_VM: _ClassVar[VmType]
-    VM_TYPE_MANUAL_VM: _ClassVar[VmType]
-    VM_TYPE_LOCAL_VM: _ClassVar[VmType]
 ACCELERATOR_TYPE_UNSPECIFIED: AcceleratorType
 ACCELERATOR_TYPE_CPU: AcceleratorType
 ACCELERATOR_TYPE_GPU: AcceleratorType
 ACCELERATOR_TYPE_TPU: AcceleratorType
-VM_TYPE_UNSPECIFIED: VmType
-VM_TYPE_TPU_VM: VmType
-VM_TYPE_GCE_VM: VmType
-VM_TYPE_MANUAL_VM: VmType
-VM_TYPE_LOCAL_VM: VmType
 
 class GcpPlatformConfig(_message.Message):
-    __slots__ = ("project_id", "region", "zone", "default_zones")
+    __slots__ = ("project_id", "zones")
     PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
-    REGION_FIELD_NUMBER: _ClassVar[int]
-    ZONE_FIELD_NUMBER: _ClassVar[int]
-    DEFAULT_ZONES_FIELD_NUMBER: _ClassVar[int]
+    ZONES_FIELD_NUMBER: _ClassVar[int]
     project_id: str
-    region: str
-    zone: str
-    default_zones: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, project_id: _Optional[str] = ..., region: _Optional[str] = ..., zone: _Optional[str] = ..., default_zones: _Optional[_Iterable[str]] = ...) -> None: ...
+    zones: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, project_id: _Optional[str] = ..., zones: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class ManualPlatformConfig(_message.Message):
     __slots__ = ()
@@ -52,17 +35,25 @@ class LocalPlatformConfig(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class CoreweavePlatformConfig(_message.Message):
+    __slots__ = ("region",)
+    REGION_FIELD_NUMBER: _ClassVar[int]
+    region: str
+    def __init__(self, region: _Optional[str] = ...) -> None: ...
+
 class PlatformConfig(_message.Message):
-    __slots__ = ("label_prefix", "gcp", "manual", "local")
+    __slots__ = ("label_prefix", "gcp", "manual", "local", "coreweave")
     LABEL_PREFIX_FIELD_NUMBER: _ClassVar[int]
     GCP_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
     LOCAL_FIELD_NUMBER: _ClassVar[int]
+    COREWEAVE_FIELD_NUMBER: _ClassVar[int]
     label_prefix: str
     gcp: GcpPlatformConfig
     manual: ManualPlatformConfig
     local: LocalPlatformConfig
-    def __init__(self, label_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpPlatformConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualPlatformConfig, _Mapping]] = ..., local: _Optional[_Union[LocalPlatformConfig, _Mapping]] = ...) -> None: ...
+    coreweave: CoreweavePlatformConfig
+    def __init__(self, label_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpPlatformConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualPlatformConfig, _Mapping]] = ..., local: _Optional[_Union[LocalPlatformConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweavePlatformConfig, _Mapping]] = ...) -> None: ...
 
 class ManualProvider(_message.Message):
     __slots__ = ("hosts", "ssh_user", "ssh_key_file")
@@ -73,6 +64,117 @@ class ManualProvider(_message.Message):
     ssh_user: str
     ssh_key_file: str
     def __init__(self, hosts: _Optional[_Iterable[str]] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ...) -> None: ...
+
+class GcpVmConfig(_message.Message):
+    __slots__ = ("zone", "machine_type", "boot_disk_size_gb")
+    ZONE_FIELD_NUMBER: _ClassVar[int]
+    MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
+    zone: str
+    machine_type: str
+    boot_disk_size_gb: int
+    def __init__(self, zone: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ...) -> None: ...
+
+class ManualVmConfig(_message.Message):
+    __slots__ = ("host", "ssh_user", "ssh_key_file")
+    HOST_FIELD_NUMBER: _ClassVar[int]
+    SSH_USER_FIELD_NUMBER: _ClassVar[int]
+    SSH_KEY_FILE_FIELD_NUMBER: _ClassVar[int]
+    host: str
+    ssh_user: str
+    ssh_key_file: str
+    def __init__(self, host: _Optional[str] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ...) -> None: ...
+
+class VmConfig(_message.Message):
+    __slots__ = ("name", "labels", "metadata", "gcp", "manual")
+    class LabelsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class MetadataEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    LABELS_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
+    GCP_FIELD_NUMBER: _ClassVar[int]
+    MANUAL_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    labels: _containers.ScalarMap[str, str]
+    metadata: _containers.ScalarMap[str, str]
+    gcp: GcpVmConfig
+    manual: ManualVmConfig
+    def __init__(self, name: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., gcp: _Optional[_Union[GcpVmConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualVmConfig, _Mapping]] = ...) -> None: ...
+
+class GcpSliceConfig(_message.Message):
+    __slots__ = ("zone", "runtime_version", "topology")
+    ZONE_FIELD_NUMBER: _ClassVar[int]
+    RUNTIME_VERSION_FIELD_NUMBER: _ClassVar[int]
+    TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
+    zone: str
+    runtime_version: str
+    topology: str
+    def __init__(self, zone: _Optional[str] = ..., runtime_version: _Optional[str] = ..., topology: _Optional[str] = ...) -> None: ...
+
+class CoreweaveSliceConfig(_message.Message):
+    __slots__ = ("region", "instance_type")
+    REGION_FIELD_NUMBER: _ClassVar[int]
+    INSTANCE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    region: str
+    instance_type: str
+    def __init__(self, region: _Optional[str] = ..., instance_type: _Optional[str] = ...) -> None: ...
+
+class ManualSliceConfig(_message.Message):
+    __slots__ = ("hosts", "ssh_user", "ssh_key_file")
+    HOSTS_FIELD_NUMBER: _ClassVar[int]
+    SSH_USER_FIELD_NUMBER: _ClassVar[int]
+    SSH_KEY_FILE_FIELD_NUMBER: _ClassVar[int]
+    hosts: _containers.RepeatedScalarFieldContainer[str]
+    ssh_user: str
+    ssh_key_file: str
+    def __init__(self, hosts: _Optional[_Iterable[str]] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ...) -> None: ...
+
+class LocalSliceConfig(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class SliceConfig(_message.Message):
+    __slots__ = ("name_prefix", "num_vms", "accelerator_type", "accelerator_variant", "labels", "preemptible", "gcp", "coreweave", "manual", "local")
+    class LabelsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    NAME_PREFIX_FIELD_NUMBER: _ClassVar[int]
+    NUM_VMS_FIELD_NUMBER: _ClassVar[int]
+    ACCELERATOR_TYPE_FIELD_NUMBER: _ClassVar[int]
+    ACCELERATOR_VARIANT_FIELD_NUMBER: _ClassVar[int]
+    LABELS_FIELD_NUMBER: _ClassVar[int]
+    PREEMPTIBLE_FIELD_NUMBER: _ClassVar[int]
+    GCP_FIELD_NUMBER: _ClassVar[int]
+    COREWEAVE_FIELD_NUMBER: _ClassVar[int]
+    MANUAL_FIELD_NUMBER: _ClassVar[int]
+    LOCAL_FIELD_NUMBER: _ClassVar[int]
+    name_prefix: str
+    num_vms: int
+    accelerator_type: AcceleratorType
+    accelerator_variant: str
+    labels: _containers.ScalarMap[str, str]
+    preemptible: bool
+    gcp: GcpSliceConfig
+    coreweave: CoreweaveSliceConfig
+    manual: ManualSliceConfig
+    local: LocalSliceConfig
+    def __init__(self, name_prefix: _Optional[str] = ..., num_vms: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., preemptible: _Optional[bool] = ..., gcp: _Optional[_Union[GcpSliceConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveSliceConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualSliceConfig, _Mapping]] = ..., local: _Optional[_Union[LocalSliceConfig, _Mapping]] = ...) -> None: ...
 
 class ScaleGroupResources(_message.Message):
     __slots__ = ("cpu", "memory_bytes", "disk_bytes", "gpu_count", "tpu_count")
@@ -88,37 +190,51 @@ class ScaleGroupResources(_message.Message):
     tpu_count: int
     def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., gpu_count: _Optional[int] = ..., tpu_count: _Optional[int] = ...) -> None: ...
 
+class WorkerSettings(_message.Message):
+    __slots__ = ("attributes", "env")
+    class AttributesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class EnvEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
+    ENV_FIELD_NUMBER: _ClassVar[int]
+    attributes: _containers.ScalarMap[str, str]
+    env: _containers.ScalarMap[str, str]
+    def __init__(self, attributes: _Optional[_Mapping[str, str]] = ..., env: _Optional[_Mapping[str, str]] = ...) -> None: ...
+
 class ScaleGroupConfig(_message.Message):
-    __slots__ = ("name", "vm_type", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "topology", "runtime_version", "preemptible", "resources", "slice_size", "zones", "priority", "manual")
+    __slots__ = ("name", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "resources", "num_vms", "priority", "slice_template", "worker")
     NAME_FIELD_NUMBER: _ClassVar[int]
-    VM_TYPE_FIELD_NUMBER: _ClassVar[int]
     MIN_SLICES_FIELD_NUMBER: _ClassVar[int]
     MAX_SLICES_FIELD_NUMBER: _ClassVar[int]
     ACCELERATOR_TYPE_FIELD_NUMBER: _ClassVar[int]
     ACCELERATOR_VARIANT_FIELD_NUMBER: _ClassVar[int]
-    TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
-    RUNTIME_VERSION_FIELD_NUMBER: _ClassVar[int]
-    PREEMPTIBLE_FIELD_NUMBER: _ClassVar[int]
     RESOURCES_FIELD_NUMBER: _ClassVar[int]
-    SLICE_SIZE_FIELD_NUMBER: _ClassVar[int]
-    ZONES_FIELD_NUMBER: _ClassVar[int]
+    NUM_VMS_FIELD_NUMBER: _ClassVar[int]
     PRIORITY_FIELD_NUMBER: _ClassVar[int]
-    MANUAL_FIELD_NUMBER: _ClassVar[int]
+    SLICE_TEMPLATE_FIELD_NUMBER: _ClassVar[int]
+    WORKER_FIELD_NUMBER: _ClassVar[int]
     name: str
-    vm_type: VmType
     min_slices: int
     max_slices: int
     accelerator_type: AcceleratorType
     accelerator_variant: str
-    topology: str
-    runtime_version: str
-    preemptible: bool
     resources: ScaleGroupResources
-    slice_size: int
-    zones: _containers.RepeatedScalarFieldContainer[str]
+    num_vms: int
     priority: int
-    manual: ManualProvider
-    def __init__(self, name: _Optional[str] = ..., vm_type: _Optional[_Union[VmType, str]] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., topology: _Optional[str] = ..., runtime_version: _Optional[str] = ..., preemptible: _Optional[bool] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., slice_size: _Optional[int] = ..., zones: _Optional[_Iterable[str]] = ..., priority: _Optional[int] = ..., manual: _Optional[_Union[ManualProvider, _Mapping]] = ...) -> None: ...
+    slice_template: SliceConfig
+    worker: WorkerSettings
+    def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., num_vms: _Optional[int] = ..., priority: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerSettings, _Mapping]] = ...) -> None: ...
 
 class BootstrapConfig(_message.Message):
     __slots__ = ("controller_address", "worker_id", "worker_port", "docker_image", "cache_dir", "env_vars")
@@ -154,24 +270,28 @@ class TimeoutConfig(_message.Message):
     def __init__(self, boot_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., init_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ssh_poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class SshConfig(_message.Message):
-    __slots__ = ("user", "key_file", "connect_timeout")
+    __slots__ = ("user", "key_file", "port", "connect_timeout")
     USER_FIELD_NUMBER: _ClassVar[int]
     KEY_FILE_FIELD_NUMBER: _ClassVar[int]
+    PORT_FIELD_NUMBER: _ClassVar[int]
     CONNECT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
     user: str
     key_file: str
+    port: int
     connect_timeout: _time_pb2.Duration
-    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class GcpControllerConfig(_message.Message):
-    __slots__ = ("machine_type", "boot_disk_size_gb", "port")
+    __slots__ = ("zone", "machine_type", "boot_disk_size_gb", "port")
+    ZONE_FIELD_NUMBER: _ClassVar[int]
     MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
     BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
+    zone: str
     machine_type: str
     boot_disk_size_gb: int
     port: int
-    def __init__(self, machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ...) -> None: ...
+    def __init__(self, zone: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ...) -> None: ...
 
 class ManualControllerConfig(_message.Message):
     __slots__ = ("host", "port")
@@ -188,30 +308,38 @@ class LocalControllerConfig(_message.Message):
     def __init__(self, port: _Optional[int] = ...) -> None: ...
 
 class ControllerVmConfig(_message.Message):
-    __slots__ = ("image", "bundle_prefix", "gcp", "manual", "local")
+    __slots__ = ("image", "bundle_prefix", "worker_timeout", "heartbeat_failure_threshold", "gcp", "manual", "local")
     IMAGE_FIELD_NUMBER: _ClassVar[int]
     BUNDLE_PREFIX_FIELD_NUMBER: _ClassVar[int]
+    WORKER_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+    HEARTBEAT_FAILURE_THRESHOLD_FIELD_NUMBER: _ClassVar[int]
     GCP_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
     LOCAL_FIELD_NUMBER: _ClassVar[int]
     image: str
     bundle_prefix: str
+    worker_timeout: _time_pb2.Duration
+    heartbeat_failure_threshold: int
     gcp: GcpControllerConfig
     manual: ManualControllerConfig
     local: LocalControllerConfig
-    def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., worker_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_failure_threshold: _Optional[int] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ...) -> None: ...
 
 class AutoscalerConfig(_message.Message):
-    __slots__ = ("evaluation_interval", "requesting_timeout", "scale_up_delay", "scale_down_delay")
+    __slots__ = ("evaluation_interval", "requesting_timeout", "scale_up_delay", "scale_down_delay", "startup_grace_period", "heartbeat_grace_period")
     EVALUATION_INTERVAL_FIELD_NUMBER: _ClassVar[int]
     REQUESTING_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
     SCALE_UP_DELAY_FIELD_NUMBER: _ClassVar[int]
     SCALE_DOWN_DELAY_FIELD_NUMBER: _ClassVar[int]
+    STARTUP_GRACE_PERIOD_FIELD_NUMBER: _ClassVar[int]
+    HEARTBEAT_GRACE_PERIOD_FIELD_NUMBER: _ClassVar[int]
     evaluation_interval: _time_pb2.Duration
     requesting_timeout: _time_pb2.Duration
     scale_up_delay: _time_pb2.Duration
     scale_down_delay: _time_pb2.Duration
-    def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., requesting_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+    startup_grace_period: _time_pb2.Duration
+    heartbeat_grace_period: _time_pb2.Duration
+    def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., requesting_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., startup_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class DefaultsConfig(_message.Message):
     __slots__ = ("timeouts", "ssh", "autoscaler", "bootstrap")

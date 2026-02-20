@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 marin/transform/dolmino/transform_dclm_hq.py
@@ -56,7 +45,7 @@ from marin.download.huggingface.stream_remove_columns import hf_fs
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
 from tqdm import tqdm
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
@@ -162,4 +151,5 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
         )
     )
 
-    Backend.execute(pipeline)
+    with ZephyrContext(name="transform-dclm-hq") as ctx:
+        ctx.execute(pipeline)

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """E2E test for local cluster mode via the CLI.
 
@@ -18,7 +7,7 @@ Uses ``iris cluster start --local`` through Click's test runner, then submits
 a job through the IrisClient to verify the full stack works.
 """
 
-import re
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -29,7 +18,7 @@ from click.testing import CliRunner
 from iris.cli import iris
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
+from iris.cluster.controller.local import LocalController
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
@@ -43,8 +32,6 @@ def cluster_config_file(tmp_path: Path) -> Path:
                 "platform": {
                     "gcp": {
                         "project_id": "test-project",
-                        "region": "us-central1",
-                        "zone": "us-central1-a",
                     }
                 },
                 "defaults": {
@@ -61,18 +48,21 @@ def cluster_config_file(tmp_path: Path) -> Path:
                 },
                 "scale_groups": {
                     "local-cpu": {
-                        "vm_type": "gce_vm",
                         "accelerator_type": "ACCELERATOR_TYPE_CPU",
                         "min_slices": 1,
                         "max_slices": 1,
-                        "zones": ["us-central1-a"],
-                        "slice_size": 1,
+                        "num_vms": 1,
                         "resources": {
                             "cpu": 1,
                             "ram": "1GB",
                             "disk": 0,
                             "gpu_count": 0,
                             "tpu_count": 0,
+                        },
+                        "slice_template": {
+                            "accelerator_type": "ACCELERATOR_TYPE_CPU",
+                            "num_vms": 1,
+                            "local": {},
                         },
                     },
                 },
@@ -101,35 +91,40 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
     """Start a local cluster via CLI, submit a job via IrisClient, verify completion."""
     runner = CliRunner()
 
-    # Capture the ClusterManager instance so we can get the address and stop it
-    captured_manager: list[ClusterManager] = []
-    original_start = ClusterManager.start
+    # Capture the LocalController instance so we can get the address and stop it
+    captured_controller: list[LocalController] = []
+    controller_ready = threading.Event()
+    original_start = LocalController.start
 
     def patched_start(self):
-        captured_manager.append(self)
-        return original_start(self)
+        captured_controller.append(self)
+        result = original_start(self)
+        controller_ready.set()
+        return result
 
-    with patch.object(ClusterManager, "start", patched_start):
-        result = runner.invoke(
-            iris,
-            ["--config", str(cluster_config_file), "cluster", "start", "--local"],
-        )
+    # Run CLI in a background thread because `cluster start --local` blocks
+    # until the controller is stopped.
+    invoke_result: list = []
 
-    assert result.exit_code == 0, f"CLI failed: {result.output}"
-    assert "Controller started at" in result.output
-    assert len(captured_manager) == 1
+    def run_cli():
+        with patch.object(LocalController, "start", patched_start):
+            invoke_result.append(
+                runner.invoke(
+                    iris,
+                    ["--config", str(cluster_config_file), "cluster", "start", "--local"],
+                )
+            )
 
-    manager = captured_manager[0]
+    cli_thread = threading.Thread(target=run_cli, daemon=True)
+    cli_thread.start()
+
+    assert controller_ready.wait(timeout=10), "Controller didn't start in time"
+    assert len(captured_controller) == 1
+
+    controller = captured_controller[0]
     try:
-        # Extract the address from the CLI output
-        address = None
-        for line in result.output.splitlines():
-            m = re.search(r"Controller started at (http://\S+)", line)
-            if m:
-                address = m.group(1)
-                break
-        if not address:
-            pytest.fail(f"Could not find controller address in CLI output:\n{result.output}")
+        address = controller.discover()
+        assert address is not None
 
         _wait_for_workers(address)
 
@@ -148,4 +143,10 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
         status = job.wait(timeout=30, raise_on_failure=True)
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
     finally:
-        manager.stop()
+        controller.stop()
+        cli_thread.join(timeout=5)
+
+    assert invoke_result, "CLI did not return"
+    result = invoke_result[0]
+    assert result.exit_code == 0, f"CLI failed: {result.output}"
+    assert "Controller started at" in result.output

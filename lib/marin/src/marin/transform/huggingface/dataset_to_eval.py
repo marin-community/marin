@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Convert HuggingFace datasets to evaluation and decontamination formats.
@@ -47,7 +36,7 @@ from datasets import get_dataset_config_names, load_dataset
 from google.cloud import storage
 from marin.core.data import QAExample, QAExampleMetadata
 from marin.utilities.dataclass_utils import asdict_without_nones
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 
 logger = logging.getLogger(__name__)
 
@@ -600,7 +589,8 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
             .write_jsonl(output_pattern)  # Compression auto-detected from .gz extension
         )
 
-        Backend.execute(pipeline)
+        with ZephyrContext(name="dataset-to-eval") as ctx:
+            ctx.execute(pipeline)
         logger.info(f"Wrote to {output_pattern}")
 
 

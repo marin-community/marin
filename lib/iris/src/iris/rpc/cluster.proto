@@ -18,12 +18,59 @@ package iris.cluster;
 
 import "time.proto";
 import "vm.proto";
+import "logging.proto";
 
 // ============================================================================
 // SHARED TYPES
 // ============================================================================
 
 message Empty {}
+
+// --- Profiling ---
+// Shared by both ControllerService and WorkerService (controller proxies to worker).
+
+// CPU profiling configuration (py-spy)
+message CpuProfile {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FLAMEGRAPH = 1;     // SVG flamegraph
+    SPEEDSCOPE = 2;     // JSON for speedscope viewer
+    RAW = 3;            // Text output
+  }
+  Format format = 1;
+  int32 rate_hz = 2;    // Sample rate (default: 100)
+}
+
+// Memory profiling configuration (memray)
+message MemoryProfile {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FLAMEGRAPH = 1;     // HTML flamegraph with memory timeline
+    TABLE = 2;          // Text summary table
+    STATS = 3;          // JSON statistics
+  }
+  Format format = 1;
+  bool leaks = 2;       // Focus on potential memory leaks
+}
+
+// Profile type selector
+message ProfileType {
+  oneof profiler {
+    CpuProfile cpu = 1;
+    MemoryProfile memory = 2;
+  }
+}
+
+message ProfileTaskRequest {
+  string task_id = 1;
+  int32 duration_seconds = 2;   // How long to sample (default: 10)
+  ProfileType profile_type = 3;
+}
+
+message ProfileTaskResponse {
+  bytes profile_data = 1;       // SVG/JSON/HTML/text output
+  string error = 2;             // Non-empty if profiling failed
+}
 
 message ProcessLogRecord {
   double timestamp = 1;
@@ -82,6 +129,9 @@ message TaskStatus {
   // Scheduling diagnostics for pending tasks (dashboard display)
   string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
+
+  // Log storage location (e.g., "gs://bucket/path/worker-123/job/task/0")
+  string log_directory = 18;
 }
 
 // Record of a single task execution attempt
@@ -198,9 +248,6 @@ message ResourceSpecProto {
 
   // Device configuration
   DeviceConfig device = 5;
-
-  // Scheduling preferences
-  repeated string regions = 8; // Preferred cloud regions
 }
 
 // ============================================================================
@@ -265,6 +312,7 @@ enum ConstraintOp {
   CONSTRAINT_OP_GE = 5;         // Attribute greater than or equal to value (numeric)
   CONSTRAINT_OP_LT = 6;         // Attribute less than value (numeric)
   CONSTRAINT_OP_LE = 7;         // Attribute less than or equal to value (numeric)
+  CONSTRAINT_OP_IN = 8;         // Attribute value is in the provided set (disjunction)
 }
 
 // Constraint for filtering workers by attribute.
@@ -273,6 +321,7 @@ message Constraint {
   string key = 1;           // Attribute key to match (e.g., "tpu-name")
   ConstraintOp op = 2;      // Comparison operator
   AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
+  repeated AttributeValue values = 4; // Set of values for IN operator
 }
 
 // Coscheduling configuration for multi-host jobs.
@@ -322,7 +371,7 @@ message WorkerMetadata {
   map<string, AttributeValue> attributes = 40;
 
   // VM address from IRIS_VM_ADDRESS env var, used for autoscaler VM tracking.
-  // For cloud VMs, this is the VM's IP address injected by ManagedVm.
+  // For cloud VMs, this is the VM's IP address injected by the Platform bootstrap.
   // For local workers, this may be empty or a local identifier.
   string vm_address = 41;
 }
@@ -473,6 +522,7 @@ message Controller {
     string task_id = 1;
     int32 attempt_id = 2;
     TaskState state = 3;
+    string log_directory = 4;  // Storage location for logs (e.g., "gs://bucket/path/worker/task/attempt")
   }
 
   // A task completion reported by the worker in its heartbeat response.
@@ -484,6 +534,7 @@ message Controller {
     string error = 6;
     iris.time.Timestamp finished_at = 7;
     int32 attempt_id = 8;
+    string log_directory = 9;  // Storage location for logs (e.g., "gs://bucket/path/worker/task/attempt")
   }
 
 
@@ -606,7 +657,7 @@ message Controller {
 
   message TaskLogBatch {
     string task_id = 1;
-    repeated Worker.LogEntry logs = 2;
+    repeated iris.logging.LogEntry logs = 2;
     string error = 3;                // If fetch failed for this task
     string worker_id = 4;            // Worker that produced these logs
   }
@@ -626,6 +677,7 @@ message Controller {
   message GetProcessLogsResponse {
     repeated ProcessLogRecord records = 1;
   }
+
 }
 
 // ============================================================================
@@ -644,6 +696,7 @@ message Worker {
     iris.time.Duration timeout = 7;
     repeated string ports = 8;
     int32 attempt_id = 9;
+    repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
   }
 
   message GetTaskStatusRequest {
@@ -655,13 +708,6 @@ message Worker {
 
   message ListTasksResponse {
     repeated TaskStatus tasks = 1;
-  }
-
-  message LogEntry {
-    iris.time.Timestamp timestamp = 1;
-    string source = 2;  // "stdout", "stderr", or "build"
-    string data = 3;    // Log line content
-    int32 attempt_id = 4;  // Which attempt produced this log
   }
 
   message FetchLogsFilter {
@@ -679,7 +725,7 @@ message Worker {
   }
 
   message FetchTaskLogsResponse {
-    repeated LogEntry logs = 1;
+    repeated iris.logging.LogEntry logs = 1;
   }
 
   message KillTaskRequest {
@@ -768,6 +814,9 @@ service ControllerService {
 
   // Controller process logs
   rpc GetProcessLogs(Controller.GetProcessLogsRequest) returns (Controller.GetProcessLogsResponse);
+
+  // Profiling (proxied to worker)
+  rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 }
 
 service WorkerService {
@@ -777,4 +826,5 @@ service WorkerService {
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
   rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 }

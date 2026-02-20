@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Core types for the iris cluster layer.
 
@@ -28,8 +17,10 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum, IntEnum
+from pathlib import Path
 from typing import Any, NewType
 
+import cloudpickle
 import humanfriendly
 
 from iris.rpc import cluster_pb2
@@ -131,6 +122,24 @@ class JobName:
     def is_task(self) -> bool:
         """True if this is a task (last component is numeric)."""
         return self.task_index is not None
+
+    @property
+    def depth(self) -> int:
+        """Depth in the job hierarchy. Root jobs have depth 1.
+
+        Tasks inherit their parent job's depth (the task index
+        is not counted as a depth level).
+
+        Examples:
+            /root -> 1
+            /root/child -> 2
+            /root/child/grandchild -> 3
+            /root/0 (task) -> 1
+            /root/child/0 (task) -> 2
+        """
+        if self.is_task:
+            return len(self._parts) - 1
+        return len(self._parts)
 
     def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
         """True if this job name is an ancestor of another job name."""
@@ -307,6 +316,7 @@ class ConstraintOp(IntEnum):
     GE = 5
     LT = 6
     LE = 7
+    IN = 8
 
     def to_proto(self) -> cluster_pb2.ConstraintOp:
         """Convert to protobuf ConstraintOp enum value."""
@@ -319,6 +329,7 @@ class ConstraintOp(IntEnum):
             ConstraintOp.GE: cluster_pb2.CONSTRAINT_OP_GE,
             ConstraintOp.LT: cluster_pb2.CONSTRAINT_OP_LT,
             ConstraintOp.LE: cluster_pb2.CONSTRAINT_OP_LE,
+            ConstraintOp.IN: cluster_pb2.CONSTRAINT_OP_IN,
         }
         return mapping[self]
 
@@ -339,18 +350,36 @@ class Constraint:
         >>> Constraint(key="memory_gb", op=ConstraintOp.GE, value=64)
         >>> # Require workers that have a GPU
         >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+        >>> # Require workers in one of several regions
+        >>> Constraint(key="region", op=ConstraintOp.IN, values=("us-central1", "us-central2"))
     """
 
     key: str
     op: ConstraintOp
     value: str | int | float | None = None
+    values: tuple[str | int | float, ...] | None = None
 
     def to_proto(self) -> cluster_pb2.Constraint:
         """Convert to protobuf representation."""
         proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
         if self.value is not None:
             proto.value.CopyFrom(AttributeValue(self.value).to_proto())
+        if self.values is not None:
+            for v in self.values:
+                proto.values.append(AttributeValue(v).to_proto())
         return proto
+
+    @staticmethod
+    def from_proto(proto: cluster_pb2.Constraint) -> "Constraint":
+        """Convert from protobuf representation."""
+        op = ConstraintOp(proto.op)
+        value: str | int | float | None = None
+        if proto.HasField("value"):
+            value = AttributeValue.from_proto(proto.value).value
+        values: tuple[str | int | float, ...] | None = None
+        if proto.values:
+            values = tuple(AttributeValue.from_proto(v).value for v in proto.values)
+        return Constraint(key=proto.key, op=op, value=value, values=values)
 
 
 @dataclass(frozen=True)
@@ -447,7 +476,6 @@ class ResourceSpec:
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
-    regions: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
         """Convert to wire format."""
@@ -457,7 +485,6 @@ class ResourceSpec:
             cpu=self.cpu,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            regions=list(self.regions or []),
         )
         if self.device is not None:
             spec.device.CopyFrom(self.device)
@@ -495,29 +522,6 @@ except Exception:
 """
 
 
-def _build_uv_sync_flags(extras: Sequence[str] | None) -> str:
-    """Build uv sync flags from extras list.
-
-    Accepts 'extra' or 'package:extra' syntax. The package prefix is stripped
-    since --all-packages syncs every workspace member and --extra applies
-    to whichever package defines that extra name.
-    """
-    sync_parts = ["--all-packages", "--no-group", "dev"]
-    for e in extras or []:
-        if ":" in e:
-            _package, extra = e.split(":", 1)
-            sync_parts.append(f"--extra {extra}")
-        else:
-            sync_parts.append(f"--extra {e}")
-    return " ".join(sync_parts)
-
-
-def _build_pip_install_args(pip_packages: Sequence[str] | None) -> str:
-    """Build pip install args. Each package is quoted for shell safety (e.g. torch>=2.0)."""
-    packages = ["cloudpickle", *list(pip_packages or [])]
-    return " ".join(f'"{pkg}"' for pkg in packages)
-
-
 @dataclass
 class EnvironmentSpec:
     """Environment specification for jobs.
@@ -545,11 +549,6 @@ class EnvironmentSpec:
         }
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
-
-        uv_sync_flags = _build_uv_sync_flags(self.extras)
-        if uv_sync_flags:
-            merged_env_vars["IRIS_UV_SYNC_FLAGS"] = uv_sync_flags
-        merged_env_vars["IRIS_PIP_INSTALL"] = _build_pip_install_args(self.pip_packages)
 
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
@@ -596,11 +595,156 @@ class Namespace(str):
 
 
 PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
+REGION_ATTRIBUTE_KEY = "region"
+ZONE_ATTRIBUTE_KEY = "zone"
 
 
 def preemptible_constraint(preemptible: bool = True) -> Constraint:
     """Constraint requiring workers to be preemptible (or not)."""
     return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
+
+
+def zone_constraint(zone: str) -> Constraint:
+    """Constraint requiring workers to be in a given zone."""
+    if not zone:
+        raise ValueError("zone must be non-empty")
+    return Constraint(key=ZONE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=zone)
+
+
+def region_constraint(regions: Sequence[str]) -> Constraint:
+    """Constraint requiring workers to be in one of the given regions.
+
+    Emits an EQ constraint for a single region or an IN constraint for multiple
+    regions.
+
+    Args:
+        regions: Non-empty sequence of region strings.
+
+    Raises:
+        ValueError: If regions is empty or contains empty strings.
+    """
+    if not regions:
+        raise ValueError("regions must be non-empty")
+    for r in regions:
+        if not r:
+            raise ValueError("region must be non-empty")
+    if len(regions) == 1:
+        return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=regions[0])
+    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.IN, values=tuple(regions))
+
+
+@dataclass(frozen=True)
+class NormalizedConstraints:
+    """Normalized canonical placement constraints derived from proto constraints."""
+
+    preemptible: bool | None
+    required_regions: frozenset[str] | None
+
+
+def preemptible_preference_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
+    """Extract preemptible preference from constraints.
+
+    Returns:
+        True if explicitly required preemptible workers, False if explicitly
+        requiring non-preemptible workers, or None if unspecified.
+
+    Raises:
+        ValueError: If multiple conflicting preemptible constraints are present
+            or an invalid non-boolean value is used.
+    """
+    values: set[bool] = set()
+    for constraint in constraints:
+        if constraint.key != PREEMPTIBLE_ATTRIBUTE_KEY:
+            continue
+        if constraint.op != cluster_pb2.CONSTRAINT_OP_EQ:
+            raise ValueError("preemptible constraint must use EQ")
+        if not constraint.value.HasField("string_value"):
+            raise ValueError("preemptible constraint requires string value")
+        raw = constraint.value.string_value.strip().lower()
+        if raw == "true":
+            values.add(True)
+        elif raw == "false":
+            values.add(False)
+        else:
+            raise ValueError("preemptible constraint must be 'true' or 'false'")
+
+    if len(values) > 1:
+        raise ValueError("conflicting preemptible constraints")
+    return next(iter(values)) if values else None
+
+
+def required_regions_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> frozenset[str] | None:
+    """Extract required regions from constraints.
+
+    Returns:
+        Set of required regions when specified, otherwise None.
+
+    Raises:
+        ValueError: If region constraints use invalid operators/values or contain
+            conflicting EQ values.
+    """
+    regions: set[str] = set()
+    has_in = False
+    for constraint in constraints:
+        if constraint.key != REGION_ATTRIBUTE_KEY:
+            continue
+        if constraint.op == cluster_pb2.CONSTRAINT_OP_IN:
+            if not constraint.values:
+                raise ValueError("IN region constraint requires at least one value")
+            for av in constraint.values:
+                if not av.HasField("string_value"):
+                    raise ValueError("region constraint requires string value")
+                region = av.string_value.strip()
+                if not region:
+                    raise ValueError("region constraint must be non-empty")
+                regions.add(region)
+            has_in = True
+        elif constraint.op == cluster_pb2.CONSTRAINT_OP_EQ:
+            if not constraint.value.HasField("string_value"):
+                raise ValueError("region constraint requires string value")
+            region = constraint.value.string_value.strip()
+            if not region:
+                raise ValueError("region constraint must be non-empty")
+            regions.add(region)
+        else:
+            raise ValueError(f"region constraint must use EQ or IN, got {constraint.op}")
+
+    if not has_in and len(regions) > 1:
+        raise ValueError("conflicting region constraints")
+    return frozenset(regions) if regions else None
+
+
+def normalize_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> NormalizedConstraints:
+    """Normalize canonical placement constraints from protobuf constraints."""
+    return NormalizedConstraints(
+        preemptible=preemptible_preference_from_constraints(constraints),
+        required_regions=required_regions_from_constraints(constraints),
+    )
+
+
+def merge_constraints(parent: Sequence[Constraint], child: Sequence[Constraint]) -> list[Constraint]:
+    """Merge parent and child constraints with canonical-key override semantics."""
+
+    merged_by_key: dict[str, list[Constraint]] = {}
+    for constraint in parent:
+        merged_by_key.setdefault(constraint.key, []).append(constraint)
+
+    for key in (REGION_ATTRIBUTE_KEY, PREEMPTIBLE_ATTRIBUTE_KEY):
+        child_for_key = [constraint for constraint in child if constraint.key == key]
+        if child_for_key:
+            merged_by_key[key] = child_for_key
+
+    for constraint in child:
+        if constraint.key in (REGION_ATTRIBUTE_KEY, PREEMPTIBLE_ATTRIBUTE_KEY):
+            continue
+        existing = merged_by_key.setdefault(constraint.key, [])
+        if constraint not in existing:
+            existing.append(constraint)
+
+    result: list[Constraint] = []
+    for constraints_for_key in merged_by_key.values():
+        result.extend(constraints_for_key)
+    return result
 
 
 def is_job_finished(state: int) -> bool:
@@ -734,24 +878,25 @@ class Entrypoint:
         payload = self.workdir_files.get("_callable.pkl")
         if payload is None:
             raise ValueError("Not a callable entrypoint")
-        import cloudpickle
 
         return cloudpickle.loads(payload)
 
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
-        import sys
-        from pathlib import Path
-
-        import cloudpickle
-
+        # mark any testing code as pickle_by_value so we can use it with cloudpickle
         module = sys.modules.get(fn.__module__)
         module_path = Path(module.__file__).parts if module and getattr(module, "__file__", None) else ()
         if module and (module.__package__ is None or module.__spec__ is None or "tests" in module_path):
             cloudpickle.register_pickle_by_value(module)
 
+        # We use bash -c so that $IRIS_WORKDIR and $IRIS_PYTHON are expanded
+        # at runtime from the container's environment.  ProcessContainerHandle
+        # remaps IRIS_WORKDIR to the host workdir and IRIS_PYTHON to
+        # sys.executable for local execution; in Docker containers these are
+        # set to "/app" and "python" respectively by task_attempt env setup.
+        # `exec` replaces bash with python to avoid an extra parent process.
         return cls(
-            command=["bash", "-c", "exec python -u $IRIS_WORKDIR/_callable_runner.py"],
+            command=["bash", "-c", "exec $IRIS_PYTHON -u $IRIS_WORKDIR/_callable_runner.py"],
             workdir_files={
                 "_callable.pkl": cloudpickle.dumps((fn, args, kwargs)),
                 "_callable_runner.py": CALLABLE_RUNNER.encode(),

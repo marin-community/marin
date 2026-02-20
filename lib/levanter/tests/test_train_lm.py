@@ -4,7 +4,6 @@
 import os
 import tempfile
 
-import haliax as hax
 import jax
 import jax.numpy as jnp
 import pytest
@@ -14,9 +13,8 @@ from haliax.quantization import QuantizationConfig
 import levanter.main.train_lm as train_lm
 import tiny_test_corpus
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text import DirectDatasetComponent, LmDataConfig
+from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
 from levanter.distributed import DistributedConfig, RayConfig
-from levanter.models.lm_model import LmExample
 from levanter.tracker import NoopConfig
 
 
@@ -95,12 +93,11 @@ def test_train_lm_direct_dataset():
         try:
             vocab_size = 128
             seq_len = 64
-            Pos = hax.Axis("position", seq_len)
             data = []
             for i in range(8):
-                tokens = hax.named(jnp.full((seq_len,), i % vocab_size, dtype=jnp.int32), Pos)
-                data.append(LmExample.causal(tokens))
-            dataset = ListAsyncDataset(data, is_complete=True)
+                tokens = jnp.full((seq_len,), i % vocab_size, dtype=jnp.int32)
+                data.append(GrugLmExample.causal(tokens))
+            dataset = ListAsyncDataset(data)
 
             component = DirectDatasetComponent(datasets={"train": dataset})
             data_config = LmDataConfig(

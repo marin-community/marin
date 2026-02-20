@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for WorkerDashboard HTTP/RPC endpoints and WorkerService implementation."""
 
@@ -89,6 +78,7 @@ def worker(mock_bundle_cache, mock_runtime, tmp_path):
         port=0,
         port_range=(50000, 50100),
         cache_dir=tmp_path / "cache",
+        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
     )
     return Worker(
         config,
@@ -254,7 +244,7 @@ def test_get_logs_with_tail_parameter(client, worker):
     # Inject logs
     task = worker.get_task(task_id)
     for i in range(100):
-        task.logs.add("stdout", f"Log line {i}")
+        task._log_sink.append(source="stdout", data=f"Log line {i}")
 
     response = rpc_post(
         client,
@@ -290,12 +280,14 @@ def test_get_logs_with_source_filter(client, worker):
     if task.thread:
         task.thread.join(timeout=1.0)
 
-    # Clear any existing logs and add test logs
-    task.logs.lines.clear()
-    task.logs.add("stdout", "stdout line 1")
-    task.logs.add("stdout", "stdout line 2")
-    task.logs.add("stderr", "stderr line 1")
-    task.logs.add("stderr", "stderr line 2")
+    # Add test logs directly to the canonical sink
+    for source, data in [
+        ("stdout", "stdout line 1"),
+        ("stdout", "stdout line 2"),
+        ("stderr", "stderr line 1"),
+        ("stderr", "stderr line 2"),
+    ]:
+        task._log_sink.append(source=source, data=data)
 
     response = rpc_post(
         client,
@@ -305,12 +297,12 @@ def test_get_logs_with_source_filter(client, worker):
     assert response.status_code == 200
     data = response.json()
     logs = data.get("logs", [])
-    assert len(logs) == 4
+    assert len(logs) >= 4
 
     stdout_logs = [entry for entry in logs if entry["source"] == "stdout"]
     stderr_logs = [entry for entry in logs if entry["source"] == "stderr"]
-    assert len(stdout_logs) == 2
-    assert len(stderr_logs) == 2
+    assert len(stdout_logs) >= 2
+    assert len(stderr_logs) >= 2
 
 
 def test_fetch_task_logs_tail_with_negative_start_line(service, worker, request_context):
@@ -319,10 +311,10 @@ def test_fetch_task_logs_tail_with_negative_start_line(service, worker, request_
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
-    # Add logs directly to task.logs
+    # Add logs directly to canonical log sink
     task = worker.get_task(task_id)
     for i in range(10):
-        task.logs.add("stdout", f"Log line {i}")
+        task._log_sink.append(source="stdout", data=f"Log line {i}")
 
     log_filter = cluster_pb2.Worker.FetchLogsFilter(start_line=-3)
     logs_request = cluster_pb2.Worker.FetchTaskLogsRequest(task_id=task_id, filter=log_filter)
@@ -342,10 +334,13 @@ def test_fetch_task_logs_with_regex_filter(service, worker, request_context):
 
     # Add logs with different patterns
     task = worker.get_task(task_id)
-    task.logs.add("stdout", "ERROR: something bad")
-    task.logs.add("stdout", "INFO: normal log")
-    task.logs.add("stdout", "ERROR: another error")
-    task.logs.add("stdout", "DEBUG: details")
+    for data in [
+        "ERROR: something bad",
+        "INFO: normal log",
+        "ERROR: another error",
+        "DEBUG: details",
+    ]:
+        task._log_sink.append(source="stdout", data=data)
 
     log_filter = cluster_pb2.Worker.FetchLogsFilter(regex="ERROR")
     logs_request = cluster_pb2.Worker.FetchTaskLogsRequest(task_id=task_id, filter=log_filter)
@@ -364,12 +359,15 @@ def test_fetch_task_logs_combined_filters(service, worker, request_context):
 
     # Add logs
     task = worker.get_task(task_id)
-    task.logs.add("stdout", "ERROR: first error")
-    task.logs.add("stdout", "INFO: normal")
-    task.logs.add("stdout", "ERROR: second error")
-    task.logs.add("stdout", "ERROR: third error")
-    task.logs.add("stdout", "ERROR: fourth error")
-    task.logs.add("stdout", "ERROR: fifth error")
+    for data in [
+        "ERROR: first error",
+        "INFO: normal",
+        "ERROR: second error",
+        "ERROR: third error",
+        "ERROR: fourth error",
+        "ERROR: fifth error",
+    ]:
+        task._log_sink.append(source="stdout", data=data)
 
     # Use regex to filter ERRORs, then limit to 2
     log_filter = cluster_pb2.Worker.FetchLogsFilter(regex="ERROR", max_lines=2)

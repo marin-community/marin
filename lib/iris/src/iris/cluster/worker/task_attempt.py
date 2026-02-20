@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Task execution attempt handling.
 
@@ -30,12 +19,18 @@ from pathlib import Path
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, ContainerRuntime
-from iris.cluster.types import DEFAULT_BASE_IMAGE, JobName, is_task_finished
+from google.protobuf import json_format
+
+from iris.cluster.types import (
+    DEFAULT_BASE_IMAGE,
+    JobName,
+    is_task_finished,
+)
 from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.worker.worker_types import TaskLogs
-from iris.rpc import cluster_pb2
+from iris.cluster.task_logging import LogSink
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
 from iris.time_utils import Deadline, Duration, Timestamp
@@ -93,7 +88,6 @@ class TaskAttemptConfig:
     ports: dict[str, int]
     workdir: Path
     cache_dir: Path
-    uv_cache_dir: Path
 
 
 def _get_host_ip() -> str:
@@ -158,6 +152,7 @@ def build_iris_env(
     env["IRIS_BIND_HOST"] = "0.0.0.0"
     env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
     env["IRIS_WORKDIR"] = "/app"
+    env["IRIS_PYTHON"] = "python"
 
     # Propagate extras and pip_packages so child jobs can inherit them
     extras = list(task.request.environment.extras)
@@ -172,6 +167,10 @@ def build_iris_env(
     user_env_vars = dict(task.request.environment.env_vars)
     if user_env_vars:
         env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
+    if task.request.constraints:
+        env["IRIS_JOB_CONSTRAINTS"] = json.dumps(
+            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in task.request.constraints]
+        )
 
     # Inject allocated ports
     for name, port in task.ports.items():
@@ -206,8 +205,10 @@ class TaskAttempt:
         worker_metadata: WorkerMetadata,
         worker_id: str | None,
         controller_address: str | None,
+        default_task_env: dict[str, str],
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
+        log_sink: LogSink,
         poll_interval_seconds: float = 5.0,
     ):
         """Initialize a TaskAttempt.
@@ -219,18 +220,22 @@ class TaskAttempt:
             worker_metadata: Worker's hardware/environment metadata
             worker_id: Worker identifier for env injection
             controller_address: Controller address for env injection
+            default_task_env: Worker-level default env vars injected into task containers
             port_allocator: Port allocator for retry logic
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
+            log_sink: Persistent log sink for this task attempt
         """
         self._bundle_provider = bundle_provider
         self._runtime = container_runtime
         self._worker_metadata = worker_metadata
         self._worker_id = worker_id
         self._controller_address = controller_address
+        self._default_task_env = default_task_env
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
+        self._log_sink = log_sink
 
         # Task identity (from config)
         self.task_id: JobName = config.task_id
@@ -240,7 +245,6 @@ class TaskAttempt:
         self.ports: dict[str, int] = config.ports
         self.workdir: Path | None = config.workdir
         self._cache_dir: Path = config.cache_dir
-        self._uv_cache_dir: Path = config.uv_cache_dir
         self._bundle_path: Path | None = None
 
         # Task state
@@ -270,9 +274,6 @@ class TaskAttempt:
         self.cleanup_done: bool = False
         self.should_stop: bool = False
 
-        # Structured logs (build logs stored here, container logs fetched from Docker)
-        self.logs: TaskLogs = TaskLogs()
-
         self.result: bytes | None = None  # cloudpickle serialized return value from container
 
     @property
@@ -281,6 +282,21 @@ class TaskAttempt:
         if self._container_handle:
             return self._container_handle.container_id
         return None
+
+    @property
+    def log_directory(self) -> str:
+        """Return the storage directory for this task's logs."""
+        return self._log_sink.log_path
+
+    def recent_logs(self, max_entries: int = 0) -> list[logging_pb2.LogEntry]:
+        """Return recent logs from the canonical log sink."""
+        return self._log_sink.query_recent(max_entries=max_entries)
+
+    def stop(self, force: bool = False) -> None:
+        """Stop the container, if running."""
+        self.should_stop = True
+        if self._container_handle:
+            self._container_handle.stop(force=force)
 
     def transition_to(
         self,
@@ -382,10 +398,14 @@ class TaskAttempt:
             self.transition_to(cluster_pb2.TASK_STATE_KILLED)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
-            self.logs.add("error", f"Task failed:\n{error_msg}")
+            self._log_sink.append(source="error", data=f"Task failed:\n{error_msg}")
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             if is_task_finished(self.status):
+                # Flush logs to storage before notifying controller, so that
+                # clients who fetch logs immediately after seeing the terminal
+                # state will find complete data on disk.
+                self._log_sink.sync()
                 self._report_state()
             self._cleanup()
             logger.info(
@@ -444,16 +464,14 @@ class TaskAttempt:
         Prepares the container configuration including environment variables,
         mounts, and workdir setup. The actual container is not started yet.
         """
-        # Build environment from user-provided vars + EnvironmentConfig
-        env_config = self.request.environment
-        env = dict(env_config.env_vars)
-
         iris_env = build_iris_env(
             self,
             self._worker_id,
             self._controller_address,
         )
-        env.update(iris_env)
+        env = dict(iris_env)
+        env.update(self._default_task_env)
+        env.update(dict(self.request.environment.env_vars))
 
         # uv needs a writable directory for Python downloads.
         # Use a subdirectory of the cache which is bind-mounted from the worker.
@@ -480,6 +498,12 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
+        # Pre-create cache mount directories so Docker doesn't create them as root
+        uv_cache = self._cache_dir / "uv"
+        cargo_cache = self._cache_dir / "cargo"
+        uv_cache.mkdir(parents=True, exist_ok=True)
+        cargo_cache.mkdir(parents=True, exist_ok=True)
+
         config = ContainerConfig(
             image=self.image_tag,
             entrypoint=rt_ep,
@@ -488,7 +512,8 @@ class TaskAttempt:
             timeout_seconds=timeout_seconds,
             mounts=[
                 (str(self.workdir), "/app", "rw"),
-                (str(self._uv_cache_dir), "/uv/cache", "rw"),
+                (str(uv_cache), "/uv/cache", "rw"),
+                (str(cargo_cache), "/root/.cargo/registry", "rw"),
             ],
             task_id=self.task_id.to_wire(),
             job_id=job_id.to_wire(),
@@ -515,10 +540,9 @@ class TaskAttempt:
 
         build_logs = self._container_handle.build()
 
-        # Capture build logs into task.logs
+        # Capture build logs into log sink
         for log_line in build_logs:
-            ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
-            self.logs.add(log_line.source, log_line.data, timestamp=ts)
+            self._log_sink.append(source=log_line.source, data=log_line.data)
 
         self.build_finished = Timestamp.now()
         if self.request.entrypoint.setup_commands:
@@ -607,7 +631,7 @@ class TaskAttempt:
                         try:
                             self.result = result_path.read_bytes()
                         except Exception as e:
-                            self.logs.add("error", f"Failed to read result file: {e}")
+                            self._log_sink.append(source="error", data=f"Failed to read result file: {e}")
 
                 # Container has stopped
                 if status.error:
@@ -628,7 +652,7 @@ class TaskAttempt:
                     if stderr_line:
                         error = f"{error}. stderr: {stderr_line}"
                     if status.oom_killed:
-                        self.logs.add("error", "Container was OOM killed by the kernel")
+                        self._log_sink.append(source="error", data="Container was OOM killed by the kernel")
                     self.transition_to(
                         cluster_pb2.TASK_STATE_FAILED,
                         error=error,
@@ -658,14 +682,14 @@ class TaskAttempt:
             time.sleep(self._poll_interval_seconds)
 
     def _stream_logs(self, since: Timestamp | None) -> Timestamp | None:
-        """Fetch new logs from container and append to task.logs.
+        """Fetch new logs from container and append to log sink.
 
         Args:
             since: Timestamp to fetch logs after (None for all logs)
 
         Returns:
             Timestamp of the last log line + 1ms, or the input 'since' if no new logs.
-            We add 1ms because Docker's --since is inclusive at the timestamp boundary,
+            We add 1ms because Docker's--since is inclusive at the timestamp boundary,
             and we lose nanosecond precision when converting to milliseconds.
         """
         if not self._container_handle:
@@ -673,8 +697,8 @@ class TaskAttempt:
         try:
             new_logs = self._container_handle.logs(since=since)
             for log_line in new_logs:
-                ts = Timestamp.from_seconds(log_line.timestamp.timestamp())
-                self.logs.add(log_line.source, log_line.data, timestamp=ts)
+                self._log_sink.append(source=log_line.source, data=log_line.data)
+
             if new_logs:
                 last_ts = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp())
                 return last_ts.add_ms(1)
@@ -695,6 +719,42 @@ class TaskAttempt:
         if self.cleanup_done:
             return
         self.cleanup_done = True
+
+        # Final log sync and metadata write
+        if is_task_finished(self.status):
+            try:
+                # Write metadata
+                metadata = logging_pb2.TaskAttemptMetadata(
+                    task_id=self.task_id.to_wire(),
+                    attempt_id=self.attempt_id,
+                    worker_id=self._worker_id or "unknown",
+                    status=self.status,
+                    exit_code=self.exit_code or 0,
+                    oom_killed=self._container_handle.status().oom_killed if self._container_handle else False,
+                    error_message=self.error or "",
+                )
+
+                # Add timestamps if available
+                if self.started_at:
+                    metadata.start_time.CopyFrom(self.started_at.to_proto())
+                if self.finished_at:
+                    metadata.end_time.CopyFrom(self.finished_at.to_proto())
+
+                # Add resource usage if available
+                if self.peak_memory_mb > 0:
+                    metadata.resource_usage.CopyFrom(
+                        logging_pb2.ResourceUsage(
+                            peak_memory_bytes=self.peak_memory_mb * 1024 * 1024,
+                            cpu_seconds=0,  # Not tracked currently
+                            gpu_memory_bytes=0,  # Not tracked currently
+                        )
+                    )
+
+                self._log_sink.write_metadata(metadata)
+            except Exception as e:
+                logger.error(f"Failed to write final logs/metadata: {e}")
+
+        self._log_sink.close()
 
         # Clean up container handle (logs already captured in monitor loop)
         if self._container_handle:

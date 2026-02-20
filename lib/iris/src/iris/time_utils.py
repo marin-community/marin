@@ -1,18 +1,7 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
-
+import math
 import random
 import time
 from collections.abc import Callable
@@ -29,19 +18,29 @@ def _now_ms() -> int:
 class Deadline:
     """Represents a point in time after which an operation should timeout.
 
-    Uses monotonic time internally to avoid issues with system clock adjustments.
+    Supports two modes:
+    - Monotonic mode (from_seconds/from_ms/from_now): uses monotonic clock,
+      immune to system clock adjustments. Cannot be serialized to Timestamp.
+    - Timestamp mode (after): uses epoch-based Timestamp for deterministic
+      testing and proto serialization.
 
-    Example:
+    Example (monotonic):
         deadline = Deadline.from_seconds(30.0)
         while not deadline.expired():
             if try_operation():
                 break
             time.sleep(0.1)
         deadline.raise_if_expired("Operation timed out")
+
+    Example (timestamp):
+        deadline = Deadline.after(timestamp, Duration.from_seconds(30))
+        if deadline.expired(now=current_ts):
+            ...
     """
 
     def __init__(self, deadline_monotonic: float):
         self._deadline = deadline_monotonic
+        self._timestamp: Timestamp | None = None
 
     @classmethod
     def from_seconds(cls, timeout_seconds: float) -> "Deadline":
@@ -58,9 +57,40 @@ class Deadline:
         """Create deadline from a Duration offset from now."""
         return cls(time.monotonic() + duration.to_seconds())
 
-    def expired(self) -> bool:
-        """Check if deadline has passed."""
+    @classmethod
+    def after(cls, base_ts: "Timestamp", duration: "Duration") -> "Deadline":
+        """Create a timestamp-based deadline: base_ts + duration.
+
+        Unlike monotonic deadlines, this supports deterministic testing
+        via expired(now=...) and serialization via as_timestamp().
+        """
+        target = base_ts.add(duration)
+        d = cls.__new__(cls)
+        d._deadline = 0.0  # unused in timestamp mode
+        d._timestamp = target
+        return d
+
+    def expired(self, now: "Timestamp | None" = None) -> bool:
+        """Check if deadline has passed.
+
+        Args:
+            now: If provided, compare against this timestamp (timestamp mode).
+                 If None and this is a monotonic deadline, uses monotonic clock.
+                 If None and this is a timestamp deadline, uses Timestamp.now().
+        """
+        if self._timestamp is not None:
+            if now is None:
+                now = Timestamp.now()
+            return now._epoch_ms >= self._timestamp._epoch_ms
         return time.monotonic() >= self._deadline
+
+    def as_timestamp(self) -> "Timestamp":
+        """Return the deadline as a Timestamp. Only valid for timestamp-mode deadlines."""
+        if self._timestamp is None:
+            raise ValueError(
+                "as_timestamp() is only supported for timestamp-based deadlines (created via Deadline.after)"
+            )
+        return self._timestamp
 
     def raise_if_expired(self, message: str = "Deadline exceeded") -> None:
         """Raise TimeoutError if deadline has passed."""
@@ -77,6 +107,8 @@ class Deadline:
         return max(0.0, self._deadline - time.monotonic())
 
     def __repr__(self) -> str:
+        if self._timestamp is not None:
+            return f"Deadline(until={self._timestamp})"
         return f"Deadline(remaining={self.remaining_seconds():.3f}s)"
 
 
@@ -382,8 +414,13 @@ class ExponentialBackoff:
         self._jitter = jitter
         self._attempt = 0
 
+        # Beyond this attempt count the raw interval exceeds maximum, so
+        # further exponentiation is pointless (and eventually overflows float64).
+        self._max_attempt = int(math.log(self._maximum / self._initial) / math.log(self._factor)) + 1
+
     def next_interval(self) -> float:
-        interval = self._initial * (self._factor**self._attempt)
+        effective_attempt = min(self._attempt, self._max_attempt)
+        interval = self._initial * (self._factor**effective_attempt)
         interval = min(interval, self._maximum)
 
         if self._jitter > 0:

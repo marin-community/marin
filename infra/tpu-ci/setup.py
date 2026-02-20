@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
-#
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 # /// script
 # dependencies = [
 #   "click",
@@ -32,6 +22,8 @@ import shlex
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -64,7 +56,7 @@ def get_github_token() -> str:
 
 
 def store_github_token_in_secret_manager(token: str):
-    """Store GitHub token in Secret Manager."""
+    """Store GitHub token in Secret Manager (creates secret if it doesn't exist)."""
     logging.info("Storing GitHub token in Secret Manager...")
 
     result = run_sh(
@@ -85,6 +77,39 @@ def store_github_token_in_secret_manager(token: str):
     )
 
     logging.info("✓ GitHub token stored")
+
+
+def update_github_token_in_secret_manager(token: str):
+    """Replace the GitHub token in Secret Manager with a new version."""
+    logging.info("Updating GitHub token in Secret Manager...")
+
+    result = run_sh(
+        f"gcloud secrets describe tpu-ci-github-token --project {config.GCP_PROJECT_ID}",
+        capture_output=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        logging.info("Secret doesn't exist yet, creating...")
+        store_github_token_in_secret_manager(token)
+        return
+
+    run(
+        [
+            "gcloud",
+            "secrets",
+            "versions",
+            "add",
+            "tpu-ci-github-token",
+            "--project",
+            config.GCP_PROJECT_ID,
+            "--data-file=-",
+        ],
+        input=token.encode(),
+        check=True,
+    )
+
+    logging.info("✓ GitHub token updated")
 
 
 def check_ghcr_authentication() -> bool:
@@ -414,6 +439,76 @@ def build_image():
     logging.info("Building TPU CI Docker image...")
     build_and_push_docker_image()
     logging.info("✓ Image build complete")
+
+
+@cli.command("update-token")
+def update_token():
+    """Update the GitHub PAT in Secret Manager and restart all TPU runners.
+
+    This is the fix when runners fail to register because the token expired or
+    lost permissions. After updating, all existing TPU VMs are deleted so the
+    controller recreates them with the new token.
+
+    Usage:
+        MARIN_CI_TOKEN=<new-pat> uv run infra/tpu-ci/setup.py update-token
+    """
+    github_token = get_github_token()
+
+    # Verify token works before storing. We use urllib instead of curl to avoid
+    # leaking the PAT in logged command arguments.
+    logging.info("Verifying token against GitHub API...")
+    url = f"https://api.github.com/repos/{config.GITHUB_REPOSITORY}/actions/runners/registration-token"
+    req = urllib.request.Request(
+        url,
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {github_token}",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req) as response:
+            resp = json.loads(response.read().decode())
+        if resp.get("token"):
+            logging.info("Token is valid - registration token obtained")
+        else:
+            logging.error(f"Token verification failed: {resp}")
+            logging.error(
+                "Ensure the PAT has 'Administration' read & write repository permission "
+                "(fine-grained) or 'repo' scope (classic)."
+            )
+            sys.exit(1)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        logging.error(f"Token verification failed (HTTP {e.code}): {body}")
+        logging.error(
+            "Ensure the PAT has 'Administration' read & write repository permission "
+            "(fine-grained) or 'repo' scope (classic)."
+        )
+        sys.exit(1)
+    except (json.JSONDecodeError, urllib.error.URLError) as e:
+        logging.error(f"Unexpected error verifying token: {e}")
+        sys.exit(1)
+
+    update_github_token_in_secret_manager(github_token)
+
+    logging.info("Deleting all TPU VMs so they re-register with the new token...")
+    delete_all_tpu_vms()
+    logging.info("Done. The controller will recreate VMs within ~10 minutes.")
+
+
+@cli.command("restart-runners")
+def restart_runners():
+    """Delete all TPU VMs and let the controller recreate them.
+
+    Use this when runners are stuck, unresponsive, or need a fresh start.
+    The controller's monitor loop will recreate VMs within ~10 minutes.
+    """
+    logging.info("Restarting all TPU CI runners...")
+    delete_all_tpu_vms()
+    logging.info("All TPU VMs deleted. The controller will recreate them within ~10 minutes.")
+    logging.info("Monitor progress with: uv run infra/tpu-ci/setup.py controller-logs -f")
 
 
 @cli.command("controller-logs")

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Type definitions for fray v2.
 
@@ -289,7 +278,8 @@ class TpuConfig:
     topology: str | None = None
 
     def chip_count(self) -> int:
-        return get_tpu_topology(self.variant).chip_count
+        """Return the number of chips per VM for this TPU type."""
+        return get_tpu_topology(self.variant).chips_per_vm
 
     def vm_count(self) -> int:
         return get_tpu_topology(self.variant).vm_count
@@ -325,7 +315,7 @@ class ResourceConfig:
     """
 
     cpu: int = 1
-    ram: str = "1g"
+    ram: str = "4g"
     disk: str = "16g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
@@ -334,7 +324,8 @@ class ResourceConfig:
     max_concurrency: int = 1
 
     def chip_count(self) -> int:
-        return self.device.chip_count()
+        """Total accelerator chips across all replicas."""
+        return self.device.chip_count() * self.replicas
 
     def device_flops(self, dtype: str = "bf16") -> float:
         return self.device.device_flops(dtype)
@@ -345,21 +336,15 @@ class ResourceConfig:
         return self.device_flops(dtype) * self.chip_count()
 
     @staticmethod
-    def with_tpu(tpu_type: str, *, slice_count: int | None = None, **kwargs: Any) -> ResourceConfig:
-        topo = get_tpu_topology(tpu_type)
-        if slice_count is None:
-            slice_count = topo.vm_count
-        elif slice_count != topo.vm_count:
-            raise ValueError(
-                f"slice_count must match TPU slice size ({topo.vm_count}) for {tpu_type}, got {slice_count}"
-            )
-
+    def with_tpu(tpu_type: str, *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
         device = TpuConfig(variant=tpu_type)
+        topo = get_tpu_topology(tpu_type)
+        replicas = slice_count * topo.vm_count
         kwargs = dict(kwargs)
         kwargs.setdefault("cpu", 32)
         kwargs.setdefault("ram", "128g")
         kwargs.setdefault("disk", "50g")
-        return ResourceConfig(device=device, replicas=slice_count, **kwargs)
+        return ResourceConfig(device=device, replicas=replicas, **kwargs)
 
     @staticmethod
     def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs: Any) -> ResourceConfig:
