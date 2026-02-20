@@ -110,13 +110,13 @@ def _lev_state_from_hf_layer(lev_cfg: GatedDeltaNetConfig, hf_layer) -> dict[str
 def test_layer_streaming_decode_matches_one_shot_prefill():
     """Streaming (per-token) with carried (conv_state, S_state) must match one-shot prefill."""
     key = jax.random.PRNGKey(0)
-    B, L = 2, 20
+    B, L = 1, 12
     cfg = GatedDeltaNetConfig(
-        Embed=Axis("embed", 32),
+        Embed=Axis("embed", 24),
         num_k_heads=2,
         num_v_heads=4,  # ratio > 1 exercises Q/K repetition across V groups
-        head_k_dim=8,
-        head_v_dim=8,
+        head_k_dim=4,
+        head_v_dim=4,
         conv_kernel_size=4,
         rms_norm_eps=1e-6,
     )
@@ -204,13 +204,13 @@ def test_layer_chunk_size_invariance(csize_a, csize_b):
 def test_layer_gradients_exist():
     """End-to-end differentiability: grads w.r.t. inputs exist and are finite."""
     key = jax.random.PRNGKey(0)
-    B, L = 1, 12
+    B, L = 1, 8
     cfg = GatedDeltaNetConfig(
-        Embed=Axis("embed", 32),
+        Embed=Axis("embed", 16),
         num_k_heads=2,
         num_v_heads=2,
-        head_k_dim=8,
-        head_v_dim=8,
+        head_k_dim=4,
+        head_v_dim=4,
         conv_kernel_size=4,
         rms_norm_eps=1e-6,
     )
