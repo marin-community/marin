@@ -39,6 +39,8 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 from joblib import Parallel, delayed
 from pathlib import Path
+import matplotlib.colors as mcolors
+from scipy.optimize import minimize as sp_minimize
 
 sys.path.insert(0, str(Path(__file__).parent))
 warnings.filterwarnings("ignore")
@@ -693,6 +695,21 @@ def _get_full_fit(m):
     return _full_fit_cache[m.name]
 
 
+def _refine_optimum(pred_fn, feature_kind, p0_init, p1_init):
+    """Refine a grid-argmin optimum using L-BFGS-B on [0.001, 0.999]²."""
+
+    def _obj(x):
+        X = build_features(feature_kind, np.array([x[0]]), np.array([x[1]]))
+        return float(pred_fn(X)[0])
+
+    result = sp_minimize(
+        _obj, [p0_init, p1_init], method="L-BFGS-B", bounds=[(0.001, 0.999), (0.001, 0.999)]
+    )
+    if result.success:
+        return float(result.x[0]), float(result.x[1]), float(result.fun)
+    return p0_init, p1_init, _obj([p0_init, p1_init])
+
+
 if not quick_mode:
     # =====================================================================
     # Figure 3: Stability of predicted optimum + BPB sanity check
@@ -1183,11 +1200,13 @@ if _optima_csv.exists():
             opt_p1_val = float(P1.ravel()[idx])
             opt_bpb = float(Z.ravel()[idx])
 
-            actual_bpb = None
+            # Find closest actual within L1 < 0.02
+            best_dist, actual_bpb = 0.02, None
             for _ap0, _ap1, _abpb in _actuals_lookup:
-                if round(_ap0, 3) == round(opt_p0, 3) and round(_ap1, 3) == round(opt_p1_val, 3):
+                dist = abs(_ap0 - opt_p0) + abs(_ap1 - opt_p1_val)
+                if dist < best_dist:
+                    best_dist = dist
                     actual_bpb = _abpb
-                    break
             _model_optima.append((m.name, m, opt_p0, opt_p1_val, opt_bpb, actual_bpb))
         except Exception:
             _model_optima.append((m.name, m, 0.0, 0.0, 0.0, None))
@@ -1234,7 +1253,6 @@ if _optima_csv.exists():
 
             # Star colored by actual BPB on the same colormap as the heatmap
             if actual_bpb is not None:
-                import matplotlib.colors as mcolors
 
                 _cmap = plt.get_cmap("RdYlGn_r")
                 _norm = mcolors.Normalize(vmin=vmin_global, vmax=vmax_global)
@@ -1316,6 +1334,144 @@ if _optima_csv.exists():
     print(f"  Saved {out4b}")
 else:
     print(f"\nSkipping Figure 4b: {_optima_csv} not found (run --analyze-local first)")
+
+
+# =========================================================================
+# Figure 6: Optimum trajectory over training sizes
+# Shows how each model's predicted 2D optimum drifts as training data grows.
+# 8 points from TRAIN_SIZES (one seed each) + 1 full-data point = 9 total.
+# =========================================================================
+print("\nGenerating Figure 6: Optimum trajectory over training sizes...")
+
+_cmap6 = plt.get_cmap("RdYlGn_r")
+_norm6 = mcolors.Normalize(vmin=vmin_global, vmax=vmax_global)
+
+n_models_6 = len(ranked_model_info)
+ncols6 = min(4, n_models_6)
+nrows6 = (n_models_6 + ncols6 - 1) // ncols6
+
+fig6, axes6 = plt.subplots(
+    nrows6,
+    ncols6,
+    figsize=(cell_size * ncols6 + 1.8, cell_size * nrows6),
+    squeeze=False,
+    constrained_layout=True,
+)
+
+last_scatter_6 = None
+for mi, (_, m) in enumerate(ranked_model_info):
+    row, col = divmod(mi, ncols6)
+    ax = axes6[row][col]
+
+    # Compute optima at each training size (1 seed per size) + full data
+    optima: list[tuple[float, float, float]] = []
+
+    for si, n_train in enumerate(TRAIN_SIZES):
+        seed = SEED_BASE + si * B
+        rng = np.random.RandomState(seed)
+        idx = rng.permutation(N)
+        train_idx = idx[:n_train]
+
+        try:
+            X_train = build_features(m.feature_kind, p0_sc[train_idx], p1_sc[train_idx])
+            y_train = y[train_idx]
+            pred_fn_sub, _ = m.fit_fn(X_train, y_train)
+            X_grid, P0, P1 = make_2d_grid(g, g, kind=m.feature_kind)
+            Z_sub = pred_fn_sub(X_grid).reshape(P0.shape)
+            grid_idx = int(np.argmin(Z_sub))
+            p0_init = float(P0.ravel()[grid_idx])
+            p1_init = float(P1.ravel()[grid_idx])
+            optima.append(_refine_optimum(pred_fn_sub, m.feature_kind, p0_init, p1_init))
+        except Exception:
+            optima.append((np.nan, np.nan, np.nan))
+
+    # Full-data optimum
+    try:
+        pred_fn_full, _ = _get_full_fit(m)
+        X_grid, P0, P1 = make_2d_grid(g, g, kind=m.feature_kind)
+        Z_full = pred_fn_full(X_grid).reshape(P0.shape)
+        Z_clipped = np.clip(Z_full, vmin_global, vmax_global + 0.5)
+        grid_idx = int(np.argmin(Z_full))
+        p0_init = float(P0.ravel()[grid_idx])
+        p1_init = float(P1.ravel()[grid_idx])
+        optima.append(_refine_optimum(pred_fn_full, m.feature_kind, p0_init, p1_init))
+
+        # Render heatmap + contours from full-data fit
+        ax.pcolormesh(P0, P1, Z_clipped, cmap="RdYlGn_r", vmin=vmin_global, vmax=vmax_global, shading="gouraud")
+        cs = ax.contour(P0, P1, Z_clipped, levels=n_contour_levels, colors="black", linewidths=0.4, alpha=0.6)
+        ax.clabel(cs, inline=True, fontsize=6, fmt="%.2f")
+    except Exception as e:
+        ax.text(0.5, 0.5, f"Fit failed:\n{e}", ha="center", va="center", transform=ax.transAxes, fontsize=8, color="red")
+        optima.append((np.nan, np.nan, np.nan))
+
+    # Training data scatter with transparent edges
+    last_scatter_6 = ax.scatter(
+        p0_sc, p1_sc, c=y, cmap="RdYlGn_r", vmin=vmin_global, vmax=vmax_global,
+        s=30, marker="o", edgecolors=(0, 0, 0, 0.25), linewidths=0.6, zorder=3,
+    )
+
+    # Draw arrows between consecutive valid optima
+    for i in range(len(optima) - 1):
+        if np.isnan(optima[i][0]) or np.isnan(optima[i + 1][0]):
+            continue
+        ax.annotate(
+            "", xy=(optima[i + 1][0], optima[i + 1][1]),
+            xytext=(optima[i][0], optima[i][1]),
+            arrowprops=dict(arrowstyle="->", color="black", lw=1.2, alpha=0.7),
+            zorder=7,
+        )
+
+    # Draw numbered points colored by predicted BPB
+    for i, (p0_opt, p1_opt, bpb_opt) in enumerate(optima):
+        if np.isnan(p0_opt):
+            continue
+        color = _cmap6(_norm6(bpb_opt))
+        ax.plot(p0_opt, p1_opt, "o", ms=12, color=color, markeredgecolor="black", markeredgewidth=0.8, zorder=8)
+        label = str(i + 1) if i < len(TRAIN_SIZES) else "F"
+        ax.text(p0_opt, p1_opt, label, ha="center", va="center", fontsize=6, fontweight="bold", color="white", zorder=9)
+
+    # Star on final (full-data) optimum
+    if not np.isnan(optima[-1][0]):
+        ax.plot(
+            optima[-1][0], optima[-1][1], marker="*", ms=16,
+            color="gold", markeredgecolor="black", markeredgewidth=1.2, zorder=10,
+        )
+
+    n_params_6 = None
+    try:
+        _, params_6 = _get_full_fit(m)
+        n_params_6 = len(params_6)
+    except Exception:
+        pass
+    title_6 = clean_name(m.name)
+    if n_params_6 is not None:
+        title_6 += f" ({n_params_6}p)"
+    ax.set_title(title_6, fontsize=10)
+    ax.set_aspect("equal")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    if row == nrows6 - 1:
+        ax.set_xlabel("Phase 0 StarCoder weight")
+    if col == 0:
+        ax.set_ylabel("Phase 1 StarCoder weight")
+
+for idx in range(n_models_6, nrows6 * ncols6):
+    row, col = divmod(idx, ncols6)
+    axes6[row][col].set_visible(False)
+
+if last_scatter_6 is not None:
+    fig6.colorbar(last_scatter_6, ax=axes6.ravel().tolist(), label="BPB", shrink=0.7, pad=0.03, aspect=30)
+
+# Build TRAIN_SIZES legend string
+_ts_labels = ", ".join(f"{i + 1}={n}" for i, n in enumerate(TRAIN_SIZES))
+fig6.suptitle(
+    f"Predicted Optimum Trajectory over Training Size ({_ts_labels}, F=full $n$={N})",
+    fontsize=11,
+)
+out6 = OUT_DIR / "fig6_optimum_trajectory.png"
+fig6.savefig(out6)
+plt.close(fig6)
+print(f"  Saved {out6}")
 
 
 # =========================================================================
