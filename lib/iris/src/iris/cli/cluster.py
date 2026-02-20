@@ -16,6 +16,7 @@ import click
 from connectrpc.errors import ConnectError
 
 from iris.cli.build import _build_image, _find_iris_root, _find_marin_root, _push_to_gcp_registries
+from iris.cluster.platform.bootstrap import parse_artifact_registry_tag
 from iris.cli.debug import debug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
@@ -69,27 +70,6 @@ def _get_vm_logs(controller_url: str, vm_id: str, tail: int) -> tuple[str, str, 
     return response.logs, response.vm_id, response.state
 
 
-def _parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | None:
-    """Parse ``REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION``."""
-    if "-docker.pkg.dev/" not in image_tag:
-        return None
-    parts = image_tag.split("/")
-    if len(parts) < 4:
-        return None
-    registry = parts[0]
-    if not registry.endswith("-docker.pkg.dev"):
-        return None
-    region = registry.replace("-docker.pkg.dev", "")
-    project = parts[1]
-    image_and_version = parts[3]
-    if ":" in image_and_version:
-        image_name, version = image_and_version.split(":", 1)
-    else:
-        image_name = image_and_version
-        version = "latest"
-    return region, project, image_name, version
-
-
 @dataclass
 class _ImageBuildParams:
     image_type: str
@@ -106,7 +86,7 @@ class _ImageBuildParams:
 
 
 def _extract_image_params(image_tag: str, image_type: str) -> _ImageBuildParams | None:
-    parsed = _parse_artifact_registry_tag(image_tag)
+    parsed = parse_artifact_registry_tag(image_tag)
     if not parsed:
         return None
     region, project, image_name, version = parsed
@@ -142,19 +122,47 @@ def _build_and_push_image(params: _ImageBuildParams) -> None:
     )
 
 
+def _collect_scale_group_regions(config) -> set[str]:
+    """Collect unique cloud regions from all scale groups' GCP zones."""
+    regions: set[str] = set()
+    for sg in config.scale_groups.values():
+        template = sg.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            regions.add(template.gcp.zone.rsplit("-", 1)[0])
+    return regions
+
+
+def _push_image_to_extra_regions(params: _ImageBuildParams, extra_regions: set[str]) -> None:
+    """Push an already-built image to additional AR regions beyond the primary."""
+    for region in sorted(extra_regions):
+        click.echo(f"Pushing {params.image_name} to additional region: {region}")
+        _push_to_gcp_registries(
+            source_tag=params.local_tag,
+            regions=(region,),
+            project=params.project,
+            image_name=params.image_name,
+            version=params.version,
+        )
+
+
 def _build_cluster_images(config) -> None:
+    extra_regions = _collect_scale_group_regions(config)
+
     for tag, typ in [(config.defaults.bootstrap.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
             params = _extract_image_params(tag, typ)
             if params:
                 _build_and_push_image(params)
+                # Push worker images to all scale group regions
+                if typ == "worker":
+                    _push_image_to_extra_regions(params, extra_regions - {params.region})
                 click.echo()
 
     # Build and push the task image. It uses the marin repo root as context
     # (needs pyproject.toml + uv.lock) and Dockerfile.task from iris root.
     worker_tag = config.defaults.bootstrap.docker_image
     if worker_tag:
-        parsed = _parse_artifact_registry_tag(worker_tag)
+        parsed = parse_artifact_registry_tag(worker_tag)
         if parsed:
             region, project, _, _ = parsed
             task_params = _ImageBuildParams(
@@ -167,6 +175,7 @@ def _build_cluster_images(config) -> None:
                 dockerfile=str(_find_iris_root() / "Dockerfile.task"),
             )
             _build_and_push_image(task_params)
+            _push_image_to_extra_regions(task_params, extra_regions - {region})
             click.echo()
 
 
