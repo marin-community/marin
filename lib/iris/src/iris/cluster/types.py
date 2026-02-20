@@ -626,18 +626,21 @@ def zone_constraint(zone: str) -> Constraint:
     return Constraint(key=ZONE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=zone)
 
 
-def region_constraint(regions: Sequence[str]) -> Constraint:
+def region_constraint(regions: list[str]) -> Constraint:
     """Constraint requiring workers to be in one of the given regions.
 
     Emits an EQ constraint for a single region or an IN constraint for multiple
     regions.
 
     Args:
-        regions: Non-empty sequence of region strings.
+        regions: Non-empty list of region strings. Must be a list, not a bare string.
 
     Raises:
+        TypeError: If regions is a string (common mistake — pass [region] instead).
         ValueError: If regions is empty or contains empty strings.
     """
+    if isinstance(regions, str):
+        raise TypeError("region_constraint() requires a list of strings, not a bare string. Use [region] instead.")
     if not regions:
         raise ValueError("regions must be non-empty")
     for r in regions:

@@ -5,7 +5,8 @@
 
 import pytest
 
-from iris.cli.cluster import _parse_artifact_registry_tag, _parse_ghcr_tag
+from iris.cli.cluster import _parse_ghcr_tag
+from iris.cluster.platform.bootstrap import parse_artifact_registry_tag as _parse_artifact_registry_tag
 
 
 @pytest.mark.parametrize(

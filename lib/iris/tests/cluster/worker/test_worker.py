@@ -292,9 +292,9 @@ def test_task_failure_on_error(worker, mock_runtime):
     assert final_task.error == "Container crashed"
 
 
-def test_task_exception_handling(worker, mock_bundle_cache):
+def test_task_exception_handling(worker, mock_runtime):
     """Test task handles exceptions during execution."""
-    mock_bundle_cache.get_bundle = Mock(side_effect=Exception("Bundle download failed"))
+    mock_runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
 
     request = create_run_task_request()
     task_id = worker.submit_task(request)
@@ -505,9 +505,9 @@ def test_env_merge_precedence(mock_bundle_cache, mock_runtime, tmp_path):
     assert "IRIS_JOB_ID" in env
 
 
-def test_task_failure_error_appears_in_logs(worker, mock_bundle_cache):
+def test_task_failure_error_appears_in_logs(worker, mock_runtime):
     """Test that task failure errors appear in logs."""
-    mock_bundle_cache.get_bundle = Mock(side_effect=Exception("Bundle download failed"))
+    mock_runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
 
     request = create_run_task_request()
     task_id = worker.submit_task(request)
