@@ -264,6 +264,12 @@ Notes:
 - Add `--hold-dev-tpu --dev-tpu-name <name>` to make `codex-loop` allocate/hold/release a dev TPU allocation for the entire loop session.
 - In managed dev TPU mode, use `dev-tpu-test`/`dev-tpu-profile` (not Ray TPU test/profile commands) for loop validation/profiling.
 - Keep managed-mode `--post-check` commands aligned with the held allocation `--cluster` and `--tpu-name`.
+- Performance governance is enabled by default:
+  - `--perf-mode required` ensures each validated iteration has parseable performance metrics.
+  - `--perf-metric throughput/mfu` controls champion comparisons.
+  - `--perf-min-improvement-pct` and `--perf-max-regression-pct` define promotion/regression thresholds.
+  - `--perf-regression-policy revert-count-failure` (default) auto-reverts regressing commits with non-destructive `git revert --no-edit`.
+  - `--perf-state-file` overrides the default champion-state file `<log-dir>/perf_state.json`.
 
 ## Logging Expectations
 After each meaningful iteration, append:

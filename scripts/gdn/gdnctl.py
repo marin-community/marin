@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2026 The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Gated DeltaNet TPU iteration utilities.
@@ -41,9 +41,7 @@ GDN_KERNEL_TEST = "tests/test_gdn_kernels.py"
 GDN_LAYER_TEST = "tests/test_gdn_layer.py"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 DEFAULT_HF_TRACE_PATTERN = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$)"
-DEFAULT_HF_TRACE_PATTERN_WITH_XPLANE = (
-    r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$|xplane\\.pb$)"
-)
+DEFAULT_HF_TRACE_PATTERN_WITH_XPLANE = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$|xplane\\.pb$)"
 DEFAULT_HILLCLIMB_LOG = REPO_ROOT / "lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md"
 
 SESSION_DIRECTIVE_PRESET_FILES = {
@@ -62,7 +60,8 @@ CODEX_REASONING_VARIANT_RE = re.compile(
 CODEX_FILE_UPDATE_HEADER_RE = re.compile(r"^file (update|create|add|delete|rename):")
 CODEX_DIFF_LINE_RE = re.compile(
     r"^(diff --git |index [0-9a-f]+\.\.[0-9a-f]+|--- |\+\+\+ |@@ |\\ No newline at end of file$|"
-    r"new file mode |deleted file mode |similarity index |rename from |rename to |old mode |new mode |Binary files |[ +-].*)"
+    r"new file mode |deleted file mode |similarity index |rename from |rename to |old mode |"
+    r"new mode |Binary files |[ +-].*)"
 )
 DEV_TPU_READY_MARKERS = (
     "TPU allocation is active. Press Ctrl-C to release...",
@@ -70,6 +69,9 @@ DEV_TPU_READY_MARKERS = (
 )
 GIT_TRANSIENT_ERROR_RE = re.compile(
     r"(index\.lock|Another git process seems to be running|Unable to create '.+?\.lock')"
+)
+WANDB_RUN_URL_RE = re.compile(
+    r"https://wandb\.ai/(?P<entity>[^/\s]+)/(?P<project>[^/\s]+)/runs/(?P<run_id>[A-Za-z0-9]+)"
 )
 
 
@@ -242,6 +244,327 @@ def _terminate_process(
             proc.kill()
 
 
+def _extract_last_wandb_run_url(text: str) -> str | None:
+    matches = list(WANDB_RUN_URL_RE.finditer(text))
+    if not matches:
+        return None
+    return matches[-1].group(0)
+
+
+def _coerce_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_metric_from_text(text: str, metric_key: str) -> float | None:
+    pattern = re.compile(
+        re.escape(metric_key) + r"[^0-9eE+\-]*(?P<value>[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?)"
+    )
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return None
+    try:
+        return float(matches[-1].group("value"))
+    except ValueError:
+        return None
+
+
+def _fetch_wandb_summary_for_run_url(
+    run_url: str,
+    *,
+    metric_keys: Sequence[str],
+) -> tuple[dict[str, float], str | None]:
+    match = WANDB_RUN_URL_RE.search(run_url)
+    if match is None:
+        return {}, f"could not parse wandb run url: {run_url}"
+
+    try:
+        import wandb
+    except ImportError:
+        return {}, "wandb package is not installed"
+
+    entity = match.group("entity")
+    project = match.group("project")
+    run_id = match.group("run_id")
+    run_path = f"{entity}/{project}/{run_id}"
+
+    try:
+        api = wandb.Api(timeout=30)
+        run = api.run(run_path)
+    except Exception as exc:  # pragma: no cover - external API behavior
+        return {}, f"wandb api fetch failed for {run_path}: {exc!r}"
+
+    summary = dict(getattr(run, "summary", {}))
+    metrics: dict[str, float] = {}
+    for key in metric_keys:
+        numeric = _coerce_float(summary.get(key))
+        if numeric is not None:
+            metrics[key] = numeric
+    return metrics, None
+
+
+def _discover_wandb_run_for_prefix(
+    *,
+    entity: str,
+    project: str,
+    profile_prefix: str,
+) -> tuple[str | None, str | None]:
+    try:
+        import wandb
+    except ImportError:
+        return None, "wandb package is not installed"
+
+    try:
+        api = wandb.Api(timeout=30)
+        runs = api.runs(
+            f"{entity}/{project}",
+            order="-created_at",
+            per_page=80,
+        )
+    except Exception as exc:  # pragma: no cover - external API behavior
+        return None, f"wandb api listing failed for {entity}/{project}: {exc!r}"
+
+    needle = f"{profile_prefix}_"
+    for run in runs:
+        run_id = str(getattr(run, "id", "") or "")
+        if not run_id:
+            continue
+
+        candidates = [
+            str(getattr(run, "name", "") or ""),
+            str(getattr(run, "display_name", "") or ""),
+            str(getattr(run, "path", "") or ""),
+        ]
+        if any(needle in value for value in candidates):
+            return f"https://wandb.ai/{entity}/{project}/runs/{run_id}", None
+    return None, f"no matching run found for prefix {profile_prefix!r} in {entity}/{project}"
+
+
+def _collect_profile_metrics(
+    args: argparse.Namespace,
+    *,
+    output_text: str,
+    profile_prefix: str,
+) -> dict[str, object]:
+    metric_keys = [args.perf_metric, "throughput/mfu", "throughput/tokens_per_second"]
+    metric_keys = [key for key in dict.fromkeys(metric_keys) if key]
+
+    run_url = _extract_last_wandb_run_url(output_text)
+    warnings: list[str] = []
+    metrics: dict[str, float] = {}
+
+    for key in metric_keys:
+        parsed = _extract_metric_from_text(output_text, key)
+        if parsed is not None:
+            metrics[key] = parsed
+
+    if run_url is None and args.validation_profile_wandb_mode == "online":
+        discovered_url, discover_warning = _discover_wandb_run_for_prefix(
+            entity=args.perf_wandb_entity,
+            project=args.perf_wandb_project,
+            profile_prefix=profile_prefix,
+        )
+        if discovered_url is not None:
+            run_url = discovered_url
+        elif discover_warning is not None:
+            warnings.append(discover_warning)
+
+    if run_url is not None and args.validation_profile_wandb_mode == "online":
+        summary_metrics, summary_warning = _fetch_wandb_summary_for_run_url(
+            run_url,
+            metric_keys=metric_keys,
+        )
+        metrics.update(summary_metrics)
+        if summary_warning is not None:
+            warnings.append(summary_warning)
+
+    return {
+        "profile_prefix": profile_prefix,
+        "run_url": run_url,
+        "metrics": metrics,
+        "warnings": warnings,
+    }
+
+
+def _load_perf_state(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {"version": 1, "champion": None, "history": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(
+            f"[gdnctl] WARNING: could not parse perf state {path}: {exc!r}. Reinitializing.",
+            file=sys.stderr,
+        )
+        return {"version": 1, "champion": None, "history": []}
+
+    if not isinstance(data, dict):
+        return {"version": 1, "champion": None, "history": []}
+    if "history" not in data or not isinstance(data["history"], list):
+        data["history"] = []
+    if "champion" not in data:
+        data["champion"] = None
+    data["version"] = 1
+    return data
+
+
+def _save_perf_state(path: Path, state: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _percent_delta(candidate: float, baseline: float) -> float:
+    if baseline == 0:
+        if candidate == 0:
+            return 0.0
+        return float("inf") if candidate > 0 else float("-inf")
+    return ((candidate - baseline) / abs(baseline)) * 100.0
+
+
+def _revert_single_commit(workdir: Path, *, commit_sha: str) -> tuple[bool, str]:
+    proc = _run_git(
+        ["revert", "--no-edit", commit_sha],
+        cwd=workdir,
+        capture_output=True,
+        check=False,
+    )
+    output = (proc.stdout or "") + (proc.stderr or "")
+    if output.strip():
+        sink = sys.stdout if proc.returncode == 0 else sys.stderr
+        print(f"[gdnctl] {output.strip()}", file=sink)
+
+    if proc.returncode == 0:
+        return True, "revert commit created"
+
+    _run_git(["revert", "--abort"], cwd=workdir, capture_output=True, check=False)
+    return False, f"git revert failed for {commit_sha} (exit={proc.returncode})"
+
+
+def _apply_performance_policy(
+    args: argparse.Namespace,
+    *,
+    workdir: Path,
+    perf_state_path: Path,
+    iteration: int,
+    commit_sha: str,
+    validation_info: dict[str, object],
+) -> tuple[bool, bool, int]:
+    if args.perf_mode == "off":
+        return True, False, 0
+
+    metrics_obj = validation_info.get("metrics")
+    metrics = metrics_obj if isinstance(metrics_obj, dict) else {}
+    metric_value = _coerce_float(metrics.get(args.perf_metric))
+    run_url = validation_info.get("run_url")
+    warnings_obj = validation_info.get("warnings")
+    warnings = warnings_obj if isinstance(warnings_obj, list) else []
+
+    for warning in warnings:
+        print(f"[gdnctl] WARNING: {warning}", file=sys.stderr)
+
+    if metric_value is None:
+        print(
+            "[gdnctl] required performance metric is unavailable after validation profile: " f"{args.perf_metric}",
+            file=sys.stderr,
+        )
+        return False, True, 1
+
+    state = _load_perf_state(perf_state_path)
+    history_obj = state.get("history")
+    history = history_obj if isinstance(history_obj, list) else []
+
+    candidate_record: dict[str, object] = {
+        "iteration": iteration,
+        "commit": commit_sha,
+        "metric": args.perf_metric,
+        "metric_value": metric_value,
+        "metrics": metrics,
+        "run_url": run_url,
+        "timestamp_unix": time.time(),
+    }
+
+    champion_obj = state.get("champion")
+    champion = champion_obj if isinstance(champion_obj, dict) else None
+
+    if champion is None:
+        candidate_record["decision"] = "baseline"
+        history.append(candidate_record)
+        state["history"] = history
+        state["champion"] = candidate_record
+        _save_perf_state(perf_state_path, state)
+        print("[gdnctl] performance baseline initialized: " f"{args.perf_metric}={metric_value:.6g} @ {commit_sha[:12]}")
+        return True, False, 0
+
+    champion_value = _coerce_float(champion.get("metric_value"))
+    if champion_value is None:
+        candidate_record["decision"] = "promote_corrupt_champion"
+        history.append(candidate_record)
+        state["history"] = history
+        state["champion"] = candidate_record
+        _save_perf_state(perf_state_path, state)
+        print("[gdnctl] champion record was invalid; replaced with current candidate.")
+        return True, False, 0
+
+    delta_pct = _percent_delta(metric_value, champion_value)
+    candidate_record["delta_vs_champion_pct"] = delta_pct
+
+    if delta_pct >= args.perf_min_improvement_pct:
+        candidate_record["decision"] = "promoted"
+        history.append(candidate_record)
+        state["history"] = history
+        state["champion"] = candidate_record
+        _save_perf_state(perf_state_path, state)
+        print(
+            "[gdnctl] performance champion promoted: " f"{champion_value:.6g} -> {metric_value:.6g} ({delta_pct:+.2f}%)"
+        )
+        return True, False, 0
+
+    if delta_pct <= -args.perf_max_regression_pct:
+        candidate_record["decision"] = "regression"
+        history.append(candidate_record)
+        state["history"] = history
+        _save_perf_state(perf_state_path, state)
+
+        print(
+            "[gdnctl] performance regression detected vs champion: "
+            f"{champion_value:.6g} -> {metric_value:.6g} ({delta_pct:+.2f}%)",
+            file=sys.stderr,
+        )
+
+        if args.perf_regression_policy.startswith("revert"):
+            reverted, reason = _revert_single_commit(workdir, commit_sha=commit_sha)
+            if not reverted:
+                print(f"[gdnctl] {reason}", file=sys.stderr)
+                return False, True, 1
+            print(
+                "[gdnctl] regression commit reverted successfully; champion remains "
+                f"{str(champion.get('commit', 'unknown'))[:12]}."
+            )
+            if args.perf_regression_policy == "revert-continue":
+                return True, False, 0
+            return True, True, 0
+
+        if args.perf_regression_policy == "continue":
+            return True, False, 0
+        if args.perf_regression_policy == "count-failure":
+            return True, True, 0
+        return False, True, 1
+
+    candidate_record["decision"] = "within_threshold"
+    history.append(candidate_record)
+    state["history"] = history
+    _save_perf_state(perf_state_path, state)
+    print(
+        "[gdnctl] performance within hold band vs champion: "
+        f"{champion_value:.6g} -> {metric_value:.6g} ({delta_pct:+.2f}%)"
+    )
+    return True, False, 0
+
+
 def _stream_subprocess_output_to_file(
     proc: subprocess.Popen[str],
     *,
@@ -328,10 +651,7 @@ def _hold_dev_tpu_for_loop(
             while time.time() < deadline:
                 if ready_event.is_set():
                     args.active_dev_tpu_cluster = cluster
-                    print(
-                        "[gdnctl] dev TPU allocation is active: "
-                        f"dev-tpu-{args.dev_tpu_name} (cluster {cluster})"
-                    )
+                    print("[gdnctl] dev TPU allocation is active: " f"dev-tpu-{args.dev_tpu_name} (cluster {cluster})")
                     try:
                         yield
                     finally:
@@ -378,8 +698,7 @@ def _hold_dev_tpu_for_loop(
 
         if attempt < args.dev_tpu_allocate_attempts and args.dev_tpu_allocate_retry_sleep > 0:
             print(
-                "[gdnctl] retrying managed dev TPU allocation in "
-                f"{args.dev_tpu_allocate_retry_sleep:.1f}s",
+                "[gdnctl] retrying managed dev TPU allocation in " f"{args.dev_tpu_allocate_retry_sleep:.1f}s",
                 file=sys.stderr,
             )
             time.sleep(args.dev_tpu_allocate_retry_sleep)
@@ -387,8 +706,7 @@ def _hold_dev_tpu_for_loop(
     error_message = last_error or "[gdnctl] managed dev TPU allocation failed without diagnostic output."
     if args.hold_dev_tpu_policy == "best-effort":
         print(
-            "[gdnctl] WARNING: managed dev TPU allocation failed; continuing without held dev TPU.\n"
-            f"{error_message}",
+            "[gdnctl] WARNING: managed dev TPU allocation failed; continuing without held dev TPU.\n" f"{error_message}",
             file=sys.stderr,
         )
         yield
@@ -437,8 +755,7 @@ def _restore_stash_tree(cwd: Path, *, stash_ref: str, stash_message: str) -> boo
         return True
 
     print(
-        "[gdnctl] stash restore failed; stash was kept for manual recovery "
-        f"({stash_ref}, message={stash_message}).",
+        "[gdnctl] stash restore failed; stash was kept for manual recovery " f"({stash_ref}, message={stash_message}).",
         file=sys.stderr,
     )
     return False
@@ -556,6 +873,17 @@ def _validation_gate_session_directive(args: argparse.Namespace) -> str:
         f"- Required tests target: `{args.validation_tests}`\n"
         "- Required profile: one completed profile run per iteration.\n"
         "- If dev TPU path is unavailable/fails, fall back to ray-test/ray-profile and wait for completion."
+    )
+
+
+def _performance_policy_session_directive(args: argparse.Namespace, *, perf_state_path: Path) -> str:
+    return (
+        "Performance governance is active for this codex-loop run.\n\n"
+        f"- Primary metric: `{args.perf_metric}`\n"
+        f"- Promote champion only when improvement >= {args.perf_min_improvement_pct:.3f}%.\n"
+        f"- Regression threshold: {args.perf_max_regression_pct:.3f}% below champion.\n"
+        f"- Regression policy: `{args.perf_regression_policy}`\n"
+        f"- State file: `{perf_state_path}`"
     )
 
 
@@ -760,9 +1088,13 @@ def _profile_command_lines(
         lines.append("uv sync --all-packages --extra=tpu --python=3.11")
     else:
         lines.append("uv sync")
-    lines.append(f"uv pip install --python .venv/bin/python --index-url {shlex.quote(TORCH_CPU_INDEX)} --force-reinstall torch")
+    lines.append(
+        "uv pip install --python .venv/bin/python " f"--index-url {shlex.quote(TORCH_CPU_INDEX)} --force-reinstall torch"
+    )
     lines.append("(uv pip uninstall --python .venv/bin/python torchvision || true)")
-    lines.append(f".venv/bin/python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile {shlex.join(profile_args)}")
+    lines.append(
+        ".venv/bin/python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile " f"{shlex.join(profile_args)}"
+    )
     return lines
 
 
@@ -842,6 +1174,15 @@ def cmd_dev_tpu_profile(args: argparse.Namespace) -> int:
     profile_cmd_lines = _profile_command_lines(include_tpu_sync=True, profile_args=profile_args)
     cmd += ["--", " && ".join(profile_cmd_lines)]
     return _run(cmd, check=False).returncode
+
+
+def _run_command_with_output(cmd: Sequence[str], *, cwd: Path | None = None) -> tuple[int, str]:
+    proc = _run(cmd, cwd=cwd, capture_output=True, check=False)
+    if proc.stdout:
+        sys.stdout.write(proc.stdout)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
 def cmd_ray_wait(args: argparse.Namespace) -> int:
@@ -982,8 +1323,7 @@ def _run_post_checks_with_retries(
                 if attempt > retries:
                     return False, exc.returncode or 1
                 print(
-                    "[gdnctl] post-check failed "
-                    f"(attempt {attempt}/{retries + 1}) for command: {command}",
+                    "[gdnctl] post-check failed " f"(attempt {attempt}/{retries + 1}) for command: {command}",
                     file=sys.stderr,
                 )
                 if retry_sleep_seconds > 0:
@@ -1054,8 +1394,7 @@ def _run_validation_ray_test_once(args: argparse.Namespace, *, cluster: str) -> 
     if proc.returncode != 0 and "No cluster config found for region" in combined:
         _validation_bad_ray_clusters(args).add(cluster)
         print(
-            "[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: "
-            f"{cluster}",
+            "[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: " f"{cluster}",
             file=sys.stderr,
         )
         return proc.returncode, False
@@ -1099,7 +1438,12 @@ def _run_validation_tests_once(args: argparse.Namespace) -> tuple[int, bool]:
     return last_rc, retryable
 
 
-def _run_validation_ray_profile_once(args: argparse.Namespace, *, cluster: str, run_name_prefix: str) -> tuple[int, bool]:
+def _run_validation_ray_profile_once(
+    args: argparse.Namespace,
+    *,
+    cluster: str,
+    run_name_prefix: str,
+) -> tuple[int, bool, str]:
     cmd = [
         *RAY_RUN,
         "--cluster",
@@ -1128,24 +1472,18 @@ def _run_validation_ray_profile_once(args: argparse.Namespace, *, cluster: str, 
     profile_cmd = " && ".join(profile_cmd_lines)
     cmd += ["--", "bash", "-lc", profile_cmd]
 
-    proc = _run(cmd, capture_output=True, check=False)
-    if proc.stdout:
-        sys.stdout.write(proc.stdout)
-    if proc.stderr:
-        sys.stderr.write(proc.stderr)
-    combined = (proc.stdout or "") + (proc.stderr or "")
-    if proc.returncode != 0 and "No cluster config found for region" in combined:
+    rc, combined = _run_command_with_output(cmd)
+    if rc != 0 and "No cluster config found for region" in combined:
         _validation_bad_ray_clusters(args).add(cluster)
         print(
-            "[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: "
-            f"{cluster}",
+            "[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: " f"{cluster}",
             file=sys.stderr,
         )
-        return proc.returncode, False
-    return proc.returncode, True
+        return rc, False, combined
+    return rc, True, combined
 
 
-def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) -> tuple[int, bool]:
+def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) -> tuple[int, bool, dict[str, object]]:
     profile_prefix = f"{args.validation_profile_run_name_prefix}_iter{iteration:03d}"
     active_cluster = getattr(args, "active_dev_tpu_cluster", None)
     if args.dev_tpu_name and active_cluster is not None:
@@ -1166,9 +1504,30 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             dry_run=args.validation_profile_dry_run,
             no_sync=args.validation_dev_no_sync,
         )
-        rc = cmd_dev_tpu_profile(dev_profile_args)
+        cmd = [
+            *DEV_TPU,
+            "--cluster",
+            dev_profile_args.cluster,
+            "--tpu-name",
+            dev_profile_args.tpu_name,
+            "execute",
+        ]
+        _append_profile_env(cmd, dev_profile_args)
+        if dev_profile_args.marin_prefix:
+            marin_prefix = dev_profile_args.marin_prefix
+        else:
+            marin_prefix = f"gs://marin-{dev_profile_args.cluster}"
+        cmd += ["-e", f"MARIN_PREFIX={marin_prefix}"]
+        if dev_profile_args.no_sync:
+            cmd.append("--no-sync")
+        profile_args = ["--force_run_failed", "true"]
+        if dev_profile_args.dry_run:
+            profile_args += ["--dry_run", "true"]
+        profile_cmd_lines = _profile_command_lines(include_tpu_sync=True, profile_args=profile_args)
+        cmd += ["--", " && ".join(profile_cmd_lines)]
+        rc, output_text = _run_command_with_output(cmd)
         if rc == 0:
-            return 0, True
+            return 0, True, _collect_profile_metrics(args, output_text=output_text, profile_prefix=profile_prefix)
         print(
             "[gdnctl] validation profile failed on held dev TPU; trying Ray fallback.",
             file=sys.stderr,
@@ -1180,26 +1539,34 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             "[gdnctl] no valid Ray clusters remain for validation profile.",
             file=sys.stderr,
         )
-        return 1, False
+        return 1, False, {"profile_prefix": profile_prefix}
 
     last_rc = 1
     retryable = False
+    last_output = ""
     for cluster in clusters:
-        rc, cluster_retryable = _run_validation_ray_profile_once(
+        rc, cluster_retryable, output_text = _run_validation_ray_profile_once(
             args,
             cluster=cluster,
             run_name_prefix=profile_prefix,
         )
         if rc == 0:
-            return 0, True
+            return 0, True, _collect_profile_metrics(args, output_text=output_text, profile_prefix=profile_prefix)
         last_rc = rc
+        last_output = output_text
         retryable = retryable or cluster_retryable
-    return last_rc, retryable
+    if last_output:
+        return last_rc, retryable, _collect_profile_metrics(args, output_text=last_output, profile_prefix=profile_prefix)
+    return last_rc, retryable, {"profile_prefix": profile_prefix}
 
 
-def _run_validation_gate_for_iteration(args: argparse.Namespace, *, iteration: int) -> tuple[bool, int]:
+def _run_validation_gate_for_iteration(
+    args: argparse.Namespace,
+    *,
+    iteration: int,
+) -> tuple[bool, int, dict[str, object]]:
     if args.validation_mode != "required":
-        return True, 0
+        return True, 0, {}
 
     def should_continue(attempt: int) -> bool:
         if args.validation_max_attempts < 0:
@@ -1213,32 +1580,31 @@ def _run_validation_gate_for_iteration(args: argparse.Namespace, *, iteration: i
         if rc == 0:
             break
         if not retryable:
-            return False, rc
+            return False, rc, {}
         if not should_continue(attempt):
-            return False, rc
+            return False, rc, {}
         if args.validation_retry_sleep > 0:
             print(
-                "[gdnctl] validation tests failed; waiting "
-                f"{args.validation_retry_sleep:.1f}s before retry.",
+                "[gdnctl] validation tests failed; waiting " f"{args.validation_retry_sleep:.1f}s before retry.",
                 file=sys.stderr,
             )
             time.sleep(args.validation_retry_sleep)
         attempt += 1
 
     attempt = 1
+    validation_info: dict[str, object] = {}
     while True:
         print(f"[gdnctl] validation profile attempt {attempt}")
-        rc, retryable = _run_validation_profile_once(args, iteration=iteration)
+        rc, retryable, validation_info = _run_validation_profile_once(args, iteration=iteration)
         if rc == 0:
-            return True, 0
+            return True, 0, validation_info
         if not retryable:
-            return False, rc
+            return False, rc, validation_info
         if not should_continue(attempt):
-            return False, rc
+            return False, rc, validation_info
         if args.validation_retry_sleep > 0:
             print(
-                "[gdnctl] validation profile failed; waiting "
-                f"{args.validation_retry_sleep:.1f}s before retry.",
+                "[gdnctl] validation profile failed; waiting " f"{args.validation_retry_sleep:.1f}s before retry.",
                 file=sys.stderr,
             )
             time.sleep(args.validation_retry_sleep)
@@ -1270,6 +1636,9 @@ def _apply_resilient_defaults(args: argparse.Namespace) -> None:
     args.codex_retries = max(args.codex_retries, 2)
     args.post_check_retries = max(args.post_check_retries, 2)
     args.validation_mode = "required"
+    args.perf_mode = "required"
+    if args.perf_regression_policy == "fail":
+        args.perf_regression_policy = "revert-count-failure"
     if args.validation_max_attempts >= 0:
         args.validation_max_attempts = -1
 
@@ -1313,6 +1682,9 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     base_session_directives = _load_session_directives(args)
     log_dir = Path(args.log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
+    perf_state_path = (
+        Path(args.perf_state_file).resolve() if args.perf_state_file else (log_dir / "perf_state.json").resolve()
+    )
 
     _apply_resilient_defaults(args)
 
@@ -1354,6 +1726,15 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     if args.validation_retry_sleep < 0:
         raise SystemExit("[gdnctl] --validation-retry-sleep must be >= 0.")
 
+    if args.perf_mode == "required" and args.validation_mode != "required":
+        raise SystemExit("[gdnctl] --perf-mode=required requires --validation-mode=required.")
+
+    if args.perf_min_improvement_pct < 0:
+        raise SystemExit("[gdnctl] --perf-min-improvement-pct must be >= 0.")
+
+    if args.perf_max_regression_pct < 0:
+        raise SystemExit("[gdnctl] --perf-max-regression-pct must be >= 0.")
+
     if args.resilient:
         print(
             "[gdnctl] resilient mode active: unlimited failures, stash dirty handling, "
@@ -1389,6 +1770,8 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
             )
         if args.validation_mode == "required":
             session_directives.append(_validation_gate_session_directive(args))
+        if args.perf_mode == "required":
+            session_directives.append(_performance_policy_session_directive(args, perf_state_path=perf_state_path))
         if session_directives:
             print(f"[gdnctl] session directives: {len(session_directives)} loaded")
 
@@ -1461,7 +1844,9 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                     head_after = _git_head(workdir)
                     missing_commit = args.require_new_commit and head_after == head_before
 
-                    validation_ok, validation_rc = _run_validation_gate_for_iteration(args, iteration=iteration)
+                    validation_ok, validation_rc, validation_info = _run_validation_gate_for_iteration(
+                        args, iteration=iteration
+                    )
                     if not validation_ok:
                         message = (
                             "[gdnctl] Iteration failed required TPU validation/profile gate. "
@@ -1518,6 +1903,26 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                             failures += 1
                             if _failure_limit_exceeded(failures=failures, max_failures=args.max_failures):
                                 return 3
+                        continue
+
+                    perf_ok, perf_count_failure, perf_rc = _apply_performance_policy(
+                        args,
+                        workdir=workdir,
+                        perf_state_path=perf_state_path,
+                        iteration=iteration,
+                        commit_sha=head_after,
+                        validation_info=validation_info,
+                    )
+                    if not perf_ok:
+                        print(
+                            "[gdnctl] performance policy failed this iteration.",
+                            file=sys.stderr,
+                        )
+                        return perf_rc or 1
+                    if perf_count_failure:
+                        failures += 1
+                        if _failure_limit_exceeded(failures=failures, max_failures=args.max_failures):
+                            return perf_rc or 1
                         continue
 
                     if iteration < args.iterations and args.sleep_seconds > 0:
@@ -1818,6 +2223,50 @@ def build_parser() -> argparse.ArgumentParser:
         "--validation-profile-dry-run",
         action="store_true",
         help="Use executor dry-run for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--perf-mode",
+        choices=["required", "off"],
+        default="required",
+        help="Whether each validated iteration must include parseable performance metrics.",
+    )
+    codex_loop.add_argument(
+        "--perf-state-file",
+        default=None,
+        help="Path to champion/baseline performance state JSON (defaults to <log-dir>/perf_state.json).",
+    )
+    codex_loop.add_argument(
+        "--perf-metric",
+        default="throughput/mfu",
+        help="Primary metric used for champion comparison.",
+    )
+    codex_loop.add_argument(
+        "--perf-min-improvement-pct",
+        type=float,
+        default=0.25,
+        help="Minimum percent gain vs champion required to promote a new champion.",
+    )
+    codex_loop.add_argument(
+        "--perf-max-regression-pct",
+        type=float,
+        default=1.0,
+        help="Maximum allowed regression percent vs champion before policy triggers.",
+    )
+    codex_loop.add_argument(
+        "--perf-regression-policy",
+        choices=["revert-count-failure", "revert-continue", "fail", "count-failure", "continue"],
+        default="revert-count-failure",
+        help="Action when performance regresses beyond threshold.",
+    )
+    codex_loop.add_argument(
+        "--perf-wandb-entity",
+        default="marin-community",
+        help="W&B entity used when discovering/fetching profile summaries.",
+    )
+    codex_loop.add_argument(
+        "--perf-wandb-project",
+        default="marin",
+        help="W&B project used when discovering/fetching profile summaries.",
     )
     codex_loop.add_argument(
         "--post-check-policy",
