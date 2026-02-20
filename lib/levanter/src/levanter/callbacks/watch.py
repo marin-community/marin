@@ -85,48 +85,29 @@ def compute_watch_stats(
     _validate_watch_targets(watch_targets)
 
     to_log: dict[str, jax.Array | Histogram] = {}
+    tree_targets: dict[Target, tuple[str, PyTree | None]] = {
+        "grads": ("grad", grads),
+        "params": ("params", params),
+        "updates": ("updates", updates),
+    }
 
     for target in watch_targets:
-        if target == "grads":
-            if grads is None:
-                raise ValueError("grads must be provided when watch_targets includes 'grads'")
+        if target in tree_targets:
+            prefix, tree = tree_targets[target]
+            if tree is None:
+                raise ValueError(f"{target} must be provided when watch_targets includes '{target}'")
             stats = summary_statistics_for_tree(
-                "grad",
-                grads,
+                prefix,
+                tree,
                 split_scan_layers,
                 include_histogram=include_histogram,
                 include_norms=include_norms,
                 include_per_parameter_norms=include_per_parameter_norms,
             )
             to_log.update(stats)
+            continue
 
-        elif target == "params":
-            if params is None:
-                raise ValueError("params must be provided when watch_targets includes 'params'")
-            stats = summary_statistics_for_tree(
-                "params",
-                params,
-                split_scan_layers,
-                include_histogram=include_histogram,
-                include_norms=include_norms,
-                include_per_parameter_norms=include_per_parameter_norms,
-            )
-            to_log.update(stats)
-
-        elif target == "updates":
-            if updates is None:
-                raise ValueError("updates must be provided when watch_targets includes 'updates'")
-            stats = summary_statistics_for_tree(
-                "updates",
-                updates,
-                split_scan_layers,
-                include_histogram=include_histogram,
-                include_norms=include_norms,
-                include_per_parameter_norms=include_per_parameter_norms,
-            )
-            to_log.update(stats)
-
-        elif target == "opt_state":
+        if target == "opt_state":
             if opt_state is None:
                 raise ValueError("opt_state must be provided when watch_targets includes 'opt_state'")
 
@@ -235,10 +216,3 @@ class WatchCallback(JitCallback[S, M, dict[str, jax.Array | Histogram]]):
 
     def on_step(self, step_info: S, cb_info: dict[str, jax.Array | Histogram]):
         levanter.tracker.log(cb_info, step=int(step_info.step))
-
-    # Optimizer states can have weird/arbitrary structures, but the states we care about
-    # are PyTrees with the same class as our model parameters (e.g., NamedArray, jax arrays, etc.)
-    # opt_state/inner_state/1/nu/ --> we want nu
-    def _munge_key_name(self, path: Sequence[Any]) -> str:
-        """Helper method to format optimizer state keys."""
-        return _munge_key_name(path)
