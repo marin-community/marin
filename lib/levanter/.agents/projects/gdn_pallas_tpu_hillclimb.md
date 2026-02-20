@@ -622,3 +622,69 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / regression (failed attempt)**. MFU regressed beyond the 1% regression threshold and dominant hotspot category remained `custom-call`.
 - Why this did not unlock a large speedup: the lane-safe full-sequence forward path reduced one forward closed-call pallas site but introduced additional shard-map pallas time, leaving the dominant backward custom-call unchanged and raising total custom-call wall time.
 - Next bold hypothesis (escalation): implement a true FLA Experiment A backward decomposition (separate chunk-local adjoint/precompute kernel from recurrent `dS` apply kernel), then pipeline only the recurrent stage with `emit_pipeline` so launch count drops without creating extra forward shard-map pressure.
+
+### Iteration 16 - Macro Move B / FLA Experiment A extension: transpose-fused dot paths in split kernels (reverted)
+
+- Date: 2026-02-20T18:08:22Z
+- Commit: none (failed attempt)
+- Loop session/local index: `1/20`
+- Starting commit: `5c44b4ca545b04febdec13995671d1011c1032a1`
+- Dominant bottleneck carried in (from baseline trace `.profiles/wandb/gdn_emitpipe_i1_dev_130m_ch128_seg16_20steps-a499c1/plugins/profile/2026_02_20_13_35_37/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `custom-call`: `174.229 ms` (dominant category).
+  - Top GDN shard-map callsites:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `85.704 ms`
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `75.049 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move B**: transpose-fuse all hot chunkwise fwd+bwd matmuls through one `dot_general` helper (`+10-18%`, medium/high risk from backward lowering changes).
+  2. **Macro Move C**: BF16-input/FP32-accumulation kernel policy across split solve/recurrent kernels (`+10-20%`, high numerical parity risk).
+  3. **Macro Move D**: full-sequence backward `emit_pipeline` active at `head_dim=64` (`+15-30%`, very high layout/compile risk).
+- Selected macro-move category: **B) Replace `jnp.matmul(..., x.T)` with `lax.dot_general`**.
+- Selected hypothesis: push transpose-fused `dot_general` through the hot split-kernel path (forward prepare/recurrent + backward chunk adjoint) so transpose materialization costs drop and the dominant backward shard-map call gets faster.
+
+- Change summary:
+  - Extended `_mxu_matmul_f32` to support transpose-fused `dot_general` via dimension numbers (`transpose_a` / `transpose_b`) with explicit FP32 output type.
+  - Migrated hot split-kernel matmul callsites in `lib/levanter/src/levanter/layers/gated_deltanet.py` to the fused helper (forward prepare/recurrent + backward chunk math).
+  - Attempted BF16 default precision in hot kernels first; TPU correctness regressed heavily, so precision defaults were restored to FP32 before final validation/profile.
+  - Reverted all speculative kernel code after profile regression; tree intentionally left without speculative kernel changes.
+
+- Correctness checks:
+  - Initial attempt (BF16 default) command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Result: failed (`34 failed, 53 passed, 2 skipped`) due parity drift in flash chunk/layer tests.
+  - Final validated code path command (after restoring FP32 defaults):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Infra blockers on dev TPU:
+      - mid-run disconnect: `Connection to 34.162.199.237 closed by remote host`
+      - subsequent availability failure: `ssh: connect to host 34.162.199.237 port 22: Connection refused`
+  - Required fallback validation (per managed-mode directive):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+    - Ray job `ray-run-calvinxu-levanter-20260220-175425` succeeded: `49 passed, 40 skipped`.
+
+- Profile run (Ray fallback):
+  - Submit:
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_dotfuse_struct_i1_ray --no-wait`
+    - Submission id: `ray-run-calvinxu-bash-20260220-175945`
+  - Wait:
+    - `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-east5-a ray-run-calvinxu-bash-20260220-175945 --show-logs --tail 400`
+  - Result:
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_dotfuse_struct_i1_ray_130m_ch128_seg16_20steps-2dea1f`
+    - W&B profiler artifact: `run-gdn_dotfuse_struct_i1_ray_130m_ch128_seg16_20steps-2dea1f-profiler:v0`
+    - Downloaded trace: `.profiles/wandb/gdn_dotfuse_struct_i1_ray/plugins/profile/2026_02_20_10_05_12/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU XLA Ops `pid=3, tid=3`, vs baseline trace above):
+  - `custom-call` (`hlo_category` aggregate): `174.229 ms -> 195.450 ms` (`+12.18%`).
+  - Dominant backward GDN callsite got slower (hotspot unchanged):
+    - `transpose(jvp(...))/closed_call/shard_map/pallas_call:` `85.704 ms -> 106.919 ms` (`+24.75%`).
+  - Forward dominant GDN callsite stayed flat:
+    - `jvp(...)/closed_call/shard_map/pallas_call:` `75.049 ms -> 75.052 ms` (`+0.00%`).
+  - `all-gather`: `32.731 ms -> 32.732 ms` (flat).
+
+- MFU/throughput delta (vs baseline run `gdn_emitpipe_i1_dev_130m_ch128_seg16_20steps-a499c1`):
+  - `throughput/mfu`: `4.41497 -> 4.16744` (`-5.61%`).
+  - `throughput/tokens_per_second`: `142823.53 -> 134815.80` (`-5.61%`).
+  - `throughput/duration`: `0.22943s -> 0.24306s` (`+5.94%`).
+
+- Assessment: **failed attempt / regression**. Dominant hotspot class stayed `custom-call` and worsened materially.
+- Why this did not unlock a large speedup: transpose-fused lowering in the backward-heavy shard-map path increased wall time for the same dominant callsite, offsetting any expected transpose elimination wins.
+- Next bold hypothesis (escalation): avoid another local math rewrite and move to a launch/dataflow redesign that reduces backward custom-call pressure, e.g. FLA Experiment A backward decomposition (chunk-local adjoint precompute kernel + recurrent `dS` apply kernel) with pipeline-only recurrence.
