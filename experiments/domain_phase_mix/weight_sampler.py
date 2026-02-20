@@ -361,6 +361,7 @@ class WeightSampler:
         n: int,
         deduplicate: bool = True,
         precision: int = 2,
+        existing_configs: list[WeightConfig] | None = None,
     ) -> list[WeightConfig]:
         """Sample n unique configurations with optional deduplication.
 
@@ -368,12 +369,20 @@ class WeightSampler:
             n: Number of configurations to sample.
             deduplicate: Whether to remove near-duplicate configurations.
             precision: Decimal places for deduplication comparison.
+            existing_configs: Previously sampled configs to avoid when checking
+                min_config_distance. New configs will be well-separated from
+                both each other and these existing configs.
 
         Returns:
             List of n WeightConfig instances.
         """
         configs: list[WeightConfig] = []
         seen_hashes: set[str] = set()
+
+        # Distance check pool includes existing configs so new samples are
+        # well-separated from both previously accepted new configs AND the
+        # existing ones.
+        distance_pool: list[WeightConfig] = list(existing_configs) if existing_configs else []
 
         attempts = 0
         max_attempts = n * self.SAMPLE_MULTIPLIER
@@ -390,16 +399,16 @@ class WeightSampler:
                     continue
                 seen_hashes.add(config_hash)
 
-            # Check minimum distance to previous configs
-            if min_dist > 0 and configs:
-                # Compute minimum distance to any previous config
-                min_distance_to_prev = min(self._config_distance(config, prev) for prev in configs)
+            # Check minimum distance to all configs in the distance pool
+            if min_dist > 0 and distance_pool:
+                min_distance_to_prev = min(self._config_distance(config, prev) for prev in distance_pool)
                 if min_distance_to_prev < min_dist:
                     attempts += 1
                     continue
 
             config.run_id = len(configs)
             configs.append(config)
+            distance_pool.append(config)
             attempts += 1
 
         if len(configs) < n:

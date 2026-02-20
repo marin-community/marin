@@ -247,7 +247,7 @@ BASELINES.extend(
         # PCEQ: predicted BPB=0.883
         # Submitted at wrong grid point; correct optimum is ([0.794, 0.206], [0.782, 0.218]).
         ([0.797, 0.203], [0.772, 0.228]),
-        ([0.794, 0.206], [0.782, 0.218])
+        ([0.794, 0.206], [0.782, 0.218]),
     ]
 )
 

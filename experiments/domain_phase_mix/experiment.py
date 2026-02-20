@@ -362,6 +362,7 @@ class MixtureExperiment:
         seed: int = 42,
         name_prefix: str | None = None,
         additional_configs: Sequence[WeightConfig] | None = None,
+        existing_configs: Sequence[WeightConfig] | None = None,
     ) -> tuple[ExecutorStep, Sequence[ExecutorStep]]:
         """Create all steps for the swarm experiment.
 
@@ -371,6 +372,8 @@ class MixtureExperiment:
             name_prefix: Prefix for run names.
             additional_configs: Additional weight configs to include (e.g., baseline configs).
                 These are added to the weight_configs.json but no training steps are created for them.
+            existing_configs: Previously sampled configs to avoid when checking
+                min_config_distance. New configs will be well-separated from these.
 
         Returns:
             Tuple of (weight_configs_step, training_steps).
@@ -380,7 +383,9 @@ class MixtureExperiment:
 
         # Sample weight configurations
         sampler = self.create_weight_sampler(seed=seed)
-        configs = sampler.sample_n_configs(n_runs, deduplicate=True)
+        configs = sampler.sample_n_configs(
+            n_runs, deduplicate=True, existing_configs=list(existing_configs) if existing_configs else None
+        )
 
         # Include additional configs (e.g., baselines) in the saved configs
         all_configs = list(configs)
