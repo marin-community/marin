@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "91a0b47f4547",
+  "strategy": "manual-commit",
+  "branch": "rav-configure-zephyr-worker-wait",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "lib/zephyr/src/zephyr/cli.py",
+    "lib/zephyr/src/zephyr/execution.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/91/a0b47f4547/0/metadata.json",
+      "transcript": "/91/a0b47f4547/0/full.jsonl",
+      "context": "/91/a0b47f4547/0/context.md",
+      "content_hash": "/91/a0b47f4547/0/content_hash.txt",
+      "prompt": "/91/a0b47f4547/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 25,
+    "cache_creation_tokens": 6008,
+    "cache_read_tokens": 1193509,
+    "output_tokens": 995,
+    "api_call_count": 19
+  }
+}
