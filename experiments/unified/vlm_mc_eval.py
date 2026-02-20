@@ -14,12 +14,13 @@ Supports two task types:
   log P(answer | prompt + image) → mean normalized log-likelihood.
 
 Both task types reuse the same Levanter loglikelihood infrastructure:
-PromptCompletion → greedy_pack → _shard_batch_for_eval → process_loglikelihood.
+PromptCompletion → greedy_pack → broadcast_shard → process_loglikelihood.
 
 All processes run the same eval loop (no coordinator/worker split). Each process
-independently builds the same deterministic batches and provides its local shard
-via jax.make_array_from_callback, avoiding the multi-host broadcast_shard
-synchronization issues that caused "unexpected peer" TPU crashes.
+independently builds batches, then broadcast_shard distributes process 0's data
+to all hosts as a JIT collective — providing both data identity and per-batch
+synchronization. barrier_sync() TCP barriers between benchmarks prevent host
+drift from CPU work (logging, result aggregation).
 
 Usage (standalone):
     uv run experiments/unified/vlm_mc_eval.py \
@@ -56,7 +57,7 @@ from levanter.eval_harness import (
     _LmEvalHarnessWorker,
     get_padding_count_from_batch,
 )
-from levanter.utils.background_iterable import BackgroundIterator
+from levanter.utils.jax_utils import barrier_sync, broadcast_shard
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -68,29 +69,6 @@ from marin.utils import fsspec_glob
 logger = logging.getLogger(__name__)
 
 MC_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"]
-
-
-def _shard_batch_for_eval(batch, axis_resources):
-    """Shard a local CPU batch onto the TPU mesh for multi-host evaluation.
-
-    All processes must hold identical batch data (same parquets, deterministic
-    packing). Each process provides its local shard via make_array_from_callback,
-    which is multi-host safe — unlike hax.shard / jax.device_put which crash when
-    the sharding references non-addressable devices.
-    """
-    shardings = hax.partitioning.infer_resource_partitions(batch, axis_resources)
-
-    def _shard_leaf(leaf, sharding):
-        if sharding is None:
-            return leaf
-        if isinstance(leaf, hax.NamedArray):
-            arr = np.asarray(leaf.array)
-            global_arr = jax.make_array_from_callback(arr.shape, sharding, lambda idx, _a=arr: _a[idx])
-            return hax.named(global_arr, leaf.axes)
-        arr = np.asarray(leaf)
-        return jax.make_array_from_callback(arr.shape, sharding, lambda idx, _a=arr: _a[idx])
-
-    return jax.tree.map(_shard_leaf, batch, shardings, is_leaf=lambda x: isinstance(x, hax.NamedArray))
 
 
 # Benchmark parquet paths
@@ -371,8 +349,7 @@ def evaluate_vlm_mc_benchmark(
         max_segments_per_example=worker.max_packed_segments,
     )
 
-    packed_iterator = stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch)
-    packed_iterator = BackgroundIterator(packed_iterator, max_capacity=64)
+    all_batches = list(stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch))
 
     result_probs = np.zeros(len(all_completions))
     covered_points = np.zeros(len(all_completions), dtype=bool)
@@ -380,10 +357,11 @@ def evaluate_vlm_mc_benchmark(
     total_tokens_expected = len(packed) * worker.EvalPos.size
     pbar = tqdm(total=total_tokens_expected, desc="vlm_mc_eval", unit="tok")
 
-    for batch in packed_iterator:
+    for batch in all_batches:
         _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
 
-        batch = _shard_batch_for_eval(batch, worker.axis_resources)
+        shardings = hax.partitioning.infer_resource_partitions(batch, worker.axis_resources)
+        batch = broadcast_shard(batch, shardings)
         out_ids, out_lls, _out_correct = worker.process_loglikelihood(batch)
 
         out_ids = jax.device_get(out_ids.array)
@@ -581,8 +559,7 @@ def evaluate_vlm_open_ended_benchmark(
         max_segments_per_example=worker.max_packed_segments,
     )
 
-    packed_iterator = stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch)
-    packed_iterator = BackgroundIterator(packed_iterator, max_capacity=64)
+    all_batches = list(stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch))
 
     result_probs = np.zeros(len(all_completions))
     covered_points = np.zeros(len(all_completions), dtype=bool)
@@ -590,10 +567,11 @@ def evaluate_vlm_open_ended_benchmark(
     total_tokens_expected = len(packed) * worker.EvalPos.size
     pbar = tqdm(total=total_tokens_expected, desc="vlm_open_ended_eval", unit="tok")
 
-    for batch in packed_iterator:
+    for batch in all_batches:
         _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
 
-        batch = _shard_batch_for_eval(batch, worker.axis_resources)
+        shardings = hax.partitioning.infer_resource_partitions(batch, worker.axis_resources)
+        batch = broadcast_shard(batch, shardings)
         out_ids, out_lls, _out_correct = worker.process_loglikelihood(batch)
 
         out_ids = jax.device_get(out_ids.array)
@@ -760,7 +738,7 @@ def main():
 
         EvalPos = model.Pos if args.max_length is None else model.Pos.resize(args.max_length)
 
-        # All processes prepare data and run eval independently (no coordinator/worker split).
+        # All processes prepare data independently, then eval in lockstep via broadcast_shard.
         prepared: dict[str, tuple] = {}
         for bench_name in args.benchmarks:
             parquet_paths = find_benchmark_parquets(bench_name, args.eval_parquet_path)
@@ -790,6 +768,7 @@ def main():
         )
 
         results = {}
+        barrier_sync()
         for bench_name, (task_type, completions, metadata) in prepared.items():
             if not completions:
                 continue
@@ -816,6 +795,8 @@ def main():
                         result["mean_ll"],
                         result["num_questions"],
                     )
+
+            barrier_sync()
 
         if jax.process_index() == 0:
             # Print summary
@@ -917,12 +898,11 @@ def vlm_mc_eval_callback(
             f"{parameter_count(model):,}",
         )
 
-        # All processes prepare data and run eval independently. This avoids
-        # the coordinator/worker broadcast_shard pattern which causes
-        # multi-host TPU synchronization crashes ("unexpected peer" errors).
-        # Data preparation is deterministic (same parquets, same packing),
-        # so all processes produce identical batches. _shard_batch_for_eval
-        # then gives each process its local shard via make_array_from_callback.
+        # All processes prepare data independently, then run eval in lockstep.
+        # broadcast_shard distributes process 0's batch data to all hosts
+        # (tolerating any GCS download non-determinism) and acts as a per-batch
+        # collective barrier. barrier_sync() adds TCP-level barriers between
+        # benchmarks to prevent host drift.
         prepared: dict[str, tuple] = {}
         for bench_name, parquet_paths in bench_parquets.items():
             task_type = bench_task_types[bench_name]
@@ -955,9 +935,10 @@ def vlm_mc_eval_callback(
             max_packed_segments=64,
         )
 
-        # All processes run the same eval loop. process_loglikelihood is a
-        # collective JIT call, so all processes must call it in lockstep.
-        # Only process 0 logs metrics.
+        # All processes run the same eval loop with broadcast_shard providing
+        # per-batch synchronization. barrier_sync between benchmarks prevents
+        # host drift from CPU work (logging, result aggregation).
+        barrier_sync()
         for bench_name, (task_type, completions, metadata) in prepared.items():
             if not completions:
                 continue
@@ -999,6 +980,8 @@ def vlm_mc_eval_callback(
                         {f"eval/{bench_name}/mean_ll": mean_ll},
                         step=step.step,
                     )
+
+            barrier_sync()
 
         logger.info("VLM eval done.")
 
