@@ -226,12 +226,13 @@ class SerialCacheWriter:
         exemplar: T,
         metadata: Optional["CacheMetadata"] = None,
         shard_name: str = "",
+        mode: str = "w",
     ):
         self.cache_dir = cache_dir
         self.metadata = metadata
         self._exemplar = exemplar
         self._shard_name = shard_name
-        self._tree_store = TreeStore.open(exemplar, self.cache_dir, mode="w", cache_metadata=True)
+        self._tree_store = TreeStore.open(exemplar, self.cache_dir, mode=mode, cache_metadata=True)
         self._is_closed = False
 
     def __enter__(self) -> "SerialCacheWriter":
@@ -322,7 +323,7 @@ def build_cache(
 
     with ZephyrContext(
         resources=ResourceConfig(ram="32g", disk="16g"),
-        num_workers=min(128, len(shard_jobs)),
+        max_workers=min(128, len(shard_jobs)),
         name="levanter-cache-build",
     ) as ctx:
         shard_results = ctx.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False)
@@ -457,12 +458,12 @@ def consolidate_shard_caches(
 
     with ZephyrContext(
         resources=ResourceConfig(ram="32g", disk="16g"),
-        num_workers=min(128, len(shard_info)),
+        max_workers=min(128, len(shard_info)),
         name="levanter-cache-copy",
     ) as ctx:
         ctx.execute(
             Dataset.from_list(shard_info).map(_copy_shard),
-            verbose=True,
+            verbose=False,
         )
 
     # do metadata serially b/c of write amplification concerns

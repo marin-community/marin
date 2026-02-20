@@ -85,6 +85,7 @@ nav:
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
       - Deployment: dev-guide/deployment.md
+      - Dev TPU: dev-guide/dev_tpu.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
       - Internal Guidelines: dev-guide/guidelines-internal.md
       - Building Docs: dev-guide/building-docs.md

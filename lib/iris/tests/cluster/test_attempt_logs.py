@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for task attempt log preservation and attempt-aware routing.
 
@@ -28,8 +17,8 @@ import uuid
 import pytest
 from iris.chaos import enable_chaos, reset_chaos
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import load_config, make_local_config
+from iris.cluster.config import load_config, make_local_config
+from iris.cluster.manager import connect_cluster
 from iris.client.client import IrisClient
 from iris.rpc import cluster_pb2
 
@@ -68,11 +57,10 @@ def _reset_chaos_fixture():
 
 @pytest.fixture
 def local_cluster():
-    """Boots a local cluster via ClusterManager, yields (url, client)."""
+    """Boots a local cluster, yields (url, client)."""
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
-    manager = ClusterManager(config)
-    with manager.connect() as url:
+    with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         yield url, client
 
@@ -269,7 +257,7 @@ class TestAttemptLogs:
         assert attempt_0.attempt_id == 0
         assert attempt_0.state == cluster_pb2.TASK_STATE_FAILED
 
-        # Second attempt should have succeeded
-        attempt_1 = task_status.attempts[1]
-        assert attempt_1.attempt_id == 1
-        assert attempt_1.state == cluster_pb2.TASK_STATE_SUCCEEDED
+        # Last attempt should have succeeded (may not be attempts[1] if
+        # transient worker failures caused extra retry cycles)
+        last_attempt = task_status.attempts[-1]
+        assert last_attempt.state == cluster_pb2.TASK_STATE_SUCCEEDED

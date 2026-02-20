@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Cluster debug and validation commands.
 
@@ -53,8 +42,14 @@ def _run_gcloud(args: list[str], check: bool = False) -> subprocess.CompletedPro
     return subprocess.run(["gcloud", *args], capture_output=True, text=True, check=check)
 
 
-def _list_controller_vms(zone: str, project: str) -> list[str]:
-    """Find iris controller VMs in the zone."""
+def _list_controller_vms(zone: str, project: str, label_prefix: str = "iris") -> list[str]:
+    """Find iris controller VMs in the zone.
+
+    Controller VMs are named ``iris-controller-{label_prefix}``.
+    """
+    import re as _re
+
+    name_filter = f"name~^iris-controller-{_re.escape(label_prefix)}$"
     result = _run_gcloud(
         [
             "compute",
@@ -62,7 +57,7 @@ def _list_controller_vms(zone: str, project: str) -> list[str]:
             "list",
             f"--project={project}",
             f"--zones={zone}",
-            "--filter=name~^iris-controller",
+            f"--filter={name_filter}",
             "--format=value(name)",
         ]
     )
@@ -74,9 +69,9 @@ def _list_controller_vms(zone: str, project: str) -> list[str]:
     return [n for n in names if n]
 
 
-def _discover_controller(zone: str, project: str) -> str | None:
+def _discover_controller(zone: str, project: str, label_prefix: str = "iris") -> str | None:
     """Find the controller VM in the given zone."""
-    vm_names = _list_controller_vms(zone, project)
+    vm_names = _list_controller_vms(zone, project, label_prefix)
     if not vm_names:
         return None
     if len(vm_names) > 1:
@@ -111,13 +106,32 @@ def _get_zone_project(ctx: click.Context) -> tuple[str, str]:
     if config.platform.WhichOneof("platform") != "gcp":
         click.echo("Error: Debug commands require a GCP platform config", err=True)
         raise SystemExit(1)
-    platform = config.platform.gcp
-    zone = platform.zone or (platform.default_zones[0] if platform.default_zones else "")
-    project = platform.project_id
-    if not zone or not project:
-        click.echo("Error: Config must specify platform.gcp.project_id and zone", err=True)
+    project = config.platform.gcp.project_id
+    if not project:
+        click.echo("Error: Config must specify platform.gcp.project_id", err=True)
+        raise SystemExit(1)
+    # Zone is now per-slice in ScaleGroupConfig.slice_template.gcp.
+    # For debug commands, pick the zone from the first GCP scale group.
+    zone = ""
+    for sg in config.scale_groups.values():
+        if sg.HasField("slice_template") and sg.slice_template.HasField("gcp"):
+            gcp_slice = sg.slice_template.gcp
+            if gcp_slice.zone:
+                zone = gcp_slice.zone
+            if zone:
+                break
+    if not zone:
+        click.echo("Error: No zone found in any scale group's slice_template.gcp", err=True)
         raise SystemExit(1)
     return zone, project
+
+
+def _get_label_prefix(ctx: click.Context) -> str:
+    """Extract label_prefix from the cluster config in context, defaulting to 'iris'."""
+    config = ctx.obj.get("config")
+    if config and config.platform.label_prefix:
+        return config.platform.label_prefix
+    return "iris"
 
 
 # ─── Validation helpers ──────────────────────────────────────────────────────
@@ -293,7 +307,11 @@ def _run_validation(controller_url: str, workspace: Path, tpu_type: str) -> None
 # ─── Cleanup helpers ─────────────────────────────────────────────────────────
 
 
-def _list_tpu_slices(zone: str, project: str) -> list[str]:
+def _list_tpu_slices(zone: str, project: str, label_prefix: str = "iris") -> list[str]:
+    # TPU slices created by Iris are labeled "{label_prefix}-managed=true".
+    # Use label-based filtering so we match slices for any label_prefix, not
+    # just those whose names start with "iris-".
+    label_filter = f"labels.{label_prefix}-managed=true"
     result = _run_gcloud(
         [
             "compute",
@@ -302,7 +320,7 @@ def _list_tpu_slices(zone: str, project: str) -> list[str]:
             "list",
             f"--project={project}",
             f"--zone={zone}",
-            "--filter=name~^iris-",
+            f"--filter={label_filter}",
             "--format=json",
         ]
     )
@@ -374,9 +392,10 @@ def debug(ctx):
 def discover(ctx):
     """Find controller VM and show its status."""
     zone, project = _get_zone_project(ctx)
+    label_prefix = _get_label_prefix(ctx)
 
     click.echo(f"Searching for controller VM in {zone}...")
-    vm_name = _discover_controller(zone, project)
+    vm_name = _discover_controller(zone, project, label_prefix)
 
     if not vm_name:
         click.echo("No controller VM found.")
@@ -410,8 +429,9 @@ def discover(ctx):
 def ssh_status(ctx, tail: int):
     """SSH into controller and check docker/container status."""
     zone, project = _get_zone_project(ctx)
+    label_prefix = _get_label_prefix(ctx)
 
-    vm_name = _discover_controller(zone, project)
+    vm_name = _discover_controller(zone, project, label_prefix)
     if not vm_name:
         click.echo("No controller VM found.")
         raise SystemExit(1)
@@ -581,8 +601,9 @@ def list_workers(ctx, json_output: bool):
 def logs(ctx, tail: int, follow: bool):
     """Fetch docker logs from the iris-controller container."""
     zone, project = _get_zone_project(ctx)
+    label_prefix = _get_label_prefix(ctx)
 
-    vm_name = _discover_controller(zone, project)
+    vm_name = _discover_controller(zone, project, label_prefix)
     if not vm_name:
         click.echo("No controller VM found.")
         raise SystemExit(1)
@@ -615,8 +636,9 @@ def logs(ctx, tail: int, follow: bool):
 def bootstrap_logs(ctx, tail: int):
     """Fetch startup-script logs from the controller VM."""
     zone, project = _get_zone_project(ctx)
+    label_prefix = _get_label_prefix(ctx)
 
-    vm_name = _discover_controller(zone, project)
+    vm_name = _discover_controller(zone, project, label_prefix)
     if not vm_name:
         click.echo("No controller VM found.")
         raise SystemExit(1)
@@ -706,21 +728,31 @@ def validate(ctx, workspace: Path | None, tpu_type: str):
     default=True,
     help="Dry-run mode (default: True). Use --no-dry-run to actually delete.",
 )
+@click.option(
+    "--label",
+    "label_override",
+    default=None,
+    help="Label prefix for resource filtering (overrides config; default from config or 'iris')",
+)
 @click.pass_context
-def cleanup(ctx, dry_run: bool):
+def cleanup(ctx, dry_run: bool, label_override: str | None):
     """Clean all iris VMs and TPUs from the zone.
 
     By default runs in dry-run mode to show what would be deleted.
     Use --no-dry-run to actually perform deletions.
+
+    Resources are matched by the label prefix from the cluster config
+    (``platform.label_prefix``). Use ``--label`` to override.
     """
     zone, project = _get_zone_project(ctx)
+    label_prefix = label_override or _get_label_prefix(ctx)
 
-    click.echo(f"Scanning zone {zone} in project {project}...")
+    click.echo(f"Scanning zone {zone} in project {project} (label_prefix={label_prefix})...")
     if dry_run:
         click.echo("(DRY-RUN mode - no changes will be made)")
     click.echo()
 
-    controller_vms = _list_controller_vms(zone, project)
+    controller_vms = _list_controller_vms(zone, project, label_prefix)
     if controller_vms:
         click.echo(f"Found {len(controller_vms)} controller VM(s):")
         for name in controller_vms:
@@ -729,7 +761,7 @@ def cleanup(ctx, dry_run: bool):
         click.echo("No controller VMs found.")
     click.echo()
 
-    tpu_slices = _list_tpu_slices(zone, project)
+    tpu_slices = _list_tpu_slices(zone, project, label_prefix)
     if tpu_slices:
         click.echo(f"Found {len(tpu_slices)} TPU slice(s):")
         for name in tpu_slices:
@@ -767,3 +799,69 @@ def cleanup(ctx, dry_run: bool):
     if failed > 0:
         click.echo(f"Failed to delete {failed} resource(s).", err=True)
         sys.exit(1)
+
+
+@debug.command()
+@click.argument("task_id")
+@click.option("--duration", default=10, help="Profiling duration in seconds")
+@click.option("--profiler", type=click.Choice(["cpu", "memory"]), default="cpu", help="Profiler type")
+@click.option("--format", "fmt", help="Output format (cpu: flamegraph|speedscope|raw, memory: flamegraph|table|stats)")
+@click.option("--rate", default=100, help="Sample rate in Hz (CPU profiling only)")
+@click.option("--leaks", is_flag=True, help="Focus on potential memory leaks (memory profiling only)")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.pass_context
+def profile(
+    ctx, task_id: str, duration: int, profiler: str, fmt: str | None, rate: int, leaks: bool, output: str | None
+):
+    """Profile a running task with py-spy (CPU) or memray (memory)."""
+    controller_url = require_controller_url(ctx)
+    client = ControllerServiceClientSync(controller_url, timeout_ms=(duration + 30) * 1000)
+    try:
+        # Build ProfileType based on profiler selection
+        if profiler == "cpu":
+            # Default CPU format: speedscope
+            if not fmt:
+                fmt = "speedscope"
+            format_map = {
+                "flamegraph": cluster_pb2.CpuProfile.FLAMEGRAPH,
+                "speedscope": cluster_pb2.CpuProfile.SPEEDSCOPE,
+                "raw": cluster_pb2.CpuProfile.RAW,
+            }
+            if fmt not in format_map:
+                click.echo(f"Invalid CPU format: {fmt}. Use flamegraph|speedscope|raw", err=True)
+                sys.exit(1)
+            profile_type = cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=format_map[fmt], rate_hz=rate))
+            ext_map = {"flamegraph": "svg", "speedscope": "json", "raw": "txt"}
+        else:  # memory
+            # Default memory format: flamegraph
+            if not fmt:
+                fmt = "flamegraph"
+            format_map = {
+                "flamegraph": cluster_pb2.MemoryProfile.FLAMEGRAPH,
+                "table": cluster_pb2.MemoryProfile.TABLE,
+                "stats": cluster_pb2.MemoryProfile.STATS,
+            }
+            if fmt not in format_map:
+                click.echo(f"Invalid memory format: {fmt}. Use flamegraph|table|stats", err=True)
+                sys.exit(1)
+            profile_type = cluster_pb2.ProfileType(memory=cluster_pb2.MemoryProfile(format=format_map[fmt], leaks=leaks))
+            ext_map = {"flamegraph": "html", "table": "txt", "stats": "json"}
+
+        click.echo(f"Profiling {task_id} for {duration}s ({profiler} profiler, format={fmt})...")
+        resp = client.profile_task(
+            cluster_pb2.ProfileTaskRequest(
+                task_id=task_id,
+                duration_seconds=duration,
+                profile_type=profile_type,
+            )
+        )
+        if resp.error:
+            click.echo(f"Error: {resp.error}", err=True)
+            sys.exit(1)
+
+        ext = ext_map.get(fmt, "bin")
+        out_path = output or f"profile-{profiler}-{task_id.replace('/', '_')}.{ext}"
+        Path(out_path).write_bytes(resp.profile_data)
+        click.echo(f"Profile saved to {out_path} ({len(resp.profile_data)} bytes)")
+    finally:
+        client.close()

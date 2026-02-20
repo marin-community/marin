@@ -27,14 +27,16 @@ option features.field_presence = EXPLICIT;
 
 message GcpPlatformConfig {
   string project_id = 1;
-  string region = 2;
-  string zone = 3;
-  repeated string default_zones = 4;
+  repeated string zones = 5;  // All zones this platform operates in (for list_all_slices)
 }
 
 message ManualPlatformConfig {}
 
 message LocalPlatformConfig {}
+
+message CoreweavePlatformConfig {
+  string region = 1;
+}
 
 message PlatformConfig {
   string label_prefix = 10;  // Default: "iris"
@@ -42,6 +44,7 @@ message PlatformConfig {
     GcpPlatformConfig gcp = 1;
     ManualPlatformConfig manual = 2;
     LocalPlatformConfig local = 3;
+    CoreweavePlatformConfig coreweave = 4;
   }
 }
 
@@ -57,6 +60,72 @@ message ManualProvider {
 }
 
 // ============================================================================
+// VM CONFIGURATION (for platform.create_vm())
+// ============================================================================
+
+message GcpVmConfig {
+  string zone = 1;
+  string machine_type = 2;      // Default: "n2-standard-4"
+  int32 boot_disk_size_gb = 3;  // Default: 50
+}
+
+message ManualVmConfig {
+  string host = 1;
+  string ssh_user = 2;          // Default: "root"
+  string ssh_key_file = 3;
+}
+
+message VmConfig {
+  string name = 1;
+  map<string, string> labels = 2;
+  map<string, string> metadata = 3;
+  oneof platform {
+    GcpVmConfig gcp = 10;
+    ManualVmConfig manual = 11;
+  }
+}
+
+// ============================================================================
+// SLICE CONFIGURATION (for platform.create_slice())
+// ============================================================================
+
+message GcpSliceConfig {
+  string zone = 1;
+  string runtime_version = 2;
+  reserved 3;  // was: preemptible (moved to SliceConfig)
+  string topology = 4;
+  reserved 5;  // was: zones (each slice/scaling group operates in a single zone)
+}
+
+message CoreweaveSliceConfig {
+  string region = 1;
+  string instance_type = 2;
+}
+
+message ManualSliceConfig {
+  repeated string hosts = 1;
+  string ssh_user = 2;          // Default: "root"
+  string ssh_key_file = 3;
+}
+
+message LocalSliceConfig {}
+
+message SliceConfig {
+  string name_prefix = 1;
+  int32 num_vms = 2;
+  AcceleratorType accelerator_type = 3;
+  string accelerator_variant = 4;
+  map<string, string> labels = 5;
+  bool preemptible = 6;
+  oneof platform {
+    GcpSliceConfig gcp = 10;
+    CoreweaveSliceConfig coreweave = 11;
+    ManualSliceConfig manual = 12;
+    LocalSliceConfig local = 13;
+  }
+}
+
+// ============================================================================
 // SCALE GROUP CONFIGURATION
 // ============================================================================
 
@@ -68,14 +137,9 @@ enum AcceleratorType {
   ACCELERATOR_TYPE_TPU = 3;
 }
 
-// VM manager implementation for a scale group
-enum VmType {
-  VM_TYPE_UNSPECIFIED = 0;
-  VM_TYPE_TPU_VM = 1;
-  VM_TYPE_GCE_VM = 2;
-  VM_TYPE_MANUAL_VM = 3;
-  VM_TYPE_LOCAL_VM = 4;
-}
+// Reserved: VmType enum was removed (dispatch now via SliceConfig.WhichOneof("platform"))
+// enum VmType { ... } used field numbers 0-4
+// Callers should use slice_template.WhichOneof("platform") instead.
 
 // Resources available per slice in a scale group.
 message ScaleGroupResources {
@@ -86,30 +150,39 @@ message ScaleGroupResources {
   int32 tpu_count = 5;
 }
 
+message WorkerSettings {
+  map<string, string> attributes = 1;
+  map<string, string> env = 2;
+}
+
 // Configuration for a scale group
 message ScaleGroupConfig {
   string name = 1;
-  VmType vm_type = 2;
+  reserved 2;  // was: vm_type (removed, use slice_template.WhichOneof)
+
+  // Scaling policy
   int32 min_slices = 3 [features.field_presence = EXPLICIT];
   int32 max_slices = 4 [features.field_presence = EXPLICIT];
 
-  // Device configuration
-  AcceleratorType accelerator_type = 9;  // Device type: cpu, gpu, or tpu
-  string accelerator_variant = 10;       // Device variant: e.g., "v5litepod-16", "A100"
-  string topology = 11;                  // Optional topology override (e.g., "4x4")
-  string runtime_version = 12;
-  bool preemptible = 13 [features.field_presence = EXPLICIT];
+  // Device configuration (kept on ScaleGroupConfig for demand matching)
+  AcceleratorType accelerator_type = 9;
+  string accelerator_variant = 10;
+  reserved 11;  // was: topology (now in slice_template.gcp)
+  reserved 12;  // was: runtime_version (now in slice_template.gcp)
+  reserved 13;  // was: preemptible (moved to SliceConfig)
   ScaleGroupResources resources = 14;
-  int32 slice_size = 15 [features.field_presence = EXPLICIT];
+  int32 num_vms = 15 [features.field_presence = EXPLICIT];
 
-  // Zones to use (in priority order)
-  repeated string zones = 20;
+  reserved 20;  // was: zones (now in slice_template.gcp.zone)
 
   // Priority for waterfall routing (lower = higher priority, default 100)
   int32 priority = 30 [features.field_presence = EXPLICIT];
 
-  // Manual provider configuration (required for manual vm_type)
-  ManualProvider manual = 40;
+  reserved 40;  // was: manual (now in slice_template.manual)
+
+  // What to create when scaling up — the slice template
+  SliceConfig slice_template = 50;
+  WorkerSettings worker = 60;
 }
 
 // ============================================================================
@@ -138,6 +211,7 @@ message TimeoutConfig {
 message SshConfig {
   string user = 1;                        // Default: "root"
   string key_file = 2;                    // Path to SSH private key
+  int32 port = 3;                         // Default: 22
   iris.time.Duration connect_timeout = 4;  // Default: 30s
 }
 
@@ -147,6 +221,7 @@ message SshConfig {
 
 // GCP-managed controller configuration
 message GcpControllerConfig {
+  string zone = 1;              // Zone to create controller VM in
   string machine_type = 2;      // Default: "n2-standard-4"
   int32 boot_disk_size_gb = 3;  // Default: 50
   int32 port = 4;               // Default: 10000
@@ -168,6 +243,7 @@ message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
   string bundle_prefix = 11;    // URI prefix for job bundles (e.g., gs://bucket/path)
   iris.time.Duration worker_timeout = 12;  // Default: 60s
+  int32 heartbeat_failure_threshold = 13;  // Consecutive heartbeat failures before marking worker dead (default: 10)
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;

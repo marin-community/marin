@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Cluster management CLI commands.
 
@@ -20,22 +9,21 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 
 import signal
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
 
-from iris.cli.build import _build_image, _find_iris_root, _find_marin_root, _push_to_registries
+from iris.cli.build import _build_image, _find_iris_root, _find_marin_root, _push_to_gcp_registries
 from iris.cli.debug import debug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import make_local_config
-from iris.cluster.vm.controller_vm import create_controller_vm
-from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
+from iris.cluster.config import IrisConfig, make_local_config
+from iris.cluster.controller.lifecycle import reload_controller, start_controller
+from iris.cluster.controller.local import LocalController
+from iris.cluster.manager import stop_all
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
@@ -55,7 +43,7 @@ def _format_status_table(status: vm_pb2.AutoscalerStatus) -> str:
     header = f"{'Scale Group':<18} {'Booting':>8} {'Initializing':>12} {'Ready':>6} {'Failed':>7} {'Demand':>7}"
     lines = [header]
     for group in status.groups:
-        counts = compute_slice_state_counts(group.slices)
+        counts = dict(group.slice_state_counts)
         line = (
             f"{group.name:<18} "
             f"{counts.get('booting', 0):>8} "
@@ -139,11 +127,13 @@ def _build_and_push_image(params: _ImageBuildParams) -> None:
         dockerfile=params.dockerfile,
         context=params.context,
         platform="linux/amd64",
-        region=(),
-        project=params.project,
+        registry="gcp",
+        ghcr_org="",
+        gcp_regions=(),
+        gcp_project=params.project,
     )
     click.echo()
-    _push_to_registries(
+    _push_to_gcp_registries(
         source_tag=params.local_tag,
         regions=(params.region,),
         project=params.project,
@@ -213,15 +203,28 @@ def cluster_start(ctx, local: bool):
         raise click.ClickException("--config is required for cluster start")
     if local:
         config = make_local_config(config)
-    manager = ClusterManager(config)
-    if not manager.is_local:
+    is_local = config.controller.WhichOneof("controller") == "local"
+    if not is_local:
         _build_cluster_images(config)
     click.echo("Starting controller...")
     try:
-        address = manager.start()
+        if is_local:
+            controller = LocalController(config)
+            address = controller.start()
+        else:
+            iris_config = IrisConfig(config)
+            platform = iris_config.platform()
+            address, _vm = start_controller(platform, config)
         click.echo(f"Controller started at {address}")
         click.echo("\nController is running with integrated autoscaler.")
-        click.echo("Use 'iris cluster --config=... status' to check cluster state.")
+        if is_local:
+            click.echo("Press Ctrl+C to stop.")
+            if threading.current_thread() is threading.main_thread():
+                signal.signal(signal.SIGINT, lambda *_: controller.stop())
+                signal.signal(signal.SIGTERM, lambda *_: controller.stop())
+            controller.wait()
+        else:
+            click.echo("Use 'iris --config=... cluster status' to check cluster state.")
     except Exception as e:
         click.echo(f"Failed to start controller: {e}", err=True)
         raise SystemExit(1) from e
@@ -234,46 +237,14 @@ def cluster_stop(ctx):
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster stop")
-    from iris.cluster.vm.config import IrisConfig
 
-    iris_config = IrisConfig(config)
-    platform = iris_config.platform()
-    ops = platform.vm_ops()
-    slice_ids_by_group: dict[str, list[str]] = {}
-
-    # Discover slices via platform ops (more reliable than RPC since controller may be down)
-    click.echo("Discovering existing slices via platform ops...")
-    for name, group_config in config.scale_groups.items():
-        slice_ids = ops.list_slices(group_config)
-        if slice_ids:
-            slice_ids_by_group[name] = slice_ids
-        click.echo(f"  Found {len(slice_ids)} slice(s) in group '{name}'")
-
-    ctrl = create_controller_vm(config)
-    click.echo("Stopping controller...")
-
-    total = sum(len(ids) for ids in slice_ids_by_group.values())
-    click.echo(f"Terminating {total} slice(s)...")
-
-    # make an executor for these
-    with ThreadPoolExecutor(max_workers=total + 1) as pool:
-        futures = []
-        futures.append(pool.submit(ctrl.stop))
-        for name, slice_ids in slice_ids_by_group.items():
-            group_config = config.scale_groups[name]
-            for slice_id in slice_ids:
-                try:
-                    futures.append(pool.submit(ops.delete_slice, group_config, slice_id))
-                except Exception as e:
-                    click.echo(f"Failed to terminate {slice_id}: {e}", err=True)
-
-        for future in as_completed(futures):
-            try:
-                future.result()
-                click.echo(f"Terminated: {future.result()}")
-            except Exception as e:
-                click.echo(f"Failed to terminate: {e}", err=True)
-    click.echo("Cluster stopped")
+    click.echo("Stopping cluster (controller + all slices)...")
+    try:
+        stop_all(config)
+        click.echo("Cluster stopped")
+    except Exception as e:
+        click.echo(f"Failed to stop cluster: {e}", err=True)
+        raise SystemExit(1) from e
 
 
 @cluster.command("restart")
@@ -296,10 +267,11 @@ def cluster_reload(ctx, no_build: bool, validate: bool):
         raise click.ClickException("--config is required for cluster reload")
     if not no_build:
         _build_cluster_images(config)
-    manager = ClusterManager(config)
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
     click.echo("Reloading controller (workers will be re-bootstrapped automatically)...")
     try:
-        address = manager.reload()
+        address = reload_controller(platform, config)
         click.echo(f"Controller reloaded at {address}")
     except Exception as e:
         click.echo(f"Failed to reload cluster: {e}", err=True)
@@ -390,7 +362,7 @@ def vm_status(ctx, scale_group):
     for group in as_status.groups:
         if scale_group and group.name != scale_group:
             continue
-        counts = compute_slice_state_counts(group.slices)
+        counts = dict(group.slice_state_counts)
         total = sum(counts.values())
         click.echo(f"\nScale Group: {group.name}")
         accel_display = format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)
@@ -407,7 +379,9 @@ def vm_status(ctx, scale_group):
         if group.slices:
             click.echo("  Slices:")
             for si in group.slices:
-                ss = "READY" if slice_all_ready(si) else ("FAILED" if slice_any_failed(si) else "PENDING")
+                all_ready = bool(si.vms) and all(vm.state == vm_pb2.VM_STATE_READY for vm in si.vms)
+                any_failed = any(vm.state in (vm_pb2.VM_STATE_FAILED, vm_pb2.VM_STATE_PREEMPTED) for vm in si.vms)
+                ss = "READY" if all_ready else ("FAILED" if any_failed else "PENDING")
                 click.echo(f"    {si.slice_id}: {ss}")
                 for vi in si.vms:
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")

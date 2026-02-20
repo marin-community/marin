@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 # /// script
 # dependencies = [
@@ -32,6 +21,7 @@ Usage:
 """
 
 import asyncio
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -52,15 +42,24 @@ class EvalResult:
 
 
 def generate_screenshots(output_dir: Path) -> None:
-    """Generate dashboard screenshots using screenshot-dashboard.py."""
+    """Generate dashboard screenshots by running the e2e dashboard tests."""
     print(f"\n{'=' * 80}")
     print("Generating dashboard screenshots...")
     print(f"{'=' * 80}")
 
-    script_path = Path(__file__).parent / "screenshot-dashboard.py"
-    cmd = ["uv", "run", str(script_path), "--output-dir", str(output_dir)]
+    iris_root = Path(__file__).parent.parent
+    env = {**os.environ, "IRIS_SCREENSHOT_DIR": str(output_dir)}
+    cmd = [
+        "uv",
+        "run",
+        "pytest",
+        str(iris_root / "tests" / "e2e" / "test_dashboard.py"),
+        "-x",
+        "-o",
+        "addopts=",
+    ]
 
-    result = subprocess.run(cmd, check=False)
+    result = subprocess.run(cmd, check=False, env=env)
     if result.returncode != 0:
         print(f"Warning: Screenshot generation failed with code {result.returncode}")
 

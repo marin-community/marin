@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import logging
@@ -22,7 +11,6 @@ from pathlib import PurePath
 import draccus
 import levanter.infra.cli_helpers
 from fray.v2 import (
-    Client,
     CpuConfig,
     Entrypoint,
     GpuConfig,
@@ -38,6 +26,7 @@ from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
+from iris.temp_buckets import get_temp_bucket_path
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +60,6 @@ class TrainLmOnPodConfig:
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
-
-
-def _get_client() -> Client:
-    return current_client()
 
 
 def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
@@ -209,12 +194,12 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        marin_prefix = os.environ.get("MARIN_PREFIX")
-        if marin_prefix:
-            env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
-            logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
+        temp_cache_path = get_temp_bucket_path(ttl_days=30, prefix="compilation-cache")
+        if temp_cache_path is not None:
+            env["JAX_COMPILATION_CACHE_DIR"] = temp_cache_path
+            logger.info("JAX compilation cache on temp bucket: %s", temp_cache_path)
         else:
-            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
+            logger.warning("No temp bucket available; JAX compilation cache will not be configured.")
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
@@ -231,7 +216,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     if not config.allow_out_of_region and not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
-    client = _get_client()
+    client = current_client()
 
     extras = []
     if isinstance(config.resources.device, TpuConfig):
@@ -239,6 +224,8 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     elif isinstance(config.resources.device, GpuConfig):
         extras.append("gpu")
 
+    # Note: Using a constant job name allows restarts to adopt the existing job handle
+    # instead of raising a duplicate name error (adopt_existing=True is the default).
     job_request = JobRequest(
         name="train_lm",
         entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),

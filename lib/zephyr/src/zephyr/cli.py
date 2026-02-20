@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Command-line interface for zephyr launcher."""
 
@@ -19,7 +8,6 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import logging
-import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -27,7 +15,6 @@ from pathlib import Path
 
 import click
 from fray.v2.client import current_client
-from fray.v2.local_backend import LocalClient
 from fray.v2.types import ResourceConfig
 
 from zephyr.execution import ZephyrContext
@@ -143,28 +130,13 @@ def run_local(
     client = current_client()
     logger.info("Zephyr using fray client: %s", type(client).__name__)
 
-    # For distributed backends (iris, ray), chunk storage must be shared (GCS).
-    # Local /tmp won't work when coordinator and workers run in separate containers.
-    chunk_storage_prefix = None
-    is_distributed = not isinstance(client, LocalClient)
-    if is_distributed:
-        marin_prefix = os.environ.get("MARIN_PREFIX", "")
-        if not marin_prefix:
-            marin_prefix = "gs://marin-us-central2/scratch"
-            logger.warning(
-                "MARIN_PREFIX not set for distributed backend; using default %s",
-                marin_prefix,
-            )
-        chunk_storage_prefix = f"{marin_prefix}/tmp/zephyr"
-
     main_fn = _load_entry_point(script_path, entry_point)
     sys.argv = [script_path, *script_args]
 
     with ZephyrContext(
         client=client,
-        num_workers=config.max_parallelism,
+        max_workers=config.max_parallelism,
         resources=resources,
-        chunk_storage_prefix=chunk_storage_prefix,
         name="cli",
     ):
         main_fn()

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Unified worker managing all components and lifecycle."""
 
@@ -30,12 +19,13 @@ from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.task_logging import FsspecLogSink, LogSink, LogSinkConfig
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -52,9 +42,11 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
+    worker_attributes: dict[str, str] = field(default_factory=dict)
+    default_task_env: dict[str, str] = field(default_factory=dict)
+    log_prefix: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
-    uv_cache_dir: Path | None = None
 
 
 class Worker:
@@ -76,17 +68,11 @@ class Worker:
         self._cache_dir = config.cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use external uv_cache_dir if provided, otherwise create inside cache_dir
-        if config.uv_cache_dir:
-            self._uv_cache_dir = config.uv_cache_dir
-        else:
-            self._uv_cache_dir = self._cache_dir / "uv-cache"
-        self._uv_cache_dir.mkdir(parents=True, exist_ok=True)
-
         # Use overrides if provided, otherwise create defaults
         self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
         self._runtime = container_runtime or DockerRuntime()
         self._environment_provider = environment_provider or DefaultEnvironmentProvider()
+        self._inferred_log_prefix = self._environment_provider.log_prefix()
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Probe worker metadata eagerly so it's available before any task arrives.
@@ -119,12 +105,15 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         # Start HTTP server
+        # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
+        # causing TCP resets on idle connections.
         self._server = uvicorn.Server(
             uvicorn.Config(
                 self._dashboard._app,
                 host=self._config.host,
                 port=self._config.port,
                 log_level="error",
+                timeout_keep_alive=120,
             )
         )
         self._threads.spawn_server(self._server, name="worker-server")
@@ -244,7 +233,7 @@ class Worker:
         if address_host == "0.0.0.0":
             address_host = metadata.ip_address
 
-        # Get VM address from probe (injected by ManagedVm bootstrap via IRIS_VM_ADDRESS)
+        # Get VM address from probe (injected by Platform bootstrap via IRIS_VM_ADDRESS)
         # For non-cloud workers, use host:port as both worker_id and vm_address
         vm_address = metadata.vm_address
         if not vm_address:
@@ -300,6 +289,33 @@ class Worker:
         except Exception as e:
             # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
             logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)
+
+    def create_log_sink(self, task_id_wire: str, attempt_id: int) -> LogSink:
+        """Create log sink for task logs.
+
+        Uses FsspecLogSink if IRIS_WORKER_PREFIX is configured, otherwise LocalLogSink.
+
+        Args:
+            task_id_wire: Full task ID in wire format
+            attempt_id: Attempt ID for this execution
+
+        Returns:
+            LogSink instance (FsspecLogSink or LocalLogSink)
+        """
+        config = LogSinkConfig(
+            prefix="",  # Will be set below
+            worker_id=self._worker_id or "unknown",
+            task_id=JobName.from_wire(task_id_wire),
+            attempt_id=attempt_id,
+        )
+
+        prefix = self._config.log_prefix or self._inferred_log_prefix
+        if not prefix:
+            raise ValueError(
+                "log prefix is required; set IRIS_LOG_PREFIX or run in an environment with inferrable prefix"
+            )
+        config.prefix = prefix
+        return FsspecLogSink(config)
 
     # Task management methods
 
@@ -401,8 +417,10 @@ class Worker:
             ports=ports,
             workdir=workdir,
             cache_dir=self._cache_dir,
-            uv_cache_dir=self._uv_cache_dir,
         )
+
+        # Create log sink for task logs
+        log_sink = self.create_log_sink(task_id.to_wire(), attempt_id)
 
         attempt = TaskAttempt(
             config=config,
@@ -411,8 +429,10 @@ class Worker:
             worker_metadata=self._worker_metadata,
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
+            default_task_env=self._config.default_task_env,
             port_allocator=self._port_allocator,
             report_state=lambda: self._notify_task_update(attempt),
+            log_sink=log_sink,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
@@ -538,6 +558,7 @@ class Worker:
                             error=task_proto.error,
                             finished_at=task_proto.finished_at,
                             attempt_id=task_proto.current_attempt_id,
+                            log_directory=task.log_directory,
                         )
                     )
                 else:
@@ -547,6 +568,7 @@ class Worker:
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
                             state=task.status,
+                            log_directory=task.log_directory,
                         )
                     )
 
@@ -617,12 +639,23 @@ class Worker:
             return False
         return self._kill_task_attempt(task_id, current.attempt_id, term_timeout_ms)
 
+    def profile_task(self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+        """Profile a running task by delegating to its container handle."""
+        attempt = self._get_current_attempt(task_id)
+        if not attempt:
+            raise ValueError(f"Task {task_id} not found")
+        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
+            raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
+        if not attempt._container_handle:
+            raise ValueError(f"Task {task_id} has no container handle")
+        return attempt._container_handle.profile(duration_seconds, profile_type)
+
     def get_logs(
         self,
         task_id: str,
         start_line: int = 0,
         attempt_id: int = -1,
-    ) -> list[cluster_pb2.Worker.LogEntry]:
+    ) -> list[logging_pb2.LogEntry]:
         """Get logs for a task.
 
         Logs are streamed into task.logs during execution (single source of truth).
@@ -641,21 +674,22 @@ class Worker:
             task = self._tasks.get((task_id, attempt_id))
             if not task:
                 return []
-            logs = [log_line.to_proto() for log_line in task.logs.lines]
-            for log in logs:
-                log.attempt_id = attempt_id
+            logs = task.recent_logs(max_entries=0)
             logs.sort(key=lambda x: x.timestamp.epoch_ms)
             return logs[start_line:]
 
         # All attempts for this task
-        all_logs: list[cluster_pb2.Worker.LogEntry] = []
+        all_logs: list[logging_pb2.LogEntry] = []
         for (tid, aid), task in self._tasks.items():
             if tid != task_id:
                 continue
-            for log_line in task.logs.lines:
-                proto = log_line.to_proto()
-                proto.attempt_id = aid
-                all_logs.append(proto)
+            logs = task.recent_logs(max_entries=0)
+            for log in logs:
+                entry = logging_pb2.LogEntry()
+                entry.CopyFrom(log)
+                if entry.attempt_id == 0:
+                    entry.attempt_id = aid
+                all_logs.append(entry)
 
         all_logs.sort(key=lambda x: x.timestamp.epoch_ms)
         return all_logs[start_line:]

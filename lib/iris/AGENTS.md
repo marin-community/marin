@@ -77,6 +77,14 @@ the dashboard, rather than creating a scheduler and running it manually.
 
 ## Architecture Notes
 
+### Concurrency Model
+
+Platform operations (`terminate`, `create_slice`, etc.) shell out to `gcloud`
+via `subprocess.run` and are thread-safe. When multiple independent platform
+operations need to run (e.g. tearing down N slices), use
+`concurrent.futures.ThreadPoolExecutor` — not asyncio. Always apply a hard
+timeout so the CLI doesn't hang on a stuck gcloud call.
+
 ## Planning
 
 Prefer _spiral_ plans over _linear_ plans. e.g. when implementing a new feature, make a plan which has step 1 as:
@@ -143,9 +151,25 @@ while not deadline.expired():
     time.sleep(0.1)
 ```
 
-### Autoscaler and VM Management
+### Architecture Layers
 
-The autoscaler runs inside the Controller process and manages cloud VMs based on pending task demand. Key files:
+Iris follows a clean layering architecture:
+
+**Controller layer** (`cluster/controller/`): Task scheduling, autoscaling, and demand routing
+- Depends on Platform layer for VM abstractions (Platform, SliceHandle, VmHandle)
+- Owns autoscaling logic and scaling group state
+
+**Platform layer** (`cluster/platform/`): Platform abstractions for managing VMs
+- Provides VM lifecycle management (GCP, manual, local, CoreWeave)
+- Does NOT depend on controller layer
+
+**Cluster layer** (`cluster/`): High-level orchestration
+- `connect_cluster()` and `stop_all()` free functions for cluster lifecycle
+- `stop_all()` terminates controller + all slices in parallel via ThreadPoolExecutor
+  with a 60s hard timeout. Timed-out operations are logged at WARNING and abandoned.
+- Configuration and platform abstractions
+
+Key files:
 
 ```
 src/iris/
@@ -157,15 +181,26 @@ src/iris/
 │   ├── run.py                   # Command passthrough job submission
 │   └── rpc.py                   # Dynamic RPC CLI
 ├── cluster/
+│   ├── config.py                # General Iris configuration (load_config, IrisConfig)
+│   ├── manager.py               # connect_cluster() + stop_all() free functions
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler
-│   │   └── main.py              # Controller daemon CLI (serve command)
-│   └── vm/
-│       ├── autoscaler.py        # Core scaling logic
-│       ├── scaling_group.py     # Per-group state tracking
-│       ├── gcp.py               # GCP TPU management
-│       ├── manual.py            # Pre-existing host management
-│       └── config.py            # Config loading + factory functions
+│   │   ├── main.py              # Controller daemon CLI (serve command)
+│   │   ├── autoscaler.py        # Core autoscaling logic and demand routing
+│   │   ├── scaling_group.py     # Per-group state tracking and lifecycle
+│   │   ├── config.py            # Autoscaler factory functions
+│   │   ├── local.py             # LocalController for in-process testing
+│   │   └── lifecycle.py         # Controller lifecycle (start/stop/reload via Platform)
+│   └── platform/
+│       ├── base.py              # Platform protocol and SliceHandle/VmHandle
+│       ├── gcp.py               # GCP TPU platform
+│       ├── manual.py            # Pre-existing host platform
+│       ├── local.py             # Local development platform
+│       ├── coreweave.py         # CoreWeave stub
+│       ├── bootstrap.py         # Worker bootstrap script generation
+│       ├── ssh.py               # SSH connection management
+│       ├── factory.py           # Platform factory from config
+│       └── debug.py             # Platform debugging utilities
 ```
 
 See [README.md](README.md) for CLI usage and configuration examples.
@@ -201,9 +236,36 @@ src/iris/cluster/static/
 - Jobs displayed as a hierarchical tree based on name structure
 
 **When modifying the dashboard:**
-1. Test locally with `uv run lib/iris/scripts/screenshot-dashboard.py --stay-open`
+1. Run dashboard tests: `uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="`
 2. Ensure any new UI features have corresponding RPC endpoints
 3. Follow existing component patterns (functional components, hooks)
+
+## Testing
+
+All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
+Tests use three core fixtures:
+
+- `cluster`: Booted local cluster with `IrisClient` and RPC access
+- `page`: Playwright page pointed at the dashboard (request only when needed)
+- `screenshot`: Capture labeled screenshots to `IRIS_SCREENSHOT_DIR`
+
+Chaos injection is auto-reset between tests. Call `enable_chaos()` directly.
+Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
+
+Run all E2E tests:
+    uv run pytest lib/iris/tests/e2e/ -m e2e -o "addopts="
+
+Run E2E tests without Docker (fast):
+    uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker" -o "addopts="
+
+Run Docker-only tests:
+    uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
+
+Run dashboard tests with saved screenshots:
+    IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_dashboard.py -o "addopts="
+
+When modifying the dashboard:
+    uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="
 
 ## Debugging Container Failures
 

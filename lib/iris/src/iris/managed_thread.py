@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """ManagedThread and ThreadContainer for structured thread lifecycle management.
 
@@ -261,15 +250,24 @@ class ThreadContainer:
         return alive
 
     def wait(self) -> None:
-        """Block until all threads have exited."""
-        with self._lock:
-            children = list(self._children)
-            threads = list(self._threads)
+        """Block until all threads have exited.
 
-        for child in children:
-            child.wait()
-        for thread in threads:
-            thread.join()
+        Re-snapshots after each join round to catch threads spawned by
+        threads that were already running (e.g. a scale-up thread that
+        spawns a bootstrap thread).
+        """
+        while True:
+            with self._lock:
+                children = list(self._children)
+                threads = list(self._threads)
+
+            if not children and not threads:
+                break
+
+            for child in children:
+                child.wait()
+            for thread in threads:
+                thread.join()
 
     def stop(self, timeout: Duration = Duration.from_seconds(5.0)) -> None:
         """Stop children first, then own threads, then executors.
