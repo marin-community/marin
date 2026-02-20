@@ -56,10 +56,15 @@ def preemptible_constraint(preemptible: bool = True) -> Constraint:
     return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
 
 
-def region_constraint(region: str) -> Constraint:
-    if not region:
-        raise ValueError("region must be non-empty")
-    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=region)
+def region_constraint(regions: Sequence[str]) -> Constraint:
+    if not regions:
+        raise ValueError("regions must be non-empty")
+    for r in regions:
+        if not r:
+            raise ValueError("region must be non-empty")
+    if len(regions) == 1:
+        return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=regions[0])
+    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.IN, values=tuple(regions))
 ```
 
 Rule: all code paths use these constants/helpers; no raw string literals for these keys in controller/autoscaler/client/tests.
@@ -328,10 +333,15 @@ PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
 REGION_ATTRIBUTE_KEY = "region"
 
 
-def region_constraint(region: str) -> Constraint:
-    if not region:
-        raise ValueError("region must be non-empty")
-    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=region)
+def region_constraint(regions: Sequence[str]) -> Constraint:
+    if not regions:
+        raise ValueError("regions must be non-empty")
+    for r in regions:
+        if not r:
+            raise ValueError("region must be non-empty")
+    if len(regions) == 1:
+        return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=regions[0])
+    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.IN, values=tuple(regions))
 
 
 @dataclass(frozen=True)

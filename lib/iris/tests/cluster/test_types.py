@@ -15,7 +15,6 @@ from iris.cluster.types import (
     preemptible_constraint,
     preemptible_preference_from_constraints,
     region_constraint,
-    region_in_constraint,
     required_regions_from_constraints,
 )
 from iris.rpc import cluster_pb2
@@ -127,16 +126,29 @@ def _proto_constraint(key: str, string_value: str, op: int = cluster_pb2.CONSTRA
 # ---------------------------------------------------------------------------
 
 
-def test_region_constraint_happy_path():
-    c = region_constraint("us-west4")
+def test_region_constraint_single_region_produces_eq():
+    c = region_constraint(["us-west4"])
     assert c.key == "region"
     assert c.op == ConstraintOp.EQ
     assert c.value == "us-west4"
 
 
+def test_region_constraint_multiple_regions_produces_in():
+    c = region_constraint(["us-central1", "us-central2"])
+    assert c.key == "region"
+    assert c.op == ConstraintOp.IN
+    assert c.values == ("us-central1", "us-central2")
+    assert c.value is None
+
+
+def test_region_constraint_empty_list_raises():
+    with pytest.raises(ValueError, match="non-empty"):
+        region_constraint([])
+
+
 def test_region_constraint_empty_string_raises():
     with pytest.raises(ValueError, match="non-empty"):
-        region_constraint("")
+        region_constraint([""])
 
 
 # ---------------------------------------------------------------------------
@@ -228,14 +240,14 @@ def test_normalize_constraints_combines_fields():
 
 def test_merge_parent_only():
     """Child has no constraints -- parent constraints pass through."""
-    parent = [region_constraint("us-west4"), preemptible_constraint(True)]
+    parent = [region_constraint(["us-west4"]), preemptible_constraint(True)]
     result = merge_constraints(parent, [])
     assert set(result) == set(parent)
 
 
 def test_merge_child_overrides_region():
-    parent = [region_constraint("us-west4")]
-    child = [region_constraint("eu-west4")]
+    parent = [region_constraint(["us-west4"])]
+    child = [region_constraint(["eu-west4"])]
     result = merge_constraints(parent, child)
     regions = [c for c in result if c.key == "region"]
     assert len(regions) == 1
@@ -271,8 +283,8 @@ def test_merge_non_canonical_key_dedup():
 
 def test_merge_multiple_canonical_keys_partial_override():
     """Child overrides region but inherits preemptible from parent."""
-    parent = [region_constraint("us-west4"), preemptible_constraint(True)]
-    child = [region_constraint("eu-west4")]
+    parent = [region_constraint(["us-west4"]), preemptible_constraint(True)]
+    child = [region_constraint(["eu-west4"])]
     result = merge_constraints(parent, child)
 
     regions = [c for c in result if c.key == "region"]
@@ -284,34 +296,9 @@ def test_merge_multiple_canonical_keys_partial_override():
     assert preemptibles[0].value == "true"
 
 
-# ---------------------------------------------------------------------------
-# region_in_constraint (returns a Python Constraint dataclass with IN op)
-# ---------------------------------------------------------------------------
-
-
-def test_region_in_constraint_happy_path():
-    c = region_in_constraint(["us-central1", "us-central2"])
-    assert c.key == "region"
-    assert c.op == ConstraintOp.IN
-    assert c.values == ("us-central1", "us-central2")
-    assert c.value is None
-
-
-def test_region_in_constraint_empty_list_raises():
+def test_region_constraint_empty_string_in_multi_raises():
     with pytest.raises(ValueError, match="non-empty"):
-        region_in_constraint([])
-
-
-def test_region_in_constraint_empty_string_raises():
-    with pytest.raises(ValueError, match="non-empty"):
-        region_in_constraint(["us-central1", ""])
-
-
-def test_region_in_constraint_single_region():
-    """A single-element list still produces a valid IN constraint."""
-    c = region_in_constraint(["us-central1"])
-    assert c.op == ConstraintOp.IN
-    assert c.values == ("us-central1",)
+        region_constraint(["us-central1", ""])
 
 
 # ---------------------------------------------------------------------------

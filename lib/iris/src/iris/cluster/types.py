@@ -604,13 +604,6 @@ def preemptible_constraint(preemptible: bool = True) -> Constraint:
     return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
 
 
-def region_constraint(region: str) -> Constraint:
-    """Constraint requiring workers to be in a given region."""
-    if not region:
-        raise ValueError("region must be non-empty")
-    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=region)
-
-
 def zone_constraint(zone: str) -> Constraint:
     """Constraint requiring workers to be in a given zone."""
     if not zone:
@@ -618,14 +611,14 @@ def zone_constraint(zone: str) -> Constraint:
     return Constraint(key=ZONE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=zone)
 
 
-def region_in_constraint(regions: Sequence[str]) -> Constraint:
+def region_constraint(regions: Sequence[str]) -> Constraint:
     """Constraint requiring workers to be in one of the given regions.
 
-    Args:
-        regions: Non-empty list of region strings.
+    Emits an EQ constraint for a single region or an IN constraint for multiple
+    regions.
 
-    Returns:
-        An IN constraint matching any of the provided regions.
+    Args:
+        regions: Non-empty sequence of region strings.
 
     Raises:
         ValueError: If regions is empty or contains empty strings.
@@ -635,6 +628,8 @@ def region_in_constraint(regions: Sequence[str]) -> Constraint:
     for r in regions:
         if not r:
             raise ValueError("region must be non-empty")
+    if len(regions) == 1:
+        return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=regions[0])
     return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.IN, values=tuple(regions))
 
 
@@ -680,8 +675,6 @@ def preemptible_preference_from_constraints(constraints: Sequence[cluster_pb2.Co
 
 def required_regions_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> frozenset[str] | None:
     """Extract required regions from constraints.
-
-    Supports both EQ (single region) and IN (multiple regions) constraints.
 
     Returns:
         Set of required regions when specified, otherwise None.
