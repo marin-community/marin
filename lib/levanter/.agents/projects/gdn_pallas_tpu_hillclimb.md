@@ -61,7 +61,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 0 - Infra bootstrap
 
 - Date: 2026-02-18
-- Commit: (pending)
+- Commit: this commit
 - Hypothesis: Standardized scripts/docs and lightweight profile entrypoint reduce iteration overhead for future optimization passes.
 - Change summary: Added `scripts/gdn/gdnctl.py`, tiny profile experiment, recipe/docs, and unattended Codex loop harness.
 - Correctness checks:
@@ -293,3 +293,41 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - `throughput/duration`: `0.23450s -> 0.25418s` (`+8.40%`).
 - Assessment: **low-impact / regression**. MFU gain is below 3% (negative) and dominant hotspot is unchanged (`custom-call` in the same GDN shard-map path).
 - Next hypothesis: escalate to a more radical decomposition that reduces GDN custom-call launch count directly (for example, associative block transition composition across chunks/segments with fewer large pallas calls and a backward that consumes composed transitions instead of per-segment shard-map kernels).
+
+### Iteration 7 (loop 1/20) - Remove trailing singleton layout in hot TPU Pallas g/b paths
+
+- Date: 2026-02-20T05:44:30Z
+- Commit: this commit
+- Dominant bottleneck carried in: `custom-call` remained dominant from Iteration 6 (`5286.068 ms` in XProf `op_profile` by-program), with top GDN shard-map calls under `jit(_train_step)/.../HackableDecoderLayer/.../pallas_call`.
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move A**: remove `(..., Ct, 1)` singleton layouts for `g_cum/beta/dg/db` in forward+backward segmented Pallas calls (`+10-18%`, medium risk from spec/layout mismatch bugs).
+  2. **Macro Move B**: systematic `jnp.matmul(..., x.T)` to `lax.dot_general` migration via one helper in fwd+bwd (`+8-15%`, medium/high risk from broad math-path churn).
+  3. **Macro Move D**: full-sequence `pltpu.emit_pipeline` forward stage-axis kernel keeping recurrent state in VMEM (`+20%+`, very high implementation and correctness risk).
+- Selected macro-move category: **A) Fix vector-layout pathologies**.
+- Selected hypothesis: eliminate trailing singleton tensor layouts in the two dominant segmented Pallas kernels by keeping `g_cum/beta/dg/db` as rank-4 `(..., Ct)` tensors end-to-end (no `[..., None]` expansion and no `[..., 0]` squeeze).
+- Change summary:
+  - Updated forward segmented Pallas `in_specs` to load `g_cum` and `beta` as rank-4 blocks `(1,1,Seg,Ct)` instead of `(1,1,Seg,Ct,1)`.
+  - Updated backward segmented Pallas `in_specs/out_specs` similarly so `dg`/`db` are rank-4 outputs `(B,H,Seg,Ct)`.
+  - Removed forward/backward local-call singleton expansion (`gcum5 = g[..., None]`, `b5 = b[..., None]`) and corresponding trailing-dimension squeeze in segment-scan backward return path.
+  - Adjusted shard-map output specs to reuse rank-4 `g_spec`/`b_spec` directly.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - Result: `87 passed, 2 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_rank4gb_i1_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_rank4gb_i1_dev_130m_ch128_seg16_20steps-f2d508`
+  - W&B profiler artifact: `run-gdn_rank4gb_i1_dev_130m_ch128_seg16_20steps-f2d508-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_rank4gb_i1_dev/plugins/profile/2026_02_20_05_37_54/perfetto_trace.json.gz`
+- Hotspots observed (TPU:0 XLA Ops aggregate from downloaded Perfetto trace, compared to Iteration 6 baseline `gdn_blocksolve_i6_dev3`):
+  - `custom-call`: `220.258 ms -> 223.589 ms` (`+1.51%`), still dominant.
+  - `all-gather`: `31.403 ms -> 32.668 ms` (`+4.03%`).
+  - Dominant GDN custom-call tf_ops unchanged and slightly slower:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `142.338 ms -> 143.558 ms` (`+0.86%`).
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `64.435 ms -> 66.546 ms` (`+3.28%`).
+  - Source line numbers shifted due edit (baseline `gated_deltanet.py:2388`/`1376` now `2357`/`1368`), but the same two shard-map GDN callsites remain dominant.
+- MFU/throughput delta (vs Iteration 6 run `gdn_blocksolve_i6_dev3_130m_ch128_seg16_20steps-8f5e31`):
+  - `throughput/mfu`: `3.9850 -> 3.9889` (`+0.10%`).
+  - `throughput/tokens_per_second`: `128914.05 -> 129039.34` (`+0.10%`).
+  - `throughput/duration`: `0.25418s -> 0.25394s` (`-0.10%`).
+- Assessment: **low-impact**. Gain is below 3% and dominant hotspot is unchanged (`custom-call` in the same GDN shard-map path).
+- Next hypothesis: escalate to a more radical launch/dataflow move (Macro Move D or F), specifically a full-sequence pipeline kernel (`emit_pipeline`) or FLA-style 2-kernel split (solve kernel + recurrent kernel) to reduce GDN custom-call count and increase per-call arithmetic intensity.

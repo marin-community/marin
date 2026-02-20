@@ -1195,8 +1195,8 @@ def _in_specs_chunk_segment_fwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: in
         pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # q
         pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # k
         pl.BlockSpec((1, 1, Seg, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # v
-        pl.BlockSpec((1, 1, Seg, Ct, 1), lambda nh: (*_bh(nh), 0, 0, 0)),  # g_cum (trailing 1)
-        pl.BlockSpec((1, 1, Seg, Ct, 1), lambda nh: (*_bh(nh), 0, 0, 0)),  # beta  (trailing 1)
+        pl.BlockSpec((1, 1, Seg, Ct), lambda nh: (*_bh(nh), 0, 0)),  # g_cum
+        pl.BlockSpec((1, 1, Seg, Ct), lambda nh: (*_bh(nh), 0, 0)),  # beta
         pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # S_prev
     )
 
@@ -1315,16 +1315,8 @@ def _gdn_chunk_segment_fwd_kernel_tpu(
             .astype(jnp.float32)
             .reshape(Ct, V_pad)
         )
-        g_cum = (
-            gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, 1)]
-            .astype(jnp.float32)
-            .reshape((Ct,))
-        )
-        beta = (
-            b_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, 1)]
-            .astype(jnp.float32)
-            .reshape((Ct,))
-        )
+        g_cum = gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
+        beta = b_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
 
         out, S = chunk_fwd(S, q, k, v, g_cum, beta)
 
@@ -1363,10 +1355,6 @@ def _gdn_chunk_segment_fwd_pallas(
         B, H = q_bhscK.shape[0], q_bhscK.shape[1]
         NH = B * H
 
-        # Expand g/b to have trailing singleton dim for safe BlockSpec
-        gcum5 = g_cum_bhsc[..., None]  # (B,H,Seg,Ct,1)
-        b5 = b_bhsc[..., None]  # (B,H,Seg,Ct,1)
-
         out_struct = jax.ShapeDtypeStruct((B, H, Seg, Ct, V_pad), jnp.float32)
         st_struct = jax.ShapeDtypeStruct((B, H, K_pad, V_pad), jnp.float32)
         chunk_starts_struct = jax.ShapeDtypeStruct((B, H, Seg, K_pad, V_pad), jnp.float32)
@@ -1380,7 +1368,7 @@ def _gdn_chunk_segment_fwd_pallas(
             out_specs=out_specs,
             out_shape=(out_struct, st_struct, chunk_starts_struct),
             compiler_params=compiler_params,
-        )(q_bhscK, k_bhscK, v_bhscV, gcum5, b5, S_prev_bhKV)
+        )(q_bhscK, k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc, S_prev_bhKV)
 
     def _insert_segment_axis(pspec):
         tup = tuple(pspec) if pspec is not None else ()
@@ -1420,8 +1408,8 @@ def _in_specs_chunk_segment_bwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: in
         pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # q
         pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # k
         pl.BlockSpec((1, 1, Seg, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # v
-        pl.BlockSpec((1, 1, Seg, Ct, 1), lambda nh: (*_bh(nh), 0, 0, 0)),  # g_cum (trailing 1)
-        pl.BlockSpec((1, 1, Seg, Ct, 1), lambda nh: (*_bh(nh), 0, 0, 0)),  # beta  (trailing 1)
+        pl.BlockSpec((1, 1, Seg, Ct), lambda nh: (*_bh(nh), 0, 0)),  # g_cum
+        pl.BlockSpec((1, 1, Seg, Ct), lambda nh: (*_bh(nh), 0, 0)),  # beta
         pl.BlockSpec((1, 1, Seg, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # S_prev per chunk
         pl.BlockSpec((1, 1, Seg, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # d_out
         pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # dS_end
@@ -1431,8 +1419,8 @@ def _in_specs_chunk_segment_bwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: in
         pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # dq
         pl.BlockSpec((1, 1, Seg, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # dk
         pl.BlockSpec((1, 1, Seg, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0, 0)),  # dv
-        pl.BlockSpec((1, 1, Seg, Ct, 1), lambda nh: (*_bh(nh), 0, 0, 0)),  # dg (trailing 1)
-        pl.BlockSpec((1, 1, Seg, Ct, 1), lambda nh: (*_bh(nh), 0, 0, 0)),  # db (trailing 1)
+        pl.BlockSpec((1, 1, Seg, Ct), lambda nh: (*_bh(nh), 0, 0)),  # dg
+        pl.BlockSpec((1, 1, Seg, Ct), lambda nh: (*_bh(nh), 0, 0)),  # db
         pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # dS_start
     )
     return in_specs, out_specs
@@ -1631,16 +1619,8 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
             .astype(jnp.float32)
             .reshape(Ct, V_pad)
         )
-        g_cum = (
-            gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, 1)]
-            .astype(jnp.float32)
-            .reshape((Ct,))
-        )
-        beta = (
-            b_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, 1)]
-            .astype(jnp.float32)
-            .reshape((Ct,))
-        )
+        g_cum = gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
+        beta = b_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
 
         d_out = (
             dOut_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)]
@@ -1660,12 +1640,8 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         dv_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)] = dv[
             None, None, None, :, :
         ].astype(dv_ref.dtype)
-        dg_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, 1)] = dg[
-            None, None, None, :, None
-        ].astype(dg_ref.dtype)
-        db_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, 1)] = db[
-            None, None, None, :, None
-        ].astype(db_ref.dtype)
+        dg_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)] = dg[None, None, None, :].astype(dg_ref.dtype)
+        db_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)] = db[None, None, None, :].astype(db_ref.dtype)
 
         dS_next = dS_prev
 
@@ -1702,15 +1678,12 @@ def _gdn_chunk_segment_bwd_pallas(
         B, H = q_bhscK.shape[0], q_bhscK.shape[1]
         NH = B * H
 
-        gcum5 = g_cum_bhsc[..., None]  # (B,H,Seg,Ct,1)
-        b5 = b_bhsc[..., None]  # (B,H,Seg,Ct,1)
-
         out_shapes = (
             jax.ShapeDtypeStruct((B, H, Seg, Ct, K_pad), jnp.float32),  # dq
             jax.ShapeDtypeStruct((B, H, Seg, Ct, K_pad), jnp.float32),  # dk
             jax.ShapeDtypeStruct((B, H, Seg, Ct, V_pad), jnp.float32),  # dv
-            jax.ShapeDtypeStruct((B, H, Seg, Ct, 1), jnp.float32),  # dg
-            jax.ShapeDtypeStruct((B, H, Seg, Ct, 1), jnp.float32),  # db
+            jax.ShapeDtypeStruct((B, H, Seg, Ct), jnp.float32),  # dg
+            jax.ShapeDtypeStruct((B, H, Seg, Ct), jnp.float32),  # db
             jax.ShapeDtypeStruct((B, H, K_pad, V_pad), jnp.float32),  # dS_start
         )
 
@@ -1723,16 +1696,7 @@ def _gdn_chunk_segment_bwd_pallas(
             out_specs=out_specs,
             out_shape=out_shapes,
             compiler_params=compiler_params,
-        )(q_bhscK, k_bhscK, v_bhscV, gcum5, b5, S_prev_chunks_bhSKV, d_out_bhscV, dS_end_bhKV)
-
-    def _pspec_extend(pspec, rank: int):
-        if pspec is None:
-            tup = ()
-        else:
-            tup = tuple(pspec)
-        if len(tup) >= rank:
-            return P(*tup[:rank])
-        return P(*tup, *([None] * (rank - len(tup))))
+        )(q_bhscK, k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc, S_prev_chunks_bhSKV, d_out_bhscV, dS_end_bhKV)
 
     mesh, q_spec = _get_mesh_and_spec(q_bhscK)
     _, k_spec = _get_mesh_and_spec(k_bhscK)
@@ -1743,15 +1707,12 @@ def _gdn_chunk_segment_bwd_pallas(
     _, dO_spec = _get_mesh_and_spec(d_out_bhscV)  # rank-5
     _, dS_spec = _get_mesh_and_spec(dS_end_bhKV)  # rank-4
 
-    dg_spec = _pspec_extend(g_spec, 5)  # because dg has trailing 1 dim
-    db_spec = _pspec_extend(b_spec, 5)
-
     if _mesh_size(mesh) > 1:
         return _mk_shard_map(
             _local_call,
             mesh=mesh,
             in_specs=(q_spec, k_spec, v_spec, g_spec, b_spec, Sprev_spec, dO_spec, dS_spec),
-            out_specs=(q_spec, k_spec, v_spec, dg_spec, db_spec, dS_spec),
+            out_specs=(q_spec, k_spec, v_spec, g_spec, b_spec, dS_spec),
         )(q_bhscK, k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc, S_prev_chunks_bhSKV, d_out_bhscV, dS_end_bhKV)
     else:
         return _local_call(
@@ -2050,7 +2011,7 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
             K_pad=K_pad,
             V_pad=V_pad,
         )
-        return dS_start, (dq, dk, dv, dg[..., 0], db[..., 0])
+        return dS_start, (dq, dk, dv, dg, db)
 
     seg_inputs_rev = (q_tm[::-1], k_tm[::-1], v_tm[::-1], g_tm[::-1], b_tm[::-1], dO_tm[::-1], Sprev_tm[::-1])
     dS0, grads_rev = lax.scan(
