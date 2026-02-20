@@ -50,6 +50,10 @@ Collect:
 If objective is ambiguous, ask before editing.
 
 ## Operating Policy
+- Hard launch gate: the agent must get explicit requester approval before launching any ferry job.
+- Only exception: the requester explicitly says to launch without asking (single run or standing instruction in-thread).
+- Always run `.agents/docs/job-monitoring-loop.md` until the run reaches a terminal state (`SUCCEEDED`/`FAILED`/`STOPPED`); do not stop early.
+- Expect full ferry monitoring to often take 4-5 hours.
 - Keep canary stable; only change it for explicit reliability fixes.
 - Do not proactively edit canary; only touch it when diagnosing/fixing a concrete failure mode.
 - Canary launches usually do not require a PR if the script/config is unchanged.
@@ -87,9 +91,11 @@ Include:
 - last ferry links (issue + PR/commit + W&B/job link),
 - exact config delta and rationale,
 - risk level (`low`/`medium`/`high`),
-- launch checklist (human approval + monitoring started).
+- launch checklist (explicit requester approval or explicit waiver + monitoring started).
 
 #### 4) Launch
+Before launch, confirm requester approval in-thread unless they already gave explicit "launch without asking" permission.
+
 ```bash
 uv run lib/marin/src/marin/run/ray_run.py \
   --no_wait \
@@ -111,6 +117,7 @@ Follow `.agents/docs/job-monitoring-loop.md` with:
 - `job_id`
 - `cluster`
 - `experiment=<ferry script path>`
+- Keep the monitoring loop active until terminal status; ferry runs commonly take 4-5 hours.
 
 #### 6) Close the loop
 Post in the ferry issue:
@@ -121,6 +128,7 @@ Post in the ferry issue:
 
 ### Canary lane (steady-state run)
 Default mode: launch the existing canary script as-is and monitor. Do not run the daily proposal/PR loop unless you are intentionally changing canary.
+Even for unchanged canary runs, ask the requester before launch unless they explicitly waived that requirement.
 
 Launch:
 ```bash

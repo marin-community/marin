@@ -8,7 +8,7 @@ This is the initial target; we plan to expand to broader ferry scales/cadences o
 The workflow should support:
 - proposing the next ferry as a PR based on the previous ferry + recent repo changes/issues
 - bounded config evolution (not identical every day, but not high-risk churn)
-- human approval before launch
+- explicit requester approval before every launch, unless requester explicitly waives "ask before launch"
 - monitored execution to completion
 - status propagation to GitHub (Discord automation in Phase 2)
 
@@ -90,15 +90,19 @@ Out of scope for this phase:
 - target `main`
 
 4. Human gate:
-- explicit yes/no approval to launch
+- explicit requester yes/no approval to launch every run
+- exception: requester explicitly authorizes launching without asking first
 - likely communicated inside the active agent session for now (not necessarily via GitHub review state)
 
 5. Launch on TPU cluster:
+- verify the requester approval gate is satisfied
 - run the canonical launch command
 - capture job id + links into issue/PR
 
 6. Monitor to completion:
 - execute `.agents/docs/job-monitoring-loop.md`
+- keep monitoring active until terminal job state (`SUCCEEDED`/`FAILED`/`STOPPED`)
+- expect this loop to run for 4-5 hours for typical ferry runs
 - auto-restart only per documented loop policy
 - escalate non-trivial failures to humans
 
@@ -200,7 +204,7 @@ Every ferry PR should include:
 - exact config delta (before/after)
 - risk level (`low`/`medium`/`high`)
 - launch checklist:
-  - [ ] human approval
+  - [ ] explicit requester approval (or explicit waiver recorded in-thread)
   - [ ] issue created/updated
   - [ ] (optional/manual) Discord update posted
   - [ ] monitoring loop started
@@ -241,7 +245,7 @@ Phase-2:
 
 5. **Scheduled Daily Trigger**
 - add cron/automation entry to open daily proposal PR
-- retain human approval before launch
+- retain explicit requester approval before launch (unless explicitly waived in-thread)
 
 ## Success Criteria
 
@@ -249,6 +253,7 @@ Phase-2:
 - Daily ferry run is launchable from one documented path.
 - Each run has issue + PR + run link traceability.
 - Monitoring loop is consistently used until terminal state.
+- Monitoring ownership is maintained for the full run duration (often 4-5 hours), not handed off early.
 - Discord automation is intentionally deferred to Phase 2.
 
 ## Resolved Decisions
