@@ -339,11 +339,9 @@ def evaluate_vlm_mc_benchmark(
     pbar = tqdm(total=total_tokens_expected, desc="vlm_mc_eval", unit="tok")
 
     for batch in packed_iterator:
-        batch = hax.shard(batch, worker.axis_resources)
-
         _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
-        batch = jax.device_put(batch)
 
+        # dispatch_loglikelihood handles multi-host distribution via broadcast_shard
         out_ids, out_lls, _out_correct = worker.dispatch_loglikelihood(batch)
 
         out_ids = jax.device_get(out_ids.array)
@@ -541,11 +539,9 @@ def evaluate_vlm_open_ended_benchmark(
     pbar = tqdm(total=total_tokens_expected, desc="vlm_open_ended_eval", unit="tok")
 
     for batch in packed_iterator:
-        batch = hax.shard(batch, worker.axis_resources)
-
         _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
-        batch = jax.device_put(batch)
 
+        # dispatch_loglikelihood handles multi-host distribution via broadcast_shard
         out_ids, out_lls, _out_correct = worker.dispatch_loglikelihood(batch)
 
         out_ids = jax.device_get(out_ids.array)
