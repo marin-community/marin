@@ -162,3 +162,15 @@ def test_perf_policy_requires_metric(tmp_path: Path) -> None:
     assert not ok
     assert count_failure
     assert rc == 1
+
+
+def test_extract_wandb_run_url_supports_slug_with_underscore() -> None:
+    text = (
+        "wandb: View run at: "
+        "https://wandb.ai/marin-community/marin/runs/gdn_trisolve_i6_dev_130m_ch128_seg16_20steps-1f9dea"
+    )
+    url = gdnctl._extract_last_wandb_run_url(text)
+    assert (
+        url
+        == "https://wandb.ai/marin-community/marin/runs/gdn_trisolve_i6_dev_130m_ch128_seg16_20steps-1f9dea"
+    )

@@ -71,7 +71,7 @@ GIT_TRANSIENT_ERROR_RE = re.compile(
     r"(index\.lock|Another git process seems to be running|Unable to create '.+?\.lock')"
 )
 WANDB_RUN_URL_RE = re.compile(
-    r"https://wandb\.ai/(?P<entity>[^/\s]+)/(?P<project>[^/\s]+)/runs/(?P<run_id>[A-Za-z0-9]+)"
+    r"https://wandb\.ai/(?P<entity>[^/\s]+)/(?P<project>[^/\s]+)/runs/(?P<run_id>[^/\s?#]+)"
 )
 
 
@@ -289,14 +289,33 @@ def _fetch_wandb_summary_for_run_url(
 
     entity = match.group("entity")
     project = match.group("project")
-    run_id = match.group("run_id")
-    run_path = f"{entity}/{project}/{run_id}"
+    run_ref = match.group("run_id")
+    run_path = f"{entity}/{project}/{run_ref}"
 
     try:
         api = wandb.Api(timeout=30)
         run = api.run(run_path)
     except Exception as exc:  # pragma: no cover - external API behavior
-        return {}, f"wandb api fetch failed for {run_path}: {exc!r}"
+        try:
+            runs = api.runs(
+                f"{entity}/{project}",
+                order="-created_at",
+                per_page=120,
+            )
+        except Exception:
+            return {}, f"wandb api fetch failed for {run_path}: {exc!r}"
+
+        resolved_run = None
+        for candidate in runs:
+            candidate_id = str(getattr(candidate, "id", "") or "")
+            candidate_name = str(getattr(candidate, "name", "") or "")
+            candidate_display_name = str(getattr(candidate, "display_name", "") or "")
+            if run_ref in {candidate_id, candidate_name, candidate_display_name}:
+                resolved_run = candidate
+                break
+        if resolved_run is None:
+            return {}, f"wandb api fetch failed for {run_path}: {exc!r}"
+        run = resolved_run
 
     summary = dict(getattr(run, "summary", {}))
     metrics: dict[str, float] = {}
@@ -362,25 +381,36 @@ def _collect_profile_metrics(
         if parsed is not None:
             metrics[key] = parsed
 
-    if run_url is None and args.validation_profile_wandb_mode == "online":
-        discovered_url, discover_warning = _discover_wandb_run_for_prefix(
-            entity=args.perf_wandb_entity,
-            project=args.perf_wandb_project,
-            profile_prefix=profile_prefix,
-        )
-        if discovered_url is not None:
-            run_url = discovered_url
-        elif discover_warning is not None:
-            warnings.append(discover_warning)
-
+    summary_warning: str | None = None
     if run_url is not None and args.validation_profile_wandb_mode == "online":
         summary_metrics, summary_warning = _fetch_wandb_summary_for_run_url(
             run_url,
             metric_keys=metric_keys,
         )
         metrics.update(summary_metrics)
-        if summary_warning is not None:
-            warnings.append(summary_warning)
+
+    needs_discovery = (
+        args.validation_profile_wandb_mode == "online"
+        and (run_url is None or args.perf_metric not in metrics or summary_warning is not None)
+    )
+    if needs_discovery:
+        discovered_url, discover_warning = _discover_wandb_run_for_prefix(
+            entity=args.perf_wandb_entity,
+            project=args.perf_wandb_project,
+            profile_prefix=profile_prefix,
+        )
+        if discovered_url is not None and discovered_url != run_url:
+            run_url = discovered_url
+            summary_metrics, summary_warning = _fetch_wandb_summary_for_run_url(
+                run_url,
+                metric_keys=metric_keys,
+            )
+            metrics.update(summary_metrics)
+        elif discover_warning is not None:
+            warnings.append(discover_warning)
+
+    if summary_warning is not None and args.perf_metric not in metrics:
+        warnings.append(summary_warning)
 
     return {
         "profile_prefix": profile_prefix,
