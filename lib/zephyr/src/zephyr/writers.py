@@ -12,7 +12,6 @@ from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 import itertools
-import json
 import os
 from typing import Any
 
@@ -261,7 +260,7 @@ class ThreadedBatchWriter:
         self._queue_maxsize = maxsize
         self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
         self._error: BaseException | None = None
-        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread = threading.Thread(target=self._drain, daemon=True, name="ZephyrWriter")
         self._thread.start()
 
     def _drain(self) -> None:
@@ -359,7 +358,7 @@ def _promote_tmp_cache(fs, tmp_path: str, output_path: str) -> None:
 
 
 def write_levanter_cache(
-    records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any], batch_size: int
+    records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any], batch_size: int = 1024
 ) -> dict:
     """Write tokenized records to Levanter cache format."""
     from levanter.store.cache import CacheMetadata, SerialCacheWriter
@@ -376,10 +375,9 @@ def write_levanter_cache(
     try:
         exemplar = next(record_iter)
     except StopIteration:
-        return {"path": output_path, "count": 0, "token_count": 0}
+        return {"path": output_path, "count": 0}
 
     count = 1
-    token_count = len(exemplar.get("input_ids", []))
     logger.info("write_levanter_cache: starting write to %s", output_path)
 
     existing_rows = 0 if fs.exists(output_path) else _get_existing_row_count(tmp_path, exemplar)
@@ -389,10 +387,9 @@ def write_levanter_cache(
         # we already consumed 1 record (exemplar), skip existing_rows - 1 more
         rows_to_skip = existing_rows - 1
         skipped_rows = 0
-        for record in itertools.islice(record_iter, rows_to_skip):
+        for _record in itertools.islice(record_iter, rows_to_skip):
             skipped_rows += 1
             count += 1
-            token_count += len(record.get("input_ids", []))
         if skipped_rows != rows_to_skip:
             raise ValueError(
                 f"Temporary cache at {tmp_path} has {existing_rows} rows, but input has only {skipped_rows + 1} rows"
@@ -412,11 +409,9 @@ def write_levanter_cache(
             for batch in batchify(record_iter, n=batch_size):
                 threaded.submit(batch)
                 count += len(batch)
-                for record in batch:
-                    token_count += len(record.get("input_ids", []))
-                logger.info("write_levanter_cache: %s — %d records, %d tokens so far", output_path, count, token_count)
+                logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
 
-    logger.info("write_levanter_cache: finished %s — %d records, %d tokens", output_path, count, token_count)
+    logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
 
     _promote_tmp_cache(fs, tmp_path, output_path)
 
@@ -424,11 +419,7 @@ def write_levanter_cache(
     with fsspec.open(f"{output_path}/.success", "w") as f:
         f.write("")
 
-    # write stats for aggregation
-    with fsspec.open(f"{output_path}/.stats.json", "w") as f:
-        json.dump({"count": count, "token_count": token_count}, f)
-
-    return {"path": output_path, "count": count, "token_count": token_count}
+    return {"path": output_path, "count": count}
 
 
 def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
