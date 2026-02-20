@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Bundle cache for workspace bundles from GCS."""
 
@@ -18,6 +7,7 @@ import hashlib
 import logging
 import shutil
 import threading
+import time
 import zipfile
 from collections import defaultdict
 from pathlib import Path
@@ -61,17 +51,14 @@ class BundleCache:
         key = self._path_to_key(gcs_path)
         extract_path = self._extracts_dir / key
 
-        if extract_path.exists():
-            # Update access time for LRU
-            extract_path.touch()
-            logger.debug("Bundle cache hit: %s", gcs_path)
-            return extract_path
-
-        # Use a lock per bundle to prevent concurrent extractions to the same path
+        # All access is serialized under the per-key lock. The exists() check
+        # must be inside the lock because _extract() creates the directory
+        # before writing files — an unlocked check would race with an
+        # in-progress extraction and return a partially-extracted bundle.
         with self._extract_locks[key]:
-            # Double-check after acquiring lock - another task may have extracted it
             if extract_path.exists():
                 extract_path.touch()
+                logger.debug("Bundle cache hit: %s", gcs_path)
                 return extract_path
 
             # Download and extract
@@ -114,17 +101,33 @@ class BundleCache:
                 h.update(chunk)
         return h.hexdigest()
 
+    # Bundles accessed within this window are not eligible for eviction.
+    # After get_bundle() returns a Path, callers do copytree() from it;
+    # this grace period ensures that eviction doesn't race with that copy.
+    _EVICTION_GRACE_SECONDS = 300
+
     def _evict_old_bundles(self) -> None:
         extracts = list(self._extracts_dir.iterdir())
         if len(extracts) <= self._max_bundles:
             return
 
-        # Sort by mtime, remove oldest
         extracts.sort(key=lambda p: p.stat().st_mtime)
         for path in extracts[: len(extracts) - self._max_bundles]:
-            if path.is_dir():
-                shutil.rmtree(path)
-            # Also remove corresponding zip
-            zip_path = self._bundles_dir / f"{path.name}.zip"
-            if zip_path.exists():
-                zip_path.unlink()
+            # Sorted oldest-first — once we hit a recent bundle, the rest are newer.
+            if time.time() - path.stat().st_mtime < self._EVICTION_GRACE_SECONDS:
+                break
+
+            key = path.name
+            with self._extract_locks[key]:
+                # Re-check under lock: another thread may have touched the bundle
+                # between our mtime read and the lock acquisition.
+                if not path.exists():
+                    continue
+                if time.time() - path.stat().st_mtime < self._EVICTION_GRACE_SECONDS:
+                    continue
+
+                if path.is_dir():
+                    shutil.rmtree(path)
+                zip_path = self._bundles_dir / f"{key}.zip"
+                if zip_path.exists():
+                    zip_path.unlink()

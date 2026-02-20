@@ -7,7 +7,7 @@ import fsspec
 
 
 import levanter.config
-from levanter.data.text import HfSingleDatasetLMConfig, LMMixtureDatasetConfig
+from levanter.data.text import LmDataConfig, UrlDatasetSourceConfig
 
 
 def test_main_wrapper_loads_from_fsspec():
@@ -36,19 +36,30 @@ def test_main_wrapper_loads_from_fsspec():
 def test_lm_dataset_config():
     @dataclasses.dataclass
     class Config:
-        data: HfSingleDatasetLMConfig = dataclasses.field(default_factory=HfSingleDatasetLMConfig)
+        data: LmDataConfig = dataclasses.field(default_factory=LmDataConfig)
 
     yaml_config = """
     data:
-        id: dlwh/wikitext_103_detokenized
-        cache_dir: "gs://levanter-data/tokenized/wikitext"
+        tokenizer: gpt2
+        cache_dir: "gs://levanter-data/tokenized"
+        components:
+          wikitext:
+            source:
+              type: url
+              validation_urls:
+                - "gs://example"
+              train_urls:
+                - "gs://example"
+            cache_dir: "gs://levanter-data/tokenized/wikitext"
     """
     args = ["--config_path", _write_yaml_to_memory(yaml_config)]
 
     @levanter.config.main(args=args)
     def main(config: Config):
-        assert config.data.id == "dlwh/wikitext_103_detokenized"
-        assert config.data.cache_dir == "gs://levanter-data/tokenized/wikitext"
+        assert "wikitext" in config.data.components
+        comp = config.data.components["wikitext"]
+        assert isinstance(comp.source, UrlDatasetSourceConfig)
+        assert comp.cache_dir == "gs://levanter-data/tokenized/wikitext"
 
     main()
 
@@ -56,18 +67,22 @@ def test_lm_dataset_config():
 def test_lm_mixture_dataset_config():
     @dataclasses.dataclass
     class Config:
-        data: LMMixtureDatasetConfig = dataclasses.field(default_factory=LMMixtureDatasetConfig)
+        data: LmDataConfig = dataclasses.field(default_factory=LmDataConfig)
 
     yaml_config = """
     data:
-        configs:
+        components:
             owt:
-                train_urls:
-                    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
-                validation_urls:
-                    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
+                source:
+                    type: url
+                    train_urls:
+                        - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
+                    validation_urls:
+                        - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
             wikitext:
-                id: dlwh/wikitext_103_detokenized
+                source:
+                    type: hf
+                    id: dlwh/wikitext_103_detokenized
         train_weights:
             owt: 0.6
             wikitext: 0.4

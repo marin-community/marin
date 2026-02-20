@@ -47,7 +47,8 @@ class ImportHfConfig:
     """Target dtype for the saved checkpoint (e.g., 'float32', 'bfloat16', 'float16')"""
 
     resize_vocab_to_match_tokenizer: bool = False
-    """If True, resize model vocab to match tokenizer vocab size"""
+    """If True, resize model vocab to match tokenizer vocab size. Defaults to False because many models
+    (e.g., Qwen) intentionally pad their embedding matrices beyond the tokenizer vocab size for hardware efficiency."""
 
 
 def _coerce_to_repo_ref(checkpoint: Union[str, RepoRef]) -> RepoRef:

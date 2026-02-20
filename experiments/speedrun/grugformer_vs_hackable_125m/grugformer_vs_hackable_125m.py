@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Head-to-head speedrun: Hackable Transformer vs Grugformer (no sinks), ~125M params.
@@ -74,10 +63,6 @@ class GrugformerH2HConfig(LmConfig[GrugWrapper]):
     num_kv_heads: int = 8
     head_dim: int | None = None
 
-    # NOTE: `None` means "single full-vocab block" in grug's blockwise CE. For the 125M head-to-head
-    # speedrun we observed MFU jump from ~20 -> ~40 by disabling chunking; keep it simple for now.
-    cross_entropy_block_size: int | None = None
-
     @property
     def model_type(self) -> type[GrugWrapper]:
         return GrugWrapper
@@ -97,7 +82,6 @@ class GrugformerH2HConfig(LmConfig[GrugWrapper]):
             num_kv_heads=self.num_kv_heads,
             head_dim=self.head_dim,
             max_seq_len=self.max_seq_len,
-            cross_entropy_block_size=self.cross_entropy_block_size,
         )
         return GrugWrapper.init(Vocab, grug_cfg, key=key)
 
@@ -222,8 +206,8 @@ def main() -> None:
         raise AssertionError("Grug speedrun vocab_size mismatch; expected llama3_tokenizer_vocab_size")
 
     steps = []
-    steps.extend(default_speedrun(f"hackable_compare_125m_{max_seq_len}-profile2", hack_speedrun))
-    steps.extend(default_speedrun(f"grug_compare_125m_{max_seq_len}-profile2", grug_speedrun))
+    steps.extend(default_speedrun(f"hackable_compare_125m_{max_seq_len}-profile4", hack_speedrun))
+    steps.extend(default_speedrun(f"grug_compare_125m_{max_seq_len}-profile4", grug_speedrun))
     executor_main(steps=steps, description="Head-to-head: hackable transformer vs grugformer (~125M, no sinks)")
 
 

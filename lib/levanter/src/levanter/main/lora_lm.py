@@ -13,7 +13,7 @@ import haliax.random
 import levanter
 from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.data.text import SingleDatasetLMConfigBase
+from levanter.data.text import LmDataConfig
 from levanter.lora import (
     LoraConfig,
     lora_trainable_params_filter,
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 class LoraLmConfig:
     initialize_from_hf: str
     lora: LoraConfig = field(default_factory=LoraConfig)
-    data: SingleDatasetLMConfigBase = field(default_factory=SingleDatasetLMConfigBase)
+    data: LmDataConfig = field(default_factory=LmDataConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 

@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20260118"
+    image: "us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20260129"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -151,7 +151,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 4
+      TPU: 8
 
   tpu_slice_v5e_16:
     max_workers: 1024

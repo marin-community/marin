@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for backend implementations."""
 
@@ -18,9 +7,7 @@ import gzip
 import io
 import json
 
-import ray
-from fray.job import create_job_ctx
-from zephyr.backends import format_shard_path
+from zephyr.dataset import format_shard_path
 from zephyr.writers import write_jsonl_file
 
 
@@ -109,21 +96,6 @@ def test_write_jsonl_no_compression_without_gz_extension(tmp_path):
         assert len(lines) == 2
         assert json.loads(lines[0]) == {"id": 1, "text": "hello"}
         assert json.loads(lines[1]) == {"id": 2, "text": "world"}
-
-
-def test_create_job_ctx_defaults_to_ray_when_initialized():
-    """Test that create_job_ctx returns ray context when Ray is initialized."""
-    from fray.job import RayContext
-
-    if ray.is_initialized():
-        ray.shutdown()
-
-    try:
-        ray.init(ignore_reinit_error=True)
-        ctx = create_job_ctx()
-        assert isinstance(ctx, RayContext)
-    finally:
-        ray.shutdown()
 
 
 def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):

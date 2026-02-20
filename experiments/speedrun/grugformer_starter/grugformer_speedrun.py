@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Grugformer starter speedrun.
@@ -181,7 +170,7 @@ def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]
     )
 
     run_name = f"grugformer_starter_{size}"
-    desc = f"Grugformer starter (ejkernel blocksparse attention) ({size})."
+    desc = f"Grugformer starter ({size})."
     cfg = SpeedrunConfig(
         author=Author(
             name="__YOUR_NAME__",
@@ -207,7 +196,7 @@ def main() -> None:
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
 
-    executor_main(steps=steps, description="Grugformer starter (ejkernel blocksparse attention).")
+    executor_main(steps=steps, description="Grugformer starter.")
 
 
 if __name__ == "__main__":

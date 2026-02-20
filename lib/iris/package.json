@@ -1,0 +1,9 @@
+{
+  "name": "iris",
+  "version": "1.0.0",
+  "description": "Iris protobuf generation dependencies",
+  "private": true,
+  "devDependencies": {
+    "@bufbuild/buf": "^1.50.0"
+  }
+}
