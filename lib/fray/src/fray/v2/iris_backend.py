@@ -100,8 +100,7 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
     if resources.regions:
-        for region in resources.regions:
-            constraints.append(region_constraint(region))
+        constraints.append(region_constraint(resources.regions))
     return constraints
 
 

@@ -316,6 +316,7 @@ class ConstraintOp(IntEnum):
     GE = 5
     LT = 6
     LE = 7
+    IN = 8
 
     def to_proto(self) -> cluster_pb2.ConstraintOp:
         """Convert to protobuf ConstraintOp enum value."""
@@ -328,6 +329,7 @@ class ConstraintOp(IntEnum):
             ConstraintOp.GE: cluster_pb2.CONSTRAINT_OP_GE,
             ConstraintOp.LT: cluster_pb2.CONSTRAINT_OP_LT,
             ConstraintOp.LE: cluster_pb2.CONSTRAINT_OP_LE,
+            ConstraintOp.IN: cluster_pb2.CONSTRAINT_OP_IN,
         }
         return mapping[self]
 
@@ -348,17 +350,23 @@ class Constraint:
         >>> Constraint(key="memory_gb", op=ConstraintOp.GE, value=64)
         >>> # Require workers that have a GPU
         >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+        >>> # Require workers in one of several regions
+        >>> Constraint(key="region", op=ConstraintOp.IN, values=("us-central1", "us-central2"))
     """
 
     key: str
     op: ConstraintOp
     value: str | int | float | None = None
+    values: tuple[str | int | float, ...] | None = None
 
     def to_proto(self) -> cluster_pb2.Constraint:
         """Convert to protobuf representation."""
         proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
         if self.value is not None:
             proto.value.CopyFrom(AttributeValue(self.value).to_proto())
+        if self.values is not None:
+            for v in self.values:
+                proto.values.append(AttributeValue(v).to_proto())
         return proto
 
     @staticmethod
@@ -368,7 +376,10 @@ class Constraint:
         value: str | int | float | None = None
         if proto.HasField("value"):
             value = AttributeValue.from_proto(proto.value).value
-        return Constraint(key=proto.key, op=op, value=value)
+        values: tuple[str | int | float, ...] | None = None
+        if proto.values:
+            values = tuple(AttributeValue.from_proto(v).value for v in proto.values)
+        return Constraint(key=proto.key, op=op, value=value, values=values)
 
 
 @dataclass(frozen=True)
@@ -585,6 +596,7 @@ class Namespace(str):
 
 PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
 REGION_ATTRIBUTE_KEY = "region"
+ZONE_ATTRIBUTE_KEY = "zone"
 
 
 def preemptible_constraint(preemptible: bool = True) -> Constraint:
@@ -592,11 +604,33 @@ def preemptible_constraint(preemptible: bool = True) -> Constraint:
     return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
 
 
-def region_constraint(region: str) -> Constraint:
-    """Constraint requiring workers to be in a given region."""
-    if not region:
-        raise ValueError("region must be non-empty")
-    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=region)
+def zone_constraint(zone: str) -> Constraint:
+    """Constraint requiring workers to be in a given zone."""
+    if not zone:
+        raise ValueError("zone must be non-empty")
+    return Constraint(key=ZONE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=zone)
+
+
+def region_constraint(regions: Sequence[str]) -> Constraint:
+    """Constraint requiring workers to be in one of the given regions.
+
+    Emits an EQ constraint for a single region or an IN constraint for multiple
+    regions.
+
+    Args:
+        regions: Non-empty sequence of region strings.
+
+    Raises:
+        ValueError: If regions is empty or contains empty strings.
+    """
+    if not regions:
+        raise ValueError("regions must be non-empty")
+    for r in regions:
+        if not r:
+            raise ValueError("region must be non-empty")
+    if len(regions) == 1:
+        return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=regions[0])
+    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.IN, values=tuple(regions))
 
 
 @dataclass(frozen=True)
@@ -650,19 +684,32 @@ def required_regions_from_constraints(constraints: Sequence[cluster_pb2.Constrai
             conflicting EQ values.
     """
     regions: set[str] = set()
+    has_in = False
     for constraint in constraints:
         if constraint.key != REGION_ATTRIBUTE_KEY:
             continue
-        if constraint.op != cluster_pb2.CONSTRAINT_OP_EQ:
-            raise ValueError("region constraint must use EQ")
-        if not constraint.value.HasField("string_value"):
-            raise ValueError("region constraint requires string value")
-        region = constraint.value.string_value.strip()
-        if not region:
-            raise ValueError("region constraint must be non-empty")
-        regions.add(region)
+        if constraint.op == cluster_pb2.CONSTRAINT_OP_IN:
+            if not constraint.values:
+                raise ValueError("IN region constraint requires at least one value")
+            for av in constraint.values:
+                if not av.HasField("string_value"):
+                    raise ValueError("region constraint requires string value")
+                region = av.string_value.strip()
+                if not region:
+                    raise ValueError("region constraint must be non-empty")
+                regions.add(region)
+            has_in = True
+        elif constraint.op == cluster_pb2.CONSTRAINT_OP_EQ:
+            if not constraint.value.HasField("string_value"):
+                raise ValueError("region constraint requires string value")
+            region = constraint.value.string_value.strip()
+            if not region:
+                raise ValueError("region constraint must be non-empty")
+            regions.add(region)
+        else:
+            raise ValueError(f"region constraint must use EQ or IN, got {constraint.op}")
 
-    if len(regions) > 1:
+    if not has_in and len(regions) > 1:
         raise ValueError("conflicting region constraints")
     return frozenset(regions) if regions else None
 
