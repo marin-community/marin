@@ -16,11 +16,51 @@ import shlex
 
 import yaml
 
-from iris.cluster.platform.base import PlatformError, VmHandle
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
+
+
+def parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | None:
+    """Parse ``REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION``.
+
+    Returns:
+        (region, project, image_name, version) or None if not an AR tag.
+    """
+    if "-docker.pkg.dev/" not in image_tag:
+        return None
+    parts = image_tag.split("/")
+    if len(parts) < 4:
+        return None
+    registry = parts[0]
+    if not registry.endswith("-docker.pkg.dev"):
+        return None
+    region = registry.replace("-docker.pkg.dev", "")
+    project = parts[1]
+    image_and_version = parts[3]
+    if ":" in image_and_version:
+        image_name, version = image_and_version.split(":", 1)
+    else:
+        image_name = image_and_version
+        version = "latest"
+    return region, project, image_name, version
+
+
+def rewrite_artifact_registry_region(image_tag: str, target_region: str) -> str:
+    """Rewrite an Artifact Registry image tag to use a different region.
+
+    Non-AR images pass through unchanged. If the image is already in the
+    target region, returns the original tag.
+    """
+    parsed = parse_artifact_registry_tag(image_tag)
+    if parsed is None:
+        return image_tag
+    current_region = parsed[0]
+    if current_region == target_region:
+        return image_tag
+    parts = image_tag.split("/")
+    parts[0] = f"{target_region}-docker.pkg.dev"
+    return "/".join(parts)
 
 
 def render_template(template: str, **variables: str | int) -> str:
@@ -61,48 +101,15 @@ def render_template(template: str, **variables: str | int) -> str:
 
 
 # ============================================================================
-# Worker Bootstrap
+# Worker Bootstrap Script
 # ============================================================================
 
 
-class WorkerBootstrap:
-    """Bootstraps individual worker VMs with embedded cluster config.
-
-    Workers receive the full cluster config.yaml and use it to discover
-    the controller themselves via platform.discover_controller().
-    The autoscaler calls bootstrap_vm() for each VM in parallel via
-    bootstrap_slice_vms().
-    """
-
-    def __init__(self, cluster_config: config_pb2.IrisClusterConfig):
-        self._cluster_config = cluster_config
-
-    def bootstrap_vm(self, vm: VmHandle) -> str:
-        """Bootstrap a single VM: wait for connection, validate, run script.
-
-        Returns bootstrap log text. Raises PlatformError on failure.
-        """
-        if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
-            raise PlatformError(f"VM {vm.vm_id} failed to become reachable within timeout.")
-        if not vm.internal_address:
-            raise PlatformError(f"VM {vm.vm_id} has no internal address.")
-        script = build_worker_bootstrap_script(self._cluster_config, vm.internal_address)
-        vm.bootstrap(script)
-        return vm.bootstrap_log
-
-
 # Bootstrap script template for worker VMs.
-#
-# Workers receive the full cluster config.yaml and use platform.discover_controller()
-# to find the controller address themselves. The config is embedded in the script
-# and written to /etc/iris/config.yaml.
 WORKER_BOOTSTRAP_SCRIPT = """
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
-
-# Write config file
-{{ config_setup }}
 
 echo "[iris-init] Phase: prerequisites"
 
@@ -125,9 +132,8 @@ sudo mkdir -p {{ cache_dir }}
 
 echo "[iris-init] Phase: docker_pull"
 echo "[iris-init] Configuring docker authentication"
-# Configure docker for common GCP Artifact Registry regions
-sudo gcloud auth configure-docker \\
-  europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
+WORKER_REGISTRY=$(echo "{{ docker_image }}" | cut -d'/' -f1)
+sudo gcloud auth configure-docker $WORKER_REGISTRY --quiet 2>/dev/null || true
 
 echo "[iris-init] Pulling image: {{ docker_image }}"
 sudo docker pull {{ docker_image }}
@@ -160,13 +166,12 @@ sudo docker run -d --name iris-worker \\
     --network=host \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
-    {{ config_volume }} \\
     {{ env_flags }} \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.worker.main serve \\
         --host 0.0.0.0 --port {{ worker_port }} \\
         --cache-dir {{ cache_dir }} \\
-        --config /etc/iris/config.yaml
+        --controller-address {{ controller_address }}
 
 echo "[iris-init] Worker container started"
 echo "[iris-init] Phase: registration"
@@ -203,14 +208,19 @@ exit 1
 """
 
 
-def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str:
+def build_worker_env_flags(
+    config: config_pb2.BootstrapConfig,
+    vm_address: str,
+) -> str:
     """Generate docker -e flags with proper escaping.
 
     TPU metadata is probed by the worker process via env_probe.py, so bootstrap
     only forwards explicit bootstrap env vars plus IRIS_VM_ADDRESS.
     """
+    env_vars = dict(config.env_vars)
+
     flags = []
-    for k, v in config.env_vars.items():
+    for k, v in env_vars.items():
         flags.append(f"-e {shlex.quote(k)}={shlex.quote(v)}")
     # Inject VM address so worker can include it in registration for autoscaler tracking
     if vm_address:
@@ -220,36 +230,25 @@ def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) 
 
 
 def build_worker_bootstrap_script(
-    cluster_config: config_pb2.IrisClusterConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
     vm_address: str,
 ) -> str:
     """Build the bootstrap script for a worker VM.
 
-    The worker receives the full cluster config.yaml and discovers the controller
-    itself via platform.discover_controller().
-
     Args:
-        cluster_config: Full cluster configuration
+        bootstrap_config: Worker bootstrap settings
         vm_address: VM IP address for autoscaler tracking
     """
-    # Local import to avoid circular dependency (config.py imports WorkerBootstrap)
-    from iris.cluster.config import config_to_dict
-
-    bootstrap_config = cluster_config.defaults.bootstrap
-
-    # Serialize cluster config to YAML and embed it
-    config_yaml = yaml.dump(config_to_dict(cluster_config), default_flow_style=False)
-    config_setup = _build_config_setup(config_yaml, log_prefix="[iris-init]")
-
     env_flags = build_worker_env_flags(bootstrap_config, vm_address)
+    if not bootstrap_config.controller_address:
+        raise ValueError("bootstrap_config.controller_address is required for worker bootstrap")
 
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
-        config_setup=config_setup,
         cache_dir=bootstrap_config.cache_dir or "/var/cache/iris",
         docker_image=bootstrap_config.docker_image,
         worker_port=bootstrap_config.worker_port or 10001,
-        config_volume="-v /etc/iris/config.yaml:/etc/iris/config.yaml:ro",
+        controller_address=bootstrap_config.controller_address,
         env_flags=env_flags,
     )
 
@@ -292,8 +291,8 @@ fi
 
 # Configure docker for GCP Artifact Registry
 echo "[iris-controller] [3/5] Configuring Docker for GCP Artifact Registry..."
-sudo gcloud auth configure-docker \\
-  europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
+CONTROLLER_REGISTRY=$(echo "{{ docker_image }}" | cut -d'/' -f1)
+sudo gcloud auth configure-docker $CONTROLLER_REGISTRY --quiet 2>/dev/null || true
 echo "[iris-controller] [3/5] Docker registry configuration complete"
 
 echo "[iris-controller] [4/5] Pulling image: {{ docker_image }}"
@@ -428,7 +427,7 @@ def build_controller_bootstrap_script_from_config(
 
     Serializes the config to YAML and embeds it in the bootstrap script.
     """
-    # Local import to avoid circular dependency (config.py imports WorkerBootstrap)
+    # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
 
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)

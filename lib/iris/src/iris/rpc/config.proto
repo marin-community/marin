@@ -150,6 +150,11 @@ message ScaleGroupResources {
   int32 tpu_count = 5;
 }
 
+message WorkerSettings {
+  map<string, string> attributes = 1;
+  map<string, string> env = 2;
+}
+
 // Configuration for a scale group
 message ScaleGroupConfig {
   string name = 1;
@@ -177,6 +182,7 @@ message ScaleGroupConfig {
 
   // What to create when scaling up — the slice template
   SliceConfig slice_template = 50;
+  WorkerSettings worker = 60;
 }
 
 // ============================================================================

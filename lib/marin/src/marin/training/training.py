@@ -26,6 +26,7 @@ from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
+from iris.temp_buckets import get_temp_bucket_path
 
 logger = logging.getLogger(__name__)
 
@@ -193,12 +194,12 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        marin_prefix = os.environ.get("MARIN_PREFIX")
-        if marin_prefix:
-            env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
-            logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
+        temp_cache_path = get_temp_bucket_path(ttl_days=30, prefix="compilation-cache")
+        if temp_cache_path is not None:
+            env["JAX_COMPILATION_CACHE_DIR"] = temp_cache_path
+            logger.info("JAX compilation cache on temp bucket: %s", temp_cache_path)
         else:
-            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
+            logger.warning("No temp bucket available; JAX compilation cache will not be configured.")
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")

@@ -5,6 +5,9 @@
 #
 FROM python:3.11-slim
 
+LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
+LABEL org.opencontainers.image.description="Iris controller image"
+
 # Install system dependencies (openssh-client required for gcloud TPU SSH)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \

@@ -3,6 +3,7 @@
 
 """Environment probing for worker registration."""
 
+import json
 import logging
 import os
 import re
@@ -16,20 +17,12 @@ from typing import Protocol
 
 from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.rpc import cluster_pb2
+from iris.temp_buckets import REGION_TO_TMP_BUCKET
 
 logger = logging.getLogger(__name__)
 
 _GCP_METADATA_ROOT = "http://metadata.google.internal/computeMetadata/v1/instance"
 _GCP_METADATA_HEADERS = {"Metadata-Flavor": "Google"}
-_REGION_TO_TMP_BUCKET = {
-    "asia-northeast1": "marin-tmp-asia-northeast-1",
-    "us-central1": "marin-tmp-us-central1",
-    "us-central2": "marin-tmp-us-central2",
-    "europe-west4": "marin-tmp-eu-west4",
-    "us-west4": "marin-tmp-us-west4",
-    "us-east1": "marin-tmp-us-east1",
-    "us-east5": "marin-tmp-us-east5",
-}
 
 
 @lru_cache(maxsize=1)
@@ -75,7 +68,7 @@ def _infer_worker_log_prefix() -> str | None:
     if "-" not in zone_name:
         return None
     region = zone_name.rsplit("-", 1)[0]
-    bucket = _REGION_TO_TMP_BUCKET.get(region)
+    bucket = REGION_TO_TMP_BUCKET.get(region)
     if not bucket:
         logger.warning("No tmp bucket mapping for region %s", region)
         return None
@@ -238,28 +231,16 @@ def _detect_preemptible(extra_attributes: dict[str, str]) -> bool:
 def _get_extra_attributes() -> dict[str, str]:
     """Get extra worker attributes from IRIS_WORKER_ATTRIBUTES env var.
 
-    Format: key1=value1,key2=value2,...
-    Example: taint:maintenance=true,pool=large-jobs
-
-    Values are always strings; the caller is responsible for type conversion if needed.
+    Format: JSON object, e.g. {"region":"us-west4","pool":"large-jobs"}.
+    Values are stringified.
     """
     attrs_env = os.environ.get("IRIS_WORKER_ATTRIBUTES", "")
     if not attrs_env:
         return {}
-    result: dict[str, str] = {}
-    for pair in attrs_env.split(","):
-        pair = pair.strip()
-        if not pair:
-            continue
-        if "=" not in pair:
-            logger.warning("Skipping malformed attribute (no '='): %s", pair)
-            continue
-        key, value = pair.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key:
-            result[key] = value
-    return result
+    parsed = json.loads(attrs_env)
+    if not isinstance(parsed, dict):
+        raise ValueError("IRIS_WORKER_ATTRIBUTES must decode to a dictionary")
+    return {str(key): str(value) for key, value in parsed.items() if str(key)}
 
 
 def _build_worker_attributes(
