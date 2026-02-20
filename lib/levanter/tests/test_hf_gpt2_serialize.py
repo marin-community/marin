@@ -211,7 +211,7 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
 
 
 def test_hf_save_to_fs_spec():
-    config = Gpt2Config(hidden_dim=32, num_heads=2, num_layers=2)
+    config = Gpt2Config(hidden_dim=16, num_heads=1, num_layers=1)
     converter = HFCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
 
     with use_test_mesh():
