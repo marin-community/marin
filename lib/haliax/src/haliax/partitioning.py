@@ -14,8 +14,8 @@ from typing import Any, Callable, ContextManager, Mapping, Optional, ParamSpec, 
 import equinox as eqx
 import jax
 from equinox import is_array, module_update_wrapper
+from jax import shard_map as jax_shard_map
 from jax.sharding import reshard
-from jax.experimental.shard_map import shard_map as jax_shard_map
 from jax.lax import with_sharding_constraint
 from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh, AxisType
 
@@ -818,7 +818,7 @@ def shard_map(
     check_rep: bool = False,
     **shmap_kwargs: dict,
 ) -> Callable:
-    """A NamedArray-friendly wrapper around :func:`jax.experimental.shard_map.shard_map`.
+    """A NamedArray-friendly wrapper around :func:`jax.shard_map`.
 
     This function can be used either as ``haliax.shard_map(fn, ...)`` or as a
     decorator::

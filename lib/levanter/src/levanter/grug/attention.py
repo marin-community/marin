@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import jax
 from jax import numpy as jnp
-from jax.experimental.shard_map import shard_map
+from jax import shard_map
 from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import Array, Bool, Float, Int
