@@ -228,6 +228,29 @@ def _shape_bucket(b: int, h: int, v: int) -> Optional[str]:
     return None
 
 
+def _largest_supported_divisor(dim: int, preferred: int) -> int | None:
+    """Largest <= preferred divisor of dim that is also TPU-lane aligned."""
+    upper = min(dim, preferred)
+    candidate = upper - (upper % 128)
+    while candidate >= 128:
+        if dim % candidate == 0:
+            return candidate
+        candidate -= 128
+    return None
+
+
+def _adapt_block_sizes_for_shape(block_sizes: BlockSizes, *, b: int, h: int) -> BlockSizes:
+    """Clamp tuned/default block sizes to divisors of the current shape when possible."""
+    b_block_size = _largest_supported_divisor(b, block_sizes.b_block_size)
+    h_block_size = _largest_supported_divisor(h, block_sizes.h_block_size)
+
+    return BlockSizes(
+        b_block_size=b_block_size or block_sizes.b_block_size,
+        h_block_size=h_block_size or block_sizes.h_block_size,
+        v_block_size=block_sizes.v_block_size,
+    )
+
+
 def infer_block_sizes(
     b: int,
     h: int,
@@ -258,9 +281,9 @@ def infer_block_sizes(
                 continue
             entry = TUNED_BLOCK_SIZES.get(key, {}).get((dtype_name, bucket))
             if entry is not None:
-                return entry
+                return _adapt_block_sizes_for_shape(entry, b=b, h=h)
 
-    return BlockSizes.get_default()
+    return _adapt_block_sizes_for_shape(BlockSizes.get_default(), b=b, h=h)
 
 
 def infer_xla_v_block_size(

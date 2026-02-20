@@ -63,6 +63,14 @@ class AttentionBackend(StrEnum):
 
 
 DEFAULT_SPLASH_BLOCK_SIZE = 512
+_SPLASH_FALLBACK_WARNINGS_EMITTED: set[str] = set()
+
+
+def _warn_splash_fallback_once(message: str) -> None:
+    if message in _SPLASH_FALLBACK_WARNINGS_EMITTED:
+        return
+    _SPLASH_FALLBACK_WARNINGS_EMITTED.add(message)
+    warnings.warn(message, stacklevel=3)
 
 
 def default_attention_type() -> AttentionBackend:
@@ -1186,13 +1194,13 @@ def _try_tpu_splash_attention(
     if dropout != 0.0:
         if force_flash:
             raise NotImplementedError("Splash attention does not support dropout.")
-        warnings.warn("Splash attention does not support. Falling back to the reference implementation.")
+        _warn_splash_fallback_once("Splash attention does not support dropout. Falling back to the reference.")
         return None
 
     if bias is not None:
         if force_flash:
             raise NotImplementedError("Splash attention does not support bias.")
-        warnings.warn("Splash attention does not support bias. Falling back to the reference implementation.")
+        _warn_splash_fallback_once("Splash attention does not support bias. Falling back to the reference.")
         return None
 
     try:
@@ -1220,16 +1228,17 @@ def _try_tpu_splash_attention(
             raise
         if force_flash:
             raise ImportError("Could not import splash attention. You need to update your JAX to at least 0.7.2.")
-        warnings.warn(
+        _warn_splash_fallback_once(
             "Could not import splash attention. You need to update your JAX to at least 0.7.2. "
-            "Falling back to the reference implementation."
+            "Falling back to the reference implementation.",
         )
         return None
     except NotImplementedError as e:
         message = str(e)
         if force_flash:
             raise NotImplementedError(f"Could not use splash attention: {message}")
-        warnings.warn(f"Could not use splash attention: {message}. Falling back to the reference")
+        logger.info("Could not use splash attention. Falling back to the reference implementation: %s", message)
+        _warn_splash_fallback_once("Could not use splash attention. Falling back to the reference implementation.")
         return None
 
 
