@@ -149,8 +149,6 @@ class WriteOp:
     levanter_metadata: dict[str, Any] | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
     batch_size: int = 1000  # For parquet
-    tokenizer_name: str | None = None  # For levanter_cache
-    format: object | None = None  # For levanter_cache (LmDatasetFormatBase)
     skip_existing: bool = False  # Skip writing if output file already exists
 
     def __repr__(self):
