@@ -3,10 +3,13 @@
 Append-only running log for `lib/levanter/src/levanter/layers/gated_deltanet.py` TPU optimization work.
 
 ## Goal
+
 Increase training MFU for the Gated DeltaNet TPU implementation without changing model semantics.
 
 ## Loop Contract
+
 Each iteration should include:
+
 1. one optimization hypothesis,
 2. one code change set,
 3. TPU correctness validation,
@@ -14,6 +17,7 @@ Each iteration should include:
 5. one commit if validated.
 
 ## Known Constraints (as of 2026-01-06)
+
 - Strict lower-triangular inversion is a TPU hotspot.
 - Pallas TPU kernels do not support dynamic slice indexing in-kernel, requiring static indexing/segmentation.
 
@@ -21,6 +25,7 @@ Each iteration should include:
 
 ```markdown
 ### Iteration <N> - <short title>
+
 - Date: <UTC timestamp>
 - Commit: <sha>
 - Hypothesis:
@@ -40,6 +45,7 @@ Each iteration should include:
 ## Iterations
 
 ### Iteration 0 - Infra bootstrap
+
 - Date: 2026-02-18
 - Commit: (pending)
 - Hypothesis: Standardized scripts/docs and lightweight profile entrypoint reduce iteration overhead for future optimization passes.
@@ -56,6 +62,7 @@ Each iteration should include:
 - Next hypothesis: Use new loop to target one kernel bottleneck per commit.
 
 ### Iteration 1 - Loop hardening + trace validation
+
 - Date: 2026-02-18
 - Commit: (pending)
 - Hypothesis: The loop must run reliably under TPU queue contention; adding safe tiny-profile defaults and a first-class dev TPU profile path will make each iteration deterministic.
@@ -79,6 +86,7 @@ Each iteration should include:
 - Next hypothesis: reduce GDN segment scan overhead by fusing segment boundaries/state handoff so line-2361 and line-1861 while/custom-call blocks execute fewer large-loop iterations per step.
 
 ### Iteration 2 - Unroll flash segment scans
+
 - Date: 2026-02-18T12:55:20Z
 - Commit: (pending)
 - Hypothesis: Unrolling the segment-level `lax.scan` loops in the flash TPU forward/backward path will remove `while` overhead and improve MFU.
@@ -105,6 +113,7 @@ Each iteration should include:
 - Next hypothesis: reduce remaining GDN custom-call cost at `gated_deltanet.py:2374`/`1316` by increasing useful work per pallas call (fewer shard-map launches per training step).
 
 ### Iteration 3 - Increase flash segment scan unroll to 8
+
 - Date: 2026-02-18T13:54:59Z
 - Commit: (pending)
 - Hypothesis: Increasing segment-level scan unroll from `4` to `8` in flash TPU forward/backward should slightly reduce residual scan overhead and improve MFU without changing kernel memory shape.
@@ -133,6 +142,7 @@ Each iteration should include:
 - Next hypothesis: `custom-call` at `gated_deltanet.py:2374`/`1316` dominates; target fewer shard-map launches or more work per launch in those pallas calls.
 
 ### Iteration 4 - Single forward super-segment pallas call
+
 - Date: 2026-02-18T07:40:10Z
 - Commit: (pending)
 - Dominant bottleneck carried in: `custom-call` at `gated_deltanet.py:2374`/`1316` from Iteration 3 trace (`183.251 ms` total on TPU:0 XLA Ops aggregate).
@@ -169,6 +179,7 @@ Each iteration should include:
 - Next hypothesis: escalate to a radical backward redesign that changes algorithmic decomposition (e.g., blockwise associative state propagation or a two-stage backward that avoids large per-call gradient tensors) so we can safely reduce both forward and backward launch count without vmem blowups.
 
 ### Iteration 5 - Backward state tape with segmented forward launches
+
 - Date: 2026-02-18T16:55:00Z
 - Commit: (pending)
 - Dominant bottleneck carried in: `custom-call` from `jit__train_step` remained dominant in Iteration 4 (`4531.684 ms` in XProf `op_profile` by-program view), with biggest GDN sources at `gated_deltanet.py:2375` and `gated_deltanet.py:1335`.
@@ -202,7 +213,34 @@ Each iteration should include:
 - Assessment: moderate win; this clears prior scoped-vmem failure path and improves MFU above the 3% threshold, but the dominant hotspot category is still `custom-call`.
 - Next hypothesis: pursue a more radical launch/dataflow reduction in the remaining GDN custom-call path (e.g., associative/blockwise backward decomposition or fewer larger pallas calls that keep scoped-vmem bounded).
 
+### Iteration 5B - Recursive block solve attempt (infra blocked)
+
+- Date: 2026-02-19T18:24:09Z
+- Commit: none (failed attempt)
+- Dominant bottleneck carried in: `custom-call` remained dominant in the latest available dev trace (`178.524 ms` on TPU:0 XLA Ops aggregate), with top GDN sources at `gated_deltanet.py:2337` (`115.855 ms`) and `gated_deltanet.py:1329` (`71.412 ms`).
+- Candidate shortlist (estimated upside / risk):
+  1. Recursive block solve without chunk-size inverse materialization (`+10-20%`, medium risk).
+  2. Two-stage WY-style prep/apply decomposition in pallas (`+12-25%`, high risk, memory-traffic risk).
+  3. Associative blockwise triangular dependency composition (`>20%`, very high algorithmic risk).
+- Selected hypothesis: option (1), replacing explicit strict-lower inversion with equivalent block-recursive solve/transpose-solve decomposition.
+- Change summary:
+  - Implemented a recursive solve path in `gated_deltanet.py` and rewired forward/backward chunk kernels to use solve + transpose-solve instead of explicit full inverse materialization.
+  - Reverted the speculative code changes after infra failure so the tree does not retain unvalidated kernel edits.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - Result: failed immediately with `Error: SSH configuration for dev-tpu-calvinxu-gdn not found` (allocation missing).
+  - Allocation command attempted: `uv run scripts/ray/dev_tpu.py --cluster us-east5-a --tpu-name calvinxu-gdn allocate --tpu-type v5p-8`
+  - Blocker: allocation timed out with `ray.exceptions.GetTimeoutError: Get timed out: some object(s) not ready.`
+- Profile run:
+  - Command: not run (blocked on dev TPU allocation).
+  - Job ID: N/A
+  - Trace location: N/A
+- Hotspots observed: unchanged (no new trace); carry-in dominant hotspot remains GDN `custom-call`.
+- MFU/throughput delta: N/A (infra-blocked; no validated run).
+- Next hypothesis: retry the recursive block-solve redesign once dev TPU allocation succeeds; if allocation remains unstable, coordinate cluster-side remediation before further kernel iterations.
+
 ### Iteration 6 - Replace explicit triangular inversion with blockwise solves
+
 - Date: 2026-02-19T19:15:26Z
 - Commit: this commit
 - Dominant bottleneck carried in: `custom-call` remained dominant in Iteration 5 (`4284.468 ms` in XProf `op_profile` by-program), with largest GDN shard-map pallas callsites under `jit(_train_step)/.../HackableDecoderLayer/.../pallas_call`.
