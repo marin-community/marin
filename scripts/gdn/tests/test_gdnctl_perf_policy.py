@@ -205,7 +205,50 @@ def test_extract_wandb_run_url_supports_slug_with_underscore() -> None:
         "https://wandb.ai/marin-community/marin/runs/gdn_trisolve_i6_dev_130m_ch128_seg16_20steps-1f9dea"
     )
     url = gdnctl._extract_last_wandb_run_url(text)
-    assert (
-        url
-        == "https://wandb.ai/marin-community/marin/runs/gdn_trisolve_i6_dev_130m_ch128_seg16_20steps-1f9dea"
+    assert url == "https://wandb.ai/marin-community/marin/runs/gdn_trisolve_i6_dev_130m_ch128_seg16_20steps-1f9dea"
+
+
+def test_stamp_last_log_commit_placeholder(tmp_path: Path) -> None:
+    log_path = tmp_path / "hillclimb.md"
+    log_path.write_text(
+        "\n".join(
+            [
+                "### Iteration 1 - Example",
+                "- Commit: abc123",
+                "",
+                "### Iteration 2 - Example",
+                "- Commit: this commit",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
     )
+
+    changed = gdnctl._stamp_last_log_commit_placeholder(log_path, commit_sha="deadbeef")
+    assert changed
+    text = log_path.read_text(encoding="utf-8")
+    assert "- Commit: deadbeef" in text
+    assert "- Commit: this commit" not in text
+
+
+def test_lint_log_rejects_this_commit_by_default(tmp_path: Path) -> None:
+    log_path = tmp_path / "hillclimb.md"
+    log_path.write_text(
+        "\n".join(
+            [
+                "### Iteration 9 - Example",
+                "- Commit: this commit",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    args = argparse.Namespace(
+        log_file=str(log_path),
+        scope="last-entry",
+        allow_pending=False,
+        allow_this_commit=False,
+    )
+    rc = gdnctl.cmd_lint_log(args)
+    assert rc == 1

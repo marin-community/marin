@@ -70,9 +70,7 @@ DEV_TPU_READY_MARKERS = (
 GIT_TRANSIENT_ERROR_RE = re.compile(
     r"(index\.lock|Another git process seems to be running|Unable to create '.+?\.lock')"
 )
-WANDB_RUN_URL_RE = re.compile(
-    r"https://wandb\.ai/(?P<entity>[^/\s]+)/(?P<project>[^/\s]+)/runs/(?P<run_id>[^/\s?#]+)"
-)
+WANDB_RUN_URL_RE = re.compile(r"https://wandb\.ai/(?P<entity>[^/\s]+)/(?P<project>[^/\s]+)/runs/(?P<run_id>[^/\s?#]+)")
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -389,9 +387,8 @@ def _collect_profile_metrics(
         )
         metrics.update(summary_metrics)
 
-    needs_discovery = (
-        args.validation_profile_wandb_mode == "online"
-        and (run_url is None or args.perf_metric not in metrics or summary_warning is not None)
+    needs_discovery = args.validation_profile_wandb_mode == "online" and (
+        run_url is None or args.perf_metric not in metrics or summary_warning is not None
     )
     if needs_discovery:
         discovered_url, discover_warning = _discover_wandb_run_for_prefix(
@@ -1685,6 +1682,41 @@ def _apply_resilient_defaults(args: argparse.Namespace) -> None:
         args.validation_max_attempts = -1
 
 
+def _last_iteration_bounds(lines: Sequence[str]) -> tuple[int, int] | None:
+    last_start = None
+    for idx, line in enumerate(lines):
+        if line.startswith("### Iteration "):
+            last_start = idx
+    if last_start is None:
+        return None
+    return last_start, len(lines)
+
+
+def _stamp_last_log_commit_placeholder(log_path: Path, *, commit_sha: str) -> bool:
+    if not log_path.exists():
+        return False
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    bounds = _last_iteration_bounds(lines)
+    if bounds is None:
+        return False
+
+    start, end = bounds
+    for idx in range(end - 1, start - 1, -1):
+        stripped = lines[idx].strip()
+        if not stripped.startswith("- Commit:"):
+            continue
+        value = stripped.split(":", 1)[1].strip()
+        if value in {"this commit", "(pending)"}:
+            prefix = lines[idx][: lines[idx].index("- Commit:")]
+            lines[idx] = f"{prefix}- Commit: {commit_sha}"
+            log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return True
+        return False
+
+    return False
+
+
 def cmd_lint_log(args: argparse.Namespace) -> int:
     log_path = Path(args.log_file).resolve()
     if not log_path.exists():
@@ -1692,25 +1724,38 @@ def cmd_lint_log(args: argparse.Namespace) -> int:
         return 2
 
     lines = log_path.read_text(encoding="utf-8").splitlines()
+    pending_lines: list[int]
+    this_commit_lines: list[int]
     if args.scope == "last-entry":
-        last_entry_start = None
-        for idx, line in enumerate(lines):
-            if line.startswith("### Iteration "):
-                last_entry_start = idx
-        if last_entry_start is None:
+        bounds = _last_iteration_bounds(lines)
+        if bounds is None:
             pending_lines = []
+            this_commit_lines = []
         else:
+            start, end = bounds
             pending_lines = [
                 idx
-                for idx, line in enumerate(lines[last_entry_start:], start=last_entry_start + 1)
+                for idx, line in enumerate(lines[start:end], start=start + 1)
                 if line.strip() == "- Commit: (pending)"
+            ]
+            this_commit_lines = [
+                idx
+                for idx, line in enumerate(lines[start:end], start=start + 1)
+                if line.strip() == "- Commit: this commit"
             ]
     else:
         pending_lines = [idx for idx, line in enumerate(lines, start=1) if line.strip() == "- Commit: (pending)"]
+        this_commit_lines = [idx for idx, line in enumerate(lines, start=1) if line.strip() == "- Commit: this commit"]
 
     if pending_lines and not args.allow_pending:
         print(f"[gdnctl] unresolved `Commit: (pending)` entries in {log_path}:", file=sys.stderr)
         for line_no in pending_lines:
+            print(f"[gdnctl]   line {line_no}", file=sys.stderr)
+        return 1
+
+    if this_commit_lines and not args.allow_this_commit:
+        print(f"[gdnctl] unresolved `Commit: this commit` entries in {log_path}:", file=sys.stderr)
+        for line_no in this_commit_lines:
             print(f"[gdnctl]   line {line_no}", file=sys.stderr)
         return 1
 
@@ -1946,6 +1991,11 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                             if _failure_limit_exceeded(failures=failures, max_failures=args.max_failures):
                                 return 3
                         continue
+
+                    if _stamp_last_log_commit_placeholder(DEFAULT_HILLCLIMB_LOG, commit_sha=head_after):
+                        print(
+                            "[gdnctl] stamped last hill-climb log entry with commit " f"{head_after[:12]}",
+                        )
 
                     perf_ok, perf_count_failure, perf_rc = _apply_performance_policy(
                         args,
@@ -2458,6 +2508,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-pending",
         action="store_true",
         help="Do not fail when `Commit: (pending)` placeholders are present.",
+    )
+    lint_log.add_argument(
+        "--allow-this-commit",
+        action="store_true",
+        help="Do not fail when `Commit: this commit` placeholders are present.",
     )
     lint_log.set_defaults(func=cmd_lint_log)
 

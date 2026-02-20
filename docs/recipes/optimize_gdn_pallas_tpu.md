@@ -283,4 +283,4 @@ After each meaningful iteration, append:
 to `lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md`.
 
 Log hygiene:
-- Do not leave `Commit: (pending)` in new entries. Use a concrete status such as a SHA, `this commit`, or `none (failed attempt)`.
+- Do not leave `Commit: (pending)` or `Commit: this commit` in new entries. Use an exact SHA or `none (failed attempt)`.

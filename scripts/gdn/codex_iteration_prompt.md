@@ -55,7 +55,7 @@ Failed-attempt handling:
 - Either:
   - revert the failed code attempt and record `Commit: none (failed attempt)`, or
   - keep only clearly justified scaffolding that is necessary for the next planned attempt and commit it with explicit rationale.
-- Never leave `Commit: (pending)` in a newly-added log entry.
+- Never leave `Commit: (pending)` or `Commit: this commit` in a newly-added log entry; use the exact commit SHA.
 
 Constraints:
 - TPU-only optimization target.
