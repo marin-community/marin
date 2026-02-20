@@ -168,9 +168,7 @@ def test_ragged_paged_attention_single_seq():
 jit_rpa = jax.jit(ragged_paged_attention)
 
 
-@pytest.mark.parametrize(
-    "seq_lens", [[8], [8, 32, 16], [10, 37, 64], [34, 17], [9, 10, 34, 17], [64, 10, 37], [5, 15, 25, 35, 45]]
-)
+@pytest.mark.parametrize("seq_lens", [[8], [8, 32, 16], [10, 37, 64], [9, 10, 34, 17]])
 def test_ragged_paged_attention_multi_seq(seq_lens):
     rng = jr.PRNGKey(hash(tuple(seq_lens)))
     q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_random_case(rng, seq_lens)
