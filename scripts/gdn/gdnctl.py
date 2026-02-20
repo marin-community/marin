@@ -856,22 +856,105 @@ def _stash_dirty_tree(cwd: Path, *, iteration: int) -> tuple[str, str]:
     return stash_ref, stash_message
 
 
+def _stash_apply_would_conflict(cwd: Path, *, stash_ref: str) -> tuple[bool, str]:
+    """Preflight stash apply in a temporary worktree.
+
+    This avoids leaving the main working tree in an unmerged state if the stash
+    would conflict with iteration-generated commits.
+    """
+
+    head = _git_head(cwd)
+    with tempfile.TemporaryDirectory(prefix="gdnctl-stash-preflight-") as temp_root:
+        probe_worktree = Path(temp_root) / "probe"
+        add_proc = _run_git(
+            ["worktree", "add", "--detach", str(probe_worktree), head],
+            cwd=cwd,
+            capture_output=True,
+            check=False,
+        )
+        if add_proc.returncode != 0:
+            output = (add_proc.stdout + add_proc.stderr).strip()
+            # Fail open if preflight infra itself fails; we'll attempt a normal restore.
+            return False, output
+        try:
+            apply_proc = _run_git(
+                ["stash", "apply", "--quiet", stash_ref],
+                cwd=probe_worktree,
+                capture_output=True,
+                check=False,
+            )
+            output = (apply_proc.stdout + apply_proc.stderr).strip()
+            return apply_proc.returncode != 0, output
+        finally:
+            _run_git(
+                ["worktree", "remove", "--force", str(probe_worktree)],
+                cwd=cwd,
+                capture_output=True,
+                check=False,
+            )
+
+
 def _restore_stash_tree(cwd: Path, *, stash_ref: str, stash_message: str) -> bool:
     print(f"[gdnctl] restoring stashed dirty tree: {stash_message} ({stash_ref})")
-    proc = _run_git(["stash", "pop", stash_ref], cwd=cwd, capture_output=True, check=False)
+    would_conflict, preflight_output = _stash_apply_would_conflict(cwd, stash_ref=stash_ref)
+    if would_conflict:
+        if preflight_output:
+            print(f"[gdnctl] stash preflight: {preflight_output}", file=sys.stderr)
+        print(
+            "[gdnctl] stash restore skipped because preflight detected conflicts; "
+            f"stash kept for manual recovery ({stash_ref}, message={stash_message}).",
+            file=sys.stderr,
+        )
+        return False
+
+    if preflight_output:
+        # Informative only: preflight setup can emit warnings.
+        print(f"[gdnctl] stash preflight: {preflight_output}", file=sys.stderr)
+
+    proc = _run_git(["stash", "apply", stash_ref], cwd=cwd, capture_output=True, check=False)
     output = (proc.stdout + proc.stderr).strip()
     if output:
         sink = sys.stdout if proc.returncode == 0 else sys.stderr
         print(f"[gdnctl] {output}", file=sink)
 
-    if proc.returncode == 0:
-        return True
+    if proc.returncode != 0:
+        print(
+            "[gdnctl] stash restore failed; stash was kept for manual recovery "
+            f"({stash_ref}, message={stash_message}).",
+            file=sys.stderr,
+        )
+        return False
 
+    drop_proc = _run_git(["stash", "drop", stash_ref], cwd=cwd, capture_output=True, check=False)
+    drop_output = (drop_proc.stdout + drop_proc.stderr).strip()
+    if drop_output:
+        sink = sys.stdout if drop_proc.returncode == 0 else sys.stderr
+        print(f"[gdnctl] {drop_output}", file=sink)
+    if drop_proc.returncode != 0:
+        print(
+            "[gdnctl] WARNING: stash was applied but could not be dropped automatically "
+            f"({stash_ref}).",
+            file=sys.stderr,
+        )
+        return False
+
+    return True
+
+
+def _has_unmerged_paths(cwd: Path) -> bool:
+    proc = _run_git(["diff", "--name-only", "--diff-filter=U"], cwd=cwd, capture_output=True, check=True)
+    return bool(proc.stdout.strip())
+
+
+def _recover_from_unmerged_paths(cwd: Path) -> None:
+    if not _has_unmerged_paths(cwd):
+        return
     print(
-        "[gdnctl] stash restore failed; stash was kept for manual recovery " f"({stash_ref}, message={stash_message}).",
+        "[gdnctl] WARNING: unmerged paths detected after stash restore attempt; "
+        "resetting index/worktree to HEAD to keep loop running (stashes are preserved).",
         file=sys.stderr,
     )
-    return False
+    _run_git(["reset", "--merge"], cwd=cwd, capture_output=True, check=False)
 
 
 @contextmanager
@@ -896,6 +979,13 @@ def _clean_worktree_for_iteration(
         if stash_entry is not None:
             stash_ref, stash_message = stash_entry
             restored = _restore_stash_tree(workdir, stash_ref=stash_ref, stash_message=stash_message)
+            if not restored:
+                _recover_from_unmerged_paths(workdir)
+                if _has_unmerged_paths(workdir):
+                    raise RuntimeError(
+                        "[gdnctl] Unable to recover from unmerged paths after stash restore attempt. "
+                        "Resolve conflicts manually before continuing."
+                    )
             if not restored and args.stash_restore_policy == "fail":
                 raise RuntimeError(
                     "[gdnctl] Failed to restore stashed dirty tree. "
