@@ -358,7 +358,7 @@ def tokenize(config: TokenizeConfigBase):
         temp_shards = (
             ds.window(64)
             .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
-            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
+            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}", metadata={}, skip_existing=True)
         )
 
         # Broadcast the tokenizer to all workers via ZephyrContext
