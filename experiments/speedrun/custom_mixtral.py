@@ -3,6 +3,7 @@
 
 # nodryrun
 import dataclasses
+import inspect
 import logging
 import os
 from dataclasses import dataclass
@@ -41,6 +42,8 @@ from transformers import PretrainedConfig as HfConfig  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 _LOGGED_LIBTPU_ARGS = False
+_SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
+_SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
 
 
 def _log_libtpu_args_once():
@@ -346,7 +349,7 @@ class MixtralSparseMoeBlock(eqx.Module):
                 hax.partitioning.pspec_for_axis((Token, TopExperts)),
                 hax.partitioning.pspec_for_axis((Token, TopExperts)),
             ),
-            check_rep=False,
+            **_SHARD_MAP_CHECK_KWARGS,
         )
         def sharded_route(router_probs_):
             selected_weights_, selected_experts_ = jax.lax.top_k(router_probs_, TopExperts.size)
@@ -379,7 +382,7 @@ class MixtralSparseMoeBlock(eqx.Module):
                 hax.partitioning.pspec_for_axis((Experts,)),
                 hax.partitioning.pspec_for_axis((TokenRepeat,)),
             ),
-            check_rep=False,
+            **_SHARD_MAP_CHECK_KWARGS,
         )
         def permute_sharded(x_flat_: Array, topk_idx_flat_: Array):
             sort_idx_ = jnp.argsort(topk_idx_flat_, axis=-1)
@@ -417,7 +420,7 @@ class MixtralSparseMoeBlock(eqx.Module):
                 hax.partitioning.pspec_for_axis(sort_idx.axes),
             ),
             out_specs=hax.partitioning.pspec_for_axis((Token, TopExperts, self.config.Embed)),
-            check_rep=False,
+            **_SHARD_MAP_CHECK_KWARGS,
         )
         def unpermute_sharded(out_repeat_sort_: Array, sort_idx_: Array):
             inv_sort_idx_ = jnp.argsort(sort_idx_)

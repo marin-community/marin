@@ -1,6 +1,7 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 import functools
+import inspect
 import math
 from dataclasses import dataclass
 
@@ -13,6 +14,10 @@ from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
+
+
+_SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
+_SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
 
 
 @dataclass(frozen=True)
@@ -367,7 +372,7 @@ def _tpu_splash_attention(
         mesh=mesh,
         in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, kernel_specs),
         out_specs=q_pspec,
-        check_rep=False,
+        **_SHARD_MAP_CHECK_KWARGS,
     )
     def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
         return jax.vmap(kernel, in_axes=(0, 0, 0, segment_batch_axis))(q_bhsd, k_bhsd, v_bhsd, seg_ids)
