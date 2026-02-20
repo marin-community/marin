@@ -61,7 +61,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 0 - Infra bootstrap
 
 - Date: 2026-02-18
-- Commit: this commit
+- Commit: 4879e0379
 - Hypothesis: Standardized scripts/docs and lightweight profile entrypoint reduce iteration overhead for future optimization passes.
 - Change summary: Added `scripts/gdn/gdnctl.py`, tiny profile experiment, recipe/docs, and unattended Codex loop harness.
 - Correctness checks:
@@ -78,7 +78,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 1 - Loop hardening + trace validation
 
 - Date: 2026-02-18
-- Commit: (pending)
+- Commit: 4879e0379
 - Hypothesis: The loop must run reliably under TPU queue contention; adding safe tiny-profile defaults and a first-class dev TPU profile path will make each iteration deterministic.
 - Change summary:
   - Fixed `ray-test`/`ray-profile` command and submission-id parsing issues in `scripts/gdn/gdnctl.py`.
@@ -102,7 +102,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 2 - Unroll flash segment scans
 
 - Date: 2026-02-18T12:55:20Z
-- Commit: (pending)
+- Commit: 1d74d11ac
 - Hypothesis: Unrolling the segment-level `lax.scan` loops in the flash TPU forward/backward path will remove `while` overhead and improve MFU.
 - Change summary:
   - Added `_GDN_SEGMENT_SCAN_UNROLL = 4` in `lib/levanter/src/levanter/layers/gated_deltanet.py`.
@@ -129,7 +129,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 3 - Increase flash segment scan unroll to 8
 
 - Date: 2026-02-18T13:54:59Z
-- Commit: (pending)
+- Commit: 4645d0210
 - Hypothesis: Increasing segment-level scan unroll from `4` to `8` in flash TPU forward/backward should slightly reduce residual scan overhead and improve MFU without changing kernel memory shape.
 - Change summary:
   - Changed `_GDN_SEGMENT_SCAN_UNROLL` from `4` to `8` in `lib/levanter/src/levanter/layers/gated_deltanet.py`.
@@ -158,7 +158,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 4 - Single forward super-segment pallas call
 
 - Date: 2026-02-18T07:40:10Z
-- Commit: (pending)
+- Commit: 8cf1cca9c
 - Dominant bottleneck carried in: `custom-call` at `gated_deltanet.py:2374`/`1316` from Iteration 3 trace (`183.251 ms` total on TPU:0 XLA Ops aggregate).
 - Candidate shortlist (estimated upside / risk):
   1. Full-sequence super-segment for both forward and backward (`+10-20%`, high vmem risk).
@@ -195,7 +195,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 5 - Backward state tape with segmented forward launches
 
 - Date: 2026-02-18T16:55:00Z
-- Commit: (pending)
+- Commit: e21104682
 - Dominant bottleneck carried in: `custom-call` from `jit__train_step` remained dominant in Iteration 4 (`4531.684 ms` in XProf `op_profile` by-program view), with biggest GDN sources at `gated_deltanet.py:2375` and `gated_deltanet.py:1335`.
 - Candidate shortlist (estimated upside / risk):
   1. Full super-segment state tape (forward all chunks + backward no recompute) (`+10-20%`, high scoped-vmem risk).
@@ -256,7 +256,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 6 - Replace explicit triangular inversion with blockwise solves
 
 - Date: 2026-02-19T19:15:26Z
-- Commit: this commit
+- Commit: 2db3ad589
 - Dominant bottleneck carried in: `custom-call` remained dominant in Iteration 5 (`4284.468 ms` in XProf `op_profile` by-program), with largest GDN shard-map pallas callsites under `jit(_train_step)/.../HackableDecoderLayer/.../pallas_call`.
 - Candidate shortlist (estimated upside / risk):
   1. Replace explicit `(I - A)^-1` construction with direct blockwise solve + transpose-solve (`+10-20%`, medium/high numerical + backward-derivation risk).
@@ -297,7 +297,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 7 (loop 1/20) - Remove trailing singleton layout in hot TPU Pallas g/b paths
 
 - Date: 2026-02-20T05:44:30Z
-- Commit: this commit
+- Commit: 0ff31bd21
 - Dominant bottleneck carried in: `custom-call` remained dominant from Iteration 6 (`5286.068 ms` in XProf `op_profile` by-program), with top GDN shard-map calls under `jit(_train_step)/.../HackableDecoderLayer/.../pallas_call`.
 - Candidate shortlist (estimated upside / risk):
   1. **Macro Move A**: remove `(..., Ct, 1)` singleton layouts for `g_cum/beta/dg/db` in forward+backward segmented Pallas calls (`+10-18%`, medium risk from spec/layout mismatch bugs).
@@ -335,7 +335,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 8 (loop 2/20) - FLA Experiment A: split forward into solve + recurrent kernels
 
 - Date: 2026-02-20T06:44:00Z
-- Commit: this commit
+- Commit: a4ee55408
 - Dominant bottleneck carried in: GDN shard-map custom calls remained dominant in Iteration 7 TPU:0 XLA Ops aggregate (`shard_map/custom-call` `220.522 ms` total), with top callsites at `gated_deltanet.py:2357` (transpose/jvp path, `143.558 ms`) and `gated_deltanet.py:1368` (jvp path, `66.546 ms`).
 - Candidate shortlist (estimated upside / risk):
   1. **Macro Move D**: full-sequence `emit_pipeline` kernel to keep recurrent state in VMEM across chunks (`+20-35%`, very high implementation risk).
