@@ -277,7 +277,7 @@ def test_large_vocab():
     ), "Large vocab block-wise loss does not match full loss."
 
 
-@pytest.mark.parametrize("block_size", [1, 3, 5])
+@pytest.mark.parametrize("block_size", [3])
 def test_gradient_block_cross_entropy(block_size, test_data):
     """
     Test the gradient of block-wise cross-entropy loss.

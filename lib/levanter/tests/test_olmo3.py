@@ -153,7 +153,7 @@ def test_olmo3_custom_layer_types():
     ]
 
     config = Olmo3Config(
-        max_seq_len=128,
+        max_seq_len=64,
         hidden_dim=16,
         intermediate_dim=32,
         num_layers=4,
@@ -168,7 +168,7 @@ def test_olmo3_custom_layer_types():
 
     with use_test_mesh():
         # Build model and verify each layer has correct attention type
-        Vocab = hax.Axis("vocab", 1000)
+        Vocab = hax.Axis("vocab", 256)
         model = Olmo3LMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(0))
 
         for i, layer in enumerate(model.transformer.layers):
@@ -179,7 +179,7 @@ def test_olmo3_custom_layer_types():
                 assert layer.self_attn.config.sliding_window is None
 
         # Verify model runs successfully
-        Batch = hax.Axis("batch", 2)
+        Batch = hax.Axis("batch", 1)
         input_ids = hax.random.randint(random.PRNGKey(0), (Batch, config.max_Pos), 0, Vocab.size)
         mask = AttentionMask.causal()
         out = model(input_ids, mask)
@@ -493,16 +493,10 @@ def test_olmo3_state_dict_consistency(num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [2])
 def test_olmo3_seq_len_doesnt_change_predictions(num_kv_heads):
     """Test that predictions are consistent across sequence lengths."""
-    from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
+    from levanter.models.olmo3 import Olmo3LMHeadModel
 
-    config = Olmo3Config(
-        max_seq_len=128,
-        hidden_dim=16,
-        num_heads=4,
-        num_kv_heads=num_kv_heads,
-        gradient_checkpointing=False,
-    )
-    Vocab = hax.Axis("vocab", 1000)
+    config = _get_olmo3_config(num_kv_heads=num_kv_heads, seq_len=128)
+    Vocab = hax.Axis("vocab", 256)
 
     # Make input and attn_mask
     input_full = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)

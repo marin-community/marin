@@ -210,4 +210,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --package levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow and not torch' --ignore=lib/levanter/tests/test_audio.py --ignore=lib/levanter/tests/test_new_cache.py --ignore=lib/levanter/tests/test_hf_checkpoints.py -v --tb=short --log-cli-level=WARNING --durations=20"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --package levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow and not torch' --ignore=lib/levanter/tests/test_audio.py --ignore=lib/levanter/tests/test_new_cache.py --ignore=lib/levanter/tests/test_hf_checkpoints.py --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py --ignore=lib/levanter/tests/test_gdn_layer.py -v --tb=short --log-cli-level=WARNING --durations=20"

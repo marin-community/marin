@@ -100,7 +100,7 @@ def test_linear_softmax_cross_entropy_grad_matches_full():
     else:
         # Keep representative TPU-scale shapes while staying within CI latency budget.
         # Use a non-divisible vocab size to exercise the trailing-V-block path.
-        b, s, h, v = 4 * len(jax.devices()), 1024, 64, 1664
+        b, s, h, v = 2 * len(jax.devices()), 512, 64, 1664
     hidden = jax.random.normal(key, (b, s, h), dtype=jnp.float32)
     lm_head = jax.random.normal(jax.random.key(1), (h, v), dtype=jnp.float32)
     labels = jax.random.randint(jax.random.key(2), (b, s), 0, v, dtype=jnp.int32)

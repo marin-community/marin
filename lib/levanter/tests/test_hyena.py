@@ -18,10 +18,10 @@ def test_causality():
     # Create a test config that matches the PyTorch example
     config = HyenaConfig(
         # Keep this modest so TPU CI spends time on backend coverage rather than huge test tensors.
-        max_seq_len=256,
-        hidden_dim=128,
+        max_seq_len=128,
+        hidden_dim=64,
         order=2,
-        filter_order=32,
+        filter_order=16,
         activation=ActivationFunctionEnum.gelu_new,
     )
 

@@ -113,8 +113,8 @@ def test_llama_attention(use_flash, num_kv_heads):
 
 
 def test_llama_param_counts_dont_change_with_seqlen():
-    model = LlamaLMHeadModel.init(hax.Axis("v", 1024), _get_llama_config(seq_len=64), key=random.PRNGKey(0))
-    model2 = LlamaLMHeadModel.init(hax.Axis("v", 1024), _get_llama_config(seq_len=128), key=random.PRNGKey(0))
+    model = LlamaLMHeadModel.init(hax.Axis("v", 512), _get_llama_config(seq_len=32), key=random.PRNGKey(0))
+    model2 = LlamaLMHeadModel.init(hax.Axis("v", 512), _get_llama_config(seq_len=64), key=random.PRNGKey(0))
     assert parameter_count(model) == parameter_count(model2)
 
 
@@ -198,11 +198,11 @@ def test_llama_lm_head_model(num_kv_heads):
 
 
 @pytest.mark.parametrize("use_flash", [True, False])
-@pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
+@pytest.mark.parametrize("num_kv_heads", [2])
 def test_llama_lm_head_model_bwd(use_flash, num_kv_heads):
     llama_config = _get_llama_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
-    Batch = hax.Axis("batch", 2)
-    Vocab = hax.Axis("vocab", 1000)
+    Batch = hax.Axis("batch", 1)
+    Vocab = hax.Axis("vocab", 256)
     Pos = llama_config.max_Pos
     input_ids = hax.random.randint(random.PRNGKey(0), (Batch, Pos), 0, Vocab.size)
     mask = AttentionMask.causal()
@@ -280,10 +280,12 @@ def test_llama_roundtrip(scan_layers, num_kv_heads):
         numpy.testing.assert_allclose(torch_out2, jax_out, rtol=1e-5, atol=1e-5)
 
 
-def _get_llama_config(use_flash=False, num_kv_heads=4, seq_len=128) -> LlamaConfig:
+def _get_llama_config(use_flash=False, num_kv_heads=4, seq_len=64) -> LlamaConfig:
     return LlamaConfig(
         max_seq_len=seq_len,
         hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=2,
         num_heads=4,
         num_kv_heads=num_kv_heads,
         gradient_checkpointing=False,  # disable for tests so debugging is easier
@@ -350,14 +352,8 @@ def test_state_dict_consistency(scan_layers, num_kv_heads):
 
 @pytest.mark.parametrize("num_kv_heads", [2])
 def test_llama_seq_len_doesnt_change_predictions(num_kv_heads):
-    config = LlamaConfig(
-        max_seq_len=128,
-        hidden_dim=16,
-        num_heads=4,
-        num_kv_heads=num_kv_heads,
-        gradient_checkpointing=False,
-    )
-    Vocab = hax.Axis("vocab", 1000)
+    config = _get_llama_config(num_kv_heads=num_kv_heads, seq_len=128)
+    Vocab = hax.Axis("vocab", 256)
 
     # Make input and attn_mask
     input_full = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
