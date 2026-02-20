@@ -21,6 +21,7 @@ from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 import json
 import os
+import queue
 import re
 import signal
 import shlex
@@ -110,6 +111,8 @@ def _run_streaming(
     check: bool = True,
     extra_env: dict[str, str] | None = None,
     hide_codex_file_updates: bool = False,
+    max_runtime_seconds: float | None = None,
+    idle_timeout_seconds: float | None = None,
 ) -> int:
     _echo_cmd(cmd)
     env = None
@@ -132,23 +135,93 @@ def _run_streaming(
         proc.stdin.write(input_text)
         proc.stdin.close()
 
+    line_queue: queue.Queue[str | None] = queue.Queue()
+
+    def _stdout_reader() -> None:
+        stdout = proc.stdout
+        if stdout is None:
+            line_queue.put(None)
+            return
+        try:
+            for line in stdout:
+                line_queue.put(line)
+        finally:
+            line_queue.put(None)
+
+    reader_thread = threading.Thread(target=_stdout_reader, daemon=True)
+    reader_thread.start()
+
     suppressing_diff = False
-    if proc.stdout is not None:
-        for line in proc.stdout:
-            line_text = line.rstrip("\n")
-            stripped = line_text.strip()
-            if hide_codex_file_updates:
-                if CODEX_FILE_UPDATE_HEADER_RE.match(stripped):
-                    suppressing_diff = True
+    start_time = time.monotonic()
+    last_output_time = start_time
+    saw_eof = False
+    timed_out = False
+    while True:
+        now = time.monotonic()
+        elapsed = now - start_time
+        idle_elapsed = now - last_output_time
+
+        if max_runtime_seconds is not None and elapsed > max_runtime_seconds:
+            print(
+                "[gdnctl] streaming command exceeded max runtime; terminating "
+                f"after {elapsed:.1f}s (limit={max_runtime_seconds:.1f}s).",
+                file=sys.stderr,
+            )
+            timed_out = True
+            break
+
+        if idle_timeout_seconds is not None and idle_elapsed > idle_timeout_seconds:
+            print(
+                "[gdnctl] streaming command exceeded idle timeout; terminating "
+                f"after {idle_elapsed:.1f}s without output (limit={idle_timeout_seconds:.1f}s).",
+                file=sys.stderr,
+            )
+            timed_out = True
+            break
+
+        wait_timeout = 1.0
+        if max_runtime_seconds is not None:
+            wait_timeout = min(wait_timeout, max(0.05, max_runtime_seconds - elapsed))
+        if idle_timeout_seconds is not None:
+            wait_timeout = min(wait_timeout, max(0.05, idle_timeout_seconds - idle_elapsed))
+
+        try:
+            line = line_queue.get(timeout=wait_timeout)
+        except queue.Empty:
+            if proc.poll() is not None and saw_eof:
+                break
+            continue
+
+        if line is None:
+            saw_eof = True
+            if proc.poll() is not None:
+                break
+            continue
+
+        last_output_time = time.monotonic()
+        line_text = line.rstrip("\n")
+        stripped = line_text.strip()
+        if hide_codex_file_updates:
+            if CODEX_FILE_UPDATE_HEADER_RE.match(stripped):
+                suppressing_diff = True
+                continue
+            if suppressing_diff:
+                if stripped == "" or CODEX_DIFF_LINE_RE.match(line_text):
                     continue
-                if suppressing_diff:
-                    if stripped == "" or CODEX_DIFF_LINE_RE.match(line_text):
-                        continue
-                    suppressing_diff = False
-            sys.stdout.write(line)
-            sys.stdout.flush()
+                suppressing_diff = False
+        sys.stdout.write(line)
+        sys.stdout.flush()
+
+    if timed_out:
+        _terminate_process(proc, graceful_timeout=10.0)
+        reader_thread.join(timeout=2.0)
+        return_code = 124
+        if check and return_code != 0:
+            raise subprocess.CalledProcessError(return_code, list(cmd))
+        return return_code
 
     return_code = proc.wait()
+    reader_thread.join(timeout=2.0)
     if check and return_code != 0:
         raise subprocess.CalledProcessError(return_code, list(cmd))
     return return_code
@@ -1807,6 +1880,12 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     if args.retry_sleep_seconds < 0:
         raise SystemExit("[gdnctl] --retry-sleep-seconds must be >= 0.")
 
+    if args.codex_timeout_seconds is not None and args.codex_timeout_seconds <= 0:
+        raise SystemExit("[gdnctl] --codex-timeout-seconds must be > 0 when set.")
+
+    if args.codex_idle_timeout_seconds is not None and args.codex_idle_timeout_seconds <= 0:
+        raise SystemExit("[gdnctl] --codex-idle-timeout-seconds must be > 0 when set.")
+
     if args.validation_max_attempts < -1 or args.validation_max_attempts == 0:
         raise SystemExit("[gdnctl] --validation-max-attempts must be -1 (unlimited) or >= 1.")
 
@@ -1909,6 +1988,8 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                             input_text=prompt,
                             check=False,
                             hide_codex_file_updates=not args.show_file_updates,
+                            max_runtime_seconds=args.codex_timeout_seconds,
+                            idle_timeout_seconds=args.codex_idle_timeout_seconds,
                         )
                         if rc == 0:
                             break
@@ -2380,6 +2461,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Retry attempts for each codex exec iteration command.",
+    )
+    codex_loop.add_argument(
+        "--codex-timeout-seconds",
+        type=float,
+        default=7200.0,
+        help="Maximum wall-clock runtime per codex exec iteration command.",
+    )
+    codex_loop.add_argument(
+        "--codex-idle-timeout-seconds",
+        type=float,
+        default=900.0,
+        help="Maximum seconds without codex output before the iteration command is terminated and retried.",
     )
     codex_loop.add_argument(
         "--post-check-retries",
