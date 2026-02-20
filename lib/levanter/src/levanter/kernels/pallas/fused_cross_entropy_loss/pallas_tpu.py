@@ -33,23 +33,29 @@ def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) ->
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
 
 
-def _should_use_emulated_one_hot() -> bool:
-    # Keep kernel behavior deterministic and backend-stable: always use emulated one-hot.
-    return True
-
-
 def _labels_one_hot_emulated(
     labels_adjusted: jax.Array,
     num_classes: int,
     dtype: jnp.dtype,
 ) -> jax.Array:
-    if not _should_use_emulated_one_hot():
-        return jax.nn.one_hot(labels_adjusted, num_classes, dtype=dtype)
     labels_adjusted = labels_adjusted.astype(jnp.int32)
     in_block = (labels_adjusted >= 0) & (labels_adjusted < num_classes)
     safe_labels = jnp.where(in_block, labels_adjusted, -1)
     cols = jnp.arange(num_classes, dtype=labels_adjusted.dtype)[None, :]
     return (cols == safe_labels[:, None]).astype(dtype)
+
+
+def _mask_invalid_vocab_columns(
+    logits: jax.Array,
+    *,
+    v_index: jax.Array,
+    v_block_size: int,
+    v_dim: int,
+) -> jax.Array:
+    """Mask padded tail-vocab columns with -inf so they do not affect softmax."""
+    cols = v_index * v_block_size + jnp.arange(v_block_size, dtype=jnp.int32)
+    valid = cols < v_dim
+    return jnp.where(valid[None, :], logits, -jnp.inf)
 
 
 def _validate_inputs(
@@ -185,6 +191,13 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
         label_logits_block = jnp.sum(labels_one_hot * logits, axis=-1)
         label_logits_scratch_ref[...] += label_logits_block[:, None]
 
+        logits = _mask_invalid_vocab_columns(
+            logits,
+            v_index=v_index,
+            v_block_size=v_block_size,
+            v_dim=v_dim,
+        )
+
         m_prev, l_prev = m_scratch_ref[...], l_scratch_ref[...]
         m_curr = jnp.max(logits, axis=-1)[:, None]
         m_next = jnp.maximum(m_prev, m_curr)
@@ -306,6 +319,8 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
     xw_scratch_ref,
     x_grad_tile_ref,
     w_grad_tile_ref,
+    x_read_sem,
+    w_read_sem,
     x_write_sem,
     w_write_sem,
     *,
@@ -367,6 +382,17 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
 
     x_write_future = pltpu.make_async_copy(x_grad_tile_ref, x_grad_slice, sem=x_write_sem)
     w_write_future = pltpu.make_async_copy(w_grad_tile_slice, w_grad_slice, sem=w_write_sem)
+    x_read_future = pltpu.make_async_copy(x_grad_slice, x_grad_tile_ref, sem=x_read_sem)
+    w_read_future = pltpu.make_async_copy(w_grad_slice, w_grad_tile_slice, sem=w_read_sem)
+
+    # Stage 1: async DMA reads for gradient tiles.
+    @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
+    def x_read():
+        x_read_future.start()
+
+    @pl.when(jnp.logical_and(stage_index == 1, b_index != 0))
+    def w_read():
+        w_read_future.start()
 
     # Compute the softmax-gradient term for this V tile (once per H=0).
     @pl.when(jnp.logical_and(stage_index == 1, h_index == 0))
@@ -384,6 +410,13 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
         else:
             cap_deriv = 1.0
 
+        logits = _mask_invalid_vocab_columns(
+            logits,
+            v_index=v_index,
+            v_block_size=v_block_size,
+            v_dim=v_dim,
+        )
+
         logits = logits - lse_ref[...][:, None]
         probs = jnp.exp(logits)
         dout_loss = dout_loss_ref[...]
@@ -400,20 +433,23 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             preferred_element_type=jnp.float32,
             precision=precision,
         ).astype(x_grad_tile_ref.dtype)
+        x_write_future.start()
 
     @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
     def accumulate_x_grad():
-        x_grad_tile_ref[...] += jax.lax.dot_general(
+        res = jax.lax.dot_general(
             xw_scratch_ref[...],
             w_ref[...],
             (((1,), (1,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
         ).astype(x_grad_tile_ref.dtype)
-
-    @pl.when(jnp.logical_and(stage_index == 1, v_index == num_v_blocks - 1))
-    def write_x_grad():
+        x_read_future.wait()
+        x_grad_tile_ref[...] += res
         x_write_future.start()
+
+    @pl.when(stage_index == 1)
+    def wait_async_x_writes():
         x_write_future.wait()
 
     @pl.when(jnp.logical_and(stage_index == 1, b_index == 0))
@@ -425,6 +461,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             preferred_element_type=jnp.float32,
             precision=precision,
         ).astype(w_grad_tile_ref.dtype)
+        w_write_future.start()
 
     @pl.when(jnp.logical_and(stage_index == 1, b_index != 0))
     def accumulate_w_grad():
@@ -435,11 +472,12 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             preferred_element_type=jnp.float32,
             precision=precision,
         ).astype(w_grad_tile_ref.dtype)
+        w_read_future.wait()
         w_grad_tile_ref[...] += res
-
-    @pl.when(jnp.logical_and(stage_index == 1, b_index == num_b_blocks_per_core - 1))
-    def write_w_grad():
         w_write_future.start()
+
+    @pl.when(stage_index == 1)
+    def wait_async_writes():
         w_write_future.wait()
 
 
@@ -470,7 +508,7 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
     num_h_blocks = math.ceil(h_dim / block_sizes.h_block_size)
     num_stages = 2
     num_cores, num_b_blocks_per_core = _infer_core_grid(b_dim, block_sizes)
-    x_grad, w_grad_partial = pl.pallas_call(
+    x_grad_f32, w_grad_partial_f32 = pl.pallas_call(
         partial(
             linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel,
             dtype=dtype,
@@ -515,13 +553,15 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
             pl.BlockSpec(memory_space=pltpu.HBM),  # w_grad_partial
         ],
         out_shape=[
-            jax.ShapeDtypeStruct(x.shape, dtype=x.dtype),
-            jax.ShapeDtypeStruct((num_cores,) + w.shape, dtype=w.dtype),
+            jax.ShapeDtypeStruct(x.shape, dtype=jnp.float32),
+            jax.ShapeDtypeStruct((num_cores,) + w.shape, dtype=jnp.float32),
         ],
         scratch_shapes=(
             pltpu.VMEM((block_sizes.b_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # xw_scratch
-            pltpu.VMEM((block_sizes.b_block_size, block_sizes.h_block_size), dtype=x.dtype),  # x_grad_tile
-            pltpu.VMEM((block_sizes.h_block_size, block_sizes.v_block_size), dtype=w.dtype),  # w_grad_tile
+            pltpu.VMEM((block_sizes.b_block_size, block_sizes.h_block_size), dtype=jnp.float32),  # x_grad_tile
+            pltpu.VMEM((block_sizes.h_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # w_grad_tile
+            pltpu.SemaphoreType.DMA,  # x_read_sem
+            pltpu.SemaphoreType.DMA,  # w_read_sem
             pltpu.SemaphoreType.DMA,  # x_write_sem
             pltpu.SemaphoreType.DMA,  # w_write_sem
         ),
@@ -529,7 +569,8 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
             dimension_semantics=("parallel", "arbitrary", "arbitrary", "arbitrary", "arbitrary"),
         ),
     )(x, labels, w, lse, dout_loss, dout_lse)
-    w_grad = jnp.sum(w_grad_partial, axis=0)
+    x_grad = x_grad_f32.astype(x.dtype)
+    w_grad = jnp.sum(w_grad_partial_f32, axis=0).astype(w.dtype)
     return x_grad, w_grad
 
 
