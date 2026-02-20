@@ -41,7 +41,7 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
    sleep 570
 
 2. CHECK
-   uv run scripts/ray/cluster.py --cluster <CLUSTER> job-logs -n 50 -g "loss\|error" <JOB_ID>
+   uv run scripts/ray/cluster.py --cluster <CLUSTER> job-logs -n 200 -g "loss\|error\|Error\|Traceback\|RESOURCE_EXHAUSTED\|compiler_base.cc:2587\|Program hbm requirement\|Largest program allocations" <JOB_ID>
 
 3. PRINT W&B RUN IDS/LINKS
    - Inspect recent logs for W&B run URLs / IDs (for example lines containing `wandb: 🚀 View run` or `/runs/<RUN_ID>`).
@@ -50,6 +50,10 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
 
 4. EVALUATE
    - If output contains "error" or "Error" or "Traceback" → go to step 5
+   - Treat TPU/XLA HBM reports as failures even when "OOM" is not present. In particular, if logs include:
+     - `Program hbm requirement ...`
+     - `Largest program allocations in hbm`
+     then treat this as an OOM/resource-exhaustion event and go to step 5.
    - If output contains "loss" lines → go to step 1
    - If no output (job dead) → go to step 5
 
@@ -87,6 +91,7 @@ Examples of small fixes:
 
 Examples of complex issues (do not auto-fix):
 - OOM errors
+- TPU/XLA HBM exhaustion signatures such as `Program hbm requirement` and `Largest program allocations in hbm`
 - Distributed training failures
 - Data loading issues
 - Unclear stack traces spanning multiple files
