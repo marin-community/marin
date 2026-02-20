@@ -566,3 +566,59 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - Active baseline profile/metrics remain Iteration 12 run `gdn_prep_tape_i4_dev_130m_ch128_seg16_20steps-e4c03f`.
 - Assessment: **baseline reset**. This restores the known-better code path and should be treated as the launch point for subsequent optimization iterations (15+).
 - Next hypothesis: target the remaining forward closed-call shard-map `custom-call` hotspot with a macro-move change (D/E/F), keeping the Iteration 12 backward tape reuse intact.
+
+### Iteration 15 - Macro Move D / FLA Experiment A extension: lane-safe full-sequence forward recurrent pipeline (reverted)
+
+- Date: 2026-02-20T16:33:35Z
+- Commit: none (failed attempt)
+- Loop session/local index: `4/20`
+- Starting commit: `09a067c4db98eed262f22ca4a151d0f32ac7b0ab`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_emitpipe_i1_dev_130m_ch128_seg16_20steps-a499c1/plugins/profile/2026_02_20_13_35_37/perfetto_trace.json.gz`, TPU XLA Ops `pid=3, tid=3`):
+  - `custom-call`: `174.229 ms` (dominant category).
+  - Top GDN callsites:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `85.704 ms`
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `75.049 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: make full-sequence recurrent forward `emit_pipeline` lane-safe for `head_dim=64` by staging as `(..., K, Ct)` / `(..., V, Ct)` (`+10-20%`, high compile/layout risk).
+  2. **Macro Move E**: lane-packed full-sequence backward recurrence (`+15-30%`, high risk from padded overcompute and prior regressions).
+  3. **Macro Move F**: FLA-style backward decomposition (chunk-local adjoint precompute + recurrent `dS` apply) (`+20-35%`, very high implementation/tape-I/O risk).
+- Selected macro-move category: **D) Use `pltpu.emit_pipeline` to fuse across chunk/segment loops**.
+- Selected hypothesis: keep the existing 2-kernel forward decomposition (prepare + recurrent) but rewrite the full-sequence recurrent pipeline staging layout so the path runs at `K=V=64` without last-axis 64-lane slice failures.
+
+- Change summary:
+  - Reworked `_in_specs_chunk_fullseq_recurrent_fwd_tpu` and `_gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu` to lane-safe staged layouts:
+    - `q/k/k_cumdecay`: `(..., K, Ct)`
+    - `v_pseudo/out`: `(..., V_pipe, Ct)` with `V_pipe = round_up(V, 128)`
+  - Updated `_gdn_chunk_fullseq_recurrent_fwd_pallas` wrapper to transpose/pad staged tensors in/out of the kernel while preserving external tensor contracts.
+  - Enabled full-sequence recurrent forward path for chunk tiles with `Ct >= 128` (instead of requiring `K_pad,V_pad >= 128`).
+  - Reverted speculative kernel changes after profile regression; tree intentionally left without speculative code changes.
+
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - Result: `87 passed, 2 skipped, 1 warning`.
+
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_emitpipe_lanefwd_i4_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_emitpipe_lanefwd_i4_dev_130m_ch128_seg16_20steps-cda47e`
+  - W&B profiler artifact: `run-gdn_emitpipe_lanefwd_i4_dev_130m_ch128_seg16_20steps-cda47e-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_emitpipe_lanefwd_i4_dev_130m_ch128_seg16_20steps-cda47e/plugins/profile/2026_02_20_16_29_57/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU XLA Ops `pid=3, tid=3`, vs baseline trace `.profiles/wandb/gdn_emitpipe_i1_dev_130m_ch128_seg16_20steps-a499c1/plugins/profile/2026_02_20_13_35_37/perfetto_trace.json.gz`):
+  - `custom-call`: `174.229 ms -> 183.223 ms` (`+5.16%`), still dominant.
+  - Dominant backward GDN callsite remained flat (hotspot unchanged):
+    - `transpose(jvp(...))/closed_call/shard_map/pallas_call:` `85.704 ms -> 85.695 ms` (`-0.01%`).
+  - Forward closed-call GDN callsite improved:
+    - `jvp(...)/closed_call/shard_map/pallas_call:` `75.049 ms -> 60.653 ms` (`-19.18%`).
+  - But new/expanded GDN shard-map pallas work offset the gain:
+    - `jvp(...)/HackableDecoderLayer/shard_map/pallas_call:` `10.419 ms -> 33.827 ms` (`+224.68%`), source moved to `gated_deltanet.py:1755`.
+  - `all-gather`: `32.731 ms -> 26.438 ms` (`-19.23%`).
+
+- MFU/throughput delta (vs baseline run `gdn_emitpipe_i1_dev_130m_ch128_seg16_20steps-a499c1`):
+  - `throughput/mfu`: `4.41497 -> 4.36303` (`-1.18%`).
+  - `throughput/tokens_per_second`: `142823.53 -> 141143.16` (`-1.18%`).
+  - `throughput/duration`: `0.22943s -> 0.23216s` (`+1.19%`).
+
+- Assessment: **low-impact / regression (failed attempt)**. MFU regressed beyond the 1% regression threshold and dominant hotspot category remained `custom-call`.
+- Why this did not unlock a large speedup: the lane-safe full-sequence forward path reduced one forward closed-call pallas site but introduced additional shard-map pallas time, leaving the dominant backward custom-call unchanged and raising total custom-call wall time.
+- Next bold hypothesis (escalation): implement a true FLA Experiment A backward decomposition (separate chunk-local adjoint/precompute kernel from recurrent `dS` apply kernel), then pipeline only the recurrent stage with `emit_pipeline` so launch count drops without creating extra forward shard-map pressure.
