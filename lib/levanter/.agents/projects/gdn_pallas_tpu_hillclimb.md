@@ -622,3 +622,69 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / regression (failed attempt)**. MFU regressed beyond the 1% regression threshold and dominant hotspot category remained `custom-call`.
 - Why this did not unlock a large speedup: the lane-safe full-sequence forward path reduced one forward closed-call pallas site but introduced additional shard-map pallas time, leaving the dominant backward custom-call unchanged and raising total custom-call wall time.
 - Next bold hypothesis (escalation): implement a true FLA Experiment A backward decomposition (separate chunk-local adjoint/precompute kernel from recurrent `dS` apply kernel), then pipeline only the recurrent stage with `emit_pipeline` so launch count drops without creating extra forward shard-map pressure.
+
+### Iteration 16 - Macro Move D / FLA Experiment A extension: full-sequence backward pipeline carry (reverted)
+
+- Date: 2026-02-20T21:02:29Z
+- Commit: none (failed attempt)
+- Loop session/local index: `3/20`
+- Starting commit: `3e3b64cd427f85853031e28579d7981caa21a202`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_loopgate_iter004_130m_ch128_seg16_20steps-60161d/plugins/profile/2026_02_20_03_34_47/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `custom-call`: `174.246 ms` (dominant category).
+  - Top GDN callsites:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `85.705 ms`
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `75.050 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: full-sequence backward recurrence via `pltpu.emit_pipeline` with in-kernel `dS` carry (`+10-20%`, high compile/dataflow risk).
+  2. **Macro Move E / Experiment B**: V-tiled recurrent backward apply (`+15-30%`, high reduction/duplication risk).
+  3. **Macro Move F / Experiment A**: explicit 2-kernel backward decomposition (chunk-local adjoint precompute + recurrent `dS` apply) (`+20-35%`, very high refactor risk).
+- Selected macro-move category: **D) Use `pltpu.emit_pipeline` to fuse across chunk/segment loops**.
+- Selected decomposition experiment: **Experiment A (Solve vs Recurrent)**.
+- Selected hypothesis: validate a full-sequence backward pipeline path that carries `dS` across chunk stages and consumes forward solve tape (`v_pseudo`, `k_cumdecay`) end-to-end, to reduce segment-level launch overhead.
+
+- Change summary:
+  - Tested the full-sequence backward `emit_pipeline` implementation that stages reversed chunk traversal with VMEM `dS` scratch carry and shared `_gdn_chunk_bwd_math` for per-chunk adjoint math.
+  - The change passed TPU validation and profiled end-to-end, but hotspot timing and MFU were effectively unchanged.
+  - Reverted the speculative kernel diff after measurement to keep only validated progress in-tree.
+
+- Correctness checks:
+  - Dev TPU path unavailable at start:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Failure: `SSH configuration for dev-tpu-calvinxu-gdn not found`.
+  - Ray fallback first attempt hit TPU contention:
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Failure during collection: `TPU initialization failed ... /dev/vfio/0 ... Device or resource busy`.
+  - Dev TPU allocate attempt failed due cluster actor/node failure:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-allocate --cluster us-east5-a --tpu-name calvinxu-gdn --tpu-type v5p-8`
+  - Final validation retry succeeded on Ray:
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Waited with `ray-wait` job `ray-run-calvinxu-levanter-20260220-205559`.
+    - Result: `49 passed, 40 skipped in 175.15s`.
+
+- Profile run:
+  - Dev TPU profile path unavailable:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_emitpipe_bwd_i3_blocked --marin-prefix gs://marin-us-east5 --no-sync`
+    - Failure: `SSH configuration for dev-tpu-calvinxu-gdn not found`.
+  - Ray fallback profile succeeded:
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_emitpipe_bwd_i3_ray --no-wait`
+    - Wait/logs: job `ray-run-calvinxu-bash-20260220-204755` reached `SUCCEEDED`.
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_emitpipe_bwd_i3_ray_130m_ch128_seg16_20steps-6e37bb`
+    - W&B profiler artifact: `run-gdn_emitpipe_bwd_i3_ray_130m_ch128_seg16_20steps-6e37bb-profiler:v0`
+    - Downloaded trace: `.profiles/wandb/gdn_emitpipe_bwd_i3_ray_130m_ch128_seg16_20steps-6e37bb/plugins/profile/2026_02_20_12_54_19/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_loopgate_iter004_130m_ch128_seg16_20steps-60161d/plugins/profile/2026_02_20_03_34_47/perfetto_trace.json.gz`):
+  - `custom-call`: `174.246 ms -> 174.234 ms` (`-0.01%`), dominant category unchanged.
+  - Backward dominant GDN callsite: `85.705 ms -> 85.704 ms` (`-0.00%`).
+  - Forward dominant GDN callsite: `75.050 ms -> 75.049 ms` (`-0.00%`).
+  - Auxiliary forward shard-map callsite: `10.434 ms -> 10.418 ms` (`-0.15%`).
+  - `all-gather`: `32.687 ms -> 32.633 ms` (`-0.17%`).
+
+- MFU/throughput delta (vs baseline run `gdn_loopgate_iter004_130m_ch128_seg16_20steps-60161d`):
+  - `throughput/mfu`: `4.3667 -> 4.3590` (`-0.18%`).
+  - `throughput/tokens_per_second`: `141262.39 -> 141012.70` (`-0.18%`).
+  - `throughput/duration`: `0.23197s -> 0.23238s` (`+0.18%`).
+
+- Assessment: **low-impact failed attempt**. Measured delta is below 3% and the dominant hotspot is unchanged.
+- Governance note: not promoted (below +0.250% promotion threshold), and not a hard regression (above -1.000% revert threshold).
+- Next bold hypothesis (escalation): execute **Macro Move F / Experiment A** as a true backward 2-kernel split (chunk-local adjoint/precompute kernel + recurrent `dS` apply kernel, optionally V-tiled) so launch structure changes materially instead of relying on a mostly-equivalent pipeline path.
