@@ -289,11 +289,9 @@ class Gpt2Embeddings(ModuleWithStateDictSerialization, eqx.Module):
     def init(Vocab: Axis, config: Gpt2Config, *, key) -> "Gpt2Embeddings":
         k_wte, k_wpe, k_out = jrandom.split(key, 3)
 
-        token_embeddings = hnn.Embedding.init(
-            Vocab, config.Embed, key=k_wte, initializer_range=config.initializer_range
-        )
+        token_embeddings = hnn.Embedding.init(Vocab, config.Embed, key=k_wte, init_scale=config.initializer_range)
         position_embeddings = hnn.Embedding.init(
-            config.max_Pos, config.Embed, key=k_wpe, initializer_range=config.initializer_range / 2
+            config.max_Pos, config.Embed, key=k_wpe, init_scale=config.initializer_range / 2
         )
         dropout = hnn.Dropout(pdrop=config.embed_pdrop)
 
