@@ -42,7 +42,9 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 ## Misc Style
 - Use `einops.rearrange` for `[batch, seq, heads, head_dim]` manipulations where it improves clarity.
-- Use `jnp.einsum` and explicit `PartitionSpec` annotations to keep matmuls consistent with the mesh layout.
+- Prefer `jnp.einsum` for tensor contractions, including both matmuls and weighted reductions.
+- Avoid broadcast-plus-sum expressions that rely on inserted singleton dimensions (for example `x[..., None] * y[:, None, :]`) when an equivalent `einsum` is clear.
+- Keep explicit `PartitionSpec` annotations so contractions stay consistent with the mesh layout.
 - Grug core attention is a single `attention(q, k, v, mask)` that calls ejkernel block-sparse attention; `reference_attention(...)` exists for debugging/regressions but is not selected at runtime.
 - Attention masks are a small spec dataclass (`levanter.grug.attention.AttentionMask`) rather than a dense mask/bias array. Grug defaults to causal masking.
 - Layer norm: implement epsilon-stabilized RMSNorm using `jnp.mean/var` and explicit shardings.

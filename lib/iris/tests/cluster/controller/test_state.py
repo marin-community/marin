@@ -22,20 +22,45 @@ from iris.cluster.controller.events import (
     WorkerFailedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.scheduler import Scheduler
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.state import (
     MAX_REPLICAS_PER_JOB,
     ControllerEndpoint,
     ControllerState,
     ControllerTask,
 )
-from iris.cluster.types import DeviceType, JobName, WorkerId
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, DeviceType, JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+
+def _build_scheduling_context(scheduler: Scheduler, state: ControllerState):
+    """Build a SchedulingContext from current state, mirroring what the controller does."""
+    pending = state.peek_pending_tasks()
+    workers = state.get_available_workers()
+    task_ids = [t.task_id for t in pending]
+    jobs: dict[JobName, JobRequirements] = {}
+    for t in pending:
+        job_id = t.task_id.parent
+        if job_id and job_id not in jobs:
+            job = state.get_job(job_id)
+            if job:
+                jobs[job_id] = JobRequirements(
+                    resources=job.request.resources,
+                    constraints=list(job.request.constraints),
+                    is_coscheduled=job.is_coscheduled,
+                    coscheduling_group_by=job.coscheduling_group_by,
+                )
+    return scheduler.create_scheduling_context(
+        workers,
+        building_counts=state.snapshot_building_counts(),
+        pending_tasks=task_ids,
+        jobs=jobs,
+    )
 
 
 def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: WorkerId) -> None:
@@ -785,9 +810,9 @@ def test_worker_cannot_accept_task_when_resources_committed(make_job_request, wo
     pending = state.peek_pending_tasks()
     assert len(pending) == 1  # j2's task is still pending
 
-    workers = state.get_available_workers()
-    scheduler = Scheduler(state)
-    result = scheduler.find_assignments(pending, workers)
+    scheduler = Scheduler()
+    context = _build_scheduling_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
     # The task cannot be scheduled - no worker has sufficient capacity
     assert len(result.assignments) == 0
@@ -811,21 +836,21 @@ def test_worker_can_accept_new_task_after_previous_completes(make_job_request, w
     # Second job needs 3 CPUs - cannot fit while first is running
     submit_job(state, "j2", make_job_request(cpu=3))
 
-    scheduler = Scheduler(state)
+    scheduler = Scheduler()
 
     # Verify second task cannot be scheduled yet
-    pending = state.peek_pending_tasks()
-    result = scheduler.find_assignments(pending, state.get_available_workers())
+    context = _build_scheduling_context(scheduler, state)
+    result = scheduler.find_assignments(context)
     assert len(result.assignments) == 0
 
     # Complete the first task
     transition_task(state, tasks1[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
 
     # Now the second task can be scheduled
-    pending = state.peek_pending_tasks()
-    result = scheduler.find_assignments(pending, state.get_available_workers())
+    context = _build_scheduling_context(scheduler, state)
+    result = scheduler.find_assignments(context)
     assert len(result.assignments) == 1
-    assert result.assignments[0][0].job_id == JobName.root("j2")
+    assert result.assignments[0][0].parent == JobName.root("j2")
 
 
 def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_metadata):
@@ -844,21 +869,23 @@ def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_meta
     for i in range(3):
         submit_job(state, f"j{i}", make_job_request(cpu=2))
 
-    scheduler = Scheduler(state)
+    scheduler = Scheduler()
 
     # First scheduling cycle: 1 task assigned (round-robin: 1 per worker per cycle)
-    pending = state.peek_pending_tasks()
-    result = scheduler.find_assignments(pending, state.get_available_workers())
+    context = _build_scheduling_context(scheduler, state)
+    result = scheduler.find_assignments(context)
     assert len(result.assignments) == 1
-    for task, worker in result.assignments:
-        dispatch_task(state, task, worker.worker_id)
+    for task_id, worker_id in result.assignments:
+        task = state.get_task(task_id)
+        dispatch_task(state, task, worker_id)
 
     # Second scheduling cycle: 1 more task assigned (worker still has 2 CPUs)
-    pending = state.peek_pending_tasks()
-    result = scheduler.find_assignments(pending, state.get_available_workers())
+    context = _build_scheduling_context(scheduler, state)
+    result = scheduler.find_assignments(context)
     assert len(result.assignments) == 1
-    for task, worker in result.assignments:
-        dispatch_task(state, task, worker.worker_id)
+    for task_id, worker_id in result.assignments:
+        task = state.get_task(task_id)
+        dispatch_task(state, task, worker_id)
 
     # Third task should still be pending
     pending = state.peek_pending_tasks()
@@ -866,7 +893,8 @@ def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_meta
     assert pending[0].job_id == JobName.root("j2")
 
     # Scheduler should not assign the third task (no capacity - 4 CPUs used)
-    result = scheduler.find_assignments(pending, state.get_available_workers())
+    context = _build_scheduling_context(scheduler, state)
+    result = scheduler.find_assignments(context)
     assert len(result.assignments) == 0
 
 
@@ -1369,7 +1397,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key="preemptible",
+                key=PREEMPTIBLE_ATTRIBUTE_KEY,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="true"),
             )
@@ -1390,7 +1418,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key="preemptible",
+                key=PREEMPTIBLE_ATTRIBUTE_KEY,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="false"),
             )
@@ -1428,6 +1456,66 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none():
     demand = compute_demand_entries(state)
     assert len(demand) == 1
     assert demand[0].preemptible is None
+
+
+def test_compute_demand_entries_extracts_required_region():
+    state = ControllerState()
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="regional-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+        constraints=[
+            cluster_pb2.Constraint(
+                key=REGION_ATTRIBUTE_KEY,
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="us-west4"),
+            )
+        ],
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].required_regions == frozenset({"us-west4"})
+    assert demand[0].invalid_reason is None
+
+
+def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints():
+    state = ControllerState()
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="invalid-regional-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+        constraints=[
+            cluster_pb2.Constraint(
+                key=REGION_ATTRIBUTE_KEY,
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="us-west4"),
+            ),
+            cluster_pb2.Constraint(
+                key=REGION_ATTRIBUTE_KEY,
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="eu-west4"),
+            ),
+        ],
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].invalid_reason is not None
 
 
 # =============================================================================

@@ -8,20 +8,20 @@ Distributed job orchestration replacing Ray with simpler primitives.
 
 ```bash
 # Start controller VM (runs autoscaler internally)
-uv run iris --config=examples/eu-west4.yaml cluster start
+uv run iris --config=examples/marin.yaml cluster start
 
 # Start a local cluster for testing (mimics the config without GCP)
 # Dashboard is available at the printed URL; press Ctrl+C to stop.
-uv run iris --config=examples/eu-west4.yaml cluster start --local
+uv run iris --config=examples/marin.yaml cluster start --local
 
 # Check cluster status
-uv run iris --config=examples/eu-west4.yaml cluster status
+uv run iris --config=examples/marin.yaml cluster status
 
 # Validate cluster with test jobs (establishes SSH tunnel automatically)
-uv run iris --config=examples/eu-west4.yaml cluster debug validate
+uv run iris --config=examples/marin.yaml cluster debug validate
 
 # Stop cluster (controller + all worker slices, terminated in parallel; 60s timeout)
-uv run iris --config=examples/eu-west4.yaml cluster stop
+uv run iris --config=examples/marin.yaml cluster stop
 ```
 
 ### Submit a Job
@@ -199,7 +199,10 @@ When a job requests TPU resources (`device=tpu_device("v5litepod-16")`), workers
 **Environment variables:**
 - `JAX_PLATFORMS=tpu,cpu` - JAX platform configuration
 - `PJRT_DEVICE=TPU` - PJRT runtime device
+- `TPU_SKIP_MDS_QUERY=1` - force JAX to use explicit TPU worker metadata in containers
+- `TPU_ACCELERATOR_TYPE`, `TPU_TYPE` - TPU accelerator variant (for libtpu/JAX topology init)
 - `TPU_NAME`, `TPU_WORKER_ID`, `TPU_WORKER_HOSTNAMES`, `TPU_CHIPS_PER_HOST_BOUNDS` - TPU metadata from host
+- `JAX_COORDINATOR_ADDRESS`, `JAX_NUM_PROCESSES`, `JAX_PROCESS_ID` - explicit JAX distributed coordination
 
 This enables JAX and other TPU-aware frameworks to initialize correctly inside job containers.
 
@@ -215,6 +218,17 @@ controller:
 ```
 
 The controller will **fail at startup** if `bundle_prefix` is not configured.
+
+### Multi-Region Bundle Storage
+
+**Design Decision:** Bundles are stored in a single centralized GCS bucket and fetched by workers in all regions as needed, rather than implementing regional caching or replication.
+
+**Rationale:**
+- Bundles are small (~4MB each)
+- Cross-region transfer costs are negligible at expected scale:
+  - 10,000 tasks/day × 4MB = 40GB/day ≈ $4/day in cross-region transfer fees
+- The complexity of regional bundle caching is not justified by these costs
+- Centralized storage simplifies operations and reduces infrastructure complexity
 
 ## CLI Reference
 
@@ -303,7 +317,7 @@ The smoke test validates end-to-end cluster functionality including autoscaling.
 
 ```bash
 # Full smoke test (builds images, starts cluster, runs TPU jobs, cleans up)
-uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/eu-west4.yaml
+uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/marin.yaml
 
 # Run tests and keep VMs running for debugging (manual cleanup required later)
 uv run python lib/iris/scripts/smoke-test.py --config ... --mode keep

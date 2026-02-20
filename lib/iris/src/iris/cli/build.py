@@ -8,6 +8,8 @@ from pathlib import Path
 
 import click
 
+GHCR_DEFAULT_ORG = "marin-community"
+
 
 def _find_marin_root() -> Path:
     """Find the marin monorepo root (contains pyproject.toml + lib/iris)."""
@@ -46,7 +48,48 @@ def _find_iris_root() -> Path:
     )
 
 
-def _push_to_registries(
+def _resolve_image_name_and_version(
+    source_tag: str,
+    image_name: str | None = None,
+    version: str | None = None,
+) -> tuple[str, str]:
+    """Extract image name and version from a source tag, using overrides if provided."""
+    parts = source_tag.split(":")
+    if not image_name:
+        image_name = parts[0].split("/")[-1]
+    if not version:
+        version = parts[1] if len(parts) > 1 else "latest"
+    return image_name, version
+
+
+def _push_to_ghcr(
+    source_tag: str,
+    ghcr_org: str = GHCR_DEFAULT_ORG,
+    image_name: str | None = None,
+    version: str | None = None,
+) -> None:
+    """Push a local Docker image to GitHub Container Registry (ghcr.io)."""
+    image_name, version = _resolve_image_name_and_version(source_tag, image_name, version)
+    dest_tag = f"ghcr.io/{ghcr_org}/{image_name}:{version}"
+
+    click.echo(f"Pushing {source_tag} to ghcr.io/{ghcr_org}...")
+
+    result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
+    if result.returncode != 0:
+        click.echo(f"Failed to tag image as {dest_tag}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Pushing to {dest_tag}...")
+    result = subprocess.run(["docker", "push", dest_tag], check=False)
+    if result.returncode != 0:
+        click.echo(f"Failed to push to {dest_tag}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Successfully pushed to {dest_tag}")
+    click.echo("\nDone!")
+
+
+def _push_to_gcp_registries(
     source_tag: str,
     regions: tuple[str, ...],
     project: str,
@@ -54,14 +97,9 @@ def _push_to_registries(
     version: str | None = None,
 ) -> None:
     """Push a local Docker image to multiple GCP Artifact Registry regions."""
-    if not image_name or not version:
-        parts = source_tag.split(":")
-        if not image_name:
-            image_name = parts[0].split("/")[-1]
-        if not version:
-            version = parts[1] if len(parts) > 1 else "latest"
+    image_name, version = _resolve_image_name_and_version(source_tag, image_name, version)
 
-    click.echo(f"Pushing {source_tag} to {len(regions)} region(s)...")
+    click.echo(f"Pushing {source_tag} to {len(regions)} GCP region(s)...")
 
     for r in regions:
         dest_tag = f"{r}-docker.pkg.dev/{project}/marin/{image_name}:{version}"
@@ -94,6 +132,26 @@ def _push_to_registries(
     click.echo("\nDone!")
 
 
+def _push_image(
+    source_tag: str,
+    registry: str,
+    image_name: str | None = None,
+    version: str | None = None,
+    ghcr_org: str = GHCR_DEFAULT_ORG,
+    gcp_regions: tuple[str, ...] = (),
+    gcp_project: str = "hai-gcp-models",
+) -> None:
+    """Push a local Docker image to the specified registry."""
+    if registry == "ghcr":
+        _push_to_ghcr(source_tag, ghcr_org=ghcr_org, image_name=image_name, version=version)
+    elif registry == "gcp":
+        if not gcp_regions:
+            raise click.ClickException("--region is required when pushing to GCP Artifact Registry")
+        _push_to_gcp_registries(source_tag, gcp_regions, gcp_project, image_name=image_name, version=version)
+    else:
+        raise click.ClickException(f"Unknown registry: {registry}. Use 'ghcr' or 'gcp'.")
+
+
 def _build_image(
     image_type: str,
     tag: str,
@@ -101,8 +159,10 @@ def _build_image(
     dockerfile: str | None,
     context: str | None,
     platform: str,
-    region: tuple[str, ...],
-    project: str,
+    registry: str,
+    ghcr_org: str,
+    gcp_regions: tuple[str, ...],
+    gcp_project: str,
 ) -> None:
     """Build a Docker image for Iris (worker or controller)."""
     dockerfile_name = f"Dockerfile.{image_type}"
@@ -137,10 +197,27 @@ def _build_image(
     click.echo(f"Image available locally as: {tag}")
 
     if push:
-        _push_to_registries(tag, region, project)
-    elif region:
-        click.echo()
-        click.echo("To push to registries, run again with --push flag")
+        _push_image(
+            tag,
+            registry=registry,
+            ghcr_org=ghcr_org,
+            gcp_regions=gcp_regions,
+            gcp_project=gcp_project,
+        )
+
+
+_registry_options = [
+    click.option("--registry", type=click.Choice(["ghcr", "gcp"]), default="ghcr", help="Registry to push to"),
+    click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization"),
+    click.option("--region", multiple=True, help="GCP Artifact Registry regions (required for --registry gcp)"),
+    click.option("--project", default="hai-gcp-models", help="GCP project ID for registry"),
+]
+
+
+def _add_registry_options(fn):
+    for opt in reversed(_registry_options):
+        fn = opt(fn)
+    return fn
 
 
 @click.group()
@@ -154,19 +231,20 @@ def build():
 @click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
 @click.option("--context", type=click.Path(exists=True), help="Build context directory")
 @click.option("--platform", default="linux/amd64", help="Target platform")
-@click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to")
-@click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+@_add_registry_options
 def build_worker_image(
     tag: str,
     push: bool,
     dockerfile: str | None,
     context: str | None,
     platform: str,
+    registry: str,
+    ghcr_org: str,
     region: tuple[str, ...],
     project: str,
 ):
     """Build Docker image for Iris worker."""
-    _build_image("worker", tag, push, dockerfile, context, platform, region, project)
+    _build_image("worker", tag, push, dockerfile, context, platform, registry, ghcr_org, region, project)
 
 
 @build.command("controller-image")
@@ -175,19 +253,20 @@ def build_worker_image(
 @click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
 @click.option("--context", type=click.Path(exists=True), help="Build context directory")
 @click.option("--platform", default="linux/amd64", help="Target platform")
-@click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to")
-@click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+@_add_registry_options
 def build_controller_image(
     tag: str,
     push: bool,
     dockerfile: str | None,
     context: str | None,
     platform: str,
+    registry: str,
+    ghcr_org: str,
     region: tuple[str, ...],
     project: str,
 ):
     """Build Docker image for Iris controller."""
-    _build_image("controller", tag, push, dockerfile, context, platform, region, project)
+    _build_image("controller", tag, push, dockerfile, context, platform, registry, ghcr_org, region, project)
 
 
 @build.command("task-image")
@@ -195,13 +274,14 @@ def build_controller_image(
 @click.option("--push", is_flag=True, help="Push image to registry after building")
 @click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
 @click.option("--platform", default="linux/amd64", help="Target platform")
-@click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to")
-@click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+@_add_registry_options
 def build_task_image(
     tag: str,
     push: bool,
     dockerfile: str | None,
     platform: str,
+    registry: str,
+    ghcr_org: str,
     region: tuple[str, ...],
     project: str,
 ):
@@ -224,6 +304,8 @@ def build_task_image(
         str(dockerfile_path),
         str(marin_root),
         platform,
+        registry,
+        ghcr_org,
         region,
         project,
     )
@@ -231,16 +313,37 @@ def build_task_image(
 
 @build.command("push")
 @click.argument("source_tag")
-@click.option("--region", "-r", multiple=True, required=True, help="GCP Artifact Registry region")
+@click.option("--registry", type=click.Choice(["ghcr", "gcp"]), default="ghcr", help="Registry to push to")
+@click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
+@click.option("--region", "-r", multiple=True, help="GCP Artifact Registry region (required for --registry gcp)")
 @click.option("--project", default="hai-gcp-models", help="GCP project ID")
-@click.option("--image-name", default="iris-worker", help="Image name in registry")
-@click.option("--version", default="latest", help="Version tag")
-def build_push(source_tag: str, region: tuple[str, ...], project: str, image_name: str, version: str):
-    """Push a local Docker image to GCP Artifact Registry."""
-    _push_to_registries(
+@click.option("--image-name", help="Image name in registry (default: derived from source tag)")
+@click.option("--version", help="Version tag (default: derived from source tag)")
+def build_push(
+    source_tag: str,
+    registry: str,
+    ghcr_org: str,
+    region: tuple[str, ...],
+    project: str,
+    image_name: str | None,
+    version: str | None,
+):
+    """Push a local Docker image to a container registry.
+
+    By default pushes to ghcr.io. Use --registry gcp with --region for GCP Artifact Registry.
+
+    Examples:
+
+        iris build push iris-worker:latest --image-name iris-worker
+
+        iris build push iris-task:v1.0 --registry gcp --region us-central1
+    """
+    _push_image(
         source_tag,
-        region,
-        project,
+        registry=registry,
         image_name=image_name,
         version=version,
+        ghcr_org=ghcr_org,
+        gcp_regions=region,
+        gcp_project=project,
     )

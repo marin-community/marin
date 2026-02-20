@@ -151,6 +151,29 @@ while not deadline.expired():
     time.sleep(0.1)
 ```
 
+### Deployment Topology
+
+The controller is a plain GCE VM with no zone affinity to workers — it can run
+in any zone and serve workers across all regions.
+
+**When changing the controller zone**, update in `examples/marin.yaml`:
+- `controller.gcp.zone` — the GCE zone
+- `controller.image` and `defaults.bootstrap.docker_image` — use a registry in
+  the same region (see below). `cluster start` auto-builds and pushes images to
+  the region parsed from the image tag, so no manual push is needed.
+
+**Docker registries** are configured in `platform/bootstrap.py` (both worker and
+controller bootstrap scripts). If you add a new region's Artifact Registry, add
+it to both `gcloud auth configure-docker` lines. List existing repos with:
+`gcloud artifacts repositories list --project=hai-gcp-models`
+
+**Bundle storage** (`controller.bundle_prefix`) is a GCS URI with no zone
+affinity — globally accessible.
+
+**Zone validation**: `cluster/config.py` validates that every scale group zone
+appears in `platform.gcp.zones`. Multi-zone scale groups are auto-expanded by
+`_expand_multi_zone_groups()`.
+
 ### Architecture Layers
 
 Iris follows a clean layering architecture:

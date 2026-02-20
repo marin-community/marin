@@ -43,6 +43,7 @@ HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 EXCLUDE_PATTERNS = [
     ".git/**",
     ".github/**",
+    "lib/harbor/**",
     "tests/snapshots/**",
     # grpc generated files
     "**/*_connect.py",

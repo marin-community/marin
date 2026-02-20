@@ -4,9 +4,9 @@
 """Tests for cluster client hierarchical name handling."""
 
 import pytest
-from connectrpc.errors import ConnectError
 
 from iris.client import IrisClient, LocalClientConfig
+from iris.client.client import JobAlreadyExists
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec
 from iris.rpc import cluster_pb2
 
@@ -36,7 +36,7 @@ def test_submit_rejects_name_with_slash(local_client):
 
 
 def test_submit_rejects_duplicate_name(local_client):
-    """Verify submit rejects duplicate job names."""
+    """Verify submit raises JobAlreadyExists with a valid job handle for duplicate names."""
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
@@ -44,11 +44,14 @@ def test_submit_rejects_duplicate_name(local_client):
     job = local_client.submit(entrypoint, "duplicate-job", resources)
     assert job.job_id == JobName.root("duplicate-job")
 
-    # Second submit with same name should fail with RPC conflict error
-    with pytest.raises(ConnectError) as exc_info:
+    # Second submit with same name should raise JobAlreadyExists
+    with pytest.raises(JobAlreadyExists) as exc_info:
         local_client.submit(entrypoint, "duplicate-job", resources)
 
-    assert "already exists" in str(exc_info.value)
+    assert "already exists" in str(exc_info.value).lower()
+    # The exception carries a Job handle that can be used to adopt the existing job
+    assert exc_info.value.job is not None
+    assert exc_info.value.job.job_id == JobName.root("duplicate-job")
 
 
 def test_list_jobs_returns_all_jobs(local_client):

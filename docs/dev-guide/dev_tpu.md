@@ -154,6 +154,25 @@ uv run scripts/ray/dev_tpu.py --config <config> allocate --tpu-type v5p-8
 
 Run `allocate` first for that `--tpu-name`, then retry `connect`/`execute`.
 
+### Verify release/cleanup after `allocate`
+
+After finishing work, stop allocation with `Ctrl-C` in the terminal running `allocate`.
+
+Recommended verification:
+
+1. Confirm the allocator exited cleanly (you should see a release message).
+2. Confirm no local `allocate` process is still running for that TPU name.
+3. Confirm the local alias state is cleaned up by running:
+
+```bash
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
+  --config <config> \
+  --tpu-name <name> execute --no-sync -- /bin/bash -lc 'echo ok'
+```
+
+Expected result after cleanup: it should fail with
+`SSH configuration ... not found` and ask you to run `allocate` first.
+
 ### TPU busy / stale lockfile
 
 If TPU init fails due lock contention:

@@ -17,24 +17,24 @@
 
 """Platform abstraction layer for infrastructure providers.
 
-Provides a unified interface for creating/managing VMs and slices across
+Provides a unified interface for creating/managing workers and slices across
 different cloud providers (GCP, CoreWeave) and local testing.
 """
 
 from iris.cluster.platform.base import (
     CloudSliceState,
-    CloudVmState,
+    CloudWorkerState,
     CommandResult,
     Platform,
     PlatformError,
     PlatformUnavailableError,
     QuotaExhaustedError,
+    RemoteWorkerHandle,
     ResourceNotFoundError,
     SliceHandle,
     SliceStatus,
-    StandaloneVmHandle,
-    VmHandle,
-    VmStatus,
+    StandaloneWorkerHandle,
+    WorkerStatus,
 )
 from iris.cluster.platform.coreweave import (
     CoreweavePlatform,
@@ -45,8 +45,8 @@ from iris.cluster.platform.factory import (
 from iris.cluster.platform.gcp import (
     GcpPlatform,
     GcpSliceHandle,
-    GcpStandaloneVmHandle,
-    GcpVmHandle,
+    GcpStandaloneWorkerHandle,
+    GcpWorkerHandle,
 )
 from iris.cluster.platform.local import (
     LocalPlatform,
@@ -55,34 +55,34 @@ from iris.cluster.platform.local import (
 from iris.cluster.platform.manual import (
     ManualPlatform,
     ManualSliceHandle,
-    ManualStandaloneVmHandle,
-    ManualVmHandle,
+    ManualStandaloneWorkerHandle,
+    ManualWorkerHandle,
 )
 
 __all__ = [
     "CloudSliceState",
-    "CloudVmState",
+    "CloudWorkerState",
     "CommandResult",
     "CoreweavePlatform",
     "GcpPlatform",
     "GcpSliceHandle",
-    "GcpStandaloneVmHandle",
-    "GcpVmHandle",
+    "GcpStandaloneWorkerHandle",
+    "GcpWorkerHandle",
     "LocalPlatform",
     "LocalSliceHandle",
     "ManualPlatform",
     "ManualSliceHandle",
-    "ManualStandaloneVmHandle",
-    "ManualVmHandle",
+    "ManualStandaloneWorkerHandle",
+    "ManualWorkerHandle",
     "Platform",
     "PlatformError",
     "PlatformUnavailableError",
     "QuotaExhaustedError",
+    "RemoteWorkerHandle",
     "ResourceNotFoundError",
     "SliceHandle",
     "SliceStatus",
-    "StandaloneVmHandle",
-    "VmHandle",
-    "VmStatus",
+    "StandaloneWorkerHandle",
+    "WorkerStatus",
     "create_platform",
 ]

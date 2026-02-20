@@ -100,7 +100,15 @@ class LocalClient:
         self._executor = ThreadPoolExecutor(max_workers=max_threads)
         self._jobs: list[LocalJobHandle] = []
 
-    def submit(self, request: JobRequest) -> LocalJobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> LocalJobHandle:
+        """Submit a job for execution.
+
+        Args:
+            request: The job request to submit.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
+                          LocalClient currently doesn't enforce unique names, so this
+                          parameter has no effect but is included for API compatibility.
+        """
         entry = request.entrypoint
         if entry.callable_entrypoint is not None:
             future = self._executor.submit(_run_callable, entry.callable_entrypoint)
