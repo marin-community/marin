@@ -13,8 +13,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-from jax import Array
-from jax.experimental.shard_map import shard_map
+from jax import Array, shard_map
 
 import haliax as hax
 import haliax.nn as hnn
