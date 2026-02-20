@@ -21,6 +21,7 @@ from levanter.data.text import (
     DatasetComponent,
     GrugLmExample,
     LmDataConfig,
+    PreferenceChatLmDatasetFormat,
     PrebuiltLmDatasetFormat,
     UrlDatasetSourceConfig,
     build_lm_dataset_cache,
@@ -235,6 +236,19 @@ def test_train_set_last_mile_wraps_to_named(tmp_path):
     named_train_set = config.train_set(Pos, BatchSchedule(1), key=jax.random.PRNGKey(0)).as_sync_dataset()
     named_example = named_train_set[0]
     assert isinstance(named_example, LmExample)
+
+
+def test_dataset_for_component_rejects_preference_format():
+    component = DatasetComponent(format=PreferenceChatLmDatasetFormat())
+    Pos = hax.Axis("position", 8)
+    with pytest.raises(ValueError, match="Unknown format"):
+        dataset_for_component(
+            component,
+            Pos,
+            None,  # type: ignore[arg-type]
+            eos_id=None,
+            block_cross_document_attention=True,
+        )
 
 
 @pytest.fixture
