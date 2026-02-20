@@ -126,16 +126,29 @@ def _proto_constraint(key: str, string_value: str, op: int = cluster_pb2.CONSTRA
 # ---------------------------------------------------------------------------
 
 
-def test_region_constraint_happy_path():
-    c = region_constraint("us-west4")
+def test_region_constraint_single_region_produces_eq():
+    c = region_constraint(["us-west4"])
     assert c.key == "region"
     assert c.op == ConstraintOp.EQ
     assert c.value == "us-west4"
 
 
+def test_region_constraint_multiple_regions_produces_in():
+    c = region_constraint(["us-central1", "us-central2"])
+    assert c.key == "region"
+    assert c.op == ConstraintOp.IN
+    assert c.values == ("us-central1", "us-central2")
+    assert c.value is None
+
+
+def test_region_constraint_empty_list_raises():
+    with pytest.raises(ValueError, match="non-empty"):
+        region_constraint([])
+
+
 def test_region_constraint_empty_string_raises():
     with pytest.raises(ValueError, match="non-empty"):
-        region_constraint("")
+        region_constraint([""])
 
 
 # ---------------------------------------------------------------------------
@@ -227,14 +240,14 @@ def test_normalize_constraints_combines_fields():
 
 def test_merge_parent_only():
     """Child has no constraints -- parent constraints pass through."""
-    parent = [region_constraint("us-west4"), preemptible_constraint(True)]
+    parent = [region_constraint(["us-west4"]), preemptible_constraint(True)]
     result = merge_constraints(parent, [])
     assert set(result) == set(parent)
 
 
 def test_merge_child_overrides_region():
-    parent = [region_constraint("us-west4")]
-    child = [region_constraint("eu-west4")]
+    parent = [region_constraint(["us-west4"])]
+    child = [region_constraint(["eu-west4"])]
     result = merge_constraints(parent, child)
     regions = [c for c in result if c.key == "region"]
     assert len(regions) == 1
@@ -270,8 +283,8 @@ def test_merge_non_canonical_key_dedup():
 
 def test_merge_multiple_canonical_keys_partial_override():
     """Child overrides region but inherits preemptible from parent."""
-    parent = [region_constraint("us-west4"), preemptible_constraint(True)]
-    child = [region_constraint("eu-west4")]
+    parent = [region_constraint(["us-west4"]), preemptible_constraint(True)]
+    child = [region_constraint(["eu-west4"])]
     result = merge_constraints(parent, child)
 
     regions = [c for c in result if c.key == "region"]
@@ -281,3 +294,66 @@ def test_merge_multiple_canonical_keys_partial_override():
     preemptibles = [c for c in result if c.key == "preemptible"]
     assert len(preemptibles) == 1
     assert preemptibles[0].value == "true"
+
+
+def test_region_constraint_empty_string_in_multi_raises():
+    with pytest.raises(ValueError, match="non-empty"):
+        region_constraint(["us-central1", ""])
+
+
+# ---------------------------------------------------------------------------
+# Constraint.to_proto / from_proto round-trip for IN operator
+# ---------------------------------------------------------------------------
+
+
+def test_constraint_in_proto_roundtrip():
+    """IN constraint survives a proto round-trip."""
+    original = Constraint(key="region", op=ConstraintOp.IN, values=("us-central1", "eu-west4"))
+    proto = original.to_proto()
+    assert proto.op == cluster_pb2.CONSTRAINT_OP_IN
+    assert len(proto.values) == 2
+    restored = Constraint.from_proto(proto)
+    assert restored == original
+
+
+# ---------------------------------------------------------------------------
+# required_regions_from_constraints with IN operator (proto inputs)
+# ---------------------------------------------------------------------------
+
+
+def _proto_in_constraint(key: str, string_values: list[str]) -> cluster_pb2.Constraint:
+    """Build a proto Constraint with IN op and multiple string values."""
+    c = cluster_pb2.Constraint(key=key, op=cluster_pb2.CONSTRAINT_OP_IN)
+    for sv in string_values:
+        c.values.append(cluster_pb2.AttributeValue(string_value=sv))
+    return c
+
+
+def test_required_regions_in_multiple():
+    constraints = [_proto_in_constraint("region", ["us-central1", "us-central2"])]
+    result = required_regions_from_constraints(constraints)
+    assert result == frozenset({"us-central1", "us-central2"})
+
+
+def test_required_regions_in_single():
+    constraints = [_proto_in_constraint("region", ["eu-west4"])]
+    result = required_regions_from_constraints(constraints)
+    assert result == frozenset({"eu-west4"})
+
+
+def test_required_regions_in_empty_values_raises():
+    """IN constraint with no values is invalid."""
+    c = cluster_pb2.Constraint(key="region", op=cluster_pb2.CONSTRAINT_OP_IN)
+    with pytest.raises(ValueError, match="at least one value"):
+        required_regions_from_constraints([c])
+
+
+def test_normalize_constraints_with_in_region():
+    """normalize_constraints works with IN region constraints."""
+    constraints = [
+        _proto_constraint("preemptible", "false"),
+        _proto_in_constraint("region", ["us-central1", "us-central2"]),
+    ]
+    nc = normalize_constraints(constraints)
+    assert nc.preemptible is False
+    assert nc.required_regions == frozenset({"us-central1", "us-central2"})

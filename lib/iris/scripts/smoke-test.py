@@ -990,7 +990,7 @@ class SmokeTestRunner:
             entrypoint=Entrypoint.from_callable(_hello_tpu_job),
             job_name=f"smoke-region-{self._run_id}",
             resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
-            constraints=[region_constraint("europe-west4")],
+            constraints=[region_constraint(["europe-west4"])],
         )
 
     def _run_nested_constraint_job(self, client: IrisClient) -> TestResult:
@@ -1006,7 +1006,7 @@ class SmokeTestRunner:
             entrypoint=Entrypoint.from_callable(_assert_region_child, "europe-west4"),
             job_name=f"smoke-nested-{self._run_id}",
             resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
-            constraints=[region_constraint("europe-west4")],
+            constraints=[region_constraint(["europe-west4"])],
         )
 
     # ----- Results and cleanup -----
