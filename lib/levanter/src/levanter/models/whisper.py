@@ -372,11 +372,11 @@ class WhisperDecoderEmbeddings(eqx.Module):
         k_wte, k_wpe, k_out = haliax.jax_utils.maybe_rng_split(key, 3)
 
         token_embeddings = hnn.Embedding.init(
-            Vocab, config.Embed, key=k_wte, initializer_range=config.initializer_range
+            Vocab, config.Embed, key=k_wte, init_scale=config.initializer_range
         )
 
         # Whisper Initializes the Positional Embeddings as Empty
-        position_embeddings = hnn.Embedding.init(config.max_Pos, config.Embed, key=k_wpe, initializer_range=0)
+        position_embeddings = hnn.Embedding.init(config.max_Pos, config.Embed, key=k_wpe, init_scale=0)
 
         return WhisperDecoderEmbeddings(Vocab, config, token_embeddings, position_embeddings)
 
