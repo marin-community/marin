@@ -1280,6 +1280,68 @@ def test_stale_attempt_error_log_for_non_terminal(caplog, job_request, worker_me
 
 
 # =============================================================================
+# log_directory Tests
+# =============================================================================
+
+
+def test_log_directory_persisted_on_first_running_heartbeat(job_request, worker_metadata):
+    """log_directory is stored from running_tasks even when task state has not changed."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    tasks = submit_job(state, "j1", job_request("job1"))
+    task = tasks[0]
+    dispatch_task(state, task, worker_id)
+
+    snapshot = state.begin_heartbeat(worker_id)
+    assert snapshot is not None
+
+    # Worker reports task as RUNNING (same state the controller already has) with a log_directory.
+    # This simulates the common steady-state heartbeat where the state hasn't changed but
+    # log_directory has not yet been recorded by the controller.
+    response = cluster_pb2.HeartbeatResponse(
+        running_tasks=[
+            cluster_pb2.Controller.RunningTaskEntry(
+                task_id=task.task_id.to_wire(),
+                attempt_id=task.current_attempt_id,
+                state=cluster_pb2.TASK_STATE_RUNNING,
+                log_directory="s3://bucket/logs/task/0",
+            )
+        ]
+    )
+    state.complete_heartbeat(snapshot, response)
+
+    assert task.attempts[task.current_attempt_id].log_directory == "s3://bucket/logs/task/0"
+
+
+def test_log_directory_persisted_on_completed_task(job_request, worker_metadata):
+    """log_directory is stored from completed_tasks report."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    tasks = submit_job(state, "j1", job_request("job1"))
+    task = tasks[0]
+    dispatch_task(state, task, worker_id)
+
+    snapshot = state.begin_heartbeat(worker_id)
+    assert snapshot is not None
+
+    response = cluster_pb2.HeartbeatResponse(
+        completed_tasks=[
+            cluster_pb2.Controller.CompletedTaskEntry(
+                task_id=task.task_id.to_wire(),
+                attempt_id=task.current_attempt_id,
+                state=cluster_pb2.TASK_STATE_SUCCEEDED,
+                log_directory="s3://bucket/logs/task/0",
+            )
+        ]
+    )
+    state.complete_heartbeat(snapshot, response)
+
+    assert task.attempts[task.current_attempt_id].log_directory == "s3://bucket/logs/task/0"
+
+
+# =============================================================================
 # compute_demand_entries Tests
 # =============================================================================
 

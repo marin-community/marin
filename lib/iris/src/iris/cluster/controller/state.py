@@ -1932,11 +1932,22 @@ class ControllerState:
                     continue
                 task_id = JobName.from_wire(entry.task_id)
                 task = self._tasks.get(task_id)
-                if task and task.state != entry.state and not task.is_finished():
-                    self._process_task_state_change(task_id, entry.state, entry.attempt_id)
-                    # Store log_directory from worker
-                    if task and entry.attempt_id < len(task.attempts) and entry.log_directory:
-                        task.attempts[entry.attempt_id].log_directory = entry.log_directory
+                if task and not task.is_finished():
+                    # Always persist log_directory as soon as the worker reports it,
+                    # regardless of whether the state changed. This ensures we capture
+                    # it even if the worker crashes before the next heartbeat cycle.
+                    if entry.log_directory and entry.attempt_id < len(task.attempts):
+                        if not task.attempts[entry.attempt_id].log_directory:
+                            task.attempts[entry.attempt_id].log_directory = entry.log_directory
+                    if task.state != entry.state:
+                        # Ignore PENDING reported by the worker: the task thread starts in
+                        # PENDING before transitioning to BUILDING, so the first heartbeat
+                        # after assignment can carry a stale PENDING.  Accepting it would
+                        # regress an ASSIGNED task back to PENDING and silently drop it
+                        # from the building-count backpressure window.
+                        if entry.state == cluster_pb2.TASK_STATE_PENDING:
+                            continue
+                        self._process_task_state_change(task_id, entry.state, entry.attempt_id)
 
             # Process completed tasks
             for entry in response.completed_tasks:
