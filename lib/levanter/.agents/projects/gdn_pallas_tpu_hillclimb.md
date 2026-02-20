@@ -514,3 +514,38 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - `throughput/duration`: `0.26259s -> 0.23045s` (`-12.24%`).
 - Assessment: **high-impact win**. This iteration directly accelerated the same dominant backward custom-call hotspot rather than shifting bottlenecks, and MFU improved well above governance thresholds.
 - Next hypothesis: push the remaining `~75 ms` forward closed-call pallas path with a bolder launch/dataflow move (Macro Move D full-sequence pipeline or Macro Move E/F staged recurrent decomposition) to reduce shard-map custom-call pressure further.
+
+### Iteration 13 - Revert Iteration 6 blockwise solve/inversion rewrite
+
+- Date: 2026-02-20T12:41:15Z
+- Commit: 4668d57aa
+- Hypothesis: Iteration 6's blockwise solve replacement may still be suppressing end-to-end MFU despite later wins; reverting it should recover additional throughput if that regression source persists.
+- Change summary:
+  - Reverted commit `2db3ad589` kernel math path in `lib/levanter/src/levanter/layers/gated_deltanet.py`.
+  - Restored explicit inverse-based chunk solve path (`_invert_I_minus_strict_lower_doubling` + matmul) while preserving later architectural changes (including Iteration 12 forward-prep tape consumption in backward).
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both --no-sync`
+  - Result: `87 passed, 2 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_revert_i6_i13_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_revert_i6_i13_dev_130m_ch128_seg16_20steps-72bcb2`
+  - W&B profiler artifact: `run-gdn_revert_i6_i13_dev_130m_ch128_seg16_20steps-72bcb2-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_revert_i6_i13_dev/plugins/profile/2026_02_20_12_39_21/perfetto_trace.json.gz`
+- Hotspots observed (TPU:0 XLA Ops thread `pid=3, tid=3`):
+  - Versus Iteration 12 trace (`gdn_prep_tape_i4_dev`):
+    - `custom-call`: `174.246 ms -> 185.840 ms` (`+6.65%`).
+    - Backward dominant GDN callsite: `85.705 ms -> 91.478 ms` (`+6.74%`).
+    - Forward dominant GDN callsite: `75.049 ms -> 80.879 ms` (`+7.77%`).
+  - Versus Iteration 6 trace (`gdn_blocksolve_i6_dev3`):
+    - `custom-call`: `220.258 ms -> 185.840 ms` (`-15.63%`).
+- MFU/throughput delta:
+  - Versus Iteration 12 run `gdn_prep_tape_i4_dev_...-e4c03f`:
+    - `throughput/mfu`: `4.3954 -> 4.2823` (`-2.57%`).
+    - `throughput/tokens_per_second`: `142190.31 -> 138531.44` (`-2.57%`).
+    - `throughput/duration`: `0.23045s -> 0.23654s` (`+2.64%`).
+  - Versus Iteration 6 run `gdn_blocksolve_i6_dev3_...-8f5e31`:
+    - `throughput/mfu`: `3.9850 -> 4.2823` (`+7.46%`).
+    - `throughput/tokens_per_second`: `128914.05 -> 138531.44` (`+7.46%`).
+    - `throughput/duration`: `0.25418s -> 0.23654s` (`-6.94%`).
+- Assessment: **partial recovery, not a new champion**. Reverting Iteration 6 materially improves over the Iteration 6 state, but underperforms Iteration 12 by ~2.6% MFU, so Iteration 12’s gain is not just an artifact of Iteration 6 regression.
+- Next hypothesis: keep Iteration 12 tape-reuse path and target the remaining backward and forward shard-map pallas callsites with launch/dataflow reductions (Macro Move D/E), not a full rollback of Iteration 6-era follow-on changes.
