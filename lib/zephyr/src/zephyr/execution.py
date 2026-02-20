@@ -889,7 +889,8 @@ class ZephyrContext:
         name: Descriptive name for this context, used in actor group names for debugging.
             Defaults to a random 8-character hex string.
         no_workers_timeout: Seconds to wait for at least one worker before failing a stage.
-            Defaults to 60.0. Overridable via ZEPHYR_NO_WORKERS_TIMEOUT env var.
+            If None, defaults to 600s for Ray clusters or 60s otherwise.
+            Overridable via ZEPHYR_NO_WORKERS_TIMEOUT env var.
     """
 
     client: Client | None = None
@@ -897,7 +898,7 @@ class ZephyrContext:
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
     chunk_storage_prefix: str | None = None
     name: str = ""
-    no_workers_timeout: float = 60.0
+    no_workers_timeout: float | None = None
 
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     _coordinator: ActorHandle | None = field(default=None, repr=False)
@@ -921,9 +922,14 @@ class ZephyrContext:
                 env_val = os.environ.get("ZEPHYR_MAX_WORKERS")
                 self.max_workers = int(env_val) if env_val else 128
 
-        env_timeout = os.environ.get("ZEPHYR_NO_WORKERS_TIMEOUT")
-        if env_timeout is not None:
-            self.no_workers_timeout = float(env_timeout)
+        if self.no_workers_timeout is None:
+            env_timeout = os.environ.get("ZEPHYR_NO_WORKERS_TIMEOUT")
+            if env_timeout is not None:
+                self.no_workers_timeout = float(env_timeout)
+            else:
+                from fray.v2.ray_backend.backend import RayClient
+
+                self.no_workers_timeout = 600.0 if isinstance(self.client, RayClient) else 60.0
 
         if self.chunk_storage_prefix is None:
             temp_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")

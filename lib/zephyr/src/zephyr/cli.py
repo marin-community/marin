@@ -35,7 +35,7 @@ class CliConfig:
     cluster_config: str | None = None
     entry_point: str = "main"
     dry_run: bool = False
-    no_workers_timeout: float = 60.0
+    no_workers_timeout: float | None = None
 
     ray_options: dict = field(default_factory=dict)
 
@@ -190,7 +190,7 @@ def run_ray_cluster(
         entrypoint += ["--num-cpus", str(config.num_cpus)]
     if config.num_gpus:
         entrypoint += ["--num-gpus", str(config.num_gpus)]
-    if config.no_workers_timeout != 60.0:
+    if config.no_workers_timeout is not None:
         entrypoint += ["--no-workers-timeout", str(config.no_workers_timeout)]
     if entry_point != "main":
         entrypoint += ["--entry-point", entry_point]
@@ -260,7 +260,7 @@ def run_iris_cluster(
         entrypoint += ["--num-cpus", str(config.num_cpus)]
     if config.num_gpus:
         entrypoint += ["--num-gpus", str(config.num_gpus)]
-    if config.no_workers_timeout != 60.0:
+    if config.no_workers_timeout is not None:
         entrypoint += ["--no-workers-timeout", str(config.no_workers_timeout)]
     if entry_point != "main":
         entrypoint += ["--entry-point", entry_point]
@@ -315,8 +315,8 @@ Examples:
 @click.option(
     "--no-workers-timeout",
     type=float,
-    default=60.0,
-    help="Seconds to wait for at least one worker before failing (default: 60)",
+    default=None,
+    help="Seconds to wait for at least one worker before failing (default: 600s Ray, 60s otherwise)",
 )
 @click.pass_context
 def main(
