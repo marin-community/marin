@@ -501,6 +501,18 @@ def _apply_performance_policy(
             "[gdnctl] required performance metric is unavailable after validation profile: " f"{args.perf_metric}",
             file=sys.stderr,
         )
+        if args.perf_regression_policy.startswith("revert"):
+            reverted, reason = _revert_single_commit(workdir, commit_sha=commit_sha)
+            if not reverted:
+                print(f"[gdnctl] {reason}", file=sys.stderr)
+                return False, True, 1
+            print(
+                "[gdnctl] unscored iteration commit was reverted to avoid building on unknown-performance code.",
+                file=sys.stderr,
+            )
+            if args.perf_regression_policy == "revert-continue":
+                return True, False, 0
+            return True, True, 0
         return False, True, 1
 
     state = _load_perf_state(perf_state_path)

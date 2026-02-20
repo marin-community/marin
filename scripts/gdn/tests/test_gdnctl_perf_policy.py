@@ -149,7 +149,7 @@ def test_perf_policy_reverts_regression_commit(tmp_path: Path) -> None:
 def test_perf_policy_requires_metric(tmp_path: Path) -> None:
     repo, baseline_commit = _init_repo(tmp_path)
     state_path = tmp_path / "perf_state.json"
-    args = _perf_args()
+    args = _perf_args(regression_policy="fail")
 
     ok, count_failure, rc = gdnctl._apply_performance_policy(
         args,
@@ -162,6 +162,41 @@ def test_perf_policy_requires_metric(tmp_path: Path) -> None:
     assert not ok
     assert count_failure
     assert rc == 1
+
+
+def test_perf_policy_missing_metric_reverts_candidate_under_revert_policy(tmp_path: Path) -> None:
+    repo, baseline_commit = _init_repo(tmp_path)
+    state_path = tmp_path / "perf_state.json"
+    args = _perf_args(regression_policy="revert-count-failure")
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=1,
+        commit_sha=baseline_commit,
+        validation_info={"metrics": {"throughput/mfu": 4.0}, "warnings": []},
+    )
+    assert ok
+    assert not count_failure
+    assert rc == 0
+
+    candidate_commit = _commit_change(repo, "candidate\n", "candidate")
+    assert _run_git(repo, "rev-parse", "HEAD") == candidate_commit
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=2,
+        commit_sha=candidate_commit,
+        validation_info={"metrics": {}, "warnings": []},
+    )
+    assert ok
+    assert count_failure
+    assert rc == 0
+    assert _run_git(repo, "rev-parse", "HEAD") != candidate_commit
+    assert (repo / "data.txt").read_text(encoding="utf-8") == "v1\n"
 
 
 def test_extract_wandb_run_url_supports_slug_with_underscore() -> None:
