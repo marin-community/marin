@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
+import queue
+import threading
 import uuid
+from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 import itertools
+import json
 import os
-from collections.abc import Iterable
-from contextlib import contextmanager
 from typing import Any
 
 import fsspec
@@ -240,6 +243,75 @@ def batchify(batch: Iterable, n: int = 1024) -> Iterable:
         yield batch
 
 
+_SENTINEL = object()
+
+
+class ThreadedBatchWriter:
+    """Offloads batch writes to a background thread so the producer isn't blocked on IO.
+
+    Uses a bounded queue for backpressure: the producer blocks when the writer
+    falls behind, preventing unbounded memory growth.
+
+    Generic over the write function — works with Levanter's ``write_batch``,
+    PyArrow's ``write_table``, or any other ``Callable[[T], None]``.
+    """
+
+    def __init__(self, write_fn: Callable, maxsize: int = 128):
+        self._write_fn = write_fn
+        self._queue_maxsize = maxsize
+        self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread.start()
+
+    def _drain(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is _SENTINEL:
+                return
+            try:
+                self._write_fn(item)
+            except Exception as e:
+                self._error = e
+                return
+
+    def submit(self, batch: Any) -> None:
+        """Enqueue *batch* for writing. Raises if the background thread failed."""
+        # Poll so we detect background-thread failures even when the queue is
+        # full (a plain ``put`` would block forever if the consumer died).
+        while True:
+            if self._error is not None:
+                raise self._error
+            try:
+                self._queue.put(batch, timeout=1.0)
+                return
+            except queue.Full:
+                logger.warning(f"ThreadedBatchWriter queue is full (size={self._queue_maxsize}), waiting ...")
+                continue
+
+    def close(self) -> None:
+        """Wait for all pending writes and propagate any error."""
+        self._queue.put(_SENTINEL)
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+
+    def __enter__(self) -> ThreadedBatchWriter:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        if exc_type is not None:
+            # Signal the thread to stop without blocking the caller.
+            try:
+                self._queue.put_nowait(_SENTINEL)
+            except queue.Full:
+                pass
+            self._thread.join(timeout=5.0)
+            return False
+        self.close()
+        return False
+
+
 def _get_existing_row_count(tmp_path: str, exemplar: dict[str, Any]) -> int:
     """Read the number of rows already written in a partial .tmp cache directory.
 
@@ -286,7 +358,9 @@ def _promote_tmp_cache(fs, tmp_path: str, output_path: str) -> None:
             fs.rm(backup_path, recursive=True)
 
 
-def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any]) -> dict:
+def write_levanter_cache(
+    records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any], batch_size: int
+) -> dict:
     """Write tokenized records to Levanter cache format."""
     from levanter.store.cache import CacheMetadata, SerialCacheWriter
 
@@ -302,9 +376,10 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     try:
         exemplar = next(record_iter)
     except StopIteration:
-        return {"path": output_path, "count": 0}
+        return {"path": output_path, "count": 0, "token_count": 0}
 
     count = 1
+    token_count = len(exemplar.get("input_ids", []))
     logger.info("write_levanter_cache: starting write to %s", output_path)
 
     existing_rows = 0 if fs.exists(output_path) else _get_existing_row_count(tmp_path, exemplar)
@@ -314,9 +389,10 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
         # we already consumed 1 record (exemplar), skip existing_rows - 1 more
         rows_to_skip = existing_rows - 1
         skipped_rows = 0
-        for _record in itertools.islice(record_iter, rows_to_skip):
+        for record in itertools.islice(record_iter, rows_to_skip):
             skipped_rows += 1
             count += 1
+            token_count += len(record.get("input_ids", []))
         if skipped_rows != rows_to_skip:
             raise ValueError(
                 f"Temporary cache at {tmp_path} has {existing_rows} rows, but input has only {skipped_rows + 1} rows"
@@ -330,15 +406,17 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     with SerialCacheWriter(
         tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata), mode=mode
     ) as writer:
-        if write_exemplar:
-            writer.write_batch([exemplar])
-        for batch in batchify(record_iter):
-            writer.write_batch(batch)
-            count += len(batch)
-            if count % 1000 == 0:
-                logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
+        with ThreadedBatchWriter(writer.write_batch) as threaded:
+            if write_exemplar:
+                threaded.submit([exemplar])
+            for batch in batchify(record_iter, n=batch_size):
+                threaded.submit(batch)
+                count += len(batch)
+                for record in batch:
+                    token_count += len(record.get("input_ids", []))
+                logger.info("write_levanter_cache: %s — %d records, %d tokens so far", output_path, count, token_count)
 
-    logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
+    logger.info("write_levanter_cache: finished %s — %d records, %d tokens", output_path, count, token_count)
 
     _promote_tmp_cache(fs, tmp_path, output_path)
 
@@ -346,7 +424,11 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     with fsspec.open(f"{output_path}/.success", "w") as f:
         f.write("")
 
-    return {"path": output_path, "count": count}
+    # write stats for aggregation
+    with fsspec.open(f"{output_path}/.stats.json", "w") as f:
+        json.dump({"count": count, "token_count": token_count}, f)
+
+    return {"path": output_path, "count": count, "token_count": token_count}
 
 
 def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
