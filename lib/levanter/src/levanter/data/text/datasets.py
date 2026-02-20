@@ -149,10 +149,7 @@ class PrebuiltTokenSeqDataset(AsyncDataset[dict]):
         ids_out = await asyncio.gather(*id_reads)
         if self.loss_weights_key is not None:
             lw_out = await asyncio.gather(*lw_reads)
-            return [
-                {self.input_ids_key: ids, self.loss_weights_key: lw}
-                for ids, lw in zip(ids_out, lw_out)
-            ]
+            return [{self.input_ids_key: ids, self.loss_weights_key: lw} for ids, lw in zip(ids_out, lw_out)]
         else:
             return [{self.input_ids_key: ids} for ids in ids_out]
 

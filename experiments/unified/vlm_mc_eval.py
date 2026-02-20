@@ -14,7 +14,12 @@ Supports two task types:
   log P(answer | prompt + image) → mean normalized log-likelihood.
 
 Both task types reuse the same Levanter loglikelihood infrastructure:
-PromptCompletion → greedy_pack → _LmEvalHarnessWorker.dispatch_loglikelihood.
+PromptCompletion → greedy_pack → _shard_batch_for_eval → process_loglikelihood.
+
+All processes run the same eval loop (no coordinator/worker split). Each process
+independently builds the same deterministic batches and provides its local shard
+via jax.make_array_from_callback, avoiding the multi-host broadcast_shard
+synchronization issues that caused "unexpected peer" TPU crashes.
 
 Usage (standalone):
     uv run experiments/unified/vlm_mc_eval.py \
@@ -63,6 +68,30 @@ from marin.utils import fsspec_glob
 logger = logging.getLogger(__name__)
 
 MC_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"]
+
+
+def _shard_batch_for_eval(batch, axis_resources):
+    """Shard a local CPU batch onto the TPU mesh for multi-host evaluation.
+
+    All processes must hold identical batch data (same parquets, deterministic
+    packing). Each process provides its local shard via make_array_from_callback,
+    which is multi-host safe — unlike hax.shard / jax.device_put which crash when
+    the sharding references non-addressable devices.
+    """
+    shardings = hax.partitioning.infer_resource_partitions(batch, axis_resources)
+
+    def _shard_leaf(leaf, sharding):
+        if sharding is None:
+            return leaf
+        if isinstance(leaf, hax.NamedArray):
+            arr = np.asarray(leaf.array)
+            global_arr = jax.make_array_from_callback(arr.shape, sharding, lambda idx, _a=arr: _a[idx])
+            return hax.named(global_arr, leaf.axes)
+        arr = np.asarray(leaf)
+        return jax.make_array_from_callback(arr.shape, sharding, lambda idx, _a=arr: _a[idx])
+
+    return jax.tree.map(_shard_leaf, batch, shardings, is_leaf=lambda x: isinstance(x, hax.NamedArray))
+
 
 # Benchmark parquet paths
 DEFAULT_EVAL_PARQUET_PATH = "gs://marin-vlm/eval_benchmarks_tokenized"
@@ -354,8 +383,8 @@ def evaluate_vlm_mc_benchmark(
     for batch in packed_iterator:
         _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
 
-        # dispatch_loglikelihood handles multi-host distribution via broadcast_shard
-        out_ids, out_lls, _out_correct = worker.dispatch_loglikelihood(batch)
+        batch = _shard_batch_for_eval(batch, worker.axis_resources)
+        out_ids, out_lls, _out_correct = worker.process_loglikelihood(batch)
 
         out_ids = jax.device_get(out_ids.array)
         out_lls = jax.device_get(out_lls.array)
@@ -564,8 +593,8 @@ def evaluate_vlm_open_ended_benchmark(
     for batch in packed_iterator:
         _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
 
-        # dispatch_loglikelihood handles multi-host distribution via broadcast_shard
-        out_ids, out_lls, _out_correct = worker.dispatch_loglikelihood(batch)
+        batch = _shard_batch_for_eval(batch, worker.axis_resources)
+        out_ids, out_lls, _out_correct = worker.process_loglikelihood(batch)
 
         out_ids = jax.device_get(out_ids.array)
         out_lls = jax.device_get(out_lls.array)
@@ -731,25 +760,24 @@ def main():
 
         EvalPos = model.Pos if args.max_length is None else model.Pos.resize(args.max_length)
 
-        # Pre-load all benchmark data before creating worker (avoids collective timeouts)
+        # All processes prepare data and run eval independently (no coordinator/worker split).
         prepared: dict[str, tuple] = {}
-        if jax.process_index() == 0:
-            for bench_name in args.benchmarks:
-                parquet_paths = find_benchmark_parquets(bench_name, args.eval_parquet_path)
-                if not parquet_paths:
-                    continue
+        for bench_name in args.benchmarks:
+            parquet_paths = find_benchmark_parquets(bench_name, args.eval_parquet_path)
+            if not parquet_paths:
+                continue
 
-                task_type = _detect_benchmark_task_type(parquet_paths[0])
-                logger.info("Preparing %s [%s] (%d parquet shards)", bench_name, task_type, len(parquet_paths))
+            task_type = _detect_benchmark_task_type(parquet_paths[0])
+            logger.info("Preparing %s [%s] (%d parquet shards)", bench_name, task_type, len(parquet_paths))
 
-                if task_type == "multiple_choice":
-                    completions, metadata = prepare_vlm_mc_data(parquet_paths, tokenizer, EvalPos.size)
-                    prepared[bench_name] = ("multiple_choice", completions, metadata)
-                elif task_type == "open_ended":
-                    completions, metadata = prepare_vlm_open_ended_data(parquet_paths, tokenizer, EvalPos.size)
-                    prepared[bench_name] = ("open_ended", completions, metadata)
-                else:
-                    logger.warning("Unsupported task_type=%s for %s, skipping", task_type, bench_name)
+            if task_type == "multiple_choice":
+                completions, metadata = prepare_vlm_mc_data(parquet_paths, tokenizer, EvalPos.size)
+                prepared[bench_name] = ("multiple_choice", completions, metadata)
+            elif task_type == "open_ended":
+                completions, metadata = prepare_vlm_open_ended_data(parquet_paths, tokenizer, EvalPos.size)
+                prepared[bench_name] = ("open_ended", completions, metadata)
+            else:
+                logger.warning("Unsupported task_type=%s for %s, skipping", task_type, bench_name)
 
         worker = _LmEvalHarnessWorker(
             EvalBatch,
@@ -761,15 +789,15 @@ def main():
             max_packed_segments=64,
         )
 
-        if jax.process_index() == 0:
-            results = {}
-            for bench_name, (task_type, completions, metadata) in prepared.items():
-                if not completions:
-                    continue
+        results = {}
+        for bench_name, (task_type, completions, metadata) in prepared.items():
+            if not completions:
+                continue
 
-                if task_type == "multiple_choice":
-                    result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
-                    results[bench_name] = result
+            if task_type == "multiple_choice":
+                result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
+                results[bench_name] = result
+                if jax.process_index() == 0:
                     logger.info(
                         "%s: accuracy=%.4f (%d/%d), loss=%.4f",
                         bench_name,
@@ -778,9 +806,10 @@ def main():
                         result["num_questions"],
                         result["loss"],
                     )
-                elif task_type == "open_ended":
-                    result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
-                    results[bench_name] = result
+            elif task_type == "open_ended":
+                result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
+                results[bench_name] = result
+                if jax.process_index() == 0:
                     logger.info(
                         "%s: mean_ll=%.4f (%d questions)",
                         bench_name,
@@ -788,8 +817,7 @@ def main():
                         result["num_questions"],
                     )
 
-            worker.stop()
-
+        if jax.process_index() == 0:
             # Print summary
             logger.info("=" * 60)
             logger.info("VLM Evaluation Results:")
@@ -818,8 +846,6 @@ def main():
                 with open(args.output_json, "w") as f:
                     json.dump(compact, f, indent=2)
                 logger.info("Results written to %s", args.output_json)
-        else:
-            worker.worker_message_loop()
 
         logger.info("Done.")
 
@@ -891,30 +917,33 @@ def vlm_mc_eval_callback(
             f"{parameter_count(model):,}",
         )
 
-        # Pre-load and pre-prepare all benchmark data on process 0 BEFORE
-        # creating the worker and entering the coordinator/worker split.
-        # This avoids collective timeouts: on multi-host TPU, workers enter
-        # broadcast_shard immediately after each benchmark and wait for
-        # process 0. If process 0 spends 30+ seconds loading the next
-        # benchmark's parquets from GCS, the collective times out.
+        # All processes prepare data and run eval independently. This avoids
+        # the coordinator/worker broadcast_shard pattern which causes
+        # multi-host TPU synchronization crashes ("unexpected peer" errors).
+        # Data preparation is deterministic (same parquets, same packing),
+        # so all processes produce identical batches. _shard_batch_for_eval
+        # then gives each process its local shard via make_array_from_callback.
         prepared: dict[str, tuple] = {}
-        if jax.process_index() == 0:
-            for bench_name, parquet_paths in bench_parquets.items():
-                task_type = bench_task_types[bench_name]
-                logger.info("Preparing %s [%s] (%d shards)", bench_name, task_type, len(parquet_paths))
+        for bench_name, parquet_paths in bench_parquets.items():
+            task_type = bench_task_types[bench_name]
+            logger.info("Preparing %s [%s] (%d shards)", bench_name, task_type, len(parquet_paths))
 
-                if task_type == "multiple_choice":
-                    completions, metadata = prepare_vlm_mc_data(
-                        parquet_paths, tokenizer, EvalPos.size,
-                    )
-                    prepared[bench_name] = ("multiple_choice", completions, metadata)
-                elif task_type == "open_ended":
-                    completions, metadata = prepare_vlm_open_ended_data(
-                        parquet_paths, tokenizer, EvalPos.size,
-                    )
-                    prepared[bench_name] = ("open_ended", completions, metadata)
-                else:
-                    logger.warning("Unknown task_type=%s for %s, skipping", task_type, bench_name)
+            if task_type == "multiple_choice":
+                completions, metadata = prepare_vlm_mc_data(
+                    parquet_paths,
+                    tokenizer,
+                    EvalPos.size,
+                )
+                prepared[bench_name] = ("multiple_choice", completions, metadata)
+            elif task_type == "open_ended":
+                completions, metadata = prepare_vlm_open_ended_data(
+                    parquet_paths,
+                    tokenizer,
+                    EvalPos.size,
+                )
+                prepared[bench_name] = ("open_ended", completions, metadata)
+            else:
+                logger.warning("Unknown task_type=%s for %s, skipping", task_type, bench_name)
 
         worker = _LmEvalHarnessWorker(
             EvalBatch,
@@ -926,17 +955,18 @@ def vlm_mc_eval_callback(
             max_packed_segments=64,
         )
 
-        # Now enter the coordinator/worker split. All data is pre-loaded,
-        # so transitions between benchmarks are fast (no GCS I/O).
-        if jax.process_index() == 0:
-            for bench_name, (task_type, completions, metadata) in prepared.items():
-                if not completions:
-                    continue
+        # All processes run the same eval loop. process_loglikelihood is a
+        # collective JIT call, so all processes must call it in lockstep.
+        # Only process 0 logs metrics.
+        for bench_name, (task_type, completions, metadata) in prepared.items():
+            if not completions:
+                continue
 
-                logger.info("Evaluating %s [%s]", bench_name, task_type)
+            logger.info("Evaluating %s [%s]", bench_name, task_type)
 
-                if task_type == "multiple_choice":
-                    result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
+            if task_type == "multiple_choice":
+                result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
+                if jax.process_index() == 0:
                     accuracy = result["accuracy"]
                     loss = result["loss"]
                     logger.info(
@@ -955,8 +985,9 @@ def vlm_mc_eval_callback(
                         step=step.step,
                     )
 
-                elif task_type == "open_ended":
-                    result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
+            elif task_type == "open_ended":
+                result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
+                if jax.process_index() == 0:
                     mean_ll = result["mean_ll"]
                     logger.info(
                         "%s: mean_ll=%.4f (%d questions)",
@@ -968,10 +999,6 @@ def vlm_mc_eval_callback(
                         {f"eval/{bench_name}/mean_ll": mean_ll},
                         step=step.step,
                     )
-
-            worker.stop()
-        else:
-            worker.worker_message_loop()
 
         logger.info("VLM eval done.")
 

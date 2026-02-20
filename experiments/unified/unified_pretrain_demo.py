@@ -274,9 +274,7 @@ def make_unified_0_6b(
         use_default_validation=False,
     )
     # Multimodal caches live in gs://marin-vlm (us multi-region); allow cross-region read
-    return dataclasses.replace(
-        step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",))
-    )
+    return dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
 
 
 def make_unified_1_7b(
@@ -297,9 +295,7 @@ def make_unified_1_7b(
         eval_harness_tasks=[],
         use_default_validation=False,
     )
-    return dataclasses.replace(
-        step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",))
-    )
+    return dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
 
 
 def make_unified_4b(
@@ -320,9 +316,7 @@ def make_unified_4b(
         eval_harness_tasks=[],
         use_default_validation=False,
     )
-    return dataclasses.replace(
-        step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",))
-    )
+    return dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
 
 
 if __name__ == "__main__":

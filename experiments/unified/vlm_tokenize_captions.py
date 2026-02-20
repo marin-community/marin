@@ -670,7 +670,11 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
                 }
 
                 for future in tqdm(
-                    as_completed(futures), desc=f"Processing ({total_completed}/{len(pending)})", total=len(futures), unit="shard", leave=False
+                    as_completed(futures),
+                    desc=f"Processing ({total_completed}/{len(pending)})",
+                    total=len(futures),
+                    unit="shard",
+                    leave=False,
                 ):
                     local_cache, source = futures[future]
                     try:
