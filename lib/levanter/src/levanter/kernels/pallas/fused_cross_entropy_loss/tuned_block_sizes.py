@@ -229,7 +229,7 @@ def _shape_bucket(b: int, h: int, v: int) -> Optional[str]:
 
 
 def _largest_supported_divisor(dim: int, preferred: int) -> int | None:
-    """Largest <= preferred divisor of dim that is also TPU-lane aligned."""
+    """Largest <= preferred divisor of dim that is TPU-lane aligned, else None."""
     upper = min(dim, preferred)
     candidate = upper - (upper % 128)
     while candidate >= 128:
@@ -240,7 +240,7 @@ def _largest_supported_divisor(dim: int, preferred: int) -> int | None:
 
 
 def _adapt_block_sizes_for_shape(block_sizes: BlockSizes, *, b: int, h: int) -> BlockSizes:
-    """Clamp tuned/default block sizes to divisors of the current shape when possible."""
+    """Clamp block sizes to 128-aligned divisors when available, otherwise keep tuned/default values."""
     b_block_size = _largest_supported_divisor(b, block_sizes.b_block_size)
     h_block_size = _largest_supported_divisor(h, block_sizes.h_block_size)
 

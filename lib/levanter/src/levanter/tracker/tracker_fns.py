@@ -54,7 +54,8 @@ def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int
     """
     global _global_tracker
     if _global_tracker is None:
-        raise RuntimeError("No global tracker set")
+        _log_missing_tracker_once()
+        return
 
     if is_inside_jit():
         # we're inside a jit, so we need to log from the host

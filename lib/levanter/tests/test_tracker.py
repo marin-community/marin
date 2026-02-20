@@ -92,8 +92,10 @@ def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
+        tracker_fns.log({"metric": 1.0}, step=0)
         tracker_fns.jit_log({"metric": 1.0}, step=0)
         tracker_fns.log_summary({"metric": 1.0})
         tracker_fns.log_hyperparameters({"metric": 1.0})
+        tracker_fns.log_configuration({"metric": 1.0})
 
     assert not caught

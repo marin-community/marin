@@ -135,6 +135,19 @@ def test_infer_block_sizes_adapts_to_supported_divisors():
     assert block_sizes.h_block_size == 128
 
 
+def test_infer_block_sizes_preserves_defaults_without_128_aligned_divisors():
+    block_sizes = infer_block_sizes(
+        b=96,
+        h=64,
+        v=4096,
+        dtype=jnp.float32,
+        device_kind="TPU v5e",
+    )
+
+    assert block_sizes.b_block_size == 1024
+    assert block_sizes.h_block_size == 512
+
+
 def test_default_implementation_on_cpu_skips_expected_tpu_warning():
     if jax.default_backend() == "tpu":
         pytest.skip("requires non-TPU backend")
