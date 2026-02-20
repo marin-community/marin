@@ -254,6 +254,7 @@ class ZephyrCoordinator:
         self._fatal_error: str | None = None
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
+        self._no_workers_timeout: float = 60.0
 
         # Worker management state (workers self-register via register_worker)
         self._worker_handles: dict[str, ActorHandle] = {}
@@ -268,6 +269,7 @@ class ZephyrCoordinator:
         self,
         chunk_prefix: str,
         coordinator_handle: ActorHandle,
+        no_workers_timeout: float = 60.0,
     ) -> None:
         """Initialize coordinator for push-based worker registration.
 
@@ -277,9 +279,11 @@ class ZephyrCoordinator:
         Args:
             chunk_prefix: Storage prefix for intermediate chunks
             coordinator_handle: Handle to this coordinator actor (passed from context)
+            no_workers_timeout: Seconds to wait for at least one worker before failing.
         """
         self._chunk_prefix = chunk_prefix
         self._self_handle = coordinator_handle
+        self._no_workers_timeout = no_workers_timeout
 
         logger.info("Coordinator initialized")
 
@@ -458,17 +462,13 @@ class ZephyrCoordinator:
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._fatal_error = None
 
-    def _wait_for_stage(self, no_workers_timeout: float = 60.0) -> None:
-        """Block until current stage completes or error occurs.
-
-        Args:
-            no_workers_timeout: Seconds to wait for at least one worker before failing.
-                If no workers are discovered within this time, raises ZephyrWorkerError.
-        """
+    def _wait_for_stage(self) -> None:
+        """Block until current stage completes or error occurs."""
         backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
         last_log_completed = -1
         start_time = time.monotonic()
         warned_no_workers = False
+        no_workers_timeout = self._no_workers_timeout
 
         while True:
             with self._lock:
@@ -888,6 +888,8 @@ class ZephyrContext:
             to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
         name: Descriptive name for this context, used in actor group names for debugging.
             Defaults to a random 8-character hex string.
+        no_workers_timeout: Seconds to wait for at least one worker before failing a stage.
+            Defaults to 60.0. Overridable via ZEPHYR_NO_WORKERS_TIMEOUT env var.
     """
 
     client: Client | None = None
@@ -895,6 +897,7 @@ class ZephyrContext:
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
     chunk_storage_prefix: str | None = None
     name: str = ""
+    no_workers_timeout: float = 60.0
 
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     _coordinator: ActorHandle | None = field(default=None, repr=False)
@@ -917,6 +920,10 @@ class ZephyrContext:
                 # Default to 128 for distributed, but allow override
                 env_val = os.environ.get("ZEPHYR_MAX_WORKERS")
                 self.max_workers = int(env_val) if env_val else 128
+
+        env_timeout = os.environ.get("ZEPHYR_NO_WORKERS_TIMEOUT")
+        if env_timeout is not None:
+            self.no_workers_timeout = float(env_timeout)
 
         if self.chunk_storage_prefix is None:
             temp_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")
@@ -999,6 +1006,7 @@ class ZephyrContext:
         self._coordinator.initialize.remote(
             self.chunk_storage_prefix,
             self._coordinator,
+            self.no_workers_timeout,
         ).result()
 
         logger.info("Coordinator initialized for %s", self.name)

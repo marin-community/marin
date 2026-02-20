@@ -35,6 +35,7 @@ class CliConfig:
     cluster_config: str | None = None
     entry_point: str = "main"
     dry_run: bool = False
+    no_workers_timeout: float = 60.0
 
     ray_options: dict = field(default_factory=dict)
 
@@ -138,6 +139,7 @@ def run_local(
         max_workers=config.max_parallelism,
         resources=resources,
         name="cli",
+        no_workers_timeout=config.no_workers_timeout,
     ):
         main_fn()
 
@@ -188,6 +190,8 @@ def run_ray_cluster(
         entrypoint += ["--num-cpus", str(config.num_cpus)]
     if config.num_gpus:
         entrypoint += ["--num-gpus", str(config.num_gpus)]
+    if config.no_workers_timeout != 60.0:
+        entrypoint += ["--no-workers-timeout", str(config.no_workers_timeout)]
     if entry_point != "main":
         entrypoint += ["--entry-point", entry_point]
 
@@ -256,6 +260,8 @@ def run_iris_cluster(
         entrypoint += ["--num-cpus", str(config.num_cpus)]
     if config.num_gpus:
         entrypoint += ["--num-gpus", str(config.num_gpus)]
+    if config.no_workers_timeout != 60.0:
+        entrypoint += ["--no-workers-timeout", str(config.no_workers_timeout)]
     if entry_point != "main":
         entrypoint += ["--entry-point", entry_point]
 
@@ -306,6 +312,12 @@ Examples:
 @click.option("--num-gpus", type=float, help="Number of GPUs per task")
 @click.option("--entry-point", type=str, default="main", help="Entry point function name (default: 'main')")
 @click.option("--dry-run", is_flag=True, help="Show optimization plan without executing")
+@click.option(
+    "--no-workers-timeout",
+    type=float,
+    default=60.0,
+    help="Seconds to wait for at least one worker before failing (default: 60)",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -318,6 +330,7 @@ def main(
     num_gpus: float | None,
     entry_point: str,
     dry_run: bool,
+    no_workers_timeout: float,
 ) -> None:
     """Execute data processing pipeline script with configurable backend."""
     script_args = ctx.args
@@ -332,6 +345,7 @@ def main(
         cluster=cluster,
         cluster_config=cluster_config,
         entry_point=entry_point,
+        no_workers_timeout=no_workers_timeout,
     )
 
     validate_backend_config(config)
