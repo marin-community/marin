@@ -146,6 +146,8 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --dev-tpu-type v5p-8 \
   --dev-tpu-allocate-attempts 2 \
   --dev-tpu-allocate-retry-sleep 20 \
+  --validation-ray-cluster us-central1 \
+  --validation-ray-cluster us-east5-a \
   --prompt-file scripts/gdn/codex_iteration_prompt.md \
   --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name $USER-gdn --tests both" \
   --post-check "uv run python scripts/gdn/gdnctl.py lint-log"
@@ -157,6 +159,7 @@ Notes:
 - Use `--allow-dirty` or `--allow-no-commit` only when intentionally debugging the loop harness.
 - The default iteration prompt (`scripts/gdn/codex_iteration_prompt.md`) is intentionally aggressive; keep it aligned with this policy.
 - Use `--resilient` for unattended loops to keep running through transient failures (network, connectivity, allocation).
+- Keep `--validation-mode required` (default) so each iteration produces both TPU test and profile evidence.
 - `--directive`, `--directive-file`, and `--directive-preset` inject per-session guidance (for example triangular inversion focus) without editing prompt files.
 - Preset directives are stored as markdown docs under `scripts/gdn/session_directives/` (`triangular-inversion` maps to `scripts/gdn/session_directives/triangular-inversion.md`).
 - Prefer `--dirty-policy stash --no-commit-policy count-failure` for unattended long runs so failed attempts do not permanently block progress.
@@ -165,6 +168,7 @@ Notes:
 - Add `--hold-dev-tpu --dev-tpu-name <name>` to make `codex-loop` allocate/hold/release a dev TPU allocation for the entire loop session.
 - In managed dev TPU mode, use `dev-tpu-test`/`dev-tpu-profile` (not Ray TPU test/profile commands) for loop validation/profiling.
 - Keep managed-mode `--post-check` commands aligned with the held allocation `--cluster` and `--tpu-name`.
+- For fallback robustness, provide Ray cluster candidates via repeatable `--validation-ray-cluster`.
 
 ## Logging Expectations
 After each meaningful iteration, append:

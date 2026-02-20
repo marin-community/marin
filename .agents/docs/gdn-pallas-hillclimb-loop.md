@@ -34,6 +34,8 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --dev-tpu-type v5p-8 \
   --dev-tpu-allocate-attempts 2 \
   --dev-tpu-allocate-retry-sleep 20 \
+  --validation-ray-cluster us-central1 \
+  --validation-ray-cluster us-east5-a \
   --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name $USER-gdn --tests both" \
   --post-check "uv run python scripts/gdn/gdnctl.py lint-log"
 ```
@@ -42,9 +44,11 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
 For each iteration:
 1. Verifies working tree cleanliness (unless `--allow-dirty`).
 2. Runs `codex exec` non-interactively with the iteration prompt.
-3. Requires a new commit (unless `--allow-no-commit`).
-4. Runs all `--post-check` commands.
-5. Proceeds to next iteration or stops on failure.
+3. Enforces TPU validation gate: tests + one profile run (`--validation-mode required` by default).
+4. Validation path prefers held dev TPU, then falls back to Ray TPU and keeps retrying until results are obtained.
+5. Requires a new commit (unless `--allow-no-commit`).
+6. Runs all `--post-check` commands.
+7. Proceeds to next iteration or stops on failure.
 
 Prompt and final-response logs are stored under:
 - `.agents/logs/gdn_codex_loop/`
@@ -65,6 +69,7 @@ Prompt and final-response logs are stored under:
 - `--dirty-policy stash` restores the stashed tree automatically after each iteration.
 - If stash restore conflicts with newly-generated iteration edits, default `--stash-restore-policy warn-keep` keeps the stash and continues; set `--stash-restore-policy fail` to stop instead.
 - `--no-commit-policy count-failure` allows the loop to continue when an iteration intentionally records a failed attempt without a commit.
+- Do not disable `--validation-mode required` for real hill-climb runs; use `--validation-mode off` only for harness debugging.
 - `--hold-dev-tpu --dev-tpu-name <name>` keeps a dev TPU allocation active for the whole loop and releases it automatically on exit.
 - Keep `--post-check` cluster/name aligned with the active held allocation (`--cluster` + `--tpu-name`) so checks run on the right TPU.
 - If TPU queueing is unstable, switch profile runs to `dev-tpu-profile` on an allocated TPU.

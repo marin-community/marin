@@ -56,6 +56,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
 ```
 
 By default, `codex-loop` hides noisy `file update:` / `diff --git` blocks from Codex output. Use `--show-file-updates` to display them.
+By default, `codex-loop` enforces a per-iteration TPU validation gate: tests + one profile run before the iteration can complete.
 
 To allocate and hold a dev TPU for the whole loop session:
 ```bash
@@ -71,10 +72,12 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --dev-tpu-type v5p-8 \
   --dev-tpu-allocate-attempts 2 \
   --dev-tpu-allocate-retry-sleep 20 \
+  --validation-ray-cluster us-central1 \
+  --validation-ray-cluster us-east5-a \
   --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name $USER-gdn --tests both"
 ```
 
-When `--hold-dev-tpu` is enabled, `gdnctl` injects a session directive forcing dev TPU validation/profile commands (`dev-tpu-test` / `dev-tpu-profile`) and warning if `--post-check` includes `ray-test` or `ray-profile`.
+When `--hold-dev-tpu` is enabled, `gdnctl` injects a session directive that prefers dev TPU validation/profile commands (`dev-tpu-test` / `dev-tpu-profile`) and allows Ray fallback when needed.
 Keep `--post-check` cluster/name aligned to the held allocation (`--cluster` + `--tpu-name`) so checks run on the active dev TPU.
 
 Prompt template used by the loop:
@@ -91,3 +94,8 @@ The default prompt is aggressive by design:
 - `--dirty-policy stash` restores the stashed tree automatically at the end of each iteration.
 - If stash restore conflicts with new iteration edits, the default `--stash-restore-policy warn-keep` keeps the stash and continues; use `--stash-restore-policy fail` for strict behavior.
 - `--resilient` is the recommended unattended mode: unlimited failure budget (`--max-failures -1`), retry-enabled codex/post-check paths, and best-effort managed dev TPU hold.
+- Validation gate behavior:
+  - tests + profile are required each iteration by default (`--validation-mode required`).
+  - execution path prefers held dev TPU and falls back to `ray_run` when dev TPU path fails/unavailable.
+  - retries are unbounded by default (`--validation-max-attempts -1`) so TPU queue wait is handled in-loop.
+  - for harness debugging only, disable with `--validation-mode off`.

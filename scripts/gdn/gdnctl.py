@@ -65,6 +65,9 @@ DEV_TPU_READY_MARKERS = (
     "TPU allocation is active. Press Ctrl-C to release...",
     "TPU allocated successfully!",
 )
+GIT_TRANSIENT_ERROR_RE = re.compile(
+    r"(index\.lock|Another git process seems to be running|Unable to create '.+?\.lock')"
+)
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -146,6 +149,50 @@ def _run_streaming(
     if check and return_code != 0:
         raise subprocess.CalledProcessError(return_code, list(cmd))
     return return_code
+
+
+def _run_git(
+    git_args: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    capture_output: bool = True,
+    check: bool = True,
+    retries: int = 3,
+    retry_sleep_seconds: float = 2.0,
+) -> subprocess.CompletedProcess[str]:
+    cmd = ["git", *git_args]
+    for attempt in range(1, retries + 2):
+        proc = _run(
+            cmd,
+            cwd=cwd,
+            capture_output=capture_output,
+            check=False,
+        )
+        if proc.returncode == 0:
+            return proc
+
+        text = (proc.stdout or "") + (proc.stderr or "")
+        transient = GIT_TRANSIENT_ERROR_RE.search(text) is not None
+        if transient and attempt <= retries:
+            print(
+                "[gdnctl] transient git error detected; retrying "
+                f"{attempt}/{retries + 1} after {retry_sleep_seconds:.1f}s",
+                file=sys.stderr,
+            )
+            if retry_sleep_seconds > 0:
+                time.sleep(retry_sleep_seconds)
+            continue
+
+        if check:
+            raise subprocess.CalledProcessError(
+                proc.returncode,
+                cmd,
+                output=proc.stdout,
+                stderr=proc.stderr,
+            )
+        return proc
+
+    raise RuntimeError("[gdnctl] internal error: git retry loop exhausted unexpectedly.")
 
 
 def _build_dev_tpu_allocate_cmd(args: argparse.Namespace, *, cluster: str) -> list[str]:
@@ -347,19 +394,19 @@ def _hold_dev_tpu_for_loop(
 
 
 def _git_head(cwd: Path) -> str:
-    proc = _run(["git", "rev-parse", "HEAD"], cwd=cwd, capture_output=True)
+    proc = _run_git(["rev-parse", "HEAD"], cwd=cwd, capture_output=True, check=True)
     return proc.stdout.strip()
 
 
 def _git_dirty(cwd: Path) -> bool:
-    proc = _run(["git", "status", "--porcelain"], cwd=cwd, capture_output=True)
+    proc = _run_git(["status", "--porcelain"], cwd=cwd, capture_output=True, check=True)
     return bool(proc.stdout.strip())
 
 
 def _stash_dirty_tree(cwd: Path, *, iteration: int) -> tuple[str, str]:
     stash_message = f"gdnctl-codex-loop-iter-{iteration:03d}-{int(time.time())}"
-    proc = _run(
-        ["git", "stash", "push", "-u", "-m", stash_message],
+    proc = _run_git(
+        ["stash", "push", "-u", "-m", stash_message],
         cwd=cwd,
         capture_output=True,
         check=True,
@@ -368,7 +415,7 @@ def _stash_dirty_tree(cwd: Path, *, iteration: int) -> tuple[str, str]:
     print(f"[gdnctl] stashed dirty tree: {stash_message}")
     if output:
         print(f"[gdnctl] {output}")
-    ref_proc = _run(["git", "stash", "list", "--format=%gd", "-n", "1"], cwd=cwd, capture_output=True, check=True)
+    ref_proc = _run_git(["stash", "list", "--format=%gd", "-n", "1"], cwd=cwd, capture_output=True, check=True)
     stash_ref = ref_proc.stdout.strip()
     if not stash_ref:
         raise RuntimeError("[gdnctl] Failed to resolve stash ref after stashing dirty tree.")
@@ -377,7 +424,7 @@ def _stash_dirty_tree(cwd: Path, *, iteration: int) -> tuple[str, str]:
 
 def _restore_stash_tree(cwd: Path, *, stash_ref: str, stash_message: str) -> bool:
     print(f"[gdnctl] restoring stashed dirty tree: {stash_message} ({stash_ref})")
-    proc = _run(["git", "stash", "pop", stash_ref], cwd=cwd, capture_output=True, check=False)
+    proc = _run_git(["stash", "pop", stash_ref], cwd=cwd, capture_output=True, check=False)
     output = (proc.stdout + proc.stderr).strip()
     if output:
         sink = sys.stdout if proc.returncode == 0 else sys.stderr
@@ -486,14 +533,26 @@ def _managed_dev_tpu_session_directive(args: argparse.Namespace) -> str:
     active_cluster = getattr(args, "active_dev_tpu_cluster", args.dev_tpu_cluster)
     return (
         "Managed dev TPU mode is active for this run.\n\n"
-        f"- Use only dev TPU commands for validation/profiling on `--cluster {active_cluster}` "
-        f"and `--tpu-name {args.dev_tpu_name}`.\n"
-        "- Prefer:\n"
+        f"- Prefer dev TPU commands for validation/profiling on `--cluster {active_cluster}` "
+        f"and `--tpu-name {args.dev_tpu_name}`; if dev TPU fails/unavailable, fall back to Ray TPU commands.\n"
+        "- Preferred first:\n"
         f"  - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster {active_cluster} "
         f"--tpu-name {args.dev_tpu_name} --tests both`\n"
         f"  - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster {active_cluster} "
         f"--tpu-name {args.dev_tpu_name} --tpu {args.dev_tpu_type or 'v5p-8'} ...`\n"
-        "- Avoid `ray-test` and `ray-profile` while this managed dev TPU session is active."
+        "- Fallback if dev TPU path fails:\n"
+        "  - `uv run python scripts/gdn/gdnctl.py ray-test --cluster <cluster> --tpu auto --tests both`\n"
+        "  - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster <cluster> --tpu v5p-8 ...`\n"
+        "- Do not finish an iteration without both validation tests and a profile result."
+    )
+
+
+def _validation_gate_session_directive(args: argparse.Namespace) -> str:
+    return (
+        "Do not end an iteration without TPU validation + profiling evidence.\n\n"
+        f"- Required tests target: `{args.validation_tests}`\n"
+        "- Required profile: one completed profile run per iteration.\n"
+        "- If dev TPU path is unavailable/fails, fall back to ray-test/ray-profile and wait for completion."
     )
 
 
@@ -502,13 +561,6 @@ def _warn_if_hold_dev_tpu_with_ray_post_checks(args: argparse.Namespace) -> None
         return
     active_cluster = getattr(args, "active_dev_tpu_cluster", args.dev_tpu_cluster)
     for command in args.post_check:
-        if "ray-test" in command or "ray-profile" in command:
-            print(
-                "[gdnctl] WARNING: --hold-dev-tpu is active but --post-check contains a Ray TPU command. "
-                "Prefer dev-tpu-test/dev-tpu-profile for this loop session.",
-                file=sys.stderr,
-            )
-            continue
         if "dev-tpu-test" in command or "dev-tpu-profile" in command:
             if f"--cluster {active_cluster}" not in command or f"--tpu-name {args.dev_tpu_name}" not in command:
                 print(
@@ -940,6 +992,256 @@ def _run_post_checks_with_retries(
     return True, 0
 
 
+def _dedupe_clusters(clusters: Sequence[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for cluster in clusters:
+        if not cluster:
+            continue
+        if cluster in seen:
+            continue
+        seen.add(cluster)
+        deduped.append(cluster)
+    return deduped
+
+
+def _validation_bad_ray_clusters(args: argparse.Namespace) -> set[str]:
+    bad = getattr(args, "_validation_bad_ray_clusters", None)
+    if bad is None:
+        bad = set()
+        args._validation_bad_ray_clusters = bad
+    return bad
+
+
+def _validation_ray_clusters(args: argparse.Namespace) -> list[str]:
+    if args.validation_ray_cluster:
+        clusters = _dedupe_clusters(args.validation_ray_cluster)
+    else:
+        active_cluster = getattr(args, "active_dev_tpu_cluster", None)
+        candidates = [active_cluster, args.dev_tpu_cluster, *args.dev_tpu_fallback_cluster]
+        clusters = _dedupe_clusters(candidates)
+
+    bad_clusters = _validation_bad_ray_clusters(args)
+    return [cluster for cluster in clusters if cluster not in bad_clusters]
+
+
+def _run_validation_ray_test_once(args: argparse.Namespace, *, cluster: str) -> tuple[int, bool]:
+    remote_cmd = _build_remote_test_command(args.validation_tests, args.validation_pytest_args)
+    cmd = [
+        *RAY_RUN,
+        "--cluster",
+        cluster,
+        "--tpu",
+        args.validation_ray_tpu,
+        "-e",
+        "EQX_ON_ERROR=nan",
+        "-e",
+        "WANDB_MODE=offline",
+        "--",
+        "bash",
+        "-lc",
+        remote_cmd,
+    ]
+    proc = _run(cmd, capture_output=True, check=False)
+    if proc.stdout:
+        sys.stdout.write(proc.stdout)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0 and "No cluster config found for region" in combined:
+        _validation_bad_ray_clusters(args).add(cluster)
+        print(
+            "[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: "
+            f"{cluster}",
+            file=sys.stderr,
+        )
+        return proc.returncode, False
+    return proc.returncode, True
+
+
+def _run_validation_tests_once(args: argparse.Namespace) -> tuple[int, bool]:
+    active_cluster = getattr(args, "active_dev_tpu_cluster", None)
+    if args.dev_tpu_name and active_cluster is not None:
+        dev_test_args = argparse.Namespace(
+            cluster=active_cluster,
+            tpu_name=args.dev_tpu_name,
+            tests=args.validation_tests,
+            pytest_args=args.validation_pytest_args,
+            no_sync=args.validation_dev_no_sync,
+        )
+        rc = cmd_dev_tpu_test(dev_test_args)
+        if rc == 0:
+            return 0, True
+        print(
+            "[gdnctl] validation tests failed on held dev TPU; trying Ray fallback.",
+            file=sys.stderr,
+        )
+
+    clusters = _validation_ray_clusters(args)
+    if not clusters:
+        print(
+            "[gdnctl] no valid Ray clusters remain for validation tests.",
+            file=sys.stderr,
+        )
+        return 1, False
+
+    last_rc = 1
+    retryable = False
+    for cluster in clusters:
+        rc, cluster_retryable = _run_validation_ray_test_once(args, cluster=cluster)
+        if rc == 0:
+            return 0, True
+        last_rc = rc
+        retryable = retryable or cluster_retryable
+    return last_rc, retryable
+
+
+def _run_validation_ray_profile_once(args: argparse.Namespace, *, cluster: str, run_name_prefix: str) -> tuple[int, bool]:
+    cmd = [
+        *RAY_RUN,
+        "--cluster",
+        cluster,
+        "--tpu",
+        args.validation_profile_tpu,
+    ]
+    profile_env_args = argparse.Namespace(
+        wandb_mode=args.validation_profile_wandb_mode,
+        size=args.validation_profile_size,
+        num_steps=args.validation_profile_num_steps,
+        profile_start_step=args.validation_profile_start_step,
+        profile_num_steps=args.validation_profile_num_steps_window,
+        run_name_prefix=run_name_prefix,
+        tpu=args.validation_profile_tpu,
+        batch_size=args.validation_profile_batch_size,
+        chunk_size=args.validation_profile_chunk_size,
+        segment_size=args.validation_profile_segment_size,
+    )
+    _append_profile_env(cmd, profile_env_args)
+
+    profile_args = ["--force_run_failed", "true"]
+    if args.validation_profile_dry_run:
+        profile_args += ["--dry_run", "true"]
+    profile_cmd_lines = _profile_command_lines(include_tpu_sync=False, profile_args=profile_args)
+    profile_cmd = " && ".join(profile_cmd_lines)
+    cmd += ["--", "bash", "-lc", profile_cmd]
+
+    proc = _run(cmd, capture_output=True, check=False)
+    if proc.stdout:
+        sys.stdout.write(proc.stdout)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0 and "No cluster config found for region" in combined:
+        _validation_bad_ray_clusters(args).add(cluster)
+        print(
+            "[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: "
+            f"{cluster}",
+            file=sys.stderr,
+        )
+        return proc.returncode, False
+    return proc.returncode, True
+
+
+def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) -> tuple[int, bool]:
+    profile_prefix = f"{args.validation_profile_run_name_prefix}_iter{iteration:03d}"
+    active_cluster = getattr(args, "active_dev_tpu_cluster", None)
+    if args.dev_tpu_name and active_cluster is not None:
+        dev_profile_args = argparse.Namespace(
+            cluster=active_cluster,
+            tpu_name=args.dev_tpu_name,
+            tpu=args.validation_profile_tpu,
+            size=args.validation_profile_size,
+            num_steps=args.validation_profile_num_steps,
+            profile_start_step=args.validation_profile_start_step,
+            profile_num_steps=args.validation_profile_num_steps_window,
+            batch_size=args.validation_profile_batch_size,
+            chunk_size=args.validation_profile_chunk_size,
+            segment_size=args.validation_profile_segment_size,
+            run_name_prefix=profile_prefix,
+            wandb_mode=args.validation_profile_wandb_mode,
+            marin_prefix=args.validation_profile_marin_prefix,
+            dry_run=args.validation_profile_dry_run,
+            no_sync=args.validation_dev_no_sync,
+        )
+        rc = cmd_dev_tpu_profile(dev_profile_args)
+        if rc == 0:
+            return 0, True
+        print(
+            "[gdnctl] validation profile failed on held dev TPU; trying Ray fallback.",
+            file=sys.stderr,
+        )
+
+    clusters = _validation_ray_clusters(args)
+    if not clusters:
+        print(
+            "[gdnctl] no valid Ray clusters remain for validation profile.",
+            file=sys.stderr,
+        )
+        return 1, False
+
+    last_rc = 1
+    retryable = False
+    for cluster in clusters:
+        rc, cluster_retryable = _run_validation_ray_profile_once(
+            args,
+            cluster=cluster,
+            run_name_prefix=profile_prefix,
+        )
+        if rc == 0:
+            return 0, True
+        last_rc = rc
+        retryable = retryable or cluster_retryable
+    return last_rc, retryable
+
+
+def _run_validation_gate_for_iteration(args: argparse.Namespace, *, iteration: int) -> tuple[bool, int]:
+    if args.validation_mode != "required":
+        return True, 0
+
+    def should_continue(attempt: int) -> bool:
+        if args.validation_max_attempts < 0:
+            return True
+        return attempt < args.validation_max_attempts
+
+    attempt = 1
+    while True:
+        print(f"[gdnctl] validation tests attempt {attempt}")
+        rc, retryable = _run_validation_tests_once(args)
+        if rc == 0:
+            break
+        if not retryable:
+            return False, rc
+        if not should_continue(attempt):
+            return False, rc
+        if args.validation_retry_sleep > 0:
+            print(
+                "[gdnctl] validation tests failed; waiting "
+                f"{args.validation_retry_sleep:.1f}s before retry.",
+                file=sys.stderr,
+            )
+            time.sleep(args.validation_retry_sleep)
+        attempt += 1
+
+    attempt = 1
+    while True:
+        print(f"[gdnctl] validation profile attempt {attempt}")
+        rc, retryable = _run_validation_profile_once(args, iteration=iteration)
+        if rc == 0:
+            return True, 0
+        if not retryable:
+            return False, rc
+        if not should_continue(attempt):
+            return False, rc
+        if args.validation_retry_sleep > 0:
+            print(
+                "[gdnctl] validation profile failed; waiting "
+                f"{args.validation_retry_sleep:.1f}s before retry.",
+                file=sys.stderr,
+            )
+            time.sleep(args.validation_retry_sleep)
+        attempt += 1
+
+
 def _failure_limit_exceeded(*, failures: int, max_failures: int) -> bool:
     if max_failures < 0:
         return False
@@ -964,6 +1266,11 @@ def _apply_resilient_defaults(args: argparse.Namespace) -> None:
     args.stash_restore_policy = "warn-keep"
     args.codex_retries = max(args.codex_retries, 2)
     args.post_check_retries = max(args.post_check_retries, 2)
+    args.validation_mode = "required"
+    if args.validation_policy == "fail":
+        args.validation_policy = "count-failure"
+    if args.validation_max_attempts >= 0:
+        args.validation_max_attempts = -1
 
 
 def cmd_lint_log(args: argparse.Namespace) -> int:
@@ -1040,6 +1347,12 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     if args.retry_sleep_seconds < 0:
         raise SystemExit("[gdnctl] --retry-sleep-seconds must be >= 0.")
 
+    if args.validation_max_attempts < -1 or args.validation_max_attempts == 0:
+        raise SystemExit("[gdnctl] --validation-max-attempts must be -1 (unlimited) or >= 1.")
+
+    if args.validation_retry_sleep < 0:
+        raise SystemExit("[gdnctl] --validation-retry-sleep must be >= 0.")
+
     if args.resilient:
         print(
             "[gdnctl] resilient mode active: unlimited failures, stash dirty handling, "
@@ -1073,6 +1386,8 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                 "[gdnctl] managed dev TPU hold is not active for this run; continuing without hold-specific directives.",
                 file=sys.stderr,
             )
+        if args.validation_mode == "required":
+            session_directives.append(_validation_gate_session_directive(args))
         if session_directives:
             print(f"[gdnctl] session directives: {len(session_directives)} loaded")
 
@@ -1143,19 +1458,25 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                         continue
 
                     head_after = _git_head(workdir)
-                    if args.require_new_commit and head_after == head_before:
+                    missing_commit = args.require_new_commit and head_after == head_before
+
+                    validation_ok, validation_rc = _run_validation_gate_for_iteration(args, iteration=iteration)
+                    if not validation_ok:
                         message = (
-                            "[gdnctl] Iteration did not produce a new commit. "
-                            "Use --allow-no-commit or set --no-commit-policy count-failure/continue."
+                            "[gdnctl] Iteration failed required TPU validation/profile gate. "
+                            "Use --validation-policy count-failure/continue to keep looping."
                         )
-                        if args.no_commit_policy == "fail":
+                        if args.validation_policy == "fail":
                             print(message, file=sys.stderr)
-                            return 3
-                        print(f"{message} Continuing due to policy={args.no_commit_policy}.", file=sys.stderr)
-                        if args.no_commit_policy == "count-failure":
+                            return validation_rc or 1
+                        print(
+                            f"{message} Continuing due to policy={args.validation_policy}.",
+                            file=sys.stderr,
+                        )
+                        if args.validation_policy == "count-failure":
                             failures += 1
                             if _failure_limit_exceeded(failures=failures, max_failures=args.max_failures):
-                                return 3
+                                return validation_rc or 1
                         continue
 
                     if args.post_check:
@@ -1182,6 +1503,21 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                                 if _failure_limit_exceeded(failures=failures, max_failures=args.max_failures):
                                     return post_rc or 1
                             continue
+
+                    if missing_commit:
+                        message = (
+                            "[gdnctl] Iteration did not produce a new commit. "
+                            "Use --allow-no-commit or set --no-commit-policy count-failure/continue."
+                        )
+                        if args.no_commit_policy == "fail":
+                            print(message, file=sys.stderr)
+                            return 3
+                        print(f"{message} Continuing due to policy={args.no_commit_policy}.", file=sys.stderr)
+                        if args.no_commit_policy == "count-failure":
+                            failures += 1
+                            if _failure_limit_exceeded(failures=failures, max_failures=args.max_failures):
+                                return 3
+                        continue
 
                     if iteration < args.iterations and args.sleep_seconds > 0:
                         time.sleep(args.sleep_seconds)
@@ -1362,6 +1698,125 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Shell command run after each successful iteration (repeatable)",
+    )
+    codex_loop.add_argument(
+        "--validation-mode",
+        choices=["required", "off"],
+        default="required",
+        help="Whether each successful codex iteration must complete TPU test+profile validation.",
+    )
+    codex_loop.add_argument(
+        "--validation-policy",
+        choices=["fail", "count-failure", "continue"],
+        default="fail",
+        help="Behavior when required TPU validation/profile gate fails.",
+    )
+    codex_loop.add_argument(
+        "--validation-max-attempts",
+        type=int,
+        default=-1,
+        help="Retry cap for validation tests/profile attempts (-1 = unlimited, default).",
+    )
+    codex_loop.add_argument(
+        "--validation-retry-sleep",
+        type=float,
+        default=120.0,
+        help="Seconds to wait between validation retries.",
+    )
+    codex_loop.add_argument(
+        "--validation-tests",
+        choices=["kernels", "layer", "both"],
+        default="both",
+        help="Test suite used by the per-iteration validation gate.",
+    )
+    codex_loop.add_argument(
+        "--validation-pytest-args",
+        default=None,
+        help="Extra pytest args for validation tests.",
+    )
+    codex_loop.add_argument(
+        "--validation-ray-cluster",
+        action="append",
+        default=[],
+        help="Ray cluster candidate for validation fallback (repeatable). Defaults to dev cluster candidates.",
+    )
+    codex_loop.add_argument(
+        "--validation-ray-tpu",
+        default="auto",
+        help="TPU type used when running validation tests through ray_run.",
+    )
+    codex_loop.add_argument(
+        "--validation-dev-no-sync",
+        action="store_true",
+        help="Skip rsync when running validation on held dev TPU.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-tpu",
+        default="v5p-8",
+        help="TPU variant for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-size",
+        choices=["130m", "300m", "520m", "1_2b"],
+        default="130m",
+        help="Model size used by validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-num-steps",
+        type=int,
+        default=20,
+        help="Number of steps for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-start-step",
+        type=int,
+        default=2,
+        help="Profile start step for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-num-steps-window",
+        type=int,
+        default=6,
+        help="Number of profiled steps for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-batch-size",
+        type=int,
+        default=8,
+        help="Batch size for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-chunk-size",
+        type=int,
+        default=None,
+        help="Optional GDN chunk override for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-segment-size",
+        type=int,
+        default=None,
+        help="Optional GDN segment override for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-run-name-prefix",
+        default="gdn_loopgate",
+        help="Run name prefix for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-wandb-mode",
+        default="online",
+        choices=["online", "offline", "disabled"],
+        help="W&B mode for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-marin-prefix",
+        default=None,
+        help="Optional MARIN_PREFIX override for dev TPU validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-dry-run",
+        action="store_true",
+        help="Use executor dry-run for validation profile runs.",
     )
     codex_loop.add_argument(
         "--post-check-policy",
