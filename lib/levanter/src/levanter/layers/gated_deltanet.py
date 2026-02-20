@@ -1100,13 +1100,20 @@ def _solve_I_minus_strict_lower_blockwise(
     if rhs.shape[0] != n:
         raise ValueError(f"rhs leading dim must match A_strict, got rhs={rhs.shape} A={A_strict.shape}")
 
-    A_strict = A_strict.astype(jnp.float32)
-    rhs = rhs.astype(jnp.float32)
+    if precision_mode == "bf16":
+        solve_dtype = jnp.bfloat16
+    elif precision_mode == "fp32":
+        solve_dtype = jnp.float32
+    else:
+        raise ValueError(f"precision_mode must be 'fp32' or 'bf16', got {precision_mode!r}")
+
+    A_strict = A_strict.astype(solve_dtype, copy=False)
+    rhs = rhs.astype(solve_dtype, copy=False)
 
     # Hard-enforce strict-lower structure so nilpotency assumptions always hold.
     idx = jnp.arange(n)
     strict_mask = idx[:, None] > idx[None, :]
-    A_strict = jnp.where(strict_mask, A_strict, 0.0)
+    A_strict = jnp.where(strict_mask, A_strict, jnp.asarray(0, dtype=solve_dtype))
 
     if n <= base_block:
         # After k rounds, this applies powers up to A^(2^k - 1). We need >= n - 1.
@@ -1160,12 +1167,19 @@ def _solve_I_minus_strict_lower_transpose_blockwise(
     if rhs.shape[0] != n:
         raise ValueError(f"rhs leading dim must match A_strict, got rhs={rhs.shape} A={A_strict.shape}")
 
-    A_strict = A_strict.astype(jnp.float32)
-    rhs = rhs.astype(jnp.float32)
+    if precision_mode == "bf16":
+        solve_dtype = jnp.bfloat16
+    elif precision_mode == "fp32":
+        solve_dtype = jnp.float32
+    else:
+        raise ValueError(f"precision_mode must be 'fp32' or 'bf16', got {precision_mode!r}")
+
+    A_strict = A_strict.astype(solve_dtype, copy=False)
+    rhs = rhs.astype(solve_dtype, copy=False)
 
     idx = jnp.arange(n)
     strict_mask = idx[:, None] > idx[None, :]
-    A_strict = jnp.where(strict_mask, A_strict, 0.0)
+    A_strict = jnp.where(strict_mask, A_strict, jnp.asarray(0, dtype=solve_dtype))
 
     if n <= base_block:
         x = rhs
@@ -1244,9 +1258,11 @@ def _gdn_chunk_segment_prepare_kernel_tpu(
     Ct: int,
     K_pad: int,
     V_pad: int,
-    precision_mode: Literal["fp32", "bf16"] = "fp32",
+    precision_mode: Literal["fp32", "bf16"] = "bf16",
 ):
     """Compute chunk-local solve outputs used by the recurrent kernel."""
+
+    matmul_dtype = jnp.bfloat16 if precision_mode == "bf16" else jnp.float32
 
     idx = jnp.arange(Ct, dtype=jnp.int32)
     ii = idx[:, None]
@@ -1256,19 +1272,19 @@ def _gdn_chunk_segment_prepare_kernel_tpu(
     for c in range(int(Seg)):
         k = (
             k_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, K_pad)
         )
         v = (
             v_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, V_pad)]
-            .astype(jnp.float32)
+            .astype(matmul_dtype)
             .reshape(Ct, V_pad)
         )
         g_cum = gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
         beta = b_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
 
-        v_beta = v * beta[:, None]  # (Ct, V)
-        k_beta = k * beta[:, None]  # (Ct, K)
+        v_beta = v.astype(jnp.float32) * beta[:, None]  # (Ct, V)
+        k_beta = k.astype(jnp.float32) * beta[:, None]  # (Ct, K)
 
         g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_g = jnp.exp(g_cum_cl)  # (Ct,)
@@ -1306,12 +1322,14 @@ def _gdn_chunk_segment_prepare_pallas(
     K_pad: int,
     V_pad: int,
 ):
+    precision_mode: Literal["fp32", "bf16"] = "bf16" if Ct >= _MXU_TILE else "fp32"
     kernel = functools.partial(
         _gdn_chunk_segment_prepare_kernel_tpu,
         Seg=int(Seg),
         Ct=int(Ct),
         K_pad=int(K_pad),
         V_pad=int(V_pad),
+        precision_mode=precision_mode,
     )
 
     def _local_call(k_bhscK, v_bhscV, g_cum_bhsc, b_bhsc):
@@ -2290,6 +2308,12 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
     B, H, L, dk = q_arr.shape
     dv = v_arr.shape[-1]
     C = int(chunk_size)
+    Ct = _round_up_to(C, _GDN_TPU_MULT)
+    pallas_io_dtype = jnp.bfloat16 if Ct >= _MXU_TILE else jnp.float32
+
+    q_arr = q_arr.astype(pallas_io_dtype, copy=False)
+    k_arr = k_arr.astype(pallas_io_dtype, copy=False)
+    v_arr = v_arr.astype(pallas_io_dtype, copy=False)
 
     # token pad to multiple of C
     pad_tok = (C - (L % C)) % C
@@ -2334,7 +2358,6 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
     v_c = _pad_axis_right(v_c, axis=-1, new_size=V_pad)
 
     # pad chunk-tile length Ct for TPU blocked indexing
-    Ct = _round_up_to(C, _GDN_TPU_MULT)
     if Ct != C:
         q_c = jnp.pad(q_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C), (0, 0)))
         k_c = jnp.pad(k_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C), (0, 0)))
@@ -2559,6 +2582,7 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
     Ct = _round_up_to(C, _GDN_TPU_MULT)
     K_pad = _round_up_to(dk, _GDN_TPU_MULT)
     V_pad = _round_up_to(dv, _GDN_TPU_MULT)
+    pallas_io_dtype = jnp.bfloat16 if Ct >= _MXU_TILE else jnp.float32
 
     pad_tok = (C - (L % C)) % C
     Lt = L + pad_tok
@@ -2574,9 +2598,9 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
 
     # materialize cotangents
     if isinstance(d_out, ad.Zero):
-        d_out = jnp.zeros((B, H, L, dv), dtype=jnp.float32)
+        d_out = jnp.zeros((B, H, L, dv), dtype=pallas_io_dtype)
     else:
-        d_out = d_out.astype(jnp.float32)
+        d_out = d_out.astype(pallas_io_dtype)
 
     if isinstance(dS_final, ad.Zero) or dS_final is None:
         dS_final = jnp.zeros((B, H, dk, dv), dtype=jnp.float32)
@@ -2584,9 +2608,9 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
         dS_final = dS_final.astype(jnp.float32)
 
     # pad primals/cotangents to match forward chunking
-    q_pad = jnp.pad(q_arr.astype(jnp.float32), ((0, 0), (0, 0), (0, Lpad - L), (0, K_pad - dk)))
-    k_pad = jnp.pad(k_arr.astype(jnp.float32), ((0, 0), (0, 0), (0, Lpad - L), (0, K_pad - dk)))
-    v_pad = jnp.pad(v_arr.astype(jnp.float32), ((0, 0), (0, 0), (0, Lpad - L), (0, V_pad - dv)))
+    q_pad = jnp.pad(q_arr.astype(pallas_io_dtype), ((0, 0), (0, 0), (0, Lpad - L), (0, K_pad - dk)))
+    k_pad = jnp.pad(k_arr.astype(pallas_io_dtype), ((0, 0), (0, 0), (0, Lpad - L), (0, K_pad - dk)))
+    v_pad = jnp.pad(v_arr.astype(pallas_io_dtype), ((0, 0), (0, 0), (0, Lpad - L), (0, V_pad - dv)))
     g_pad = jnp.pad(g_arr.astype(jnp.float32), ((0, 0), (0, 0), (0, Lpad - L)))
     b_pad = jnp.pad(b_arr.astype(jnp.float32), ((0, 0), (0, 0), (0, Lpad - L)))
     dO_pad = jnp.pad(d_out, ((0, 0), (0, 0), (0, Lpad - L), (0, V_pad - dv)))
@@ -2606,8 +2630,8 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
             tail_state = chunk_starts[:, :, -1:, :, :]
             pad_states = jnp.repeat(tail_state, n_chunks_pad - Nc, axis=2)
             chunk_starts = jnp.concatenate([chunk_starts, pad_states], axis=2)
-    v_pseudo_chunks = v_pseudo_chunks.astype(jnp.float32)
-    k_cumdecay_chunks = k_cumdecay_chunks.astype(jnp.float32)
+    v_pseudo_chunks = v_pseudo_chunks.astype(pallas_io_dtype)
+    k_cumdecay_chunks = k_cumdecay_chunks.astype(pallas_io_dtype)
     if n_chunks_pad != Nc:
         v_pseudo_chunks = jnp.pad(v_pseudo_chunks, ((0, 0), (0, 0), (0, n_chunks_pad - Nc), (0, 0), (0, 0)))
         k_cumdecay_chunks = jnp.pad(k_cumdecay_chunks, ((0, 0), (0, 0), (0, n_chunks_pad - Nc), (0, 0), (0, 0)))
@@ -3011,6 +3035,11 @@ def chunk_gated_delta_rule(
         g_arr = g_arr * valid
 
     if use_flash:
+        Ct = _round_up_to(int(chunk_size), _GDN_TPU_MULT)
+        pallas_io_dtype = jnp.bfloat16 if Ct >= _MXU_TILE else jnp.float32
+        q_arr = q_arr.astype(pallas_io_dtype, copy=False)
+        k_arr = k_arr.astype(pallas_io_dtype, copy=False)
+        v_arr = v_arr.astype(pallas_io_dtype, copy=False)
         out_arr, S_final = _chunk_gated_delta_rule_flash_pallas(
             q_arr, k_arr, v_arr, g_arr, b_arr, chunk_size, segment_size, initial_state
         )

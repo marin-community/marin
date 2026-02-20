@@ -626,7 +626,7 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 ### Iteration 16 - Macro Move C / FLA Experiment A extension: BF16 recurrent kernels with transpose-fused dot_general
 
 - Date: 2026-02-20T14:20:00Z
-- Commit: TO_FILL
+- Commit: 29cb35d8724bd817607899ca5ed6576e06ce4892
 - Loop session/local index: `4/20`
 - Starting commit: `8e6459b4af2f6883c18729804c454037ddefe979`
 - Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_loopgate_iter004_130m_ch128_seg16_20steps-60161d/plugins/profile/2026_02_20_03_34_47/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
@@ -684,3 +684,60 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 
 - Assessment: **meaningful win**. The dominant hotspot category remained `custom-call` but got materially faster at the same backward/forward recurrent callsites, yielding a >5% end-to-end MFU improvement.
 - Next bold hypothesis: combine this mixed-precision recurrent path with a launch-structure change (Macro Move D or F) to reduce remaining recurrent custom-call count and target another double-digit reduction in `custom-call` wall time.
+
+### Iteration 17 - Macro Move C / FLA Experiment A extension: BF16 flash I/O policy through custom-VJP boundaries
+
+- Date: 2026-02-20T23:18:45Z
+- Commit: 29cb35d8724bd817607899ca5ed6576e06ce4892
+- Loop session/local index: `4/20`
+- Starting commit: `29cb35d8724bd817607899ca5ed6576e06ce4892`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_bf16acc_i4_ray_130m_ch128_seg16_20steps-3aba53/plugins/profile/2026_02_20_14_17_21/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `custom-call`: `149.616 ms` (dominant category).
+  - Top GDN callsites:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `68.292 ms`
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `67.830 ms`
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move C + Experiment A extension**: make flash path BF16-native across custom-VJP boundaries (`q/k/v`, backward tape tensors, and prepare kernel operand policy) while keeping FP32 accumulation (`+10-18%`, medium compile/numerical risk).
+  2. **Macro Move D**: re-attempt full-sequence backward `emit_pipeline` to cut sequential overhead (`+15-30%`, high compile/layout risk).
+  3. **Macro Move F / Experiment B**: V-tiled recurrent decomposition for backward dominant path (`+20-35%`, very high complexity/reduction risk).
+- Selected macro-move category: **C) Switch kernel math to BF16 inputs + FP32 accumulation**.
+- Selected decomposition experiment (directive alignment): **FLA Experiment A extension** (optimize the existing solve/recurrent split).
+- Selected hypothesis: eliminate FP32 I/O cliffs around the flash Pallas path by carrying BF16 operands through forward/backward wrappers, while preserving FP32-accumulated MXU dots and FP32 gate/exp-sensitive scalar math.
+- Change summary:
+  - Added chunk-size-gated BF16 flash I/O policy (`Ct >= 128`) in `chunk_gated_delta_rule` and `_chunk_gated_delta_rule_flash_pallas_impl` so flash `q/k/v` enter Pallas in BF16.
+  - Extended backward wrapper (`_chunk_gated_delta_rule_flash_pallas_bwd`) to keep `q/k/v`, `d_out`, and forward prep tape tensors (`v_pseudo_chunks`, `k_cumdecay_chunks`) in BF16 on the hot TPU path.
+  - Made blockwise solve helpers honor `precision_mode` input dtype (`bf16` or `fp32`) instead of forcing FP32 at function entry.
+  - Enabled prepare-kernel precision policy by chunk tile size (`bf16` for large tiles), with BF16 loads for `k/v` and FP32 accumulation in dot paths.
+  - First profile attempt failed to compile due BF16 minor-dim insertion at `v * beta_m[:, None]`; fixed by keeping those broadcasted gate multiplications in FP32 in the prepare kernel.
+- Correctness checks:
+  - Dev TPU command attempted: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - Dev TPU result: unavailable (`SSH configuration for dev-tpu-calvinxu-gdn not found`).
+  - Ray fallback (final pass): `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+  - Ray job: `ray-run-calvinxu-levanter-20260220-230434`
+  - Result: `49 passed, 40 skipped`.
+- Profile run:
+  - Initial submit (failed compile): `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bf16io_i4_ray --no-wait`
+  - Failed Ray profile job: `ray-run-calvinxu-bash-20260220-225451`
+  - Compile error observed: `MosaicError: ... Insertion of minor dim that is not a no-op only supported for 32-bit types` at `gated_deltanet.py:1287` (`v_beta = v * beta_m[:, None]`).
+  - Final submit (after compile fix): `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bf16iofix_i4_ray --no-wait`
+  - Successful Ray profile job: `ray-run-calvinxu-bash-20260220-230813`
+  - Wait command: `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-bash-20260220-230813 --show-logs --tail 400`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_bf16iofix_i4_ray_130m_ch128_seg16_20steps-546ab9`
+  - W&B profiler artifact: `run-gdn_bf16iofix_i4_ray_130m_ch128_seg16_20steps-546ab9-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_bf16iofix_i4_ray_130m_ch128_seg16_20steps-546ab9/plugins/profile/2026_02_20_15_14_27/perfetto_trace.json.gz`
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_bf16acc_i4_ray_130m_ch128_seg16_20steps-3aba53/plugins/profile/2026_02_20_14_17_21/perfetto_trace.json.gz`):
+  - `custom-call`: `149.616 ms -> 131.057 ms` (`-12.40%`), still dominant.
+  - Dominant backward GDN callsite remained unchanged:
+    - `transpose(jvp(...))/closed_call/shard_map/pallas_call:` `68.292 ms -> 68.341 ms` (`+0.07%`).
+  - Dominant forward GDN callsite improved significantly:
+    - `jvp(...)/closed_call/shard_map/pallas_call:` `67.830 ms -> 49.357 ms` (`-27.23%`).
+  - Secondary recurrent shard-map path stayed near-flat:
+    - `jvp(...)/HackableDecoderLayer/shard_map/pallas_call:` `10.430 ms -> 10.304 ms` (`-1.21%`).
+  - `all-gather`: `32.663 ms -> 20.092 ms` (`-38.49%`).
+- MFU/throughput delta (vs baseline run `gdn_bf16acc_i4_ray_130m_ch128_seg16_20steps-3aba53`):
+  - `throughput/mfu`: `4.6080 -> 4.9270` (`+6.92%`).
+  - `throughput/tokens_per_second`: `149069.19 -> 159388.47` (`+6.92%`).
+  - `throughput/duration`: `0.21982s -> 0.20559s` (`-6.47%`).
+- Assessment: **meaningful win**. The same dominant hotspot category (`custom-call`) got faster, with most gain coming from the forward closed-call shard-map path and lower collective cost; this clears the performance-governance promotion threshold by a wide margin.
+- Why this did not unlock a larger speedup: the top backward closed-call shard-map pallas hotspot stayed flat (~68 ms), so remaining speedup headroom is concentrated in backward recurrent math/launch structure.
+- Next bold hypothesis: keep this BF16 I/O policy and target the unchanged backward dominant hotspot with a structural decomposition move (Macro Move F Experiment B or Macro Move D backward recurrent pipeline) rather than additional dtype-only tweaks.
