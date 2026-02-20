@@ -19,7 +19,6 @@ from collections.abc import Iterator, Sequence
 
 import draccus
 import fsspec
-import humanfriendly
 import transformers
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
@@ -86,9 +85,6 @@ class TokenizeConfig(TokenizeConfigBase):
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
     'test' or 'validation' in the file names, but are not actually test or validation sets.
     """
-    # TODO (rav): remove this once there's better way to capture this in datakit
-    zephyr_num_cpus: int = 2
-    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -145,10 +141,6 @@ class HfTokenizeConfig(TokenizeConfigBase):
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
-
-    # TODO (rav): remove this once there's better way to capture this in datakit
-    zephyr_num_cpus: int = 2
-    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -403,8 +395,9 @@ def tokenize(config: TokenizeConfigBase):
             f"Wrote stats to {stats_path}"
         )
 
+    # TODO: expose ram/disk as a flag on TokenizeConfig and align with batch size
     with ZephyrContext(
-        resources=ResourceConfig(ram="16g", disk="16g"),
+        resources=ResourceConfig(ram="2g", disk="16g"),
         max_workers=min(128, len(train_paths) + len(validation_paths)),
         name="tokenize",
     ) as ctx:
