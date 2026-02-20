@@ -470,7 +470,7 @@ class FakeKubectl:
 @pytest.fixture
 def fake_kubectl() -> FakeKubectl:
     fake = FakeKubectl()
-    with patch("iris.cluster.platform.kubectl.subprocess.run", fake):
+    with patch("iris.cluster.k8s.kubectl.subprocess.run", fake):
         yield fake
 
 
@@ -718,7 +718,7 @@ def test_run_command_on_line_streams_output(fake_kubectl: FakeKubectl):
 
     fake_output = "line1\nline2\nline3\n"
 
-    with patch("iris.cluster.platform.kubectl.subprocess.Popen") as mock_popen:
+    with patch("iris.cluster.k8s.kubectl.subprocess.Popen") as mock_popen:
         mock_proc = mock_popen.return_value
         mock_proc.stdout = io.StringIO(fake_output)
         mock_proc.stderr = io.StringIO("")

@@ -991,7 +991,7 @@ class SmokeTestRunner:
             entrypoint=Entrypoint.from_callable(_hello_gpu_job),
             job_name=f"smoke-region-gpu-{self._run_id}",
             resources=ResourceSpec(device=self._accel.make_device()),
-            constraints=[region_constraint(self._accel.region)],
+            constraints=[region_constraint([self._accel.region])],
         )
 
     # ----- TPU test suite -----
@@ -1164,7 +1164,7 @@ class SmokeTestRunner:
             entrypoint=Entrypoint.from_callable(_hello_tpu_job),
             job_name=f"smoke-region-{self._run_id}",
             resources=ResourceSpec(device=self._accel.make_device()),
-            constraints=[region_constraint(self._accel.region)],
+            constraints=[region_constraint([self._accel.region])],
         )
 
     def _run_nested_constraint_job(self, client: IrisClient) -> TestResult:
@@ -1179,7 +1179,7 @@ class SmokeTestRunner:
             entrypoint=Entrypoint.from_callable(_assert_region_child, a.region, a.device_type, a.variant, a.count),
             job_name=f"smoke-nested-{self._run_id}",
             resources=ResourceSpec(device=a.make_device()),
-            constraints=[region_constraint(a.region)],
+            constraints=[region_constraint([a.region])],
         )
 
     # ----- Diagnostics and cleanup -----
