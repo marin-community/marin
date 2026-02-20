@@ -18,7 +18,6 @@ from fray.v2 import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, TextLmDatasetFormat
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_dpo import TrainDpoConfig
@@ -56,6 +55,7 @@ from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
+    get_vocab_size_for_tokenizer,
     lm_data_config,
     tokenize,
 )
@@ -644,17 +644,9 @@ def default_dpo(
         config=config,
         override_output_path=override_output_path,
     )
-
-
-@lru_cache
-def _cached_load_tokenizer(tokenizer_name: str):
-    return load_tokenizer(tokenizer_name)
-
-
 def _get_vocab_size(pretraining_data):
     tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
-    vocab_size = _cached_load_tokenizer(tokenizer).vocab_size
-    return vocab_size
+    return get_vocab_size_for_tokenizer(tokenizer)
 
 
 def _prepare_data_config(

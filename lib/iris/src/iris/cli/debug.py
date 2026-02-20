@@ -42,8 +42,14 @@ def _run_gcloud(args: list[str], check: bool = False) -> subprocess.CompletedPro
     return subprocess.run(["gcloud", *args], capture_output=True, text=True, check=check)
 
 
-def _list_controller_vms(zone: str, project: str) -> list[str]:
-    """Find iris controller VMs in the zone."""
+def _list_controller_vms(zone: str, project: str, label_prefix: str = "iris") -> list[str]:
+    """Find iris controller VMs in the zone.
+
+    Controller VMs are named ``iris-controller-{label_prefix}``.
+    """
+    import re as _re
+
+    name_filter = f"name~^iris-controller-{_re.escape(label_prefix)}$"
     result = _run_gcloud(
         [
             "compute",
@@ -51,7 +57,7 @@ def _list_controller_vms(zone: str, project: str) -> list[str]:
             "list",
             f"--project={project}",
             f"--zones={zone}",
-            "--filter=name~^iris-controller",
+            f"--filter={name_filter}",
             "--format=value(name)",
         ]
     )
@@ -63,9 +69,9 @@ def _list_controller_vms(zone: str, project: str) -> list[str]:
     return [n for n in names if n]
 
 
-def _discover_controller(zone: str, project: str) -> str | None:
+def _discover_controller(zone: str, project: str, label_prefix: str = "iris") -> str | None:
     """Find the controller VM in the given zone."""
-    vm_names = _list_controller_vms(zone, project)
+    vm_names = _list_controller_vms(zone, project, label_prefix)
     if not vm_names:
         return None
     if len(vm_names) > 1:
@@ -118,6 +124,14 @@ def _get_zone_project(ctx: click.Context) -> tuple[str, str]:
         click.echo("Error: No zone found in any scale group's slice_template.gcp", err=True)
         raise SystemExit(1)
     return zone, project
+
+
+def _get_label_prefix(ctx: click.Context) -> str:
+    """Extract label_prefix from the cluster config in context, defaulting to 'iris'."""
+    config = ctx.obj.get("config")
+    if config and config.platform.label_prefix:
+        return config.platform.label_prefix
+    return "iris"
 
 
 # ─── Validation helpers ──────────────────────────────────────────────────────
@@ -293,7 +307,11 @@ def _run_validation(controller_url: str, workspace: Path, tpu_type: str) -> None
 # ─── Cleanup helpers ─────────────────────────────────────────────────────────
 
 
-def _list_tpu_slices(zone: str, project: str) -> list[str]:
+def _list_tpu_slices(zone: str, project: str, label_prefix: str = "iris") -> list[str]:
+    # TPU slices created by Iris are labeled "{label_prefix}-managed=true".
+    # Use label-based filtering so we match slices for any label_prefix, not
+    # just those whose names start with "iris-".
+    label_filter = f"labels.{label_prefix}-managed=true"
     result = _run_gcloud(
         [
             "compute",
@@ -302,7 +320,7 @@ def _list_tpu_slices(zone: str, project: str) -> list[str]:
             "list",
             f"--project={project}",
             f"--zone={zone}",
-            "--filter=name~^iris-",
+            f"--filter={label_filter}",
             "--format=json",
         ]
     )
@@ -374,9 +392,10 @@ def debug(ctx):
 def discover(ctx):
     """Find controller VM and show its status."""
     zone, project = _get_zone_project(ctx)
+    label_prefix = _get_label_prefix(ctx)
 
     click.echo(f"Searching for controller VM in {zone}...")
-    vm_name = _discover_controller(zone, project)
+    vm_name = _discover_controller(zone, project, label_prefix)
 
     if not vm_name:
         click.echo("No controller VM found.")
@@ -410,8 +429,9 @@ def discover(ctx):
 def ssh_status(ctx, tail: int):
     """SSH into controller and check docker/container status."""
     zone, project = _get_zone_project(ctx)
+    label_prefix = _get_label_prefix(ctx)
 
-    vm_name = _discover_controller(zone, project)
+    vm_name = _discover_controller(zone, project, label_prefix)
     if not vm_name:
         click.echo("No controller VM found.")
         raise SystemExit(1)
@@ -581,8 +601,9 @@ def list_workers(ctx, json_output: bool):
 def logs(ctx, tail: int, follow: bool):
     """Fetch docker logs from the iris-controller container."""
     zone, project = _get_zone_project(ctx)
+    label_prefix = _get_label_prefix(ctx)
 
-    vm_name = _discover_controller(zone, project)
+    vm_name = _discover_controller(zone, project, label_prefix)
     if not vm_name:
         click.echo("No controller VM found.")
         raise SystemExit(1)
@@ -615,8 +636,9 @@ def logs(ctx, tail: int, follow: bool):
 def bootstrap_logs(ctx, tail: int):
     """Fetch startup-script logs from the controller VM."""
     zone, project = _get_zone_project(ctx)
+    label_prefix = _get_label_prefix(ctx)
 
-    vm_name = _discover_controller(zone, project)
+    vm_name = _discover_controller(zone, project, label_prefix)
     if not vm_name:
         click.echo("No controller VM found.")
         raise SystemExit(1)
@@ -706,21 +728,31 @@ def validate(ctx, workspace: Path | None, tpu_type: str):
     default=True,
     help="Dry-run mode (default: True). Use --no-dry-run to actually delete.",
 )
+@click.option(
+    "--label",
+    "label_override",
+    default=None,
+    help="Label prefix for resource filtering (overrides config; default from config or 'iris')",
+)
 @click.pass_context
-def cleanup(ctx, dry_run: bool):
+def cleanup(ctx, dry_run: bool, label_override: str | None):
     """Clean all iris VMs and TPUs from the zone.
 
     By default runs in dry-run mode to show what would be deleted.
     Use --no-dry-run to actually perform deletions.
+
+    Resources are matched by the label prefix from the cluster config
+    (``platform.label_prefix``). Use ``--label`` to override.
     """
     zone, project = _get_zone_project(ctx)
+    label_prefix = label_override or _get_label_prefix(ctx)
 
-    click.echo(f"Scanning zone {zone} in project {project}...")
+    click.echo(f"Scanning zone {zone} in project {project} (label_prefix={label_prefix})...")
     if dry_run:
         click.echo("(DRY-RUN mode - no changes will be made)")
     click.echo()
 
-    controller_vms = _list_controller_vms(zone, project)
+    controller_vms = _list_controller_vms(zone, project, label_prefix)
     if controller_vms:
         click.echo(f"Found {len(controller_vms)} controller VM(s):")
         for name in controller_vms:
@@ -729,7 +761,7 @@ def cleanup(ctx, dry_run: bool):
         click.echo("No controller VMs found.")
     click.echo()
 
-    tpu_slices = _list_tpu_slices(zone, project)
+    tpu_slices = _list_tpu_slices(zone, project, label_prefix)
     if tpu_slices:
         click.echo(f"Found {len(tpu_slices)} TPU slice(s):")
         for name in tpu_slices:

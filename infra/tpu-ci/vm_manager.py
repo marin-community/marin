@@ -248,6 +248,13 @@ REGISTRATION_TOKEN=$(curl -s -X POST \\
   https://api.github.com/repos/marin-community/marin/actions/runners/registration-token \\
   | jq -r .token)
 
+if [ "$REGISTRATION_TOKEN" = "null" ] || [ -z "$REGISTRATION_TOKEN" ]; then
+    echo "ERROR: Failed to obtain runner registration token from GitHub API."
+    echo "The PAT in Secret Manager likely expired or lacks the 'Administration' repository permission."
+    echo "Update it with: MARIN_CI_TOKEN=<new-token> uv run infra/tpu-ci/setup.py update-token"
+    exit 1
+fi
+
 echo "Configuring GitHub Actions runner..."
 cd /home/$RUNNER_USER
 

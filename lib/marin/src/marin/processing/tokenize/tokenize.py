@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import Iterator, Sequence
 
 import draccus
@@ -252,14 +253,33 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
 
     batch_count = 0
     record_count = 0
+    token_count = 0
+    start_time = time.monotonic()
+
     for batch in batches:
         batch_count += 1
         for record in batch_processor(batch):
             record_count += 1
+            token_count += len(record.get("input_ids", []))
             yield record
         if batch_count % 100 == 0:
-            logger.info("Tokenized %d batches, %d records so far", batch_count, record_count)
-    logger.info("Tokenization done: %d batches, %d records total", batch_count, record_count)
+            elapsed = time.monotonic() - start_time
+            tok_per_sec = token_count / elapsed if elapsed > 0 else 0
+            doc_per_sec = record_count / elapsed if elapsed > 0 else 0
+            avg_tok_per_doc = token_count / record_count if record_count > 0 else 0
+            logger.info(
+                f"Tokenized {batch_count:,} batches, {record_count:,} docs, {token_count:,} tokens in {elapsed:.1f}s "
+                f"({tok_per_sec:,.0f} tokens/s, {doc_per_sec:,.1f} docs/s, {avg_tok_per_doc:,.0f} avg tokens/doc)"
+            )
+
+    elapsed = time.monotonic() - start_time
+    tok_per_sec = token_count / elapsed if elapsed > 0 else 0
+    doc_per_sec = record_count / elapsed if elapsed > 0 else 0
+    avg_tok_per_doc = token_count / record_count if record_count > 0 else 0
+    logger.info(
+        f"Tokenization done: {batch_count:,} batches, {record_count:,} docs, {token_count:,} tokens in {elapsed:.1f}s "
+        f"({tok_per_sec:,.0f} tokens/s, {doc_per_sec:,.1f} docs/s, {avg_tok_per_doc:,.0f} avg tokens/doc)"
+    )
 
 
 def tokenize(config: TokenizeConfigBase):
@@ -311,16 +331,23 @@ def tokenize(config: TokenizeConfigBase):
             )
             return
 
+        pipeline_start = time.monotonic()
+
         # Use local backend for lightweight file stats - no remote workers needed
-        with ZephyrContext(client=LocalClient(), num_workers=8, name="tokenize-filescan") as local_ctx:
+        filescan_start = time.monotonic()
+        with ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan") as local_ctx:
             file_stats = list(
                 local_ctx.execute(
                     Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
                     verbose=False,
                 )
             )
+        total_input_bytes = sum(f["size"] for f in file_stats)
         file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
-        logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size.")
+        logger.info(
+            f"Grouped {len(paths):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
+            f"in {time.monotonic() - filescan_start:.1f}s."
+        )
 
         ds = Dataset.from_list(file_groups).flat_map(lambda file_list: file_list).flat_map(load_file)
 
@@ -331,13 +358,15 @@ def tokenize(config: TokenizeConfigBase):
         temp_shards = (
             ds.window(64)
             .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
-            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
+            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}", metadata={}, skip_existing=True)
         )
 
         # Broadcast the tokenizer to all workers via ZephyrContext
         ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
 
+        tokenize_start = time.monotonic()
         shard_paths = ctx.execute(temp_shards)
+        tokenize_elapsed = time.monotonic() - tokenize_start
 
         logger.info("Computing exemplar for cache consolidation")
         exemplar = ctx.execute(
@@ -348,8 +377,10 @@ def tokenize(config: TokenizeConfigBase):
             verbose=False,
         )[0]
 
-        logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
+        consolidate_start = time.monotonic()
+        logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
         consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
+        consolidate_elapsed = time.monotonic() - consolidate_start
 
         # Aggregate token counts from shard stats
         total_tokens = 0
@@ -362,15 +393,22 @@ def tokenize(config: TokenizeConfigBase):
                 total_elements += stats.get("num_rows", 0)
 
         stats_path = os.path.join(prefix, ".stats.json")
-        logger.info(
-            f"Writing total token count ({total_tokens:,}) and element count ({total_elements:,}) to {stats_path}"
-        )
         with fsspec.open(stats_path, "w") as f:
             json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
+        pipeline_elapsed = time.monotonic() - pipeline_start
+        overall_tok_per_sec = total_tokens / tokenize_elapsed if tokenize_elapsed > 0 else 0
+        overall_doc_per_sec = total_elements / tokenize_elapsed if tokenize_elapsed > 0 else 0
+        logger.info(
+            f"{split_name} pipeline complete: {total_elements:,} docs, {total_tokens:,} tokens "
+            f"in {pipeline_elapsed:.1f}s (tokenize: {tokenize_elapsed:.1f}s at {overall_tok_per_sec:,.0f} tokens/s "
+            f"{overall_doc_per_sec:,.1f} docs/s, consolidate: {consolidate_elapsed:.1f}s). "
+            f"Wrote stats to {stats_path}"
+        )
+
     with ZephyrContext(
         resources=ResourceConfig(ram="16g", disk="16g"),
-        num_workers=min(128, len(train_paths) + len(validation_paths)),
+        max_workers=min(128, len(train_paths) + len(validation_paths)),
         name="tokenize",
     ) as ctx:
         if train_paths:

@@ -4,11 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - lib/haliax/**
-      - lib/levanter/**
-      - uv.lock
-      - .github/workflows/levanter-tests.yaml
   pull_request:
     paths:
       - lib/haliax/**
@@ -122,17 +117,36 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen --extra torch_test
+        run: uv sync --package levanter --dev --group test --frozen --extra torch_test --no-install-package torch
 
-      - name: Force CPU torch wheel
+      - name: Install locked CPU torch wheel
         run: |
-          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' ../../uv.lock)
-          echo $TORCH_VERSION
-          if [[ -z "$TORCH_VERSION" ]]; then
-            echo "Unable to determine torch version from uv.lock" >&2
+          TORCH_CPU_VERSION=$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          lock = tomllib.loads(Path("../../uv.lock").read_text())
+          versions = {
+              package["version"]
+              for package in lock.get("package", [])
+              if package.get("name") == "torch" and package.get("version", "").endswith("+cpu")
+          }
+          if len(versions) != 1:
+              raise SystemExit(
+                  f"Expected exactly one torch +cpu version in uv.lock, found {len(versions)}: {sorted(versions)}"
+              )
+          print(next(iter(versions)))
+          PY
+          )
+          echo "Using torch ${TORCH_CPU_VERSION}"
+          if [[ -z "$TORCH_CPU_VERSION" ]]; then
+            echo "Unable to determine torch CPU version from uv.lock" >&2
             exit 1
           fi
-          uv pip install "torch==$TORCH_VERSION" -f https://download.pytorch.org/whl/cpu/torch_stable.html  --torch-backend=cpu
+          uv pip install "torch==$TORCH_CPU_VERSION" \
+            --default-index https://download.pytorch.org/whl/cpu \
+            --index https://pypi.org/simple \
+            --index-strategy unsafe-best-match
 
       - name: Test torch-marked suite
         run: |
@@ -191,4 +205,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --package levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short --log-cli-level=WARNING --durations=20"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --package levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow and not torch' --ignore=lib/levanter/tests/test_audio.py --ignore=lib/levanter/tests/test_new_cache.py --ignore=lib/levanter/tests/test_hf_checkpoints.py --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py --ignore=lib/levanter/tests/test_gdn_layer.py -v --tb=short --log-cli-level=WARNING --durations=20"

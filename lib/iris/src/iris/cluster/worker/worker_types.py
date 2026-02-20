@@ -8,7 +8,7 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState
 from iris.time_utils import Timestamp
 
@@ -31,8 +31,8 @@ class LogLine(BaseModel):
             data=data,
         )
 
-    def to_proto(self) -> cluster_pb2.Worker.LogEntry:
-        proto = cluster_pb2.Worker.LogEntry(
+    def to_proto(self) -> logging_pb2.LogEntry:
+        proto = logging_pb2.LogEntry(
             source=self.source,
             data=self.data,
         )

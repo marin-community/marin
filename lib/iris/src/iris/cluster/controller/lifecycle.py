@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass
 from typing import cast
 
-from iris.cluster.platform.base import Platform, StandaloneVmHandle, VmHandle
+from iris.cluster.platform.base import Platform, RemoteWorkerHandle, StandaloneWorkerHandle
 from iris.cluster.platform.bootstrap import build_controller_bootstrap_script_from_config
 from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timer
@@ -84,7 +84,7 @@ class HealthCheckResult:
 
 
 def check_health(
-    vm: VmHandle,
+    vm: RemoteWorkerHandle,
     port: int = 10001,
     container_name: str = "iris-worker",
 ) -> HealthCheckResult:
@@ -131,15 +131,15 @@ def check_health(
 
 
 def wait_healthy(
-    vm: VmHandle,
+    vm: RemoteWorkerHandle,
     port: int,
     timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
     container_name: str = CONTROLLER_CONTAINER_NAME,
 ) -> bool:
     """Poll health endpoint until healthy or timeout.
 
-    Runs curl on the remote host via VmHandle.run_command(), avoiding firewall
-    issues that can block external HTTP access to the controller port.
+    Runs curl on the remote host via RemoteWorkerHandle.run_command(), avoiding
+    firewall issues that can block external HTTP access to the controller port.
 
     On failure, logs diagnostic info including container status and logs.
 
@@ -261,12 +261,13 @@ def _discover_controller_vm(
     platform: Platform,
     zones: list[str],
     label_prefix: str,
-) -> StandaloneVmHandle | None:
+) -> StandaloneWorkerHandle | None:
     """Find existing controller VM by labels.
 
-    list_vms returns VmHandle, but controller VMs were created by create_vm()
-    and support terminate/set_labels. We cast to StandaloneVmHandle since we
-    know the controller VM supports these operations.
+    list_vms returns RemoteWorkerHandle, but controller VMs were created by
+    create_vm() and support terminate/set_labels. We cast to
+    StandaloneWorkerHandle since we know the controller VM supports these
+    operations.
     """
     vms = platform.list_vms(
         zones=zones,
@@ -279,7 +280,7 @@ def _discover_controller_vm(
             f"'{_controller_label_key(label_prefix)}=true': {vm_ids}. "
             f"Expected at most one controller VM. Remove duplicates before proceeding."
         )
-    return cast(StandaloneVmHandle, vms[0]) if vms else None
+    return cast(StandaloneWorkerHandle, vms[0]) if vms else None
 
 
 def _build_controller_vm_config(config: config_pb2.IrisClusterConfig) -> config_pb2.VmConfig:
@@ -318,7 +319,7 @@ def _build_controller_vm_config(config: config_pb2.IrisClusterConfig) -> config_
 def start_controller(
     platform: Platform,
     config: config_pb2.IrisClusterConfig,
-) -> tuple[str, StandaloneVmHandle]:
+) -> tuple[str, StandaloneWorkerHandle]:
     """Start or discover existing controller. Returns (address, vm_handle).
 
     1. Try to discover an existing healthy controller
