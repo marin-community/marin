@@ -395,8 +395,9 @@ def tokenize(config: TokenizeConfigBase):
             f"Wrote stats to {stats_path}"
         )
 
+    # TODO: expose ram/disk as a flag on TokenizeConfig and align with batch size
     with ZephyrContext(
-        resources=ResourceConfig(ram="16g", disk="16g"),
+        resources=ResourceConfig(ram="2g", disk="16g"),
         max_workers=min(128, len(train_paths) + len(validation_paths)),
         name="tokenize",
     ) as ctx:
