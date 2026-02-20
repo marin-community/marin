@@ -37,7 +37,6 @@ from levanter.data.text import TextLmDatasetFormat
 
 from experiments.defaults import default_tokenize
 from experiments.dna.defaults import (
-    DNA_WINDOW_SIZE_BYTES_V1,
     FAST_RUN_CONFIG_V1,
     PROMOTERS_MRNA_256_DATASET_V1,
     dna_train,
@@ -62,7 +61,10 @@ for kmer_label, kmer_cfg in KMER_TOKENIZERS.items():
         dataset=PROMOTERS_MRNA_256_DATASET_V1,
         tokenizer=kmer_cfg["hf_id"],
         format=TextLmDatasetFormat(text_key="seq"),
-        window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
+        # Smaller windows than DNA_WINDOW_SIZE_BYTES_V1 (50MB) so each shard
+        # finishes before the zephyr coordinator backoff overflows.
+        # k-mer tokenizers are slower than character-level due to larger vocab.
+        window_size_bytes=10_000_000,
     )
 
     model_config = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=kmer_cfg["max_seq_len"])
