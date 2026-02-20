@@ -334,14 +334,7 @@ REGION_ATTRIBUTE_KEY = "region"
 
 
 def region_constraint(regions: Sequence[str]) -> Constraint:
-    if not regions:
-        raise ValueError("regions must be non-empty")
-    for r in regions:
-        if not r:
-            raise ValueError("region must be non-empty")
-    if len(regions) == 1:
-        return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=regions[0])
-    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.IN, values=tuple(regions))
+    ...
 
 
 @dataclass(frozen=True)
