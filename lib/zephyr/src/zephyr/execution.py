@@ -191,6 +191,14 @@ class ZephyrWorkerError(RuntimeError):
     """Raised when a worker encounters a fatal (non-transient) error."""
 
 
+# Application errors that should never be retried by the execute() retry loop.
+# These are deterministic errors (bad plan, invalid config, programming bugs)
+# that would fail identically on every attempt. Infrastructure errors (OSError,
+# RuntimeError from dead actors, Ray actor errors) are NOT listed here so they
+# remain retryable.
+_NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, AttributeError)
+
+
 # ---------------------------------------------------------------------------
 # WorkerContext protocol — the public interface exposed to user task code
 # ---------------------------------------------------------------------------
@@ -986,7 +994,7 @@ class ZephyrContext:
 
                 return results
 
-            except ZephyrWorkerError:
+            except _NON_RETRYABLE_ERRORS:
                 raise
 
             except Exception as e:
