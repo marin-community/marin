@@ -375,10 +375,11 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / regression**. MFU regressed and dominant hotspot category remained unchanged.
 - Next hypothesis: escalate to a more radical launch-reduction move, specifically Macro Move D with `pltpu.emit_pipeline` over full chunk axis (no Python unrolled chunk loops) and a matching backward pipeline so forward/backward shard-map call count drops instead of increasing.
 
-### Iteration 1 (loop 1/20) - FLA Experiment B: V-tiled recurrent kernels (reverted)
+### Iteration 9 - FLA Experiment B: V-tiled recurrent kernels (reverted)
 
 - Date: 2026-02-20T09:04:15Z
 - Commit: none (failed attempt)
+- Loop session/local index: `1/20`
 - Starting commit: `3abf4d1112ce53c4f52664fa115268b407bc004c`
 - Dominant bottleneck carried in: GDN shard-map `custom-call` path remained dominant from Iteration 8 TPU:0 XLA Ops (`custom-call` `232.081 ms` on TPU:0 XLA Ops thread), with top callsites:
   - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` (`143.560 ms`)
@@ -415,10 +416,66 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / regression** under current governance. Despite lower per-hotspot trace times, end-to-end MFU regressed by >1% and dominant hotspot category remained `custom-call`, so this attempt is marked failed and code reverted.
 - Next hypothesis (escalation): take a more radical launch/dataflow redesign that removes duplicated chunk-local K-only work and reduces backward launch pressure, e.g. Macro Move D (`emit_pipeline` full-sequence recurrent state carry) or a backward decomposition that computes chunk-local factors once and applies recurrent updates in a separate V-tiled stage.
 
-### Iteration 4 (loop 4/20) - FLA Experiment A: reuse forward solve tape in backward
+### Iteration 10 - Macro Move B: transpose-fused forward flash matmuls
 
-- Date: 2026-02-20T11:20:00Z
-- Commit: this commit
+- Date: 2026-02-20T10:10:00Z
+- Commit: 2c8d3c8d
+- Loop session/local index: `2/20`
+- Dominant bottleneck carried in: GDN `custom-call` remained dominant in the Iteration 8 baseline trace (`232.081 ms` on TPU:0 XLA Ops thread), with the same backward/forward shard-map pallas callsites at `143.560 ms` and `75.052 ms`.
+- Selected macro-move category: **B) transpose fusion via `dot_general`**.
+- Selected hypothesis: remove explicit transpose-materialization from hot flash forward matmul paths by extending `_mxu_matmul_f32` and routing through transpose-fused dot variants.
+- Change summary:
+  - Added transpose-fusion support in `_mxu_matmul_f32`.
+  - Updated hot forward/solve callsites in `lib/levanter/src/levanter/layers/gated_deltanet.py` (around lines `1017`, `1188`, `1272`, `1438`, `1453`) to use the fused path.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - Result: `87 passed, 2 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_dotfuse2_i2_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_dotfuse2_i2_dev_130m_ch128_seg16_20steps-457c69`
+  - Trace location: `.profiles/wandb/gdn_dotfuse2_i2_dev/plugins/profile/2026_02_20_10_04_56/perfetto_trace.json.gz`
+- Hotspots observed (vs Iteration 8 baseline trace):
+  - `custom-call`: `232.081 ms -> 232.092 ms` (flat; unchanged dominant hotspot).
+- MFU/throughput delta (vs Iteration 8 run):
+  - `throughput/mfu`: `3.8997 -> 3.9135` (`+0.35%`).
+  - `throughput/tokens_per_second`: `126155.06 -> 126600.07` (`+0.35%`).
+  - `throughput/duration`: `0.25974s -> 0.25883s` (`-0.35%`).
+- Assessment: **low-impact**. Gain is below 3%, dominant hotspot unchanged.
+- Next hypothesis: target backward-dominant pallas call directly, where most residual cost remains.
+
+### Iteration 11 - Macro Move B: transpose-fused backward flash matmuls (reverted)
+
+- Date: 2026-02-20T10:43:43Z
+- Commit: 17619a4b0
+- Loop session/local index: `3/20`
+- Dominant bottleneck carried in: same GDN shard-map `custom-call` path as Iteration 10, with backward-side transpose/jvp callsite still dominant.
+- Selected macro-move category: **B) transpose fusion via `dot_general`**.
+- Selected hypothesis: extend transpose-fusion deeper into backward hot paths to reduce backward custom-call time.
+- Change summary:
+  - Applied additional transpose-fused matmul rewrites in backward/adjoint paths.
+  - Reverted kernel code after profiling due material end-to-end regression; commit records failed attempt.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - Result: `87 passed, 2 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_dotfusebwd_i3_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_dotfusebwd_i3_dev_130m_ch128_seg16_20steps-84ddf0`
+  - Trace location: `.profiles/wandb/gdn_dotfusebwd_i3_dev_130m_ch128_seg16_20steps-84ddf0/plugins/profile/2026_02_20_10_39_53/perfetto_trace.json.gz`
+- Hotspots observed (vs loop baseline `gdn_loopgate_iter002_...-51ecc9`):
+  - `custom-call`: `232.093 ms -> 276.800 ms` (`+19.26%`).
+  - Backward dominant GDN callsite: `143.559 ms -> 188.271 ms` (`+31.14%`).
+  - Forward dominant GDN callsite: `75.051 ms -> 75.052 ms` (flat).
+- MFU/throughput delta:
+  - `throughput/mfu`: `3.8574 -> 3.6081` (`-6.46%`).
+  - `throughput/tokens_per_second`: `124787.53 -> 116721.09` (`-6.46%`).
+- Assessment: **failed attempt / regression**. Speculative kernel code reverted; log-only failure commit retained.
+- Next hypothesis: move away from broad transpose-fusion tuning toward launch/dataflow reductions that shrink backward custom-call wall time.
+
+### Iteration 12 - FLA Experiment A: reuse forward solve tape in backward
+
+- Date: 2026-02-20T11:22:01Z
+- Commit: 51c47da95
+- Loop session/local index: `4/20`
 - Starting commit: `64b706211e460717bcea452c0ce09debdc444743`
 - Dominant bottleneck carried in: GDN `custom-call` remained dominant in the latest baseline trace (`232.093 ms` on TPU:0 XLA Ops aggregate), with top callsites:
   - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` (`143.559 ms`)

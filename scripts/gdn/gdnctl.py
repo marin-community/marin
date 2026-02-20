@@ -72,6 +72,7 @@ GIT_TRANSIENT_ERROR_RE = re.compile(
     r"(index\.lock|Another git process seems to be running|Unable to create '.+?\.lock')"
 )
 WANDB_RUN_URL_RE = re.compile(r"https://wandb\.ai/(?P<entity>[^/\s]+)/(?P<project>[^/\s]+)/runs/(?P<run_id>[^/\s?#]+)")
+ITERATION_HEADING_RE = re.compile(r"^### Iteration (?P<num>\d+)(?P<suffix>[A-Za-z]*)\b")
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -1765,6 +1766,43 @@ def _last_iteration_bounds(lines: Sequence[str]) -> tuple[int, int] | None:
     return last_start, len(lines)
 
 
+def _find_iteration_sequence_issues(lines: Sequence[str]) -> list[str]:
+    issues: list[str] = []
+    prev: tuple[int, int, str, str] | None = None
+
+    for idx, line in enumerate(lines, start=1):
+        match = ITERATION_HEADING_RE.match(line.strip())
+        if match is None:
+            continue
+
+        num = int(match.group("num"))
+        suffix = match.group("suffix") or ""
+        heading = line.strip()
+
+        if prev is not None:
+            prev_line, prev_num, prev_suffix, prev_heading = prev
+            reason: str | None = None
+
+            if num < prev_num:
+                reason = "iteration number decreased"
+            elif num == prev_num:
+                if prev_suffix == "" and suffix == "":
+                    reason = "duplicate iteration number"
+                elif prev_suffix != "" and suffix == "":
+                    reason = "sub-iteration returned to base number"
+                elif prev_suffix != "" and suffix != "" and suffix <= prev_suffix:
+                    reason = "sub-iteration suffix is not increasing"
+
+            if reason is not None:
+                issues.append(
+                    f"{reason}: line {prev_line} `{prev_heading}` -> line {idx} `{heading}`"
+                )
+
+        prev = (idx, num, suffix, heading)
+
+    return issues
+
+
 def _stamp_last_log_commit_placeholder(log_path: Path, *, commit_sha: str) -> bool:
     if not log_path.exists():
         return False
@@ -1831,6 +1869,14 @@ def cmd_lint_log(args: argparse.Namespace) -> int:
         for line_no in this_commit_lines:
             print(f"[gdnctl]   line {line_no}", file=sys.stderr)
         return 1
+
+    if not args.allow_non_monotonic:
+        sequence_issues = _find_iteration_sequence_issues(lines)
+        if sequence_issues:
+            print(f"[gdnctl] non-monotonic iteration headings in {log_path}:", file=sys.stderr)
+            for issue in sequence_issues:
+                print(f"[gdnctl]   {issue}", file=sys.stderr)
+            return 1
 
     print(f"[gdnctl] log lint passed: {log_path}")
     return 0
@@ -2606,6 +2652,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-this-commit",
         action="store_true",
         help="Do not fail when `Commit: this commit` placeholders are present.",
+    )
+    lint_log.add_argument(
+        "--allow-non-monotonic",
+        action="store_true",
+        help="Do not fail when iteration headings are not globally monotonic.",
     )
     lint_log.set_defaults(func=cmd_lint_log)
 
