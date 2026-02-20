@@ -45,6 +45,7 @@ class ConstraintOp(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONSTRAINT_OP_GE: _ClassVar[ConstraintOp]
     CONSTRAINT_OP_LT: _ClassVar[ConstraintOp]
     CONSTRAINT_OP_LE: _ClassVar[ConstraintOp]
+    CONSTRAINT_OP_IN: _ClassVar[ConstraintOp]
 JOB_STATE_UNSPECIFIED: JobState
 JOB_STATE_PENDING: JobState
 JOB_STATE_BUILDING: JobState
@@ -72,6 +73,7 @@ CONSTRAINT_OP_GT: ConstraintOp
 CONSTRAINT_OP_GE: ConstraintOp
 CONSTRAINT_OP_LT: ConstraintOp
 CONSTRAINT_OP_LE: ConstraintOp
+CONSTRAINT_OP_IN: ConstraintOp
 
 class Empty(_message.Message):
     __slots__ = ()
@@ -403,14 +405,16 @@ class AttributeValue(_message.Message):
     def __init__(self, string_value: _Optional[str] = ..., int_value: _Optional[int] = ..., float_value: _Optional[float] = ...) -> None: ...
 
 class Constraint(_message.Message):
-    __slots__ = ("key", "op", "value")
+    __slots__ = ("key", "op", "value", "values")
     KEY_FIELD_NUMBER: _ClassVar[int]
     OP_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
+    VALUES_FIELD_NUMBER: _ClassVar[int]
     key: str
     op: ConstraintOp
     value: AttributeValue
-    def __init__(self, key: _Optional[str] = ..., op: _Optional[_Union[ConstraintOp, str]] = ..., value: _Optional[_Union[AttributeValue, _Mapping]] = ...) -> None: ...
+    values: _containers.RepeatedCompositeFieldContainer[AttributeValue]
+    def __init__(self, key: _Optional[str] = ..., op: _Optional[_Union[ConstraintOp, str]] = ..., value: _Optional[_Union[AttributeValue, _Mapping]] = ..., values: _Optional[_Iterable[_Union[AttributeValue, _Mapping]]] = ...) -> None: ...
 
 class CoschedulingConfig(_message.Message):
     __slots__ = ("group_by",)

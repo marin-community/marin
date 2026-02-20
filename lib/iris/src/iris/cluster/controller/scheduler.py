@@ -205,6 +205,9 @@ def _evaluate_constraint(
             return _compare_ordered(attr.value, target.value, "lt")
         case cluster_pb2.CONSTRAINT_OP_LE:
             return _compare_ordered(attr.value, target.value, "le")
+        case cluster_pb2.CONSTRAINT_OP_IN:
+            target_values = {AttributeValue.from_proto(v).value for v in constraint.values}
+            return attr.value in target_values
         case _:
             return False
 
@@ -504,6 +507,14 @@ class SchedulingContext:
                 return self.all_worker_ids - has_attr
             # Attribute doesn't exist for any worker, so all workers match
             return self.all_worker_ids
+
+        # Fast path: IN on discrete attribute — union of posting lists for each value
+        if op == cluster_pb2.CONSTRAINT_OP_IN and key in self.discrete_lists:
+            in_result: set[WorkerId] = set()
+            for av in constraint.values:
+                target_val = AttributeValue.from_proto(av).value
+                in_result |= self.discrete_lists[key].get(target_val, set())
+            return in_result
 
         # Slow path: linear scan for NE, GT, GE, LT, LE, or non-indexed attributes
         result_set: set[WorkerId] = set()
