@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from fray.v2 import ResourceConfig
+from fray.v2.local_backend import LocalClient
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext, zephyr_worker_ctx
 
@@ -68,6 +69,34 @@ def test_context_manager(fray_client):
         ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
         results = list(zctx.execute(ds))
     assert sorted(results) == [2, 3, 4]
+
+
+def test_local_client_defaults_to_tmp_chunk_storage(monkeypatch):
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    monkeypatch.setattr("zephyr.execution.get_temp_bucket_path", lambda ttl_days, prefix="": None)
+
+    client = LocalClient()
+    try:
+        ctx = ZephyrContext(
+            client=client,
+            max_workers=1,
+            resources=ResourceConfig(cpu=1, ram="512m"),
+            name=f"test-execution-{uuid.uuid4().hex[:8]}",
+        )
+        assert ctx.chunk_storage_prefix == "/tmp/zephyr"
+    finally:
+        client.shutdown(wait=True)
+
+
+def test_distributed_requires_marin_prefix_when_temp_bucket_unavailable(monkeypatch):
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    monkeypatch.setattr("zephyr.execution.get_temp_bucket_path", lambda ttl_days, prefix="": None)
+
+    class DummyClient:
+        pass
+
+    with pytest.raises(RuntimeError, match="MARIN_PREFIX must be set"):
+        ZephyrContext(client=DummyClient(), max_workers=1)  # type: ignore[arg-type]
 
 
 def test_write_jsonl(tmp_path, zephyr_ctx):
