@@ -414,3 +414,46 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - `throughput/duration`: `0.25974s -> 0.26481s` (`+1.95%`).
 - Assessment: **low-impact / regression** under current governance. Despite lower per-hotspot trace times, end-to-end MFU regressed by >1% and dominant hotspot category remained `custom-call`, so this attempt is marked failed and code reverted.
 - Next hypothesis (escalation): take a more radical launch/dataflow redesign that removes duplicated chunk-local K-only work and reduces backward launch pressure, e.g. Macro Move D (`emit_pipeline` full-sequence recurrent state carry) or a backward decomposition that computes chunk-local factors once and applies recurrent updates in a separate V-tiled stage.
+
+### Iteration 4 (loop 4/20) - FLA Experiment A: reuse forward solve tape in backward
+
+- Date: 2026-02-20T11:20:00Z
+- Commit: this commit
+- Starting commit: `64b706211e460717bcea452c0ce09debdc444743`
+- Dominant bottleneck carried in: GDN `custom-call` remained dominant in the latest baseline trace (`232.093 ms` on TPU:0 XLA Ops aggregate), with top callsites:
+  - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` (`143.559 ms`)
+  - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` (`75.051 ms`)
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move F (Experiment A extension)**: persist forward solve outputs (`v_pseudo`, `k_cumdecay`) and consume them in backward to remove duplicate per-chunk solve recompute (`+10-20%`, medium/high HBM-tape risk).
+  2. **Macro Move D**: full-sequence `emit_pipeline` recurrent kernel over chunks (`+20-35%`, very high implementation/validation risk).
+  3. **Macro Move E / Experiment B**: staged V-tiled backward decomposition (chunk-local adjoint + recurrent apply) (`+15-30%`, high complexity/reduction risk).
+- Selected macro-move category: **F) Match FlashLinearAttention’s kernel decomposition**.
+- Selected hypothesis: extend Experiment A end-to-end by reusing forward solve/prep tensors in backward, so backward keeps the recurrent pass but no longer recomputes chunk-local solve outputs.
+- Change summary:
+  - Threaded forward prepare outputs (`v_pseudo`, `k_cumdecay`) through `_chunk_gated_delta_rule_flash_pallas_impl(..., return_prepare_tape=True)` into custom-VJP residuals.
+  - Extended `_gdn_chunk_segment_bwd_pallas` and `_gdn_chunk_segment_bwd_kernel_tpu` input specs/signatures to accept the solve tape per chunk.
+  - Removed backward forward-solve recompute path (`rhs_all` + `_solve_I_minus_strict_lower_blockwise`) and consumed taped `v_pseudo`/`k_cumdecay` directly while preserving transpose-solve adjoint math.
+  - Kept segmentation/launch structure intact so the iteration isolates decomposition/dataflow impact.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - First run: one transient tolerance miss in `test_gdn_layer_backward_matches_hf[False]` (`max_abs 1.3156328e-05` vs `atol=1e-05`).
+  - Rerun result: `87 passed, 2 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_prep_tape_i4_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_prep_tape_i4_dev_130m_ch128_seg16_20steps-e4c03f`
+  - W&B profiler artifact: `run-gdn_prep_tape_i4_dev_130m_ch128_seg16_20steps-e4c03f-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_prep_tape_i4_dev_130m_ch128_seg16_20steps-e4c03f/plugins/profile/2026_02_20_11_15_48/perfetto_trace.json.gz`
+- Hotspots observed (TPU:0 XLA Ops aggregate, compared to baseline trace `.profiles/wandb/gdn_loopgate_iter002_130m_ch128_seg16_20steps-51ecc9/plugins/profile/2026_02_19_23_03_33/perfetto_trace.json.gz`):
+  - `custom-call`: `232.093 ms -> 174.246 ms` (`-24.92%`), still dominant.
+  - Dominant backward GDN callsite got faster (same hotspot, not moved):
+    - `transpose(jvp(...))/closed_call/shard_map/pallas_call:` `143.559 ms -> 85.705 ms` (`-40.30%`).
+    - Source in current run maps to `gated_deltanet.py:2614` (baseline source `gated_deltanet.py:2500`).
+  - Forward closed-call GDN callsite effectively unchanged:
+    - `jvp(...)/closed_call/shard_map/pallas_call:` `75.051 ms -> 75.049 ms` (`-0.00%`).
+  - `all-gather`: `32.643 ms -> 32.647 ms` (`+0.01%`).
+- MFU/throughput delta (vs baseline run `gdn_loopgate_iter002_130m_ch128_seg16_20steps-51ecc9`):
+  - `throughput/mfu`: `3.8574 -> 4.3954` (`+13.95%`).
+  - `throughput/tokens_per_second`: `124787.53 -> 142190.31` (`+13.95%`).
+  - `throughput/duration`: `0.26259s -> 0.23045s` (`-12.24%`).
+- Assessment: **high-impact win**. This iteration directly accelerated the same dominant backward custom-call hotspot rather than shifting bottlenecks, and MFU improved well above governance thresholds.
+- Next hypothesis: push the remaining `~75 ms` forward closed-call pallas path with a bolder launch/dataflow move (Macro Move D full-sequence pipeline or Macro Move E/F staged recurrent decomposition) to reduce shard-map custom-call pressure further.
