@@ -8,13 +8,20 @@ Given an experiment file and a step number, dump the decoded training examples
 for that step's batch to JSONL. Requires a Ray cluster (--cluster).
 
 Usage:
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --output step_100.jsonl
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --var training_step
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --summary
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --steps 0,100,500 --cluster us-central2 --summary
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --truncate 200
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py --step 100 --cluster us-central2 --tui
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+      --step 100 --cluster us-central2
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+      --step 100 --cluster us-central2 --output step_100.jsonl
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+      --step 100 --cluster us-central2 --var training_step
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+      --step 100 --cluster us-central2 --summary
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+      --steps 0,100,500 --cluster us-central2 --summary
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+      --step 100 --cluster us-central2 --truncate 200
+  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+      --step 100 --cluster us-central2 --tui
 """
 
 import importlib.util
