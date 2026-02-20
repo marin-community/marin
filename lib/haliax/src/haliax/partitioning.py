@@ -5,6 +5,7 @@
 import contextlib
 import dataclasses
 import functools
+import inspect
 import threading
 import typing
 import warnings
@@ -61,6 +62,7 @@ class _ResourceMappingHolder:
 
 
 _mapping_holder = _ResourceMappingHolder()
+_JAX_SHARD_MAP_PARAMETER_NAMES = frozenset(inspect.signature(jax_shard_map).parameters.keys())
 
 
 @contextlib.contextmanager
@@ -846,7 +848,8 @@ def shard_map(
             returned by [jax.sharding.get_abstract_mesh][].
         axis_mapping: Optional mapping from logical axis names to mesh axis names
             used when converting `Axis` objects to `PartitionSpec`.
-        check_rep: Passed through to `jax.shard_map`.
+        check_rep: Passed through to `jax.shard_map` as `check_rep` on older JAX,
+            or mapped to `check_vma` on JAX 0.8+.
         **shmap_kwargs: Additional arguments forwarded to `jax.shard_map`.
 
     Returns:
@@ -881,13 +884,21 @@ def shard_map(
 
         # for output, we need to evaluate the function on placeholder inputs to get the output shape
         # we have to do this under shard_map so that psum etc. work
+        shard_map_kwargs: dict[str, Any] = dict(shmap_kwargs)
+        if "check_rep" in _JAX_SHARD_MAP_PARAMETER_NAMES:
+            shard_map_kwargs["check_rep"] = check_rep
+        elif "check_vma" in _JAX_SHARD_MAP_PARAMETER_NAMES:
+            shard_map_kwargs["check_vma"] = check_rep
+        elif check_rep:
+            msg = "This JAX version's shard_map does not support check_rep/check_vma compatibility checks."
+            raise RuntimeError(msg)
+
         almost_shmap = functools.partial(
             jax_shard_map,
             inner,
             mesh=this_mesh,
             in_specs=this_in_specs,
-            check_rep=check_rep,
-            **shmap_kwargs,
+            **shard_map_kwargs,
         )
 
         if out_specs is not None:
