@@ -211,28 +211,21 @@ def _resolve_correct_option_index(choices: list[str], answer: str | None) -> int
 # ---------------------------------------------------------------------------
 
 
-def evaluate_vlm_mc_benchmark(
-    worker: _LmEvalHarnessWorker,
+def prepare_vlm_mc_data(
     parquet_paths: list[str],
     tokenizer,
-) -> dict:
-    """Evaluate an MC benchmark using per-option log-likelihood comparison.
+    max_len: int,
+) -> tuple[list[PromptCompletion], dict[int, tuple[int, int, bool, int]]]:
+    """Load parquets and build PromptCompletion objects for MC evaluation.
 
-    Reuses the same loglikelihood pipeline as text LLM evaluation (MMLU etc.):
-    PromptCompletion → greedy_pack → dispatch_loglikelihood → group by question → accuracy.
-
-    Args:
-        worker: Levanter eval harness worker (holds model + JIT loglikelihood).
-        parquet_paths: Paths to benchmark parquet shards (with image_tokens column).
-        tokenizer: Tokenizer for encoding text parts.
+    This is pure CPU/IO work (no JAX collectives) and should be called BEFORE
+    entering the coordinator/worker pattern to avoid collective timeouts.
 
     Returns:
-        Dict with accuracy, loss (mean normalized LL of correct answers),
-        num_questions, num_correct, and per-question details.
+        Tuple of (all_completions, segment_metadata) where segment_metadata maps
+        segment_id → (question_idx, option_idx, is_correct, num_completion_tokens).
     """
-    # Step 1: Build all PromptCompletion objects from parquet rows
     all_completions: list[PromptCompletion] = []
-    # segment_id → (question_idx, option_idx, is_correct, num_completion_tokens)
     segment_metadata: dict[int, tuple[int, int, bool, int]] = {}
     question_idx = 0
     segment_counter = 0
@@ -280,8 +273,6 @@ def evaluate_vlm_mc_benchmark(
                 segment_id_start=segment_counter,
             )
 
-            # Check none exceed max length
-            max_len = worker.EvalPos.size
             too_long = any(len(pc.ids) > max_len for pc in completions)
             if too_long:
                 logger.warning(
@@ -305,19 +296,41 @@ def evaluate_vlm_mc_benchmark(
             segment_counter += len(completions)
             question_idx += 1
 
-    num_questions = question_idx
-    if num_questions == 0:
-        logger.warning("No MC questions found in parquets")
-        return {"accuracy": 0.0, "num_questions": 0, "num_correct": 0}
-
     logger.info(
-        "Built %d completions for %d questions (%d skipped)",
+        "Built %d MC completions for %d questions (%d skipped)",
         len(all_completions),
-        num_questions,
+        question_idx,
         skipped,
     )
+    return all_completions, segment_metadata
 
-    # Step 2: Pack and run loglikelihood (same pipeline as text MMLU)
+
+def evaluate_vlm_mc_benchmark(
+    worker: _LmEvalHarnessWorker,
+    all_completions: list[PromptCompletion],
+    segment_metadata: dict[int, tuple[int, int, bool, int]],
+    tokenizer,
+) -> dict:
+    """Evaluate pre-prepared MC data using per-option log-likelihood comparison.
+
+    Data preparation (parquet loading, PromptCompletion building) must happen
+    BEFORE the coordinator/worker split via prepare_vlm_mc_data() to avoid
+    collective timeouts on multi-host TPU.
+
+    Args:
+        worker: Levanter eval harness worker (holds model + JIT loglikelihood).
+        all_completions: Pre-built PromptCompletion objects from prepare_vlm_mc_data.
+        segment_metadata: Segment metadata from prepare_vlm_mc_data.
+        tokenizer: Tokenizer (for pad token).
+
+    Returns:
+        Dict with accuracy, loss, num_questions, num_correct, and per-question details.
+    """
+    num_questions = len({meta[0] for meta in segment_metadata.values()})
+    if num_questions == 0:
+        logger.warning("No MC questions found")
+        return {"accuracy": 0.0, "num_questions": 0, "num_correct": 0}
+
     pad_token = tokenizer.pad_token_id
     if pad_token is None:
         pad_token = tokenizer.eos_token_id
@@ -359,7 +372,7 @@ def evaluate_vlm_mc_benchmark(
     if len(missing_points) > 0:
         logger.warning("Missing %d segments: %s", len(missing_points), missing_points[:10])
 
-    # Step 3: Group by question, pick highest log-likelihood → accuracy
+    # Group by question, pick highest log-likelihood → accuracy
     question_options: dict[int, list[tuple[int, bool, float]]] = defaultdict(list)
     for seg_id, (q_idx, opt_idx, is_correct, _n_tokens) in segment_metadata.items():
         if covered_points[seg_id]:
@@ -374,7 +387,6 @@ def evaluate_vlm_mc_benchmark(
             per_question.append({"question_idx": q_idx, "predicted": -1, "correct": False})
             continue
 
-        # Pick option with highest log-likelihood
         best = max(options, key=lambda x: x[2])
         correct = best[1]
         if correct:
@@ -390,9 +402,7 @@ def evaluate_vlm_mc_benchmark(
 
     accuracy = num_correct / max(num_questions, 1)
 
-    # Step 4: Compute mean length-normalized LL of correct answers (loss metric)
-    # per_segment_loss() returns summed token-level losses, so we normalize by
-    # the number of completion tokens for comparability across questions.
+    # Compute mean length-normalized LL of correct answers (loss metric)
     total_correct_norm_ll = 0.0
     num_with_loss = 0
     for seg_id, (_q_idx, _opt_idx, is_correct, n_tokens) in segment_metadata.items():
@@ -425,28 +435,21 @@ def evaluate_vlm_mc_benchmark(
 # ---------------------------------------------------------------------------
 
 
-def evaluate_vlm_open_ended_benchmark(
-    worker: _LmEvalHarnessWorker,
+def prepare_vlm_open_ended_data(
     parquet_paths: list[str],
     tokenizer,
-) -> dict:
-    """Evaluate an open-ended benchmark using length-normalized log-likelihood.
+    max_len: int,
+) -> tuple[list[PromptCompletion], dict[int, tuple[int, str, int]]]:
+    """Load parquets and build PromptCompletion objects for open-ended evaluation.
 
-    For each question, computes log P(gold_answer | prompt + image) and normalizes
-    by the number of answer tokens. Reports mean normalized log-likelihood across
-    all questions.
-
-    Args:
-        worker: Levanter eval harness worker (holds model + JIT loglikelihood).
-        parquet_paths: Paths to benchmark parquet shards (with image_tokens column).
-        tokenizer: Tokenizer for encoding text parts.
+    This is pure CPU/IO work (no JAX collectives) and should be called BEFORE
+    entering the coordinator/worker pattern to avoid collective timeouts.
 
     Returns:
-        Dict with mean_ll, num_questions, and per-question details.
+        Tuple of (all_completions, segment_metadata) where segment_metadata maps
+        segment_id → (question_idx, answer_str, num_answer_tokens).
     """
-    # Step 1: Build all PromptCompletion objects (1 per question)
     all_completions: list[PromptCompletion] = []
-    # segment_id → (question_idx, answer_str, num_answer_tokens)
     segment_metadata: dict[int, tuple[int, str, int]] = {}
     question_idx = 0
     segment_counter = 0
@@ -486,8 +489,6 @@ def evaluate_vlm_open_ended_benchmark(
                 segment_id=segment_counter,
             )
 
-            # Check length limit
-            max_len = worker.EvalPos.size
             if len(pc.ids) > max_len:
                 logger.warning(
                     "Question %d has %d tokens (max %d), skipping",
@@ -505,19 +506,41 @@ def evaluate_vlm_open_ended_benchmark(
             segment_counter += 1
             question_idx += 1
 
-    num_questions = question_idx
-    if num_questions == 0:
-        logger.warning("No open-ended questions found in parquets")
-        return {"mean_ll": 0.0, "num_questions": 0}
-
     logger.info(
-        "Built %d completions for %d open-ended questions (%d skipped)",
+        "Built %d open-ended completions for %d questions (%d skipped)",
         len(all_completions),
-        num_questions,
+        question_idx,
         skipped,
     )
+    return all_completions, segment_metadata
 
-    # Step 2: Pack and run loglikelihood (same pipeline as MC)
+
+def evaluate_vlm_open_ended_benchmark(
+    worker: _LmEvalHarnessWorker,
+    all_completions: list[PromptCompletion],
+    segment_metadata: dict[int, tuple[int, str, int]],
+    tokenizer,
+) -> dict:
+    """Evaluate pre-prepared open-ended data using length-normalized log-likelihood.
+
+    Data preparation (parquet loading, PromptCompletion building) must happen
+    BEFORE the coordinator/worker split via prepare_vlm_open_ended_data() to avoid
+    collective timeouts on multi-host TPU.
+
+    Args:
+        worker: Levanter eval harness worker (holds model + JIT loglikelihood).
+        all_completions: Pre-built PromptCompletion objects from prepare_vlm_open_ended_data.
+        segment_metadata: Segment metadata from prepare_vlm_open_ended_data.
+        tokenizer: Tokenizer (for pad token).
+
+    Returns:
+        Dict with mean_ll, num_questions, and per-question details.
+    """
+    num_questions = len(segment_metadata)
+    if num_questions == 0:
+        logger.warning("No open-ended questions found")
+        return {"mean_ll": 0.0, "num_questions": 0}
+
     pad_token = tokenizer.pad_token_id
     if pad_token is None:
         pad_token = tokenizer.eos_token_id
@@ -559,7 +582,7 @@ def evaluate_vlm_open_ended_benchmark(
     if len(missing_points) > 0:
         logger.warning("Missing %d segments: %s", len(missing_points), missing_points[:10])
 
-    # Step 3: Compute length-normalized log-likelihood per question
+    # Compute length-normalized log-likelihood per question
     per_question = []
     total_norm_ll = 0.0
     num_covered = 0
@@ -708,7 +731,26 @@ def main():
 
         EvalPos = model.Pos if args.max_length is None else model.Pos.resize(args.max_length)
 
-        # Create worker (same as eval_harness.py line 1300)
+        # Pre-load all benchmark data before creating worker (avoids collective timeouts)
+        prepared: dict[str, tuple] = {}
+        if jax.process_index() == 0:
+            for bench_name in args.benchmarks:
+                parquet_paths = find_benchmark_parquets(bench_name, args.eval_parquet_path)
+                if not parquet_paths:
+                    continue
+
+                task_type = _detect_benchmark_task_type(parquet_paths[0])
+                logger.info("Preparing %s [%s] (%d parquet shards)", bench_name, task_type, len(parquet_paths))
+
+                if task_type == "multiple_choice":
+                    completions, metadata = prepare_vlm_mc_data(parquet_paths, tokenizer, EvalPos.size)
+                    prepared[bench_name] = ("multiple_choice", completions, metadata)
+                elif task_type == "open_ended":
+                    completions, metadata = prepare_vlm_open_ended_data(parquet_paths, tokenizer, EvalPos.size)
+                    prepared[bench_name] = ("open_ended", completions, metadata)
+                else:
+                    logger.warning("Unsupported task_type=%s for %s, skipping", task_type, bench_name)
+
         worker = _LmEvalHarnessWorker(
             EvalBatch,
             EvalPos,
@@ -721,16 +763,12 @@ def main():
 
         if jax.process_index() == 0:
             results = {}
-            for bench_name in args.benchmarks:
-                parquet_paths = find_benchmark_parquets(bench_name, args.eval_parquet_path)
-                if not parquet_paths:
+            for bench_name, (task_type, completions, metadata) in prepared.items():
+                if not completions:
                     continue
 
-                task_type = _detect_benchmark_task_type(parquet_paths[0])
-                logger.info("Evaluating %s [%s] (%d parquet shards)", bench_name, task_type, len(parquet_paths))
-
                 if task_type == "multiple_choice":
-                    result = evaluate_vlm_mc_benchmark(worker, parquet_paths, tokenizer)
+                    result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
                     results[bench_name] = result
                     logger.info(
                         "%s: accuracy=%.4f (%d/%d), loss=%.4f",
@@ -741,7 +779,7 @@ def main():
                         result["loss"],
                     )
                 elif task_type == "open_ended":
-                    result = evaluate_vlm_open_ended_benchmark(worker, parquet_paths, tokenizer)
+                    result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
                     results[bench_name] = result
                     logger.info(
                         "%s: mean_ll=%.4f (%d questions)",
@@ -749,8 +787,6 @@ def main():
                         result["mean_ll"],
                         result["num_questions"],
                     )
-                else:
-                    logger.warning("Unsupported task_type=%s for %s, skipping", task_type, bench_name)
 
             worker.stop()
 
@@ -776,7 +812,6 @@ def main():
                     )
 
             if args.output_json:
-                # Strip per_question details for compact output
                 compact = {
                     bench: {k: v for k, v in res.items() if k != "per_question"} for bench, res in results.items()
                 }
@@ -856,6 +891,31 @@ def vlm_mc_eval_callback(
             f"{parameter_count(model):,}",
         )
 
+        # Pre-load and pre-prepare all benchmark data on process 0 BEFORE
+        # creating the worker and entering the coordinator/worker split.
+        # This avoids collective timeouts: on multi-host TPU, workers enter
+        # broadcast_shard immediately after each benchmark and wait for
+        # process 0. If process 0 spends 30+ seconds loading the next
+        # benchmark's parquets from GCS, the collective times out.
+        prepared: dict[str, tuple] = {}
+        if jax.process_index() == 0:
+            for bench_name, parquet_paths in bench_parquets.items():
+                task_type = bench_task_types[bench_name]
+                logger.info("Preparing %s [%s] (%d shards)", bench_name, task_type, len(parquet_paths))
+
+                if task_type == "multiple_choice":
+                    completions, metadata = prepare_vlm_mc_data(
+                        parquet_paths, tokenizer, EvalPos.size,
+                    )
+                    prepared[bench_name] = ("multiple_choice", completions, metadata)
+                elif task_type == "open_ended":
+                    completions, metadata = prepare_vlm_open_ended_data(
+                        parquet_paths, tokenizer, EvalPos.size,
+                    )
+                    prepared[bench_name] = ("open_ended", completions, metadata)
+                else:
+                    logger.warning("Unknown task_type=%s for %s, skipping", task_type, bench_name)
+
         worker = _LmEvalHarnessWorker(
             EvalBatch,
             EvalPos,
@@ -866,13 +926,17 @@ def vlm_mc_eval_callback(
             max_packed_segments=64,
         )
 
+        # Now enter the coordinator/worker split. All data is pre-loaded,
+        # so transitions between benchmarks are fast (no GCS I/O).
         if jax.process_index() == 0:
-            for bench_name, parquet_paths in bench_parquets.items():
-                task_type = bench_task_types[bench_name]
-                logger.info("Evaluating %s [%s] (%d shards)", bench_name, task_type, len(parquet_paths))
+            for bench_name, (task_type, completions, metadata) in prepared.items():
+                if not completions:
+                    continue
+
+                logger.info("Evaluating %s [%s]", bench_name, task_type)
 
                 if task_type == "multiple_choice":
-                    result = evaluate_vlm_mc_benchmark(worker, parquet_paths, tokenizer)
+                    result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
                     accuracy = result["accuracy"]
                     loss = result["loss"]
                     logger.info(
@@ -892,7 +956,7 @@ def vlm_mc_eval_callback(
                     )
 
                 elif task_type == "open_ended":
-                    result = evaluate_vlm_open_ended_benchmark(worker, parquet_paths, tokenizer)
+                    result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
                     mean_ll = result["mean_ll"]
                     logger.info(
                         "%s: mean_ll=%.4f (%d questions)",
@@ -904,9 +968,6 @@ def vlm_mc_eval_callback(
                         {f"eval/{bench_name}/mean_ll": mean_ll},
                         step=step.step,
                     )
-
-                else:
-                    logger.warning("Unknown task_type=%s for %s, skipping", task_type, bench_name)
 
             worker.stop()
         else:
