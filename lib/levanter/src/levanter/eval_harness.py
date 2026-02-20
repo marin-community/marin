@@ -23,11 +23,13 @@ References:
 import dataclasses
 import json
 import logging
+import random
 import tempfile
+import time
 import typing
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Iterator, List, Optional, Tuple, Union
+from typing import Callable, Iterator, List, Optional, Tuple, TypeVar, Union
 
 import equinox as eqx
 import haliax
@@ -85,6 +87,73 @@ from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+def _call_with_retry(
+    fn: Callable[[], T],
+    max_retries: int = 10,
+    base_delay: float = 5.0,
+    max_delay: float = 300.0,
+) -> T:
+    """
+    Call a function with retry logic and exponential backoff.
+
+    Handles HuggingFace rate limit errors (HTTP 429) by parsing the RateLimit header
+    when available to determine appropriate wait time.
+
+    Args:
+        fn: The function to call (should take no arguments).
+        max_retries: Maximum number of retry attempts.
+        base_delay: Initial delay in seconds before first retry.
+        max_delay: Maximum delay in seconds between retries.
+
+    Returns:
+        The result of the function call.
+
+    Raises:
+        The last exception if all retries are exhausted.
+    """
+    last_exception: Exception | None = None
+
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_exception = e
+            error_type = type(e).__name__
+            error_msg = str(e)
+
+            # Check if this is a rate limit error from HuggingFace
+            wait_time = base_delay * (2**attempt)
+
+            # Try to extract rate limit info from HuggingFace errors
+            if "429" in error_msg or "Too Many Requests" in error_msg:
+                # Try to parse RateLimit header if available
+                if hasattr(e, "response") and hasattr(e.response, "headers"):
+                    try:
+                        rate_limit_header = e.response.headers.get("RateLimit", "")
+                        if rate_limit_header:
+                            # Format: "api|pages|resolvers;r=[remaining];t=[seconds until reset]"
+                            rate_limit_wait = int(rate_limit_header.split(";")[-1].split("=")[-1])
+                            wait_time = max(wait_time, rate_limit_wait + 10)
+                    except Exception:
+                        logger.debug("Failed to parse RateLimit header, using exponential backoff")
+
+            # Add jitter to avoid thundering herd
+            jitter = random.uniform(0, min(wait_time * 0.25, 30))
+            wait_time = min(wait_time + jitter, max_delay)
+
+            logger.warning(
+                f"Attempt {attempt + 1}/{max_retries} failed: {error_type}: {error_msg}. "
+                f"Retrying in {wait_time:.1f}s..."
+            )
+            time.sleep(wait_time)
+
+    raise RuntimeError(
+        f"Failed after {max_retries} attempts. Last error: {type(last_exception).__name__}: {last_exception}"
+    ) from last_exception
 
 
 @dataclass(frozen=True)
@@ -1007,6 +1076,9 @@ class LmEvalHarnessConfig:
         This is a bit more complex than we'd like, because we want to run e.g. Hellaswag 0-shot and 10-shot in the same
         run, and LM Eval Harness doesn't seem to want to do that by default. So we need to do some hacky stuff to make
         it work.
+
+        Uses retry logic with exponential backoff to handle HuggingFace rate limits when
+        downloading evaluation datasets.
         """
         logger.info("Loading tasks...")
         import lm_eval.tasks as tasks
@@ -1017,7 +1089,8 @@ class LmEvalHarnessConfig:
         for task in tqdm(self.to_task_spec()):
             try:
                 if isinstance(task, str):
-                    this_tasks.update(tasks.get_task_dict(task, manager))
+                    task_dict = _call_with_retry(lambda t=task: tasks.get_task_dict(t, manager))
+                    this_tasks.update(task_dict)
                 else:
                     our_name = task.get("task_alias", task["task"]) if isinstance(task, dict) else task
                     assert isinstance(our_name, str)
@@ -1039,12 +1112,14 @@ class LmEvalHarnessConfig:
         Get a task from the task manager and rename it to our_name.
         LM Eval Harness doesn't seem to want to run multiple instances of the same task with different fewshot settings,
         (or other differences) so we need to hack around that.
+
+        Uses retry logic with exponential backoff to handle HuggingFace rate limits.
         """
         import lm_eval.tasks as tasks
 
         task_name = task if isinstance(task, str) else task["task"]
 
-        task_dict = tasks.get_task_dict([task], manager)
+        task_dict = _call_with_retry(lambda: tasks.get_task_dict([task], manager))
         assert len(task_dict) == 1, f"Expected 1 task, got {len(task_dict)}"
         try:
             this_task = self._rename_tasks_for_eval_harness(task_dict, task_name, our_name)

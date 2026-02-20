@@ -14,6 +14,7 @@
 - Begin with the agent-friendly recipes in `docs/recipes/`.
 - The first step for dataset addition is schema inspection. See the [add_dataset.md](docs/recipes/add_dataset.md) recipe for details.
 - You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
+- For long-running benchmark/research threads, follow [agent_research.md](docs/recipes/agent_research.md).
 - When making significant changes to Grug/Grugformer, follow [change_grug.md](docs/recipes/change_grug.md).
 - Follow the rules and examples in each recipe to ensure compatibility and automation-friendliness.
 
@@ -41,8 +42,12 @@
 - Disprefer internal mutation of function arguments, especially config dataclasses; prefer returning a modified copy (e.g., via `dataclasses.replace`) so call sites remain predictable and side effects are explicit.
 - Use early returns (`if not x: return None`) when they reduce nesting.
 - Do not introduce ad-hoc compatibility hacks like `hasattr(m, "old_attr")`; update the code consistently instead.
-- Do not use `from future import ...` statements.
 - Document public APIs with concise Google-style docstrings.
+- Prefer small, concrete helpers over abstraction that adds indirection without reuse.
+- When defaults depend on environment/resource type, resolve them once and fail fast on unknown/ambiguous inputs rather than silently guessing.
+- Keep environment detection logic minimal and explicit; avoid multi-key heuristics unless they are clearly required.
+- Prefer single strong signals over sprawling defensive checks when detecting environment state (e.g., check the one variable that must be set rather than many optional ones).
+- In marin we generally prefer logging over `print` statements. `print` is fine for debugging and "scripts".
 
 ### Error Handling
 
@@ -54,6 +59,7 @@
 
 - Keep MkDocs content in sync with code. Docs live in `docs/` or in the subproject's `docs/` directory; use Markdown and mkdocs-style links when referencing symbols.
 - Public-facing modules and APIs need concise Google-style docstrings; align terminology across code and docs.
+- Write docs for readers who do not have conversational context: include enough problem framing, assumptions, commands, and results that the document stands on its own.
 
 ### Deprecation
 
@@ -104,5 +110,3 @@ DO NOT:
 ## Environment
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
-
-> This file will be expanded as agent workflows and best practices evolve.

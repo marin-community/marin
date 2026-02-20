@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Switch over to Qwen3 architecture, warmstarting from the llama-32b-tootsie
@@ -40,7 +29,7 @@ qwen3_32b_remat = dataclasses.replace(
 qwen_32b_warmstart_train = dataclasses.replace(
     llama_32b_train_config,
     initialize_from_checkpoint_path=warmstart_checkpoint,
-    resources=ResourceConfig.with_tpu("v4-2048", 1),
+    resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
     reset_data_loader_on_init=False,
     allow_partial_checkpoint=True,
     optimizer_config=AdamConfig(
@@ -82,7 +71,7 @@ marin_32b_qwen = default_train(
 qwen_32b_warmstart_train_v5p = dataclasses.replace(
     qwen_32b_warmstart_train,
     initialize_from_checkpoint_path=None,
-    resources=ResourceConfig.with_tpu("v5p-2048", 1),
+    resources=ResourceConfig.with_tpu("v5p-2048", slice_count=1),
     reset_data_loader_on_init=False,
     allow_partial_checkpoint=False,
 )

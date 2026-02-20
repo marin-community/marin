@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import chex
 import equinox as eqx
 import jax.numpy as jnp

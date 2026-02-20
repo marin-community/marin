@@ -1,5 +1,9 @@
 data:
-  id: dlwh/wikitext_103_detokenized
+  components:
+    main:
+      source:
+        type: hf
+        id: dlwh/wikitext_103_detokenized
 model:
   type: backpack
   hidden_dim: 32

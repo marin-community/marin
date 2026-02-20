@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import argparse
 import os
@@ -21,7 +10,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
@@ -36,6 +25,8 @@ def run_one_query(
     max_model_len: int | None,
     mode: Literal["docker", "native"] | None,
     docker_image: str | None,
+    port: int | None,
+    use_completions: bool,
 ) -> str:
     parsed = urlparse(model_name_or_path)
     is_object_store = parsed.scheme in {"gs", "s3"}
@@ -53,7 +44,7 @@ def run_one_query(
     env = VllmEnvironment(
         model=model,
         host="127.0.0.1",
-        port=None,
+        port=port,
         timeout_seconds=3600,
         mode=mode,
         docker_image=docker_image,
@@ -63,21 +54,35 @@ def run_one_query(
             if env.model_id is None:
                 raise RuntimeError("Expected vLLM server to expose a model id.")
             model_id = env.model_id
-            response = requests.post(
-                f"{env.server_url}/chat/completions",
-                json={
-                    "model": model_id,
-                    "messages": [
-                        {"role": "system", "content": "You are a helpful assistant."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": 0.2,
-                    "max_tokens": 128,
-                },
-                timeout=180,
-            )
+            if use_completions:
+                response = requests.post(
+                    f"{env.server_url}/completions",
+                    json={
+                        "model": model_id,
+                        "prompt": prompt,
+                        "temperature": 0.2,
+                        "max_tokens": 128,
+                    },
+                    timeout=180,
+                )
+            else:
+                response = requests.post(
+                    f"{env.server_url}/chat/completions",
+                    json={
+                        "model": model_id,
+                        "messages": [
+                            {"role": "system", "content": "You are a helpful assistant."},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": 0.2,
+                        "max_tokens": 128,
+                    },
+                    timeout=180,
+                )
             response.raise_for_status()
             payload = response.json()
+            if use_completions:
+                return payload["choices"][0]["text"]
             return payload["choices"][0]["message"]["content"]
     except Exception as exc:
         print("Smoke test failed with exception:", exc)
@@ -140,6 +145,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Override MARIN_VLLM_DOCKER_IMAGE (required in docker mode if env var unset).",
     )
     parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to bind the vLLM server to (default: 8000).",
+    )
+    parser.add_argument(
+        "--use-completions",
+        action="store_true",
+        help="Use /v1/completions instead of /v1/chat/completions.",
+    )
+    parser.add_argument(
         "--tpu-type",
         default="v5p-8",
         help="TPU type to request when launching via Ray/Fray (default: v5p-8).",
@@ -168,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
                 max_model_len=args.max_model_len,
                 mode=args.mode,
                 docker_image=args.docker_image,
+                port=args.port,
+                use_completions=args.use_completions,
             )
             elapsed = time.time() - start
             print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
@@ -197,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
                         max_model_len=args.max_model_len,
                         mode=args.mode,
                         docker_image=args.docker_image,
+                        port=args.port,
+                        use_completions=args.use_completions,
                     )
                 except Exception:
                     traceback.print_exc()

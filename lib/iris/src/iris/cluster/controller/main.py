@@ -1,53 +1,21 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Click-based CLI for the Iris controller daemon."""
 
 import logging
 import signal
-import sys
 import threading
 from pathlib import Path
 
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
+from iris.logging import configure_logging
+from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
-
-
-def configure_logging(level: int = logging.INFO) -> None:
-    """Configure structured logging for the controller.
-
-    Sets up a consistent log format with timestamps and component names
-    that makes it easy to grep and analyze logs.
-    """
-    root = logging.getLogger()
-    root.setLevel(level)
-
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setLevel(level)
-
-    formatter = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    handler.setFormatter(formatter)
-
-    # Clear existing handlers to avoid duplicate logs
-    root.handlers.clear()
-    root.addHandler(handler)
 
 
 @click.group()
@@ -59,17 +27,17 @@ def cli():
 @cli.command()
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=10000, type=int, help="Bind port")
-@click.option("--bundle-dir", default="/var/cache/iris/bundles", help="Directory for job bundles")
+@click.option(
+    "--bundle-prefix", default=None, help="URI prefix for job bundles (e.g., gs://bucket/path or file:///path)"
+)
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
-@click.option("--worker-timeout", default=60.0, type=float, help="Worker heartbeat timeout (seconds)")
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
 def serve(
     host: str,
     port: int,
-    bundle_dir: str,
+    bundle_prefix: str | None,
     scheduler_interval: float,
-    worker_timeout: float,
     config_file: str | None,
     log_level: str,
 ):
@@ -78,24 +46,18 @@ def serve(
     When --config is provided, the controller runs an integrated autoscaler
     that provisions/terminates VM slices based on pending task demand.
     """
-    from iris.cluster.vm.autoscaler import Autoscaler
-    from iris.cluster.vm.config import create_autoscaler_from_config, load_config
+    from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.config import load_config, create_autoscaler
+    from iris.cluster.platform.factory import create_platform
+    from iris.rpc import config_pb2
 
     configure_logging(level=getattr(logging, log_level))
 
     logger.info("Initializing Iris controller")
-    logger.info("Configuration: host=%s port=%d bundle_dir=%s", host, port, bundle_dir)
-    logger.info("Configuration: scheduler_interval=%.2fs worker_timeout=%.2fs", scheduler_interval, worker_timeout)
 
-    config = ControllerConfig(
-        host=host,
-        port=port,
-        bundle_dir=Path(bundle_dir),
-        scheduler_interval_seconds=scheduler_interval,
-        worker_timeout_seconds=worker_timeout,
-    )
-
+    # Load cluster config first to extract bundle_prefix if not provided via CLI
     autoscaler: Autoscaler | None = None
+    cluster_config = None
     if config_file:
         logger.info("Loading cluster config from %s", config_file)
         try:
@@ -105,21 +67,54 @@ def serve(
             logger.exception("Failed to load cluster config from %s", config_file)
             raise click.ClickException(f"Failed to load cluster config: {e}") from e
 
+        # Extract bundle_prefix from config if not provided via CLI
+        if bundle_prefix is None and cluster_config.controller.bundle_prefix:
+            bundle_prefix = cluster_config.controller.bundle_prefix
+            logger.info("Using bundle_prefix from config: %s", bundle_prefix)
+
         try:
-            autoscaler = create_autoscaler_from_config(cluster_config)
+            platform = create_platform(
+                platform_config=cluster_config.platform,
+                ssh_config=cluster_config.defaults.ssh,
+            )
+            logger.info("Platform created")
+
+            # Pass only BootstrapConfig through to platform.create_slice().
+            bootstrap_config = None
+            if cluster_config.defaults.bootstrap.docker_image:
+                bootstrap_config = config_pb2.BootstrapConfig()
+                bootstrap_config.CopyFrom(cluster_config.defaults.bootstrap)
+                if not bootstrap_config.controller_address:
+                    bootstrap_config.controller_address = platform.discover_controller(cluster_config.controller)
+
+            autoscaler = create_autoscaler(
+                platform=platform,
+                autoscaler_config=cluster_config.defaults.autoscaler,
+                scale_groups=cluster_config.scale_groups,
+                label_prefix=cluster_config.platform.label_prefix or "iris",
+                bootstrap_config=bootstrap_config,
+            )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
             logger.exception("Failed to create autoscaler from config")
             raise click.ClickException(f"Failed to create autoscaler: {e}") from e
-
-        try:
-            autoscaler.reconcile()
-            logger.info("Autoscaler initial reconcile completed")
-        except Exception as e:
-            logger.exception("Autoscaler initial reconcile failed")
-            raise click.ClickException(f"Autoscaler reconcile failed: {e}") from e
     else:
         logger.info("No cluster config provided, autoscaler disabled")
+
+    heartbeat_failure_threshold = (
+        cluster_config.controller.heartbeat_failure_threshold if cluster_config else HEARTBEAT_FAILURE_THRESHOLD
+    )
+
+    logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
+    logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
+
+    config = ControllerConfig(
+        host=host,
+        port=port,
+        bundle_prefix=bundle_prefix,
+        scheduler_interval=Duration.from_seconds(scheduler_interval),
+        heartbeat_failure_threshold=heartbeat_failure_threshold,
+    )
 
     try:
         controller = Controller(

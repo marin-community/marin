@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 gcs_utils.py
@@ -18,10 +7,13 @@ gcs_utils.py
 Helpful functions for manipulating Google Cloud Storage (path manipulation, parsing, etc.).
 """
 
+import logging
 from pathlib import Path
 
-import requests
 from google.cloud import storage
+from iris.temp_buckets import region_from_metadata
+
+logger = logging.getLogger(__name__)
 
 
 def split_gcs_path(gs_uri: str) -> tuple[str, Path]:
@@ -37,22 +29,17 @@ def split_gcs_path(gs_uri: str) -> tuple[str, Path]:
     return maybe_bucket_path[0], Path(maybe_bucket_path[1])
 
 
-def get_vm_region():
-    """Get the current VM's region using the Google Cloud Metadata API."""
-    metadata_url = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
-    headers = {"Metadata-Flavor": "Google"}
-    try:
-        response = requests.get(metadata_url, headers=headers)
-        if response.status_code == 200:
-            # The response contains the full zone (e.g., projects/<project-id>/zones/<zone>)
-            zone = response.text.split("/")[-1]
-            # Remove the last part to get the region (e.g., us-central1-a -> us-central1)
-            region = "-".join(zone.split("-")[:-1])
-            return region
-        else:
-            raise ValueError(f"Failed to get VM region: {response.text}")
-    except requests.exceptions.ConnectionError as e:
-        raise ValueError("Failed to connect to Google Cloud Metadata API") from e
+def get_vm_region() -> str:
+    """Get the current VM's region via GCP metadata, or raise ``ValueError``.
+
+    Thin wrapper around ``iris.temp_buckets.region_from_metadata`` that
+    preserves the ``ValueError``-raising contract expected by callers
+    such as the region-check validation in training.
+    """
+    region = region_from_metadata()
+    if region is not None:
+        return region
+    raise ValueError("Failed to determine VM region from GCP metadata")
 
 
 def get_bucket_location(bucket_name_or_path):
