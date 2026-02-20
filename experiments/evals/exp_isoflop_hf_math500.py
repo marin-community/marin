@@ -40,7 +40,7 @@ from experiments.evals.exp1600_uncheatable_evals import (
     models,
     get_directory_friendly_name,
 )
-from experiments.evals.vllm_math500_eval import Math500EvalConfig, Math500ProcessConfig, run_math500_eval, process_math500_data
+from experiments.evals.math500_eval import Math500EvalConfig, Math500ProcessConfig, run_math500_eval, process_math500_data
 from experiments.defaults import default_tokenize
 from levanter.data.text import ChatLmDatasetFormat
 
