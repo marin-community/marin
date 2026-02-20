@@ -1508,6 +1508,251 @@ def _gdn_chunk_segment_recurrent_fwd_pallas(
         return _local_call(q_bhscK, k_bhscK, g_cum_bhsc, v_pseudo_bhscV, k_cumdecay_bhscK, S_prev_bhKV)
 
 
+def _in_specs_chunk_fullseq_recurrent_fwd_tpu(B: int, H: int, N_chunks: int, Ct: int, K_pad: int, V_pad: int):
+    """Full-sequence recurrent apply specs (one program per (b,h), staged over chunk axis)."""
+
+    def _bh(nh):
+        b = nh // H
+        h = nh - b * H
+        return (b, h)
+
+    in_specs = (
+        pl.BlockSpec(
+            (1, 1, N_chunks, Ct, K_pad),
+            lambda nh: (*_bh(nh), 0, 0, 0),
+        ),  # q
+        pl.BlockSpec(
+            (1, 1, N_chunks, Ct, K_pad),
+            lambda nh: (*_bh(nh), 0, 0, 0),
+        ),  # k
+        pl.BlockSpec((1, 1, N_chunks, Ct), lambda nh: (*_bh(nh), 0, 0)),  # g_cum
+        pl.BlockSpec(
+            (1, 1, N_chunks, Ct, V_pad),
+            lambda nh: (*_bh(nh), 0, 0, 0),
+        ),  # v_pseudo
+        pl.BlockSpec(
+            (1, 1, N_chunks, Ct, K_pad),
+            lambda nh: (*_bh(nh), 0, 0, 0),
+        ),  # k_cumdecay
+        pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # S_prev
+    )
+
+    out_specs = (
+        pl.BlockSpec(
+            (1, 1, N_chunks, Ct, V_pad),
+            lambda nh: (*_bh(nh), 0, 0, 0),
+        ),  # out
+        pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # S_end
+        pl.BlockSpec(
+            (1, 1, N_chunks, K_pad, V_pad),
+            lambda nh: (*_bh(nh), 0, 0, 0),
+        ),  # chunk starts
+    )
+    return in_specs, out_specs
+
+
+def _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu(
+    q_ref,
+    k_ref,
+    gcum_ref,
+    vpseudo_ref,
+    kcum_ref,
+    Sprev_ref,
+    out_ref,
+    Send_ref,
+    Schunkstarts_ref,
+    Sscratch_ref,
+    *,
+    N_chunks: int,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+    precision_mode: Literal["fp32", "bf16"] = "fp32",
+):
+    """Sequential full-sequence recurrent apply over chunks using emit_pipeline."""
+
+    idx = jnp.arange(Ct, dtype=jnp.int32)
+    ii = idx[:, None]
+    jj = idx[None, :]
+    causal_mask = (ii >= jj).astype(jnp.float32)
+    mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
+
+    Sscratch_ref[dslice(0, K_pad), dslice(0, V_pad)] = (
+        Sprev_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)]
+        .astype(jnp.float32)
+        .reshape(K_pad, V_pad)
+    ).astype(Sscratch_ref.dtype)
+
+    def _stage_body(
+        q_chunk_ref,
+        k_chunk_ref,
+        gcum_chunk_ref,
+        vpseudo_chunk_ref,
+        kcum_chunk_ref,
+        out_chunk_ref,
+        Schunkstarts_chunk_ref,
+        S_ref,
+    ):
+        S = S_ref[dslice(0, K_pad), dslice(0, V_pad)].astype(jnp.float32).reshape(K_pad, V_pad)
+
+        Schunkstarts_chunk_ref[
+            dslice(0, 1),
+            dslice(0, 1),
+            dslice(0, 1),
+            dslice(0, K_pad),
+            dslice(0, V_pad),
+        ] = S[
+            None, None, None, :, :
+        ].astype(Schunkstarts_chunk_ref.dtype)
+
+        q = (
+            q_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, K_pad)
+        )
+        k = (
+            k_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, K_pad)
+        )
+        g_cum = (
+            gcum_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
+        )
+        v_pseudo = (
+            vpseudo_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, V_pad)
+        )
+        k_cumdecay = (
+            kcum_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)]
+            .astype(jnp.float32)
+            .reshape(Ct, K_pad)
+        )
+
+        g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+        exp_g = jnp.exp(g_cum_cl)
+
+        diff = g_cum[:, None] - g_cum[None, :]
+        diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+        exp_diff = jnp.exp(diff_cl)
+
+        QK = _mxu_matmul_f32(q, jnp.transpose(k), precision_mode=precision_mode)
+        attn = QK * exp_diff * causal_mask
+
+        v_prime = _mxu_matmul_f32(k_cumdecay, S, precision_mode=precision_mode)
+        v_new = v_pseudo - v_prime
+
+        inter = _mxu_matmul_f32(q * exp_g[:, None], S, precision_mode=precision_mode)
+        intra = _mxu_matmul_f32(attn, v_new, precision_mode=precision_mode)
+        out = inter + intra
+
+        g_tail = jnp.sum(g_cum * mask_last)
+        decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
+
+        decay_w = jnp.exp(jnp.clip(g_tail - g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
+        k_w = k * decay_w[:, None]
+        add = _mxu_matmul_f32(jnp.transpose(k_w), v_new, precision_mode=precision_mode)
+        S_next = S * decay_tail + add
+
+        out_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)] = out[
+            None, None, None, :, :
+        ].astype(out_chunk_ref.dtype)
+        S_ref[dslice(0, K_pad), dslice(0, V_pad)] = S_next.astype(S_ref.dtype)
+
+    stage_in_specs = (
+        pl.BlockSpec((1, 1, 1, Ct, K_pad), lambda c: (0, 0, c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct, K_pad), lambda c: (0, 0, c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct), lambda c: (0, 0, c, 0)),
+        pl.BlockSpec((1, 1, 1, Ct, V_pad), lambda c: (0, 0, c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, Ct, K_pad), lambda c: (0, 0, c, 0, 0)),
+    )
+    stage_out_specs = (
+        pl.BlockSpec((1, 1, 1, Ct, V_pad), lambda c: (0, 0, c, 0, 0)),
+        pl.BlockSpec((1, 1, 1, K_pad, V_pad), lambda c: (0, 0, c, 0, 0)),
+    )
+
+    pipeline = pltpu.emit_pipeline(
+        _stage_body,
+        grid=(N_chunks,),
+        in_specs=stage_in_specs,
+        out_specs=stage_out_specs,
+        dimension_semantics=(pltpu.ARBITRARY,),
+    )
+    pipeline(
+        q_ref,
+        k_ref,
+        gcum_ref,
+        vpseudo_ref,
+        kcum_ref,
+        out_ref,
+        Schunkstarts_ref,
+        scratches=(Sscratch_ref,),
+    )
+
+    Send_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)] = Sscratch_ref[
+        dslice(0, K_pad), dslice(0, V_pad)
+    ][None, None, :, :].astype(Send_ref.dtype)
+
+
+def _gdn_chunk_fullseq_recurrent_fwd_pallas(
+    q_bhncK: jnp.ndarray,
+    k_bhncK: jnp.ndarray,
+    g_cum_bhnc: jnp.ndarray,
+    v_pseudo_bhncV: jnp.ndarray,
+    k_cumdecay_bhncK: jnp.ndarray,
+    S_prev_bhKV: jnp.ndarray,
+    *,
+    N_chunks: int,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+):
+    kernel = functools.partial(
+        _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu,
+        N_chunks=int(N_chunks),
+        Ct=int(Ct),
+        K_pad=int(K_pad),
+        V_pad=int(V_pad),
+    )
+
+    def _local_call(q_bhncK, k_bhncK, g_cum_bhnc, v_pseudo_bhncV, k_cumdecay_bhncK, S_prev_bhKV):
+        B, H = q_bhncK.shape[0], q_bhncK.shape[1]
+        NH = B * H
+
+        out_struct = jax.ShapeDtypeStruct((B, H, N_chunks, Ct, V_pad), jnp.float32)
+        st_struct = jax.ShapeDtypeStruct((B, H, K_pad, V_pad), jnp.float32)
+        chunk_starts_struct = jax.ShapeDtypeStruct((B, H, N_chunks, K_pad, V_pad), jnp.float32)
+
+        in_specs, out_specs = _in_specs_chunk_fullseq_recurrent_fwd_tpu(B, H, N_chunks, Ct, K_pad, V_pad)
+        return pl.pallas_call(
+            kernel,
+            grid=(NH,),
+            in_specs=in_specs,
+            out_specs=out_specs,
+            out_shape=(out_struct, st_struct, chunk_starts_struct),
+            scratch_shapes=(pltpu.VMEM((K_pad, V_pad), dtype=jnp.float32),),
+            compiler_params=compiler_params,
+        )(q_bhncK, k_bhncK, g_cum_bhnc, v_pseudo_bhncV, k_cumdecay_bhncK, S_prev_bhKV)
+
+    mesh, q_spec = _get_mesh_and_spec(q_bhncK)
+    _, k_spec = _get_mesh_and_spec(k_bhncK)
+    _, g_spec = _get_mesh_and_spec(g_cum_bhnc)  # rank-4
+    _, v_pseudo_spec = _get_mesh_and_spec(v_pseudo_bhncV)  # rank-5
+    _, k_cum_spec = _get_mesh_and_spec(k_cumdecay_bhncK)  # rank-5
+    _, S_spec = _get_mesh_and_spec(S_prev_bhKV)  # rank-4
+    Schunkstarts_spec = _insert_segment_axis(S_spec)
+
+    if _mesh_size(mesh) > 1:
+        return _mk_shard_map(
+            _local_call,
+            mesh=mesh,
+            in_specs=(q_spec, k_spec, g_spec, v_pseudo_spec, k_cum_spec, S_spec),
+            out_specs=(v_pseudo_spec, S_spec, Schunkstarts_spec),
+        )(q_bhncK, k_bhncK, g_cum_bhnc, v_pseudo_bhncV, k_cumdecay_bhncK, S_prev_bhKV)
+    else:
+        return _local_call(q_bhncK, k_bhncK, g_cum_bhnc, v_pseudo_bhncV, k_cumdecay_bhncK, S_prev_bhKV)
+
+
 @overload
 def _gdn_chunk_segment_fwd_pallas(
     q_bhscK: jnp.ndarray,
@@ -2075,25 +2320,98 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
         S0 = _pad_kv_state_bh(initial_state.astype(jnp.float32), K_pad=K_pad, V_pad=V_pad)
 
     n_segments = n_chunks_pad // seg
+    use_fullseq_pipeline = (K_pad >= _MXU_TILE) and (V_pad >= _MXU_TILE)
 
-    # segment view: (B,H,n_segments,seg,Ct,*)
-    q_s = q_c.reshape(B, H, n_segments, seg, Ct, K_pad)
-    k_s = k_c.reshape(B, H, n_segments, seg, Ct, K_pad)
-    v_s = v_c.reshape(B, H, n_segments, seg, Ct, V_pad)
-    g_s = g_cum.reshape(B, H, n_segments, seg, Ct)
-    b_s = b_c.reshape(B, H, n_segments, seg, Ct)
+    if use_fullseq_pipeline:
+        # Prepare is chunk-local and can remain segmented. Recurrent apply is moved
+        # to one full-sequence pipelined kernel that carries S in VMEM.
+        k_s = k_c.reshape(B, H, n_segments, seg, Ct, K_pad)
+        v_s = v_c.reshape(B, H, n_segments, seg, Ct, V_pad)
+        g_s = g_cum.reshape(B, H, n_segments, seg, Ct)
+        b_s = b_c.reshape(B, H, n_segments, seg, Ct)
 
-    # time-major segments for scan
-    q_tm = jnp.moveaxis(q_s, 2, 0)
-    k_tm = jnp.moveaxis(k_s, 2, 0)
-    v_tm = jnp.moveaxis(v_s, 2, 0)
-    g_tm = jnp.moveaxis(g_s, 2, 0)
-    b_tm = jnp.moveaxis(b_s, 2, 0)
+        k_tm = jnp.moveaxis(k_s, 2, 0)
+        v_tm = jnp.moveaxis(v_s, 2, 0)
+        g_tm = jnp.moveaxis(g_s, 2, 0)
+        b_tm = jnp.moveaxis(b_s, 2, 0)
 
-    def seg_fwd(S_prev, seg_inputs):
-        q_seg, k_seg, v_seg, g_seg, b_seg = seg_inputs
+        def seg_prepare(_, seg_inputs):
+            k_seg, v_seg, g_seg, b_seg = seg_inputs
+            v_pseudo_seg, k_cumdecay_seg = _gdn_chunk_segment_prepare_pallas(
+                k_seg,
+                v_seg,
+                g_seg,
+                b_seg,
+                Seg=seg,
+                Ct=Ct,
+                K_pad=K_pad,
+                V_pad=V_pad,
+            )
+            return None, (v_pseudo_seg, k_cumdecay_seg)
+
+        _, (v_pseudo_tm, k_cumdecay_tm) = lax.scan(
+            seg_prepare,
+            None,
+            (k_tm, v_tm, g_tm, b_tm),
+            length=n_segments,
+            unroll=_GDN_SEGMENT_SCAN_UNROLL,
+        )
+
+        v_pseudo_s = jnp.moveaxis(v_pseudo_tm, 0, 2)  # (B,H,n_segments,seg,Ct,V_pad)
+        k_cumdecay_s = jnp.moveaxis(k_cumdecay_tm, 0, 2)  # (B,H,n_segments,seg,Ct,K_pad)
+        v_pseudo_bh_all = v_pseudo_s.reshape(B, H, n_chunks_pad, Ct, V_pad)
+        k_cumdecay_bh_all = k_cumdecay_s.reshape(B, H, n_chunks_pad, Ct, K_pad)
+
+        out_bhncv, S_final, chunk_starts_bh_all = _gdn_chunk_fullseq_recurrent_fwd_pallas(
+            q_c,
+            k_c,
+            g_cum,
+            v_pseudo_bh_all,
+            k_cumdecay_bh_all,
+            S0,
+            N_chunks=n_chunks_pad,
+            Ct=Ct,
+            K_pad=K_pad,
+            V_pad=V_pad,
+        )
+
+        chunk_starts_bh = chunk_starts_bh_all[:, :, :Nc, :, :]
         if return_prepare_tape:
-            out_seg, S_next, chunk_starts_seg, v_pseudo_seg, k_cumdecay_seg = _gdn_chunk_segment_fwd_pallas(
+            v_pseudo_bh = v_pseudo_bh_all[:, :, :Nc, :, :]
+            k_cumdecay_bh = k_cumdecay_bh_all[:, :, :Nc, :, :]
+    else:
+        # For tiny head dims (e.g. tests with dk/dv=8), pipeline DMA slices can violate
+        # TPU lane tiling. Keep the validated segmented recurrent path in that regime.
+        q_s = q_c.reshape(B, H, n_segments, seg, Ct, K_pad)
+        k_s = k_c.reshape(B, H, n_segments, seg, Ct, K_pad)
+        v_s = v_c.reshape(B, H, n_segments, seg, Ct, V_pad)
+        g_s = g_cum.reshape(B, H, n_segments, seg, Ct)
+        b_s = b_c.reshape(B, H, n_segments, seg, Ct)
+
+        q_tm = jnp.moveaxis(q_s, 2, 0)
+        k_tm = jnp.moveaxis(k_s, 2, 0)
+        v_tm = jnp.moveaxis(v_s, 2, 0)
+        g_tm = jnp.moveaxis(g_s, 2, 0)
+        b_tm = jnp.moveaxis(b_s, 2, 0)
+
+        def seg_fwd(S_prev, seg_inputs):
+            q_seg, k_seg, v_seg, g_seg, b_seg = seg_inputs
+            if return_prepare_tape:
+                out_seg, S_next, chunk_starts_seg, v_pseudo_seg, k_cumdecay_seg = _gdn_chunk_segment_fwd_pallas(
+                    q_seg,
+                    k_seg,
+                    v_seg,
+                    g_seg,
+                    b_seg,
+                    S_prev,
+                    Seg=seg,
+                    Ct=Ct,
+                    K_pad=K_pad,
+                    V_pad=V_pad,
+                    return_prepare_tape=True,
+                )
+                return S_next, (out_seg, chunk_starts_seg, v_pseudo_seg, k_cumdecay_seg)
+            out_seg, S_next, chunk_starts_seg = _gdn_chunk_segment_fwd_pallas(
                 q_seg,
                 k_seg,
                 v_seg,
@@ -2104,53 +2422,39 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
                 Ct=Ct,
                 K_pad=K_pad,
                 V_pad=V_pad,
-                return_prepare_tape=True,
+                return_prepare_tape=False,
             )
-            return S_next, (out_seg, chunk_starts_seg, v_pseudo_seg, k_cumdecay_seg)
-        out_seg, S_next, chunk_starts_seg = _gdn_chunk_segment_fwd_pallas(
-            q_seg,
-            k_seg,
-            v_seg,
-            g_seg,
-            b_seg,
-            S_prev,
-            Seg=seg,
-            Ct=Ct,
-            K_pad=K_pad,
-            V_pad=V_pad,
-            return_prepare_tape=False,
-        )
-        return S_next, (out_seg, chunk_starts_seg)
+            return S_next, (out_seg, chunk_starts_seg)
 
-    if return_prepare_tape:
-        S_final, (out_tm, chunk_starts_tm, v_pseudo_tm, k_cumdecay_tm) = lax.scan(
-            seg_fwd,
-            S0,
-            (q_tm, k_tm, v_tm, g_tm, b_tm),
-            length=n_segments,
-            unroll=_GDN_SEGMENT_SCAN_UNROLL,
-        )
-    else:
-        S_final, (out_tm, chunk_starts_tm) = lax.scan(
-            seg_fwd,
-            S0,
-            (q_tm, k_tm, v_tm, g_tm, b_tm),
-            length=n_segments,
-            unroll=_GDN_SEGMENT_SCAN_UNROLL,
-        )
+        if return_prepare_tape:
+            S_final, (out_tm, chunk_starts_tm, v_pseudo_tm, k_cumdecay_tm) = lax.scan(
+                seg_fwd,
+                S0,
+                (q_tm, k_tm, v_tm, g_tm, b_tm),
+                length=n_segments,
+                unroll=_GDN_SEGMENT_SCAN_UNROLL,
+            )
+        else:
+            S_final, (out_tm, chunk_starts_tm) = lax.scan(
+                seg_fwd,
+                S0,
+                (q_tm, k_tm, v_tm, g_tm, b_tm),
+                length=n_segments,
+                unroll=_GDN_SEGMENT_SCAN_UNROLL,
+            )
 
-    out_s = jnp.moveaxis(out_tm, 0, 2)  # (B,H,n_segments,seg,Ct,V_pad)
-    chunk_starts_s = jnp.moveaxis(chunk_starts_tm, 0, 2)  # (B,H,n_segments,seg,K_pad,V_pad)
-    out_bhnscv = out_s.reshape(B, H, n_chunks_pad, Ct, V_pad)
-    chunk_starts_bh = chunk_starts_s.reshape(B, H, n_chunks_pad, K_pad, V_pad)[:, :, :Nc, :, :]
-    if return_prepare_tape:
-        v_pseudo_s = jnp.moveaxis(v_pseudo_tm, 0, 2)  # (B,H,n_segments,seg,Ct,V_pad)
-        k_cumdecay_s = jnp.moveaxis(k_cumdecay_tm, 0, 2)  # (B,H,n_segments,seg,Ct,K_pad)
-        v_pseudo_bh = v_pseudo_s.reshape(B, H, n_chunks_pad, Ct, V_pad)[:, :, :Nc, :, :]
-        k_cumdecay_bh = k_cumdecay_s.reshape(B, H, n_chunks_pad, Ct, K_pad)[:, :, :Nc, :, :]
+        out_s = jnp.moveaxis(out_tm, 0, 2)  # (B,H,n_segments,seg,Ct,V_pad)
+        chunk_starts_s = jnp.moveaxis(chunk_starts_tm, 0, 2)  # (B,H,n_segments,seg,K_pad,V_pad)
+        out_bhncv = out_s.reshape(B, H, n_chunks_pad, Ct, V_pad)
+        chunk_starts_bh = chunk_starts_s.reshape(B, H, n_chunks_pad, K_pad, V_pad)[:, :, :Nc, :, :]
+        if return_prepare_tape:
+            v_pseudo_s = jnp.moveaxis(v_pseudo_tm, 0, 2)  # (B,H,n_segments,seg,Ct,V_pad)
+            k_cumdecay_s = jnp.moveaxis(k_cumdecay_tm, 0, 2)  # (B,H,n_segments,seg,Ct,K_pad)
+            v_pseudo_bh = v_pseudo_s.reshape(B, H, n_chunks_pad, Ct, V_pad)[:, :, :Nc, :, :]
+            k_cumdecay_bh = k_cumdecay_s.reshape(B, H, n_chunks_pad, Ct, K_pad)[:, :, :Nc, :, :]
 
     # drop padded chunks, drop Ct padding to C, flatten tokens, crop dv
-    out_bhncv = out_bhnscv[:, :, :Nc, :C, :]  # (B,H,Nc,C,V)
+    out_bhncv = out_bhncv[:, :, :Nc, :C, :]  # (B,H,Nc,C,V)
     out_bhlv = out_bhncv.reshape(B, H, L1, V_pad)  # (B,H,L1,V)
     out = out_bhlv[:, :, :L, :dv]  # (B,H,L,dv)
 
