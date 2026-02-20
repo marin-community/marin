@@ -374,3 +374,43 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - `throughput/duration`: `0.25394s -> 0.25974s` (`+2.29%`).
 - Assessment: **low-impact / regression**. MFU regressed and dominant hotspot category remained unchanged.
 - Next hypothesis: escalate to a more radical launch-reduction move, specifically Macro Move D with `pltpu.emit_pipeline` over full chunk axis (no Python unrolled chunk loops) and a matching backward pipeline so forward/backward shard-map call count drops instead of increasing.
+
+### Iteration 1 (loop 1/20) - FLA Experiment B: V-tiled recurrent kernels (reverted)
+
+- Date: 2026-02-20T09:04:15Z
+- Commit: none (failed attempt)
+- Starting commit: `3abf4d1112ce53c4f52664fa115268b407bc004c`
+- Dominant bottleneck carried in: GDN shard-map `custom-call` path remained dominant from Iteration 8 TPU:0 XLA Ops (`custom-call` `232.081 ms` on TPU:0 XLA Ops thread), with top callsites:
+  - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` (`143.560 ms`)
+  - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` (`75.052 ms`)
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move E / FLA Experiment B**: tile recurrent forward+backward kernels over V blocks (`+10-25%`, high risk from reduction correctness and duplicated K-only compute per V block).
+  2. **Macro Move D**: full-sequence `pltpu.emit_pipeline` recurrent kernel over chunk axis (`+20-35%`, very high implementation and validation risk).
+  3. **Macro Move B**: global `dot_general` conversion in backward hotspot (`+8-15%`, medium risk; less launch-structure impact than E/D).
+- Selected macro-move category: **E) Tile the state/output along V**.
+- Selected hypothesis: run segmented recurrent forward/backward on `grid=(NH, V_blocks)` so each program holds `K x V_tile` state, with backward emitting per-V partials reduced in the wrapper.
+- Change summary:
+  - Implemented V-tiling for `_gdn_chunk_segment_recurrent_fwd_pallas` and `_gdn_chunk_segment_bwd_pallas` with tiled `BlockSpec` index maps and `V_tile=64` policy for `V_pad>=128`.
+  - Implemented backward partial accumulation path (`dq/dk/dg/db` reduced across `V_blocks`; `dv/dS_start` merged by tiled reshape/transposes).
+  - Fixed an initial shape-store bug in tiled backward outputs and re-ran TPU tests to green.
+  - Reverted the kernel code after profiling because end-to-end throughput/MFU regressed beyond policy threshold; tree intentionally left without speculative kernel changes.
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+  - Final result after fix: `87 passed, 2 skipped`.
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_vtile_recur_i1_dev --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_vtile_recur_i1_dev_130m_ch128_seg16_20steps-90a7d2`
+  - W&B profiler artifact: `run-gdn_vtile_recur_i1_dev_130m_ch128_seg16_20steps-90a7d2-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_vtile_recur_i1_dev/plugins/profile/2026_02_20_08_59_14/perfetto_trace.json.gz`
+- Hotspots observed (TPU:0 XLA Ops thread `pid=3, tid=3`, compared to Iteration 8 baseline trace `.profiles/wandb/gdn_split2kernel_i2_dev/plugins/profile/2026_02_20_06_37_50/perfetto_trace.json.gz`):
+  - `custom-call`: `232.081 ms -> 132.090 ms` (`-43.08%`), still dominant category.
+  - `all-gather`: `32.684 ms -> 20.479 ms` (`-37.34%`).
+  - Same dominant GDN callsites were faster (hotspot improved, not moved):
+    - `transpose(jvp(...))/closed_call/shard_map/pallas_call:` `143.560 ms -> 71.773 ms` (`-50.01%`).
+    - `jvp(...)/closed_call/shard_map/pallas_call:` `75.052 ms -> 52.524 ms` (`-30.02%`).
+- MFU/throughput delta (vs Iteration 8 run `gdn_split2kernel_i2_dev_130m_ch128_seg16_20steps-474c1f`):
+  - `throughput/mfu`: `3.8997 -> 3.8252` (`-1.91%`).
+  - `throughput/tokens_per_second`: `126155.06 -> 123743.20` (`-1.91%`).
+  - `throughput/duration`: `0.25974s -> 0.26481s` (`+1.95%`).
+- Assessment: **low-impact / regression** under current governance. Despite lower per-hotspot trace times, end-to-end MFU regressed by >1% and dominant hotspot category remained `custom-call`, so this attempt is marked failed and code reverted.
+- Next hypothesis (escalation): take a more radical launch/dataflow redesign that removes duplicated chunk-local K-only work and reduces backward launch pressure, e.g. Macro Move D (`emit_pipeline` full-sequence recurrent state carry) or a backward decomposition that computes chunk-local factors once and applies recurrent updates in a separate V-tiled stage.
