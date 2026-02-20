@@ -179,15 +179,24 @@ class Worker:
         3. Serve (wait for heartbeats from controller)
         4. If heartbeat timeout expires, return to step 1
         """
-        while not stop_event.is_set():
-            self._reset_worker_state()
-            worker_id = self._register(stop_event)
-            if worker_id is None:
-                # Shutdown requested during registration
-                break
-            self._worker_id = worker_id
-            self._ensure_process_log_sink()
-            self._serve(stop_event)
+        try:
+            while not stop_event.is_set():
+                self._reset_worker_state()
+                worker_id = self._register(stop_event)
+                if worker_id is None:
+                    # Shutdown requested during registration
+                    break
+                self._worker_id = worker_id
+                self._ensure_process_log_sink()
+                self._serve(stop_event)
+        except Exception:
+            logger.exception("Worker lifecycle crashed; flushing process logs before exit")
+            raise
+        finally:
+            # Flush process logs on any exit (clean or crash) so the last log
+            # entries reach object storage before the pod is deleted.
+            if self._process_log_sink:
+                self._process_log_sink.sync()
 
     def _register(self, stop_event: threading.Event) -> str | None:
         """Register with controller. Retries until accepted or shutdown.
@@ -583,12 +592,17 @@ class Worker:
                         )
                     )
                 else:
-                    # Task is running/building - include in running_tasks
+                    # Task is running/building - include in running_tasks.
+                    # Report BUILDING if the thread hasn't transitioned out of PENDING yet
+                    # (the thread starts in PENDING before calling _download_bundle).
+                    reported_state = task.status
+                    if reported_state == cluster_pb2.TASK_STATE_PENDING:
+                        reported_state = cluster_pb2.TASK_STATE_BUILDING
                     running_tasks.append(
                         cluster_pb2.Controller.RunningTaskEntry(
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
-                            state=task.status,
+                            state=reported_state,
                             log_directory=task.log_directory,
                         )
                     )
