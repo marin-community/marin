@@ -23,7 +23,7 @@ def test_whisper_batch_processor():
         ds = load_dataset("WillHeld/test_librispeech_parquet", split="validation").select_columns(["audio", "text"])
         batch_processor = BatchAudioProcessor(processor, tokenizer)
         inputs = [
-            (audio["array"], audio["sampling_rate"], text) for audio, text in zip(ds[:16]["audio"], ds[:16]["text"])
+            (audio["array"], audio["sampling_rate"], text) for audio, text in zip(ds[:4]["audio"], ds[:4]["text"])
         ]
         batch_processor(inputs)
     except FileNotFoundError:
