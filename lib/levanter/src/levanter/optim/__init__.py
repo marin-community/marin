@@ -34,6 +34,10 @@ __all__ = [
     "SoapConfig",
     # skipstep
     "SkipStepConfig",
+    # sso
+    "SSOConfig",
+    "MuonSphereConfig",
+    "ScaleBySSOState",
     # model averaging
     "EmaModelAveragingConfig",
     "EmaDecaySqrtConfig",
@@ -52,6 +56,7 @@ from .rmsprop import RMSPropMomentumConfig, ScaleByRMSPropMomState
 from .scion import ScaleByScionState, ScionConfig
 from .soap import SoapConfig
 from .skipstep import SkipStepConfig
+from .sso import MuonSphereConfig, ScaleBySSOState, SSOConfig
 from .model_averaging import (
     EmaDecaySqrtConfig,
     EmaModelAveragingConfig,
