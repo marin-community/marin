@@ -230,6 +230,7 @@ _HUGE_BATCH_BUCKET = "huge-batch-llama3-ish"
 _FAST_HUGE_BATCH_SOURCE_BUCKET = "llama3-ish"
 _SCOPED_VMEM_LIMIT_ARG = "xla_tpu_scoped_vmem_limit_kib="
 _WARNED_HUGE_BATCH_SAFE_FALLBACK = False
+_TPU_LABEL_LAYOUT_DEVICE_KEYS = {"TPU v4", "TPU v5", "TPU v5p"}
 
 
 def _device_key(device_kind: Optional[str]) -> Optional[str]:
@@ -277,7 +278,8 @@ def _warn_huge_batch_safe_fallback() -> None:
     warnings.warn(
         "Using safer fused CE huge-batch block sizes (v_block_size=256) because "
         "LIBTPU_INIT_ARGS does not set xla_tpu_scoped_vmem_limit_kib. "
-        "Set --xla_tpu_scoped_vmem_limit_kib in LIBTPU_INIT_ARGS to use the faster tuning.",
+        "On TPU v5p, set --xla_tpu_scoped_vmem_limit_kib=50000 (or higher) in "
+        "LIBTPU_INIT_ARGS to use the faster tuning.",
         RuntimeWarning,
         stacklevel=3,
     )
@@ -319,6 +321,22 @@ def _largest_divisor_multiple_of_128(dim: int, preferred: int) -> int:
             return block
 
     return preferred
+
+
+def _is_valid_for_pallas_shape(
+    block_sizes: BlockSizes,
+    *,
+    b: int,
+    h: int,
+    device_key: Optional[str],
+) -> bool:
+    if block_sizes.b_block_size % 128 != 0 or block_sizes.h_block_size % 128 != 0:
+        return False
+    if b % block_sizes.b_block_size != 0 or h % block_sizes.h_block_size != 0:
+        return False
+    if device_key in _TPU_LABEL_LAYOUT_DEVICE_KEYS and b >= 1024 and block_sizes.b_block_size % 1024 != 0:
+        return False
+    return True
 
 
 def _sanitize_for_pallas(
@@ -373,9 +391,13 @@ def infer_block_sizes(
                     bucket=bucket,
                     device_key=device_key,
                 )
-                return _sanitize_for_pallas(entry, b=b, h=h)
+                if _is_valid_for_pallas_shape(entry, b=b, h=h, device_key=device_key):
+                    return entry
 
-    return _sanitize_for_pallas(BlockSizes.get_default(), b=b, h=h)
+    default_entry = BlockSizes.get_default()
+    if _is_valid_for_pallas_shape(default_entry, b=b, h=h, device_key=device_key):
+        return default_entry
+    return _sanitize_for_pallas(default_entry, b=b, h=h)
 
 
 def infer_xla_v_block_size(
