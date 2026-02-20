@@ -267,7 +267,7 @@ def test_lora_works_with_checkpointer():
 
         checkpointer = Checkpointer(tempdir, None, [])
         checkpointer.save_checkpoint(
-            saveable_state=info.state.saveable_state,
+            tree=info.state.saveable_state,
             step=info.step,
             destination="loraized",
         )

@@ -56,7 +56,7 @@ def _dummy_step_info(step):
 
 def _on_step(checkpointer: Checkpointer, step: int, *, force: bool = False):
     info = _dummy_step_info(step)
-    checkpointer.on_step(saveable_state=info.state.saveable_state, step=info.step, force=force)
+    checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
 
 
 def _get_checkpoint_steps(checkpoint_dir):

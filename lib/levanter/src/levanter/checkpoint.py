@@ -167,7 +167,7 @@ class Checkpointer:
             return None
         return ret_dict["model"]
 
-    def on_step(self, *, saveable_state: PyTree, step: int, force: bool = False):
+    def on_step(self, *, tree: PyTree, step: int, force: bool = False):
         step = int(step)
 
         if step == 0:
@@ -243,7 +243,7 @@ class Checkpointer:
                         # if we can't load the metadata, we can't delete it, so just log a warning
 
             self.save_checkpoint(
-                saveable_state=saveable_state,
+                tree=tree,
                 step=step,
                 destination=destination,
                 commit_callback=callback,
@@ -284,7 +284,7 @@ class Checkpointer:
 
     def save_checkpoint(
         self,
-        saveable_state: PyTree,
+        tree: PyTree,
         step: int,
         destination: str,
         commit_callback: Optional[Callable[[], None]] = None,
@@ -295,7 +295,7 @@ class Checkpointer:
         logger.info(f"Saving checkpoint at step {step} to {path}")
 
         save_checkpoint(
-            saveable_state,
+            tree,
             step=step,
             checkpoint_path=path,
             manager=self._manager,
