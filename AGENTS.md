@@ -36,7 +36,7 @@
 ### Agent-Generated GitHub Activity
 
 - When an agent creates a PR or an issue using the user's auth token, it must add the `agent-generated` label.
-- When an agent comments on a PR or issue using the user's auth token, the comment must include a `🤖` emoji unless the exact comment text was explicitly approved by the user.
+- When an agent comments on a PR or issue using the user's auth token, the comment must begin with an `🤖` emoji unless the exact comment text was explicitly approved by the user. If it cannot be at the very beginning for formatting or workflow reasons, it should come as soon as possible.
 
 ### Code Style
 
