@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import asdict, is_dataclass
 import itertools
-import json
 import os
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -20,24 +20,32 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def unique_temp_path(output_path: str) -> str:
+    """Return a unique temporary path derived from ``output_path``.
+
+    Appends ``.tmp.<uuid>`` to avoid collisions when multiple writers target the
+    same output path (e.g. during network-partition induced worker races).
+    """
+    return f"{output_path}.tmp.{uuid.uuid4().hex}"
+
+
 @contextmanager
 def atomic_rename(output_path: str) -> Iterable[str]:
-    """Context manager for atomic write-and-rename.
+    """Context manager for atomic write-and-rename with UUID collision avoidance.
 
-    Yields a temporary path to write to. On successful exit, atomically renames
-    the temp file to the final path. On failure, cleans up the temp file.
+    Yields a unique temporary path to write to. On successful exit, atomically
+    renames the temp file to the final path. On failure, cleans up the temp file.
 
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
             write_data(tmp_path)
         # File is now at output.jsonl.gz
     """
-    temp_path = f"{output_path}.tmp"
+    temp_path = unique_temp_path(output_path)
     fs = fsspec.core.url_to_fs(output_path)[0]
 
     try:
         yield temp_path
-        # not so atomic if on a remote FS and recursive, but ...
         fs.mv(temp_path, output_path, recursive=True)
     except Exception:
         # Try to cleanup if something went wrong
@@ -294,10 +302,9 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     try:
         exemplar = next(record_iter)
     except StopIteration:
-        return {"path": output_path, "count": 0, "token_count": 0}
+        return {"path": output_path, "count": 0}
 
     count = 1
-    token_count = len(exemplar.get("input_ids", []))
     logger.info("write_levanter_cache: starting write to %s", output_path)
 
     existing_rows = 0 if fs.exists(output_path) else _get_existing_row_count(tmp_path, exemplar)
@@ -307,10 +314,9 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
         # we already consumed 1 record (exemplar), skip existing_rows - 1 more
         rows_to_skip = existing_rows - 1
         skipped_rows = 0
-        for record in itertools.islice(record_iter, rows_to_skip):
+        for _record in itertools.islice(record_iter, rows_to_skip):
             skipped_rows += 1
             count += 1
-            token_count += len(record.get("input_ids", []))
         if skipped_rows != rows_to_skip:
             raise ValueError(
                 f"Temporary cache at {tmp_path} has {existing_rows} rows, but input has only {skipped_rows + 1} rows"
@@ -329,12 +335,10 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
         for batch in batchify(record_iter):
             writer.write_batch(batch)
             count += len(batch)
-            for record in batch:
-                token_count += len(record.get("input_ids", []))
             if count % 1000 == 0:
-                logger.info("write_levanter_cache: %s — %d records, %d tokens so far", output_path, count, token_count)
+                logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
 
-    logger.info("write_levanter_cache: finished %s — %d records, %d tokens", output_path, count, token_count)
+    logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
 
     _promote_tmp_cache(fs, tmp_path, output_path)
 
@@ -342,11 +346,7 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     with fsspec.open(f"{output_path}/.success", "w") as f:
         f.write("")
 
-    # write stats for aggregation
-    with fsspec.open(f"{output_path}/.stats.json", "w") as f:
-        json.dump({"count": count, "token_count": token_count}, f)
-
-    return {"path": output_path, "count": count, "token_count": token_count}
+    return {"path": output_path, "count": count}
 
 
 def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:

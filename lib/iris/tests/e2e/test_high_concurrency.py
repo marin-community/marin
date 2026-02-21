@@ -43,7 +43,7 @@ def test_128_tasks_concurrent_scheduling(multi_worker_cluster, sentinel):
         time.sleep(1.0)
         sentinel.signal()
 
-        status = multi_worker_cluster.wait(job, timeout=120)
+        status = multi_worker_cluster.wait(job, timeout=60)
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Job failed: {status}"
     finally:
         reset_chaos()

@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+import os
 from typing import Optional
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -116,6 +118,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             h_block_size=256,
             v_block_size=2048,
         ),
+        ("bfloat16", "huge-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=256,
+        ),
         ("float32", "small-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
@@ -135,6 +142,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             b_block_size=1024,
             h_block_size=256,
             v_block_size=2048,
+        ),
+        ("float32", "huge-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=256,
         ),
     },
     "TPU v5": {
@@ -158,6 +170,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             h_block_size=256,
             v_block_size=2048,
         ),
+        ("bfloat16", "huge-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=256,
+        ),
         ("float32", "small-vocab"): BlockSizes(
             b_block_size=1024,
             h_block_size=256,
@@ -177,6 +194,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             b_block_size=1024,
             h_block_size=256,
             v_block_size=2048,
+        ),
+        ("float32", "huge-batch-llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=256,
         ),
     },
     "TPU v4": {
@@ -251,6 +273,15 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         v_max=262144,
     ),
     ShapeBucket(
+        name="huge-batch-llama3-ish",
+        b_min=65536,
+        b_max=1048576,
+        h_min=4096,
+        h_max=4096,
+        v_min=120000,
+        v_max=131072,
+    ),
+    ShapeBucket(
         name="large-batch-small-h",
         b_min=32768,
         b_max=131072,
@@ -278,6 +309,12 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         v_max=1_048_576,
     ),
 ]
+
+_HUGE_BATCH_BUCKET = "huge-batch-llama3-ish"
+_FAST_HUGE_BATCH_SOURCE_BUCKET = "llama3-ish"
+_SCOPED_VMEM_LIMIT_ARG = "xla_tpu_scoped_vmem_limit_kib="
+_WARNED_HUGE_BATCH_SAFE_FALLBACK = False
+_TPU_LABEL_LAYOUT_DEVICE_KEYS = {"TPU v4", "TPU v5", "TPU v5p"}
 
 
 def _device_key(device_kind: Optional[str]) -> Optional[str]:
@@ -320,6 +357,96 @@ def _shape_bucket(b: int, h: int, v: int) -> Optional[str]:
     return None
 
 
+def _has_scoped_vmem_limit_override() -> bool:
+    init_args = os.environ.get("LIBTPU_INIT_ARGS", "")
+    return _SCOPED_VMEM_LIMIT_ARG in init_args
+
+
+def _warn_huge_batch_safe_fallback() -> None:
+    global _WARNED_HUGE_BATCH_SAFE_FALLBACK
+    if _WARNED_HUGE_BATCH_SAFE_FALLBACK:
+        return
+    _WARNED_HUGE_BATCH_SAFE_FALLBACK = True
+    warnings.warn(
+        "Using safer fused CE huge-batch block sizes (v_block_size=256) because "
+        "LIBTPU_INIT_ARGS does not set xla_tpu_scoped_vmem_limit_kib. "
+        "On TPU v5p, set --xla_tpu_scoped_vmem_limit_kib=50000 (or higher) in "
+        "LIBTPU_INIT_ARGS to use the faster tuning.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def _maybe_override_huge_batch_block_sizes(
+    *,
+    entry: BlockSizes,
+    dtype_name: str,
+    bucket: str,
+    device_key: Optional[str],
+) -> BlockSizes:
+    if bucket != _HUGE_BATCH_BUCKET:
+        return entry
+    if not _has_scoped_vmem_limit_override():
+        _warn_huge_batch_safe_fallback()
+        return entry
+
+    for key in (device_key, DEFAULT_DEVICE_KEY):
+        if not key:
+            continue
+        fast_entry = TUNED_BLOCK_SIZES.get(key, {}).get((dtype_name, _FAST_HUGE_BATCH_SOURCE_BUCKET))
+        if fast_entry is not None:
+            return fast_entry
+    return entry
+
+
+def _largest_divisor_multiple_of_128(dim: int, preferred: int) -> int:
+    """Return the largest multiple-of-128 divisor of `dim` up to `preferred`.
+
+    If `dim` has no multiple-of-128 divisor (for example dim not divisible by 128),
+    return `preferred` and let runtime validation/fallback handle unsupported cases.
+    """
+    upper = min(dim, preferred)
+    upper -= upper % 128
+
+    for block in range(upper, 127, -128):
+        if dim % block == 0:
+            return block
+
+    return preferred
+
+
+def _is_valid_for_pallas_shape(
+    block_sizes: BlockSizes,
+    *,
+    b: int,
+    h: int,
+    device_key: Optional[str],
+) -> bool:
+    if block_sizes.b_block_size % 128 != 0 or block_sizes.h_block_size % 128 != 0:
+        return False
+    if b % block_sizes.b_block_size != 0 or h % block_sizes.h_block_size != 0:
+        return False
+    if device_key in _TPU_LABEL_LAYOUT_DEVICE_KEYS and b >= 1024 and block_sizes.b_block_size % 1024 != 0:
+        return False
+    return True
+
+
+def _sanitize_for_pallas(
+    block_sizes: BlockSizes,
+    *,
+    b: int,
+    h: int,
+) -> BlockSizes:
+    """Adjust inferred block sizes so B/H blocks divide local shapes when possible."""
+    b_block_size = _largest_divisor_multiple_of_128(b, block_sizes.b_block_size)
+    h_block_size = _largest_divisor_multiple_of_128(h, block_sizes.h_block_size)
+    return BlockSizes(
+        b_block_size=b_block_size,
+        h_block_size=h_block_size,
+        v_block_size=block_sizes.v_block_size,
+    )
+
+
 def infer_block_sizes(
     b: int,
     h: int,
@@ -350,9 +477,19 @@ def infer_block_sizes(
                 continue
             entry = TUNED_BLOCK_SIZES.get(key, {}).get((dtype_name, bucket))
             if entry is not None:
-                return entry
+                entry = _maybe_override_huge_batch_block_sizes(
+                    entry=entry,
+                    dtype_name=dtype_name,
+                    bucket=bucket,
+                    device_key=device_key,
+                )
+                if _is_valid_for_pallas_shape(entry, b=b, h=h, device_key=device_key):
+                    return entry
 
-    return BlockSizes.get_default()
+    default_entry = BlockSizes.get_default()
+    if _is_valid_for_pallas_shape(default_entry, b=b, h=h, device_key=device_key):
+        return default_entry
+    return _sanitize_for_pallas(default_entry, b=b, h=h)
 
 
 def infer_xla_v_block_size(

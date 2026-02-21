@@ -14,11 +14,11 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import Iterator, Sequence
 
 import draccus
 import fsspec
-import humanfriendly
 import transformers
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
@@ -32,6 +32,7 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
+from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.readers import load_file
 
@@ -84,9 +85,6 @@ class TokenizeConfig(TokenizeConfigBase):
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
     'test' or 'validation' in the file names, but are not actually test or validation sets.
     """
-    # TODO (rav): remove this once there's better way to capture this in datakit
-    zephyr_num_cpus: int = 2
-    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -143,10 +141,6 @@ class HfTokenizeConfig(TokenizeConfigBase):
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
-
-    # TODO (rav): remove this once there's better way to capture this in datakit
-    zephyr_num_cpus: int = 2
-    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -252,14 +246,33 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
 
     batch_count = 0
     record_count = 0
+    token_count = 0
+    start_time = time.monotonic()
+
     for batch in batches:
         batch_count += 1
         for record in batch_processor(batch):
             record_count += 1
+            token_count += len(record.get("input_ids", []))
             yield record
         if batch_count % 100 == 0:
-            logger.info("Tokenized %d batches, %d records so far", batch_count, record_count)
-    logger.info("Tokenization done: %d batches, %d records total", batch_count, record_count)
+            elapsed = time.monotonic() - start_time
+            tok_per_sec = token_count / elapsed if elapsed > 0 else 0
+            doc_per_sec = record_count / elapsed if elapsed > 0 else 0
+            avg_tok_per_doc = token_count / record_count if record_count > 0 else 0
+            logger.info(
+                f"Tokenized {batch_count:,} batches, {record_count:,} docs, {token_count:,} tokens in {elapsed:.1f}s "
+                f"({tok_per_sec:,.0f} tokens/s, {doc_per_sec:,.1f} docs/s, {avg_tok_per_doc:,.0f} avg tokens/doc)"
+            )
+
+    elapsed = time.monotonic() - start_time
+    tok_per_sec = token_count / elapsed if elapsed > 0 else 0
+    doc_per_sec = record_count / elapsed if elapsed > 0 else 0
+    avg_tok_per_doc = token_count / record_count if record_count > 0 else 0
+    logger.info(
+        f"Tokenization done: {batch_count:,} batches, {record_count:,} docs, {token_count:,} tokens in {elapsed:.1f}s "
+        f"({tok_per_sec:,.0f} tokens/s, {doc_per_sec:,.1f} docs/s, {avg_tok_per_doc:,.0f} avg tokens/doc)"
+    )
 
 
 def tokenize(config: TokenizeConfigBase):
@@ -311,16 +324,23 @@ def tokenize(config: TokenizeConfigBase):
             )
             return
 
+        pipeline_start = time.monotonic()
+
         # Use local backend for lightweight file stats - no remote workers needed
-        with ZephyrContext(client=LocalClient(), num_workers=8, name="tokenize-filescan") as local_ctx:
+        filescan_start = time.monotonic()
+        with ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan") as local_ctx:
             file_stats = list(
                 local_ctx.execute(
                     Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
                     verbose=False,
                 )
             )
+        total_input_bytes = sum(f["size"] for f in file_stats)
         file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
-        logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size.")
+        logger.info(
+            f"Grouped {len(paths):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
+            f"in {time.monotonic() - filescan_start:.1f}s."
+        )
 
         ds = Dataset.from_list(file_groups).flat_map(lambda file_list: file_list).flat_map(load_file)
 
@@ -331,13 +351,15 @@ def tokenize(config: TokenizeConfigBase):
         temp_shards = (
             ds.window(64)
             .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
-            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
+            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}", metadata={}, skip_existing=True)
         )
 
         # Broadcast the tokenizer to all workers via ZephyrContext
         ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
 
+        tokenize_start = time.monotonic()
         shard_paths = ctx.execute(temp_shards)
+        tokenize_elapsed = time.monotonic() - tokenize_start
 
         logger.info("Computing exemplar for cache consolidation")
         exemplar = ctx.execute(
@@ -348,29 +370,35 @@ def tokenize(config: TokenizeConfigBase):
             verbose=False,
         )[0]
 
-        logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
-        consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
+        consolidate_start = time.monotonic()
+        logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
+        ledger = consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
+        consolidate_elapsed = time.monotonic() - consolidate_start
 
-        # Aggregate token counts from shard stats
-        total_tokens = 0
-        total_elements = 0
-        for shard_path in shard_paths:
-            stats_path = f"{shard_path}/.stats.json"
-            with fsspec.open(stats_path) as f:
-                stats = json.load(f)
-                total_tokens += stats.get("token_count", 0)
-                total_elements += stats.get("num_rows", 0)
+        # Read stats from the consolidated cache: total rows from the ledger,
+        # total tokens from the TreeStore's input_ids data size.
+        total_elements = ledger.total_num_rows
+        store = TreeStore.open(exemplar, prefix, mode="r", cache_metadata=True)
+        total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
 
         stats_path = os.path.join(prefix, ".stats.json")
-        logger.info(
-            f"Writing total token count ({total_tokens:,}) and element count ({total_elements:,}) to {stats_path}"
-        )
         with fsspec.open(stats_path, "w") as f:
             json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
+        pipeline_elapsed = time.monotonic() - pipeline_start
+        overall_tok_per_sec = total_tokens / tokenize_elapsed if tokenize_elapsed > 0 else 0
+        overall_doc_per_sec = total_elements / tokenize_elapsed if tokenize_elapsed > 0 else 0
+        logger.info(
+            f"{split_name} pipeline complete: {total_elements:,} docs, {total_tokens:,} tokens "
+            f"in {pipeline_elapsed:.1f}s (tokenize: {tokenize_elapsed:.1f}s at {overall_tok_per_sec:,.0f} tokens/s "
+            f"{overall_doc_per_sec:,.1f} docs/s, consolidate: {consolidate_elapsed:.1f}s). "
+            f"Wrote stats to {stats_path}"
+        )
+
+    # TODO: expose ram/disk as a flag on TokenizeConfig and align with batch size
     with ZephyrContext(
-        resources=ResourceConfig(ram="16g", disk="16g"),
-        num_workers=min(128, len(train_paths) + len(validation_paths)),
+        resources=ResourceConfig(ram="2g", disk="16g"),
+        max_workers=min(128, len(train_paths) + len(validation_paths)),
         name="tokenize",
     ) as ctx:
         if train_paths:

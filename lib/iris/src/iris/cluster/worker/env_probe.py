@@ -3,6 +3,7 @@
 
 """Environment probing for worker registration."""
 
+import json
 import logging
 import os
 import re
@@ -16,6 +17,7 @@ from typing import Protocol
 
 from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.rpc import cluster_pb2
+from iris.temp_buckets import REGION_TO_TMP_BUCKET
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,25 @@ def _get_gcp_metadata(path: str) -> str | None:
             return value or None
     except (urllib.error.URLError, OSError, TimeoutError, ValueError):
         return None
+
+
+def _infer_worker_log_prefix() -> str | None:
+    """Infer worker log prefix from GCP metadata."""
+    if not _is_gcp_vm():
+        return None
+    zone = _get_gcp_metadata("zone")
+    if not zone:
+        return None
+    # zone format: projects/<project>/zones/us-central2-b
+    zone_name = zone.split("/")[-1]
+    if "-" not in zone_name:
+        return None
+    region = zone_name.rsplit("-", 1)[0]
+    bucket = REGION_TO_TMP_BUCKET.get(region)
+    if not bucket:
+        logger.warning("No tmp bucket mapping for region %s", region)
+        return None
+    return f"gs://{bucket}/ttl=30d/iris-logs"
 
 
 def _extract_tpu_name(instance_name: str) -> str:
@@ -210,28 +231,16 @@ def _detect_preemptible(extra_attributes: dict[str, str]) -> bool:
 def _get_extra_attributes() -> dict[str, str]:
     """Get extra worker attributes from IRIS_WORKER_ATTRIBUTES env var.
 
-    Format: key1=value1,key2=value2,...
-    Example: taint:maintenance=true,pool=large-jobs
-
-    Values are always strings; the caller is responsible for type conversion if needed.
+    Format: JSON object, e.g. {"region":"us-west4","pool":"large-jobs"}.
+    Values are stringified.
     """
     attrs_env = os.environ.get("IRIS_WORKER_ATTRIBUTES", "")
     if not attrs_env:
         return {}
-    result: dict[str, str] = {}
-    for pair in attrs_env.split(","):
-        pair = pair.strip()
-        if not pair:
-            continue
-        if "=" not in pair:
-            logger.warning("Skipping malformed attribute (no '='): %s", pair)
-            continue
-        key, value = pair.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key:
-            result[key] = value
-    return result
+    parsed = json.loads(attrs_env)
+    if not isinstance(parsed, dict):
+        raise ValueError("IRIS_WORKER_ATTRIBUTES must decode to a dictionary")
+    return {str(key): str(value) for key, value in parsed.items() if str(key)}
 
 
 def _build_worker_attributes(
@@ -285,6 +294,7 @@ class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
+    def log_prefix(self) -> str | None: ...
 
 
 class TPUSimEnvironmentProvider:
@@ -317,6 +327,9 @@ class TPUSimEnvironmentProvider:
         # Mark device as TPU so _build_device_env_vars triggers
         base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
         return base
+
+    def log_prefix(self) -> str | None:
+        return None
 
 
 class DefaultEnvironmentProvider:
@@ -400,3 +413,9 @@ class DefaultEnvironmentProvider:
             attributes=attributes,
             vm_address=vm_address,
         )
+
+    def log_prefix(self) -> str | None:
+        explicit = os.environ.get("IRIS_LOG_PREFIX")
+        if explicit:
+            return explicit
+        return _infer_worker_log_prefix()
