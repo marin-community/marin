@@ -1085,3 +1085,73 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 
 - Next bold hypothesis:
   - Once profiling infra is healthy, retry a bandwidth-focused Macro C pass (BF16 tapes with FP32 accumulation) or pivot to Macro E (V-tiling) if custom-call dominance persists.
+
+### Iteration 24 - Macro Move D / full-sequence backward `emit_pipeline` (regressed, reverted)
+
+- Date: 2026-02-21T23:53:47Z
+- Commit: none (failed attempt)
+- Loop session/local index: `8/20`
+- Starting commit: `96d8d47c272d1cfacf4416a64c704b75f254df4a`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` (custom-call equivalent bucket): `76.743 ms` (dominant category).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: fuse backward segment scan into one full-sequence `emit_pipeline` Pallas call over chunks (`+10-22%`, high compile/runtime risk).
+  2. **Macro Move E**: V-tiling recurrent+bwd (`KxV -> KxVb`) to reduce VMEM pressure (`+12-25%`, very high risk due duplicated `QK` work unless decomposition also changes).
+  3. **Macro Move F**: split backward into staged adjoint precompute + recurrent apply kernels (`+15-30%`, very high integration risk).
+
+- Selected macro-move category: **D) Use `pltpu.emit_pipeline` to fuse across chunk/segment loops**.
+- Selected hypothesis: replace per-segment backward custom-calls with a full-sequence backward pipeline kernel that carries `dS` in VMEM scratch across reversed chunk stages, reducing launch overhead in the train chunk path.
+
+- Change attempt summary:
+  - Implemented `_gdn_chunk_fullseq_bwd_pipeline_kernel_tpu` and `_gdn_chunk_fullseq_bwd_pallas` in `lib/levanter/src/levanter/layers/gated_deltanet.py`.
+  - Added full-sequence backward specs (`N_chunks`) and switched `_chunk_gated_delta_rule_flash_pallas_bwd` to use the new full-sequence path when `K_pad >= 128` and `V_pad >= 128`, with segmented fallback preserved for small-dim regimes.
+  - Reverted the kernel code after end-to-end profile regression with unchanged dominant hotspot.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU attempt (failed, TPU lock):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Failure: `ABORTED: The TPU is already in use by another process`.
+  - Ray fallback (success):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260221-233704`
+    - Result: `49 passed, 40 skipped`.
+
+- Profile run:
+  - Dev TPU attempt (failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bwdfullseq_i8_dev --no-sync`
+    - Failure: distributed service bind/segfault (`Failed to add port to server`, `Segmentation fault`).
+  - Ray fallback submit:
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bwdfullseq_i8_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260221-234255`
+  - Wait:
+    - `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-bash-20260221-234255 --show-logs --tail 400`
+    - Result: `status=SUCCEEDED`.
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_bwdfullseq_i8_ray_130m_ch128_seg16_20steps-0b1612`
+  - W&B profiler artifact: `run-gdn_bwdfullseq_i8_ray_130m_ch128_seg16_20steps-0b1612-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_bwdfullseq_i8_ray_130m_ch128_seg16_20steps-0b1612/plugins/profile/2026_02_21_15_50_17/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`):
+  - Dominant train-path bucket (`shard_map`): `76.743 ms -> 76.748 ms` (`+0.01%`), still dominant.
+  - Forward closed-call tf_op remained flat:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms -> 40.182 ms` (`+0.00%`).
+  - Backward closed-call tf_op remained flat:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms -> 26.255 ms` (`+0.00%`).
+  - Source-level hotspot line moved by refactor but did not materially improve:
+    - `gated_deltanet.py:3432 -> gated_deltanet.py:3941`: `38.973 ms -> 38.797 ms` (`-0.45%`).
+  - `all-gather`: `20.193 ms -> 20.005 ms` (`-0.93%`) (minor).
+
+- MFU/throughput delta (vs baseline run `gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937`):
+  - `throughput/mfu`: `5.759190 -> 5.684704` (`-1.29%`).
+  - `throughput/tokens_per_second`: `186308.71 -> 183899.09` (`-1.29%`).
+  - `throughput/duration`: `0.175880s -> 0.178185s` (`+1.31%`).
+
+- Assessment: **low-impact / regression**. MFU regressed by >1% with the same dominant `shard_map/custom-call` hotspot unchanged.
+- Governance action: regression crossed `revert-count-failure` threshold; reverted speculative kernel code and left tree clean.
+- Next bold hypothesis: pivot to a stronger decomposition that changes compute balance, for example Macro Move F + triangular-solve angle (solve-only stacked RHS / transpose-solve in bwd, avoiding explicit full transform materialization) so forward/backward closed-call hotspots are structurally reduced rather than relabeled.
