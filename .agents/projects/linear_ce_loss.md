@@ -214,3 +214,40 @@ Notes:
 - Streaming Pallas kernel is the only forward implementation (no legacy selection logic left in code).
 - Updated `BlockSizes` defaults to `b=1024, h=512, v=1024` to match the v4 tuning baseline.
 - Removed the split backward path and unused legacy backward kernels.
+
+### 2026-02-20: v4-8 retune on us-central2 (dev_tpu)
+- Environment:
+  - `scripts/ray/dev_tpu.py --config infra/marin-us-central2.yaml --tpu-type v4-8`
+  - TPU: `TPU v4` (4 local devices on the `v4-8` slice)
+- Tuned with:
+  - `lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py`
+  - candidate grid from script (`b in {1024,2048}`, `h in {128,256,512}`, `v in {1024,2048,4096}`)
+- Result summary (all non-`v=1024` candidates OOM on v4-8 in these runs):
+  - `small-vocab` (`B=2048,H=512,V=8192`): best `b=1024,h=256,v=1024` at ~11.04M tokens/s.
+  - `llama3-ish` (`B=8192,H=4096,V=128256`): best `b=1024,h=512,v=1024` at ~180k tokens/s.
+  - `large-batch-small-h` (`B=65536,H=512,V=128256`): best `b=1024,h=512,v=1024` at ~1.17M tokens/s.
+  - `medium-batch-medium-h` (`B=8192,H=2048,V=128256`): best `b=1024,h=512,v=1024` at ~349k tokens/s.
+- Code update:
+  - Added missing TPU v4 table entries in `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py` for:
+    - `small-vocab` (`h=256,v=1024`)
+    - `llama3-ish` (`h=512,v=1024`)
+  - Kept existing TPU v4 entries for `large-batch-small-h` and `medium-batch-medium-h` (already `h=512,v=1024`).
+- Tokamax note:
+  - `lib/levanter/scripts/bench/bench_tokamax_linear_softmax_ce.py` currently fails in this dev TPU env with
+    `ModuleNotFoundError: No module named 'tokamax'`.
+
+### 2026-02-20: v4-8 pallas vs xla backend comparison (same bench script)
+- Command template:
+  - `uv run --package levanter --extra tpu python lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py --input-dtype bfloat16 --accum-dtype float32 --block-sizes infer --implementation <pallas_tpu|xla> ...`
+- Environment:
+  - `scripts/ray/dev_tpu.py --config infra/marin-us-central2.yaml` on `v4-8` (`TPU v4`, 4 local devices)
+- Shape A (`B=32, P=1024, H=512, V=128256`):
+  - `pallas_tpu`: fwd `0.0281s` (`~1.17M tok/s`), bwd `0.112s` (`~292k tok/s`)
+  - `xla`: fwd `0.0417s` (`~786k tok/s`), bwd `0.307s` (`~107k tok/s`)
+  - Relative: pallas is `~1.48x` faster on fwd and `~2.74x` faster on bwd.
+- Shape B (`B=8, P=1024, H=2048, V=128256`):
+  - `pallas_tpu`: fwd `0.0201s` (`~408k tok/s`), bwd `0.0939s` (`~87.2k tok/s`)
+  - `xla`: fwd `0.0235s` (`~349k tok/s`), bwd `0.106s` (`~77.2k tok/s`)
+  - Relative: pallas is `~1.17x` faster on fwd and `~1.13x` faster on bwd.
+- Note:
+  - Loss values matched closely between backends in these runs.

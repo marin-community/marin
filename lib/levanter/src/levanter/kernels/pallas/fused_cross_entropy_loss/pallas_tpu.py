@@ -164,7 +164,7 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
         (((1,), (0,)), ((), ())),
         preferred_element_type=jnp.float32,
         precision=precision,
-    )
+    ).astype(xw_tiled.dtype)
 
     @pl.when(h_index == num_h_blocks - 1)
     def accumulate_block():
@@ -172,25 +172,28 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
         if dtype is not None:
             logits = logits.astype(dtype)
         logits = _apply_logit_soft_cap(logits, logit_soft_cap)
+        logits_f32 = logits.astype(jnp.float32)
 
         labels_adjusted = labels_ref[...] - v_index * v_block_size
-        labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, logits.dtype)
-        label_logits_block = jnp.sum(labels_one_hot * logits, axis=-1)
-        label_logits_scratch_ref[...] += label_logits_block[:, None]
+        labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, logits_f32.dtype)
+        label_logits_block = jnp.sum(labels_one_hot * logits_f32, axis=-1)
+        label_logits_scratch_ref[...] += label_logits_block[:, None].astype(label_logits_scratch_ref.dtype)
 
-        m_prev, l_prev = m_scratch_ref[...], l_scratch_ref[...]
-        m_curr = jnp.max(logits, axis=-1)[:, None]
+        m_prev = m_scratch_ref[...].astype(jnp.float32)
+        l_prev = l_scratch_ref[...].astype(jnp.float32)
+        m_curr = jnp.max(logits_f32, axis=-1)[:, None]
         m_next = jnp.maximum(m_prev, m_curr)
 
         bkv_repeats, rem = divmod(v_block_size, NUM_LANES)
         if rem != 0:
             raise NotImplementedError(f"{v_block_size=} must be a multiple of {NUM_LANES}")
 
-        s_curr = jnp.exp(logits - pltpu.repeat(m_next, bkv_repeats, axis=1))
+        s_curr = jnp.exp(logits_f32 - pltpu.repeat(m_next, bkv_repeats, axis=1))
         l_curr = jax.lax.broadcast_in_dim(s_curr.sum(axis=-1), l_prev.shape, (0,))
         alpha = jnp.exp(m_prev - m_next)
         l_next = l_curr + alpha * l_prev
-        m_scratch_ref[...], l_scratch_ref[...] = m_next, l_next
+        m_scratch_ref[...] = m_next.astype(m_scratch_ref.dtype)
+        l_scratch_ref[...] = l_next.astype(l_scratch_ref.dtype)
 
     @pl.when(jnp.logical_and(v_index == num_v_blocks - 1, h_index == num_h_blocks - 1))
     def finalize_loss():
@@ -332,7 +335,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             (((1,), (0,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
-        )
+        ).astype(xw_scratch_ref.dtype)
 
     @pl.when(jnp.logical_and(stage_index == 0, h_index != 0))
     def accumulate_logits():
@@ -342,7 +345,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             (((1,), (0,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
-        )
+        ).astype(xw_scratch_ref.dtype)
 
     cur_v_block_size = jnp.minimum(v_dim - v_block_size * v_index, v_block_size)
     cur_v_block_size = (jnp.ceil(cur_v_block_size / 128) * 128).astype(jnp.int32)
@@ -378,7 +381,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
     @pl.when(jnp.logical_and(stage_index == 1, h_index == 0))
     def compute_s():
         labels_adjusted = labels_ref[...] - v_index * v_block_size
-        labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, x_ref.dtype)
+        labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, xw_scratch_ref.dtype)
         logits = xw_scratch_ref[...]
         if dtype is not None:
             logits = logits.astype(dtype)
@@ -390,12 +393,14 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
         else:
             cap_deriv = 1.0
 
-        logits = logits - lse_ref[...][:, None]
+        logits = logits.astype(xw_scratch_ref.dtype)
+        cap_deriv = jnp.asarray(cap_deriv, dtype=xw_scratch_ref.dtype)
+        logits = logits - lse_ref[...].astype(xw_scratch_ref.dtype)[:, None]
         probs = jnp.exp(logits)
-        dout_loss = dout_loss_ref[...]
-        dout_lse = dout_lse_ref[...]
+        dout_loss = dout_loss_ref[...].astype(xw_scratch_ref.dtype)
+        dout_lse = dout_lse_ref[...].astype(xw_scratch_ref.dtype)
         delta = (dout_loss[:, None] + dout_lse[:, None]) * probs - dout_loss[:, None] * labels_one_hot
-        xw_scratch_ref[...] = delta * cap_deriv
+        xw_scratch_ref[...] = (delta * cap_deriv).astype(xw_scratch_ref.dtype)
 
     @pl.when(jnp.logical_and(stage_index == 1, v_index == 0))
     def init_x_grad():
@@ -405,7 +410,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             (((1,), (1,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
-        )
+        ).astype(x_grad_tile_ref.dtype)
         x_write_future.start()
 
     @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
@@ -416,7 +421,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             (((1,), (1,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
-        )
+        ).astype(x_grad_tile_ref.dtype)
         x_read_future.wait()
         x_grad_tile_ref[...] += res
         x_write_future.start()
@@ -433,7 +438,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             (((0,), (0,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
-        )
+        ).astype(w_grad_tile_ref.dtype)
         w_write_future.start()
 
     @pl.when(jnp.logical_and(stage_index == 1, b_index != 0))
@@ -444,7 +449,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
             (((0,), (0,)), ((), ())),
             preferred_element_type=jnp.float32,
             precision=precision,
-        )
+        ).astype(w_grad_tile_ref.dtype)
         w_read_future.wait()
         w_grad_tile_ref[...] += res
         w_write_future.start()
