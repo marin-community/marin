@@ -35,6 +35,9 @@ meta:
     russell: rjpower
     rui: ruili33
     calvin: Calvin-Xu
+    larry: ClassicLarry
+    pranshu: pc0618
+    michael: XenonMolecule
     "moo jin": moojink
 
 milestone_2025_12_basic_ingredients:
@@ -87,18 +90,33 @@ milestone_2026_02_beat_nemotron_3:
   target_date: "2026-02-28"
   labels: [timeline]
   dependencies:
+    - delphi_dense_scaling_suite
+    - training_throughput_critical_path
+    - data_mixing_poc_jan
     - data_mixing_swarm_feb
+    - data_mixing_midtraining_prediction
+    - data_mixing_multiphase_two_domain
     - html2text_model_feb
+    - raw2quality_generate_tokens_200m
+    - raw2quality_scaling_suite_eval
+    - pretraining_evals_and_models
     - moe_scaling_laws_issue
+    - moe_variants_ablation
     - moe_scaling_systems
-    - modernized_pythia_release_candidate
-    - speedrun_launch
-    - sft_agentic_datasets
+    - gather_pretraining_data_sources
+    - grug_moe_40_mfu_8x1b
+    - train_500b_moe_40_mfu
     - sft_agentic_evals
+    - posttraining_evalchemy_evals
+    - harbor_evals_setup
+    - add_openthoughts_agent_v1_dataset
+    - add_togethercoder_data
     - sft_existing_datasets_models
     - sft_synthetic_datasets
+    - synthetic_mixture_ablation
     - release_strong_sft_models
-    - openthoughts_4_dataset
+    - vlms_multimodality
+    - alignment_spec_to_model
     - data_ingestion_pipeline_scale
     - remove_ray_rollout
     - experiments_reliable
@@ -117,13 +135,14 @@ milestone_2026_03_long_running_automation:
   dependencies:
     - data_mixing_recipe_mar
     - dataset_20t_deduped
-    - html2text_distillation_recipe_mar
-    - medium_moe_release_candidate
-    - qwen3_32b_replacement
+    - moe_scaling_laws_issue
+    - openthoughts_4_dataset
+    - release_strong_sft_models
+    - infra_long_running_jobs_preemption
     - infra_reliability_95
     - automated_ingestion_datasets_environments
     - automated_ingestion_architectures_algorithms
-    - agent_driven_parameter_sweep_demo
+    - agents_run_straightforward_experiments
 
 
 milestone_2026_05_100b_moe:
@@ -134,10 +153,12 @@ milestone_2026_05_100b_moe:
   labels: [timeline]
   dependencies:
     - train_100b_moe
-    - moe_100b_readiness
     - regression_mix_optimization
     - data_tools_and_mixture_ready
     - best_sft_recipe
+    - posttrain_yolo_sft_rl
+    - infra_reliability_99
+    - most_experimentation_via_agents
 
 
 milestone_rl_backburner:
@@ -164,11 +185,11 @@ milestone_rl_backburner:
 
 
 pretraining_evals_and_models:
-  title: "Solid inexpensive evals (core set <1h, correlated with full suite)"
+  title: "Solid inexpensive evals (100 total; core set <1h correlated with full suite)"
   type: epic
   status: planned
   owners: [Helw150]
-  target_date: "2026-01-31"
+  target_date: "2026-02-28"
   issue: 1602
   labels: [timeline, evals, pretraining, agent_friendly]
 
@@ -176,7 +197,7 @@ pretraining_evals_and_models:
 dense_scaling_laws:
   title: "Stable and usable scaling laws for dense models"
   type: epic
-  status: planned
+  status: done
   owners: [Helw150]
   target_date: "2025-12-16"
   issue: 2166
@@ -187,10 +208,202 @@ moe_scaling_laws_issue:
   title: "Stable scaling laws for MoE"
   type: epic
   status: planned
-  owners: [Helw150]
+  owners: [Helw150, ClassicLarry]
   target_date: "2026-02-28"
   issue: 2167
   labels: [timeline, scaling_laws, moe, agent_friendly]
+  description: |
+    Functional `moe_isoflop_sweep` that trains stable sweeps up to 1e20 FLOPs.
+
+
+delphi_dense_scaling_suite:
+  title: "Delphi: dense scaling suite (community artifact)"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-02-28"
+  labels: [timeline, scaling_laws, pretraining, agent_friendly]
+  dependencies:
+    - scaling_suite_smooth_1e23
+    - scaling_suite_rerun_nemotron_common_pile_3_seeds
+    - scaling_suite_release_model
+
+
+scaling_suite_smooth_1e23:
+  title: "Make scaling laws smooth up to 1e23"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-02-28"
+  labels: [timeline, scaling_laws, pretraining]
+
+
+scaling_suite_rerun_nemotron_common_pile_3_seeds:
+  title: "Rerun scaling suite on Nemotron-CC and Common Pile (3 seeds)"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-02-28"
+  labels: [timeline, scaling_laws, pretraining]
+
+
+scaling_suite_release_model:
+  title: "Release scaling suite model"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-02-28"
+  labels: [timeline, scaling_laws, pretraining, release]
+
+
+training_throughput_critical_path:
+  title: "Training throughput (critical path)"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  owner_names: [Larry, Pranshu]
+  target_date: "2026-02-28"
+  labels: [timeline, systems, pretraining, moe]
+  dependencies:
+    - grug_moe_40_mfu_8x1b
+    - train_500b_moe_40_mfu
+
+
+grug_moe_40_mfu_8x1b:
+  title: "MoE Grugformer with 40% MFU on 8x1B"
+  type: task
+  status: planned
+  owner_names: [Larry]
+  target_date: "2026-02-28"
+  issue: 2371
+  labels: [timeline, grug, moe, performance]
+
+
+train_500b_moe_40_mfu:
+  title: "Can train 500B MoE with 40% MFU"
+  type: task
+  status: planned
+  owners: [dlwh]
+  owner_names: [Larry, Pranshu]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, moe, performance, pretraining]
+
+
+moe_variants_ablation:
+  title: "Ablation over all MoE variants"
+  type: task
+  status: planned
+  owner_names: [Larry]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, moe, scaling_laws, pretraining]
+
+
+gather_pretraining_data_sources:
+  title: "Gather all pretraining data sources"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, data, pretraining]
+
+
+data_mixing_midtraining_prediction:
+  title: "Predict mid-training data mixtures"
+  type: task
+  status: planned
+  owners: [Calvin-Xu]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, data, pretraining]
+
+
+data_mixing_multiphase_two_domain:
+  title: "Predict multi-phase two-domain data mixtures"
+  type: task
+  status: planned
+  owners: [Calvin-Xu]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, data, pretraining]
+  dependencies:
+    - data_mixing_midtraining_prediction
+
+
+raw2quality_generate_tokens_200m:
+  title: "raw2quality: generate 200M rewritten tokens"
+  type: task
+  status: planned
+  owner_names: [Michael]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, data, pretraining]
+  dependencies:
+    - html2text_model_feb
+
+
+raw2quality_scaling_suite_eval:
+  title: "raw2quality: train scaling suite on generated data and compare"
+  type: task
+  status: planned
+  owner_names: [Michael]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, data, scaling_laws, pretraining]
+  dependencies:
+    - raw2quality_generate_tokens_200m
+
+
+harbor_evals_setup:
+  title: "Set up Harbor for evals"
+  type: task
+  status: planned
+  owners: [AlienKevin]
+  target_date: "2026-02-28"
+  issue: 2660
+  labels: [timeline, evals, posttraining]
+
+
+add_openthoughts_agent_v1_dataset:
+  title: "Add OpenThoughts-Agent-v1 dataset"
+  type: task
+  status: planned
+  owners: [AlienKevin]
+  target_date: "2026-02-28"
+  issue: 2601
+  labels: [timeline, data, sft]
+
+
+add_togethercoder_data:
+  title: "Add TogetherCoder-Data dataset"
+  type: task
+  status: planned
+  owners: [AlienKevin]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, data, sft]
+
+
+synthetic_mixture_ablation:
+  title: "Ablation on synthetic data mixtures"
+  type: task
+  status: planned
+  owners: [AlienKevin]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, data, sft]
+
+
+alignment_spec_to_model:
+  title: "Alignment function from spec + base model to aligned model"
+  type: epic
+  status: planned
+  owners: [ahmeda14960]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, alignment, posttraining]
 
 
 ferry_muonh_feistel_comparison:
@@ -220,7 +433,7 @@ sft_existing_datasets_models:
   title: "SFT on existing synthetic datasets"
   type: epic
   status: planned
-  owners: [dlwh, moojink]
+  owners: [AlienKevin]
   target_date: "2026-02-28"
   issue: 2198
   labels: [timeline, sft, posttraining]
@@ -239,7 +452,7 @@ rl_math_llama_qwen_8b:
 dedup_pipeline_robust:
   title: "Dedup pipeline works robustly for basic configurations"
   type: task
-  status: planned
+  status: done
   owners: [ravwojdyla, yonromai]
   target_date: "2026-01-27"
   issue: 2091
@@ -270,7 +483,7 @@ speedrun_polish:
 speedrun_polish_issue_2153:
   title: "Speedrun polish (#2153)"
   type: task
-  status: planned
+  status: done
   owners: [Helw150]
   issue: 2153
   labels: [timeline, community, speedrun]
@@ -279,7 +492,7 @@ speedrun_polish_issue_2153:
 speedrun_polish_issue_1981:
   title: "Speedrun polish (#1981)"
   type: task
-  status: planned
+  status: done
   owners: [Helw150]
   issue: 1981
   labels: [timeline, community, speedrun]
@@ -291,6 +504,7 @@ marin_paper:
   status: planned
   owners: [percyliang]
   target_date: "2026-02-28"
+  issue: 2662
   labels: [timeline, community, paper]
 
 
@@ -327,7 +541,7 @@ modernized_pythia_release_candidate:
 
 
 data_mixing_poc_jan:
-  title: "Automated data mixing: Jan POC (single-phase + multi-phase baseline)"
+  title: "Predict single-phase multi-domain data mixtures (~OLMo 3 style)"
   type: task
   status: planned
   owners: [Calvin-Xu]
@@ -337,7 +551,7 @@ data_mixing_poc_jan:
 
 
 data_mixing_swarm_feb:
-  title: "Automated data mixing: multi-phase swarm runs"
+  title: "Predict multi-phase multi-domain data mixtures"
   type: task
   status: planned
   owners: [Calvin-Xu]
@@ -371,7 +585,7 @@ html2text_benchmark_jan:
 
 
 html2text_model_feb:
-  title: "HTML→Text: 1B E2E model trained + evaluated on Jan benchmark"
+  title: "Train 1B raw2quality model (HTML -> rewritten tokens)"
   type: task
   status: planned
   owner_names: [Michael]
@@ -447,7 +661,7 @@ train_8x7b:
 moe_mfu_match_maxtext_8x7b:
   title: "MoE MFU matches MaxText on 8x7B"
   type: epic
-  status: planned
+  status: done
   owners: [dlwh]
   target_date: "2026-01-15"
   issue: 1608
@@ -457,7 +671,7 @@ moe_mfu_match_maxtext_8x7b:
 attention_sinks:
   title: "Attention sinks"
   type: task
-  status: closed
+  status: done
   owners: [Calvin-Xu]
   target_date: "2026-01-15"
   issue: 1593
@@ -510,10 +724,10 @@ posttraining_evalchemy_evals:
 
 
 sft_synthetic_datasets:
-  title: "Reannotate existing synthetic datasets (OpenThoughts 4)"
+  title: "Reannotate existing synthetic datasets"
   type: epic
   status: planned
-  owners: [dlwh, moojink]
+  owners: [moojink]
   target_date: "2026-02-28"
   issue: 2277
   labels: [timeline, sft, synthetic_data, agent_friendly]
@@ -524,7 +738,7 @@ sft_synthetic_datasets:
 sft_agentic_datasets:
   title: "Prepare best agentic datasets"
   type: task
-  status: planned
+  status: done
   owners: [AlienKevin]
   target_date: "2026-02-28"
   issue: 2498
@@ -542,11 +756,11 @@ sft_agentic_evals:
 
 
 release_strong_sft_models:
-  title: "Release strong SFT models on top of existing base models"
+  title: "Strong SFT models on top of existing base models (e.g., Qwen)"
   type: task
   status: planned
-  owners: [dlwh, moojink]
-  target_date: "2026-02-28"
+  owners: [AlienKevin, moojink]
+  target_date: "2026-03-31"
   issue: null
   labels: [timeline, sft, release]
 
@@ -593,11 +807,11 @@ rl_marin_32b_more_envs:
 
 
 vlms_multimodality:
-  title: "Multimodality - VLMs"
+  title: "Replicate a LLaVA-OneVision-like VLM setup with evals"
   type: epic
   status: planned
-  owners: [dlwh, ruili33]
-  target_date: "2026-01-31"
+  owners: [ruili33]
+  target_date: "2026-02-28"
   issue: 2383
   labels: [timeline, multimodal]
 
@@ -640,7 +854,7 @@ iris_scheduler_mvp:
 iris_default_cg_pool:
   title: "Iris - Build out v0 autoscaler"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2360
@@ -650,7 +864,7 @@ iris_default_cg_pool:
 iris_more_depth:
   title: "Iris - Scheduling Improvements"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2362
@@ -660,7 +874,7 @@ iris_more_depth:
 iris_container_jobs:
   title: "Fray: Implement worker pools for inference scaling with demo"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2004
@@ -670,7 +884,7 @@ iris_container_jobs:
 iris_app_controller:
   title: "Iris - Daily CI integration tests"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2468
@@ -680,7 +894,7 @@ iris_app_controller:
 iris_ship_it:
   title: "Iris - Levanter training E2E smoke test"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2469
@@ -690,7 +904,7 @@ iris_ship_it:
 iris_frae_queue:
   title: "Iris: Fray V2 integration layer"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2552
@@ -700,7 +914,7 @@ iris_frae_queue:
 iris_user_approval:
   title: "Iris -- Iris client should return a friendly Job type, other QOL improvements"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2361
@@ -710,7 +924,7 @@ iris_user_approval:
 iris_cli_submit_job:
   title: "Iris: ray_run.py should add an --iris option (or create iris_run.py)"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2566
@@ -720,7 +934,7 @@ iris_cli_submit_job:
 iris_agent_containers:
   title: "Iris: Configuration file should be a complete description of cluster setup"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2569
@@ -730,7 +944,7 @@ iris_agent_containers:
 iris_bucket_dataset_registry:
   title: "Iris: Add automatic tunnelling for iris rpc operations"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2576
@@ -740,7 +954,7 @@ iris_bucket_dataset_registry:
 iris_task_log_streaming:
   title: "Iris: Iris cli should stream task logs from the root job for easier debugging"
   type: task
-  status: planned
+  status: done
   owners: [rjpower]
   target_date: "2026-01-31"
   issue: 2577
@@ -756,7 +970,7 @@ data_ingestion_pipeline_scale:
   issue: 2355
   labels: [timeline, infra, data_pipeline]
   description: |
-    Unify remaining dataset ingestion steps, clean up the pipeline, and ensure artifacts are consistent.
+    Unify remaining important dataset ingestion steps, clean up the pipeline, and ensure artifacts are consistent.
 
 
 remove_ray_rollout:
@@ -772,6 +986,56 @@ remove_ray_rollout:
     multi-cluster support.
   dependencies:
     - iris_scheduler_mvp
+    - iris_test_eu_west4
+    - iris_integrate_fray_zephyr_rl
+    - iris_rollout_more_clusters
+    - iris_multi_cluster_support
+
+
+iris_test_eu_west4:
+  title: "Iris testing in eu-west4"
+  type: task
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-02-07"
+  issue: null
+  labels: [timeline, infra, iris]
+
+
+iris_integrate_fray_zephyr_rl:
+  title: "Iris integrated into Fray for Zephyr and RL"
+  type: task
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-02-15"
+  issue: null
+  labels: [timeline, infra, iris]
+  dependencies:
+    - iris_test_eu_west4
+
+
+iris_rollout_more_clusters:
+  title: "Iris rolled out to more clusters"
+  type: task
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-02-21"
+  issue: null
+  labels: [timeline, infra, iris]
+  dependencies:
+    - iris_integrate_fray_zephyr_rl
+
+
+iris_multi_cluster_support:
+  title: "Iris multi-cluster support"
+  type: task
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, iris]
+  dependencies:
+    - iris_rollout_more_clusters
 
 
 experiments_reliable:
@@ -785,6 +1049,67 @@ experiments_reliable:
   description: |
     Remove dead data experiments, unify dataset preparation code paths, and validate a new dataset
     end-to-end through Iris. Add a consistent dataset schema and test an agent-driven dataset addition.
+  dependencies:
+    - remove_dead_data_experiments
+    - unify_dataset_preparation_code_paths
+    - dataset_schema_vortex_and_types
+    - validate_new_dataset_end_to_end
+    - agent_add_dataset_through_iris
+
+
+remove_dead_data_experiments:
+  title: "Remove dead data experiments"
+  type: task
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, data_pipeline]
+
+
+unify_dataset_preparation_code_paths:
+  title: "Unify dataset preparation code paths"
+  type: task
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, data_pipeline]
+
+
+dataset_schema_vortex_and_types:
+  title: "Dataset schema consistency (Vortex + typed outputs)"
+  type: task
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, data_pipeline]
+
+
+validate_new_dataset_end_to_end:
+  title: "Run a new dataset end-to-end and validate through Iris"
+  type: task
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, data_pipeline, iris]
+  dependencies:
+    - unify_dataset_preparation_code_paths
+    - dataset_schema_vortex_and_types
+
+
+agent_add_dataset_through_iris:
+  title: "Test an agent adding a new dataset and running it through Iris"
+  type: task
+  status: planned
+  owners: [yonromai, ravwojdyla]
+  target_date: "2026-02-28"
+  issue: null
+  labels: [timeline, infra, data_pipeline, agent_friendly, iris]
+  dependencies:
+    - validate_new_dataset_end_to_end
 
 
 marin_as_library:
@@ -810,7 +1135,7 @@ openthoughts_4_dataset:
   title: "New OpenThoughts 4 dataset"
   type: epic
   status: planned
-  owners: [dlwh, moojink]
+  owners: [moojink]
   target_date: "2026-02-28"
   issue: null
   labels: [timeline, data, community]
@@ -852,6 +1177,9 @@ ml_agents_issue_feedback:
   target_date: "2026-02-28"
   issue: null
   labels: [timeline, community, blog]
+  description: |
+    Deliver actionable feedback from agents on three GitHub issues.
+    This should dovetail with dataset and infra changes from the February workstream.
 
 
 rl_speedrun:
@@ -882,7 +1210,7 @@ train_50b_moe:
 
 
 dataset_20t_deduped:
-  title: "Scrounge 20T deduped tokens of high-quality data"
+  title: "Scrounge 20T deduped high-quality tokens (coding, agents, multilinguality)"
   type: epic
   status: planned
   owners: [Helw150]
@@ -921,11 +1249,62 @@ infra_reliability_95:
   labels: [timeline, infra]
 
 
+infra_long_running_jobs_preemption:
+  title: "Support long-running jobs across clusters and preemption"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, infra, iris]
+  dependencies:
+    - remove_ray_rollout
+    - infra_reliability_95
+
+
+agents_run_straightforward_experiments:
+  title: "Agents can run straightforward experiments"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-03-31"
+  issue: null
+  labels: [timeline, infra, agent_friendly]
+  dependencies:
+    - agent_driven_parameter_sweep_demo
+
+
+infra_reliability_99:
+  title: "Infrastructure reliability at 99%"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-05-31"
+  issue: null
+  labels: [timeline, infra]
+  dependencies:
+    - infra_reliability_95
+
+
+most_experimentation_via_agents:
+  title: "Most experimentation happens through agents"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-05-31"
+  issue: null
+  labels: [timeline, infra, agent_friendly]
+  dependencies:
+    - automated_ingestion_datasets_environments
+    - automated_ingestion_architectures_algorithms
+    - agents_run_straightforward_experiments
+
+
 regression_mix_optimization:
   title: "Regression-based data mix optimization"
   type: epic
   status: planned
-  owners: [Helw150]
+  owners: [Calvin-Xu, Helw150]
   target_date: "2026-05-15"
   labels: [timeline, data, scaling_laws, agent_friendly]
 
@@ -1468,7 +1847,7 @@ data_tools_and_mixture_ready:
   owners: [Helw150]
   owner_names: [Michael]
   target_date: "2026-05-15"
-  labels: [timeline, data_pipeline, data]
+  labels: [timeline, data_pipeline, data, paper]
 
 
 best_sft_recipe:
@@ -1478,7 +1857,7 @@ best_sft_recipe:
   owners: [moojink]
   target_date: "2026-05-31"
   issue: null
-  labels: [timeline, sft, posttraining]
+  labels: [timeline, sft, posttraining, paper]
 
 
 posttrain_yolo_sft_rl:
@@ -1613,7 +1992,7 @@ rl_job_api:
 rl_rollout_manager:
   title: "RolloutManager for testing rollouts without worker overhead"
   type: epic
-  status: planned
+  status: done
   issue: 1746
   labels: [rl, testing, agent_friendly, backburner]
 
@@ -1621,7 +2000,7 @@ rl_rollout_manager:
 rl_rollout_callbacks:
   title: "Hook/callback mechanism for rollout workers"
   type: epic
-  status: planned
+  status: done
   issue: 1740
   labels: [rl, infra, agent_friendly, backburner]
 
@@ -1793,7 +2172,7 @@ rl_storage_and_serialization:
 rl_stable_serialization:
   title: "RL datatypes should use stable serialization"
   type: epic
-  status: planned
+  status: done
   issue: 1689
   labels: [rl, infra, agent_friendly, backburner]
 
@@ -1816,7 +2195,7 @@ rl_multi_env_and_curriculum:
 curriculum_env_observability:
   title: "Improve observability of environments in curriculum"
   type: epic
-  status: planned
+  status: done
   issue: 1808
   labels: [rl, environments, infra, agent_friendly, backburner]
 
@@ -1837,7 +2216,7 @@ rl_observability:
 rl_throughput_and_scaling:
   title: "RL throughput measurement + async scaling"
   type: epic
-  status: planned
+  status: done
   labels: [rl, performance, infra, agent_friendly, backburner]
   issue: 1966
   dependencies:
@@ -1850,7 +2229,7 @@ rl_throughput_and_scaling:
 rl_throughput_measurement:
   title: "Robust measurement method for e2e on-policy RL throughput"
   type: epic
-  status: planned
+  status: done
   issue: 1965
   labels: [rl, performance, infra, backburner]
 
@@ -1858,7 +2237,7 @@ rl_throughput_measurement:
 rl_throughput_scaling_study:
   title: "Study how e2e RL throughput scales with number of inference workers"
   type: epic
-  status: planned
+  status: done
   issue: 1964
   labels: [rl, performance, infra, backburner]
 
@@ -1899,7 +2278,7 @@ rl_algorithms_and_losses:
 rl_loss_ablations:
   title: "RL loss ablations (DAPO, FlashRL)"
   type: epic
-  status: planned
+  status: done
   issue: 2043
   labels: [rl, algorithms, backburner]
 
@@ -1907,7 +2286,7 @@ rl_loss_ablations:
 rl_importance_sampling_fix:
   title: "Fix importance sampling to compensate for temperature"
   type: epic
-  status: planned
+  status: done
   issue: 1741
   labels: [rl, algorithms, backburner]
 
@@ -1915,7 +2294,7 @@ rl_importance_sampling_fix:
 rl_off_policy_eval:
   title: "Evaluation of off-policy performance and parameter tuning"
   type: epic
-  status: planned
+  status: done
   issue: 1745
   labels: [rl, algorithms, evals, backburner]
 
@@ -2195,7 +2574,7 @@ data_pipeline:
 scalable_dedupe:
   title: "build a scalable inexact deduplication pipeline"
   type: epic
-  status: planned
+  status: done
   labels: [data_pipeline, infra]
   issue: 2091
 
@@ -2782,7 +3161,7 @@ rl_capability_playbook:
 rl_env_math:
   title: "Fix and test RL with the Math environment"
   type: epic
-  status: planned
+  status: done
   issue: 1743
   labels: [rl, environments, backburner]
 
@@ -2790,7 +3169,7 @@ rl_env_math:
 rl_env_aime:
   title: "AIME 2024/25 environment + reproduce DAPO on Qwen2.5-32B"
   type: epic
-  status: planned
+  status: done
   issue: 2241
   labels: [rl, environments, backburner]
 
@@ -2906,7 +3285,7 @@ medical_data:
 medical_data_quality_process:
   title: "Medical data: define quality checks and evaluation plan"
   type: task
-  status: planned
+  status: done
   issue: 1652
   labels: [data, medical, evals, process]
 
@@ -2914,7 +3293,7 @@ medical_data_quality_process:
 medical_data_datashop:
   title: "Datashop for medical data"
   type: task
-  status: planned
+  status: done
   issue: 1361
   labels: [data, medical]
 
