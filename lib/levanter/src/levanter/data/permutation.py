@@ -1,7 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import functools
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -275,7 +274,6 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
             raise RuntimeError("BlockShufflingDataset is not initialized")
         return self._state
 
-    @functools.lru_cache(maxsize=256)
     def _window_layout(self, window_id: int) -> _WindowLayout:
         state = self._state_or_error()
         if window_id < 0 or window_id >= state.num_windows:
@@ -302,7 +300,6 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
             full_blocks=tuple(physical_full_blocks), full_region_size=full_region_size, tail_size=tail_size
         )
 
-    @functools.lru_cache(maxsize=256)
     def _window_full_region_permutation(self, window_id: int) -> Optional[Permutation]:
         layout = self._window_layout(window_id)
         if layout.full_region_size <= 1:
@@ -310,7 +307,6 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         key = _fold_in_on_local_cpu(self._window_full_key, window_id)
         return Permutation.make(self._perm_type, layout.full_region_size, key)
 
-    @functools.lru_cache(maxsize=256)
     def _window_tail_region_permutation(self, window_id: int) -> Optional[Permutation]:
         layout = self._window_layout(window_id)
         if layout.tail_size <= 1:
