@@ -96,7 +96,6 @@ def linear_softmax_cross_entropy_loss_streaming(
             w_block,
             (((1,), (0,)), ((), ())),
             precision=precision,
-            preferred_element_type=jnp.float32,
         )
         if dtype is not None:
             logits = logits.astype(dtype)

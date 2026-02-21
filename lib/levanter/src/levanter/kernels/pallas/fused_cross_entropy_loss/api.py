@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence
+from functools import lru_cache
 from typing import Literal, Optional, TypeAlias, cast
 import warnings
 
@@ -15,7 +16,7 @@ from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
 
-Implementation: TypeAlias = Literal["pallas_tpu", "xla", "reference"]
+Implementation: TypeAlias = Literal["pallas_tpu", "pallas_gpu", "xla", "reference"]
 Reduction: TypeAlias = Literal["sum", "mean"] | None
 
 
@@ -26,15 +27,36 @@ IMPLEMENTATIONS: dict[str, ArrayImpl] = {
     "reference": linear_softmax_cross_entropy_loss_reference,
     "xla": linear_softmax_cross_entropy_loss_xla,
 }
-_DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 
 try:
     from .pallas_tpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas
 
     IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
-    _DEFAULT_IMPLEMENTATION = ("pallas_tpu",) + _DEFAULT_IMPLEMENTATION
 except ImportError:
     PallasUnsupportedError = NotImplementedError  # type: ignore[assignment]
+
+try:
+    from .pallas_gpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas_gpu
+
+    IMPLEMENTATIONS["pallas_gpu"] = linear_softmax_cross_entropy_loss_pallas_gpu
+except ImportError:
+    pass
+
+
+@lru_cache(maxsize=1)
+def _default_implementations() -> tuple[Implementation, ...]:
+    implementations: tuple[Implementation, ...] = ("xla",)
+    backend = jax.default_backend()
+
+    if backend == "gpu" and "pallas_gpu" in IMPLEMENTATIONS:
+        devices = jax.devices()
+        device_kind = devices[0].device_kind.lower() if devices else ""
+        if "gb10" in device_kind:
+            return cast(tuple[Implementation, ...], implementations + ("pallas_gpu",))
+        return cast(tuple[Implementation, ...], ("pallas_gpu",) + implementations)
+    if backend == "tpu" and "pallas_tpu" in IMPLEMENTATIONS:
+        return cast(tuple[Implementation, ...], ("pallas_tpu",) + implementations)
+    return implementations
 
 
 def _validate_inputs(x: jax.Array, labels: jax.Array, w: jax.Array) -> None:
@@ -130,7 +152,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     )
 
     if implementation is None:
-        impls: Sequence[Implementation | ArrayImpl] = _DEFAULT_IMPLEMENTATION
+        impls = cast(Sequence[Implementation | ArrayImpl], _default_implementations())
         explicit = False
     elif isinstance(implementation, Sequence) and not isinstance(implementation, (str, bytes)):
         impls = cast(Sequence[Implementation | ArrayImpl], implementation)
