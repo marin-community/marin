@@ -1,6 +1,8 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Sequence
+
 import jax.random
 import pytest
 
@@ -157,3 +159,65 @@ async def test_block_shuffle_convenience_api():
 
     batch = await block_shuffled.get_batch(list(range(12)))
     assert sorted(batch) == data
+
+
+class _CountingListAsyncDataset(ListAsyncDataset[int]):
+    def __init__(self, data: list[int]):
+        super().__init__(data)
+        self.batch_calls = 0
+        self.indices_requested = 0
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[int]:
+        self.batch_calls += 1
+        self.indices_requested += len(indices)
+        return await super().get_batch(indices)
+
+
+@pytest.mark.asyncio
+async def test_block_shuffle_cache_reuses_materialized_blocks():
+    data = list(range(32))
+    backing = _CountingListAsyncDataset(data)
+    block_shuffled = BlockShufflingDataset(
+        backing,
+        io_block_size=4,
+        window_blocks=2,
+        cache_windows=2,  # enough cache for two windows (4 blocks)
+        key=jax.random.PRNGKey(0),
+    )
+
+    indices = list(range(16))
+    first = await block_shuffled.get_batch(indices)
+    calls_after_first = backing.batch_calls
+    requested_after_first = backing.indices_requested
+
+    second = await block_shuffled.get_batch(indices)
+
+    assert second == first
+    assert backing.batch_calls == calls_after_first
+    assert backing.indices_requested == requested_after_first
+
+
+@pytest.mark.asyncio
+async def test_block_shuffle_cache_evicts_when_capacity_is_small():
+    data = list(range(64))
+    backing = _CountingListAsyncDataset(data)
+    block_shuffled = BlockShufflingDataset(
+        backing,
+        io_block_size=4,
+        window_blocks=2,
+        cache_windows=1,  # 2 blocks max
+        key=jax.random.PRNGKey(0),
+    )
+
+    first_chunk = list(range(16))
+    second_chunk = list(range(16, 32))
+
+    await block_shuffled.get_batch(first_chunk)
+    requested_after_first = backing.indices_requested
+    await block_shuffled.get_batch(second_chunk)
+    requested_after_second = backing.indices_requested
+    await block_shuffled.get_batch(first_chunk)
+    requested_after_third = backing.indices_requested
+
+    assert requested_after_second > requested_after_first
+    assert requested_after_third > requested_after_second

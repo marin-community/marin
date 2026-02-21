@@ -35,6 +35,7 @@ TRAIN_SEQ_LEN = 1024
 LEARNING_RATE = 3e-3
 ERA_LENGTH = 1024
 BLOCK_WINDOW_BLOCKS = 4
+BLOCK_CACHE_WINDOWS = 8
 READ_STATS_LOG_EVERY = 50
 LIBTPU_SCOPED_VMEM_LIMIT = "--xla_tpu_scoped_vmem_limit_kib=50000"
 
@@ -44,6 +45,19 @@ def _int_env(name: str, default: int) -> int:
     if value is None:
         return default
     return int(value)
+
+
+def _int_list_env(name: str, default: list[int]) -> list[int]:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return list(default)
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if not parts:
+        return list(default)
+    parsed = [int(p) for p in parts]
+    if any(v <= 0 for v in parsed):
+        raise ValueError(f"{name} must contain only positive integers, got {parsed}")
+    return parsed
 
 
 def _with_env(step: ExecutorStep, env_vars: dict[str, str]) -> ExecutorStep:
@@ -98,6 +112,8 @@ def main() -> None:
         "False",
     }
     steps_per_eval = _int_env("SHUFFLE_ABLATION_STEPS_PER_EVAL", 250)
+    block_window_blocks_sweep = _int_list_env("SHUFFLE_ABLATION_BLOCK_WINDOW_BLOCKS", [BLOCK_WINDOW_BLOCKS])
+    block_cache_windows = _int_env("SHUFFLE_ABLATION_BLOCK_CACHE_WINDOWS", BLOCK_CACHE_WINDOWS)
 
     model_config = dataclasses.replace(llama_150m, max_seq_len=TRAIN_SEQ_LEN)
 
@@ -127,17 +143,35 @@ def main() -> None:
     )
 
     io_block_size = max(1, DEFAULT_CHUNK_SIZE // TRAIN_SEQ_LEN)
-    block_shuffle = BlockShuffleConfig(
-        io_block_size=io_block_size,
-        window_blocks=BLOCK_WINDOW_BLOCKS,
-        perm_type="feistel",
-    )
-
     arms: list[tuple[str, bool | int | BlockShuffleConfig]] = [
         ("full_shuffle", True),
         ("era_shuffle", ERA_LENGTH),
-        ("block_shuffle", block_shuffle),
     ]
+    if len(block_window_blocks_sweep) == 1:
+        arms.append(
+            (
+                "block_shuffle",
+                BlockShuffleConfig(
+                    io_block_size=io_block_size,
+                    window_blocks=block_window_blocks_sweep[0],
+                    cache_windows=block_cache_windows,
+                    perm_type="feistel",
+                ),
+            )
+        )
+    else:
+        for window_blocks in block_window_blocks_sweep:
+            arms.append(
+                (
+                    f"block_shuffle_w{window_blocks}",
+                    BlockShuffleConfig(
+                        io_block_size=io_block_size,
+                        window_blocks=window_blocks,
+                        cache_windows=block_cache_windows,
+                        perm_type="feistel",
+                    ),
+                )
+            )
 
     steps = [
         _build_arm(
@@ -152,7 +186,8 @@ def main() -> None:
     ]
 
     description = (
-        f"Issue #{ISSUE_NUMBER}: 150M Nemotron shuffle ablation (full vs era vs block) "
+        f"Issue #{ISSUE_NUMBER}: 150M Nemotron shuffle ablation "
+        f"(window_blocks={block_window_blocks_sweep}, cache_windows={block_cache_windows}) "
         "with TensorStore read-stats instrumentation."
     )
     executor_main(steps=steps, description=description)
