@@ -15,7 +15,6 @@
 - The first step for dataset addition is schema inspection. See the [add_dataset.md](docs/recipes/add_dataset.md) recipe for details.
 - You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
 - For long-running benchmark/research threads, follow [agent_research.md](docs/recipes/agent_research.md).
-- For canary/daily ferry proposal, launch, and monitoring workflow, follow [ferries.md](docs/recipes/ferries.md).
 - When making significant changes to Grug/Grugformer, follow [change_grug.md](docs/recipes/change_grug.md).
 - Follow the rules and examples in each recipe to ensure compatibility and automation-friendliness.
 
