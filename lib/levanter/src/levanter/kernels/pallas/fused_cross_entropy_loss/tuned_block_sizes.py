@@ -59,6 +59,8 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=256),
         ("bfloat16", "small-h-small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
         ("float32", "small-h-small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
+        ("bfloat16", "gb10-large-vocab-mid-batch"): BlockSizes(b_block_size=1024, h_block_size=32, v_block_size=1024),
+        ("float32", "gb10-large-vocab-mid-batch"): BlockSizes(b_block_size=1024, h_block_size=32, v_block_size=1024),
     },
     "NVIDIA H100": {
         ("bfloat16", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
@@ -237,6 +239,15 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         h_max=4096,
         v_min=120000,
         v_max=131072,
+    ),
+    ShapeBucket(
+        name="gb10-large-vocab-mid-batch",
+        b_min=2048,
+        b_max=32768,
+        h_min=512,
+        h_max=1536,
+        v_min=65536,
+        v_max=262144,
     ),
     ShapeBucket(
         name="large-batch-small-h",

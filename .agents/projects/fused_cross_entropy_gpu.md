@@ -442,3 +442,71 @@ Conclusion:
   - `~1.15x` speedup
 - Full `fwd+bwd` at same shape:
   - near parity (`~1.00x`).
+
+## 2026-02-20 backward rewrite + FA retune (GB10)
+
+### Key implementation change
+- File: `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`
+- Rewrote custom backward accumulation in `_backward_streaming_from_lse`:
+  - old: `lax.fori_loop` carrying full `grad_x` and full `grad_w` with per-iteration `dynamic_update_slice`
+  - new: `lax.scan` carrying only `grad_x`, emitting `grad_w_block` per vocab tile, then one final reshape/transpose to materialize `grad_w`
+- The attempted scatter-based label update in backward regressed throughput and was reverted.
+
+### Why this helped
+- Removing full `grad_w` from loop carry significantly reduced backward update overhead at large `V`.
+- Backward still dominates total step time at target shape, so this structural change produced a measurable end-to-end gain.
+
+### Target shape benchmark (fwd+bwd)
+Shape:
+- `B=8192, H=1024, V=128256`, BF16 inputs, `dtype=float32`
+
+Measured after rewrite:
+- `xla`: `~321.13 ms`
+- `pallas_gpu hybrid` (XLA fwd + custom bwd): `~144.97 ms`
+- `pallas_gpu FA-optin` (`b=1024,h=32,v=1024`): `~143.15 ms`
+
+Speedups:
+- `xla / hybrid`: `~2.22x`
+- `xla / FA-optin`: `~2.24x`
+
+### Effective large batch benchmark (fwd+bwd)
+Method:
+- emulate `B=131072` as `16 x B=8192` microbatches (to avoid direct `B x V` materialization)
+
+Measured totals:
+- `xla`: `~5151.71 ms`
+- `pallas_gpu FA-optin (b=1024,h=32,v=1024)`: `~2301.77 ms`
+- speedup: `xla / pallas ~2.24x`
+
+### Numerics checks
+At target shape (`B=8192,H=1024,V=128256`), versus XLA:
+- `loss_diff`: `0.0` (float32 scalar equality in sampled run)
+- `gx`: mean abs diff `~1.54e-7`, max abs diff `~7.63e-6`
+- sampled `gw`: mean abs diff `~5.53e-15`, max abs diff `~5.82e-11`
+
+Interpretation note:
+- A literal `loss_diff=0.0` here means equal rounded float32 scalar in this run, not proof of bitwise equivalence in all regimes.
+
+### Additional tuning notes
+- Backward vocab-tile sweep with rewritten kernel kept `v_block=7168` as best for `B>=8192` among tested values.
+- FA forward limited sweep found `b=1024,h=32,v=1024` best among valid shared-memory-safe candidates.
+- Invalid combinations encountered as expected:
+  - `h=64,v=1024` exceeds GB10 shared-memory tile budget,
+  - non-power-of-two `v_block` rejected by current lowering constraints.
+
+### 2026-02-20 follow-up: tuned block-size inference update
+- Updated `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py`:
+  - Added GB10 bucket `gb10-large-vocab-mid-batch` (`B in [2048,32768], H in [512,1536], V in [65536,262144]`).
+  - Mapped GB10 BF16/FP32 tuned block sizes for that bucket to `BlockSizes(b=1024,h=32,v=1024)`.
+- Validation:
+  - `infer_block_sizes(8192,1024,128256,dtype=float32,device_kind='NVIDIA GB10')` now returns `BlockSizes(1024,32,1024)`.
+  - With `LEVANTER_PALLAS_GPU_GB10_NATIVE_FORWARD=1` and inferred block sizes (`block_sizes=None`), measured `fwd+bwd` median: `~143.88 ms` on `B=8192,H=1024,V=128256`.
+
+### 2026-02-20 micro-opt update (backward label mask dtype)
+- In `_backward_streaming_from_lse`, changed label one-hot temporary from `float32` to `x.dtype` (BF16 on target runs), while subtraction remains against `float32` `dlogits`.
+- Rationale: reduce one-hot temporary bandwidth/footprint with exact 0/1 representability in BF16.
+- Measured at `B=8192,H=1024,V=128256` (`fwd+bwd`):
+  - `xla`: `~322.71 ms`
+  - `pallas_hybrid` (inferred blocks): `~143.42 ms`
+  - `pallas_fa` (inferred blocks + opt-in): `~143.94 ms`
+- Numerics vs XLA in sampled run remained tight (`loss_diff=0.0`, `gx_max ~7.63e-6`, sampled `gw_max=0.0`).
