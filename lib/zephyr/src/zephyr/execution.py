@@ -191,6 +191,14 @@ class ZephyrWorkerError(RuntimeError):
     """Raised when a worker encounters a fatal (non-transient) error."""
 
 
+# Application errors that should never be retried by the execute() retry loop.
+# These are deterministic errors (bad plan, invalid config, programming bugs)
+# that would fail identically on every attempt. Infrastructure errors (OSError,
+# RuntimeError from dead actors, Ray actor errors) are NOT listed here so they
+# remain retryable.
+_NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, AttributeError)
+
+
 # ---------------------------------------------------------------------------
 # WorkerContext protocol — the public interface exposed to user task code
 # ---------------------------------------------------------------------------
@@ -338,14 +346,18 @@ class ZephyrCoordinator:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
 
     def _log_status(self) -> None:
+        alive = sum(1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY})
+        dead = sum(1 for s in self._worker_states.values() if s in {WorkerState.FAILED, WorkerState.DEAD})
         logger.info(
-            "[%s] %d/%d complete, %d in-flight, %d queued, %d workers",
+            "[%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
             self._stage_name,
             self._completed_shards,
             self._total_shards,
             len(self._in_flight),
             len(self._task_queue),
+            alive,
             len(self._worker_handles),
+            dead,
         )
 
     def _check_worker_heartbeats(self, timeout: float = 30.0) -> None:
@@ -890,6 +902,9 @@ class ZephyrContext:
             Defaults to a random 8-character hex string.
         no_workers_timeout: Seconds to wait for at least one worker before failing a stage.
             Defaults to 600s.
+        max_execution_retries: Maximum number of times to retry a pipeline execution after
+            an infrastructure failure (e.g., coordinator VM preemption). Application errors
+            (ZephyrWorkerError) are never retried. Defaults to 3.
     """
 
     client: Client | None = None
@@ -898,6 +913,7 @@ class ZephyrContext:
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
+    max_execution_retries: int = 3
 
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     _coordinator: ActorHandle | None = field(default=None, repr=False)
@@ -958,32 +974,54 @@ class ZephyrContext:
         """Execute a dataset pipeline on the worker pool.
 
         Workers persist across execute() calls, so cached state (tokenizers,
-        models) will be reused.
+        models) will be reused. If the coordinator dies mid-execution (e.g.,
+        VM preemption), the pipeline is retried with a fresh coordinator and
+        worker pool up to ``max_execution_retries`` times. Application errors
+        (``ZephyrWorkerError``) are never retried.
         """
         plan = compute_plan(dataset, hints)
         if dry_run:
             _print_plan(dataset.operations, plan)
             return []
 
-        execution_id = _generate_execution_id()
-        logger.info("Starting zephyr pipeline: %s", execution_id)
+        last_exception: Exception | None = None
+        for attempt in range(self.max_execution_retries + 1):
+            execution_id = _generate_execution_id()
+            logger.info("Starting zephyr pipeline: %s (attempt %d)", execution_id, attempt)
 
-        try:
-            self._ensure_coordinator()
-            self._ensure_workers(plan.num_shards)
+            try:
+                self._ensure_coordinator()
+                self._ensure_workers(plan.num_shards)
 
-            # Run pipeline on coordinator (blocking call)
-            results = self._coordinator.run_pipeline.remote(plan, self._shared_data, execution_id, hints).result()
+                # Run pipeline on coordinator (blocking call)
+                results = self._coordinator.run_pipeline.remote(plan, self._shared_data, execution_id, hints).result()
 
-            return results
+                return results
 
-        except Exception:
-            # Re-raise without cleanup - workers will be reused
-            raise
+            except _NON_RETRYABLE_ERRORS:
+                raise
 
-        finally:
-            # Clean up chunks for this execution only (workers persist)
-            _cleanup_execution(self.chunk_storage_prefix, execution_id)
+            except Exception as e:
+                last_exception = e
+                if attempt >= self.max_execution_retries:
+                    raise
+
+                logger.warning(
+                    "Pipeline attempt %d/%d failed, retrying with fresh coordinator: %s",
+                    attempt + 1,
+                    self.max_execution_retries,
+                    e,
+                )
+                # Tear down dead coordinator and orphaned workers so
+                # _ensure_coordinator / _ensure_workers create fresh ones.
+                self.shutdown()
+
+            finally:
+                # Clean up chunks for this execution only (workers persist)
+                _cleanup_execution(self.chunk_storage_prefix, execution_id)
+
+        # Should be unreachable, but just in case
+        raise last_exception  # type: ignore[misc]
 
     def _ensure_coordinator(self) -> None:
         """Create coordinator if not already initialized."""

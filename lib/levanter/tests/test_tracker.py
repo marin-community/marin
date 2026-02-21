@@ -65,7 +65,8 @@ def test_tracker_plugin_multi_parsing_work():
     assert decoded == (NoopConfig(), TrackerConfig.get_choice_class("wandb")())
 
 
-def test_get_tracker_by_name():
+def test_get_tracker_by_name(monkeypatch):
+    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
     wandb_config = TrackerConfig.get_choice_class("wandb")
     if wandb_config is None:
         pytest.skip("wandb not installed")

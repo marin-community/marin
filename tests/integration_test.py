@@ -181,8 +181,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=tokenizer,
-        zephyr_num_cpus=1,
-        zephyr_memory=humanfriendly.parse_size("1MB", binary=True),
     )
 
     tokenize_step = ExecutorStep(
