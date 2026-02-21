@@ -99,6 +99,7 @@ def _build_arm(
         step,
         {
             "LEVANTER_LOG_DATA_READ_STATS_EVERY": str(READ_STATS_LOG_EVERY),
+            "LEVANTER_LOG_TENSORSTORE_METRICS_EVERY": str(READ_STATS_LOG_EVERY),
             "LEVANTER_SHUFFLE_ARM": arm_name,
             "LIBTPU_INIT_ARGS": LIBTPU_SCOPED_VMEM_LIMIT,
         },
