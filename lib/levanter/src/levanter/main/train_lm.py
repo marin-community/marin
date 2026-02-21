@@ -5,14 +5,12 @@ import dataclasses
 import gc
 import logging
 import os
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Optional
 
 import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
-import tensorstore as ts
 from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
 
@@ -21,6 +19,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
 from levanter.data.mixture import MixtureDataset
@@ -73,246 +72,6 @@ class TrainLmConfig:
 
     # TODO: really need to add callback framework
     log_entropy: bool = False
-
-
-def _collect_token_seq_datasets(
-    dataset: "levanter.data.dataset.AsyncDataset",
-    *,
-    prefix: str = "train",
-    _seen: set[int] | None = None,
-) -> dict[str, "TokenSeqDataset"]:
-    from levanter.data.dataset import AsyncDataset
-    from levanter.data.text.datasets import TokenSeqDataset
-
-    seen = _seen if _seen is not None else set()
-    dataset_id = id(dataset)
-    if dataset_id in seen:
-        return {}
-    seen.add(dataset_id)
-
-    if isinstance(dataset, TokenSeqDataset):
-        return {prefix: dataset}
-
-    out: dict[str, TokenSeqDataset] = {}
-
-    wrapped = getattr(dataset, "dataset", None)
-    if isinstance(wrapped, AsyncDataset):
-        out.update(_collect_token_seq_datasets(wrapped, prefix=prefix, _seen=seen))
-
-    nested = getattr(dataset, "datasets", None)
-    if isinstance(nested, Mapping):
-        for name, child in nested.items():
-            if not isinstance(name, str):
-                continue
-            if isinstance(child, AsyncDataset):
-                out.update(_collect_token_seq_datasets(child, prefix=f"{prefix}/{name}", _seen=seen))
-
-    return out
-
-
-def _install_data_read_stats_hook_if_enabled(trainer: Trainer, train_dataset) -> None:
-    every_env = os.environ.get("LEVANTER_LOG_DATA_READ_STATS_EVERY")
-    if every_env is None:
-        return
-
-    every = int(every_env)
-    if every <= 0:
-        return
-
-    token_seq_datasets = _collect_token_seq_datasets(train_dataset)
-    if not token_seq_datasets:
-        logger.warning(
-            "LEVANTER_LOG_DATA_READ_STATS_EVERY=%s set, but no TokenSeqDataset found in training dataset.",
-            every,
-        )
-        return
-
-    previous = {name: ds.read_stats for name, ds in token_seq_datasets.items()}
-    logger.info(
-        "Enabling data read-stats logging every %s step(s) for datasets: %s",
-        every,
-        sorted(token_seq_datasets.keys()),
-    )
-
-    def _log_data_read_stats(step_info):
-        metrics: dict[str, float | int] = {}
-        total_examples = 0
-        total_reads = 0
-        total_examples_delta = 0
-        total_reads_delta = 0
-
-        for name, ds in token_seq_datasets.items():
-            stats = ds.read_stats
-            prev = previous[name]
-
-            examples_delta = stats.examples_requested - prev.examples_requested
-            reads_delta = stats.tensorstore_reads_issued - prev.tensorstore_reads_issued
-            unique_examples_delta = stats.unique_examples_requested - prev.unique_examples_requested
-            coalesced_ranges_delta = stats.coalesced_ranges - prev.coalesced_ranges
-
-            total_examples += stats.examples_requested
-            total_reads += stats.tensorstore_reads_issued
-            total_examples_delta += examples_delta
-            total_reads_delta += reads_delta
-
-            prefix = f"data/read_stats/{name}"
-            metrics[f"{prefix}/examples_requested_total"] = stats.examples_requested
-            metrics[f"{prefix}/tensorstore_reads_total"] = stats.tensorstore_reads_issued
-            metrics[f"{prefix}/unique_examples_requested_total"] = stats.unique_examples_requested
-            metrics[f"{prefix}/coalesced_ranges_total"] = stats.coalesced_ranges
-            metrics[f"{prefix}/examples_requested_delta"] = examples_delta
-            metrics[f"{prefix}/tensorstore_reads_delta"] = reads_delta
-            metrics[f"{prefix}/unique_examples_requested_delta"] = unique_examples_delta
-            metrics[f"{prefix}/coalesced_ranges_delta"] = coalesced_ranges_delta
-            if stats.examples_requested > 0:
-                metrics[f"{prefix}/reads_per_example_total"] = (
-                    stats.tensorstore_reads_issued / stats.examples_requested
-                )
-            if examples_delta > 0:
-                metrics[f"{prefix}/reads_per_example_delta"] = reads_delta / examples_delta
-
-            previous[name] = stats
-
-        metrics["data/read_stats/total/examples_requested_total"] = total_examples
-        metrics["data/read_stats/total/tensorstore_reads_total"] = total_reads
-        metrics["data/read_stats/total/examples_requested_delta"] = total_examples_delta
-        metrics["data/read_stats/total/tensorstore_reads_delta"] = total_reads_delta
-        if total_examples > 0:
-            metrics["data/read_stats/total/reads_per_example_total"] = total_reads / total_examples
-        if total_examples_delta > 0:
-            metrics["data/read_stats/total/reads_per_example_delta"] = total_reads_delta / total_examples_delta
-
-        levanter.tracker.log(metrics, step=step_info.step)
-
-    trainer.add_hook(_log_data_read_stats, every=every)
-
-
-def _sum_tensorstore_metric(metric_name: str, value_key: str) -> float:
-    matched = ts.experimental_collect_matching_metrics(metric_name, include_zero_metrics=True)
-    total = 0.0
-    for metric in matched:
-        if metric.get("name") != metric_name:
-            continue
-        for value in metric.get("values", []):
-            metric_value = value.get(value_key)
-            if metric_value is not None:
-                total += float(metric_value)
-    return total
-
-
-def _collect_kvstore_drivers_from_spec_json(spec_json: object) -> set[str]:
-    drivers: set[str] = set()
-
-    if isinstance(spec_json, Mapping):
-        kvstore = spec_json.get("kvstore")
-        if isinstance(kvstore, Mapping):
-            driver = kvstore.get("driver")
-            if isinstance(driver, str):
-                drivers.add(driver)
-
-        for value in spec_json.values():
-            drivers.update(_collect_kvstore_drivers_from_spec_json(value))
-    elif isinstance(spec_json, list):
-        for value in spec_json:
-            drivers.update(_collect_kvstore_drivers_from_spec_json(value))
-
-    return drivers
-
-
-def _infer_tensorstore_kvstore_drivers(train_dataset) -> set[str]:
-    drivers: set[str] = set()
-    for dataset in _collect_token_seq_datasets(train_dataset).values():
-        store = getattr(dataset, "_store", None)
-        if store is None:
-            continue
-
-        try:
-            token_arrays = store.tree["input_ids"]
-        except (AttributeError, KeyError, TypeError):
-            continue
-
-        tensorstores = [token_arrays.offsets, token_arrays.data]
-        if token_arrays.shapes is not None:
-            tensorstores.append(token_arrays.shapes)
-
-        for tensorstore in tensorstores:
-            try:
-                spec_json = tensorstore.spec(retain_context=True).to_json()
-            except Exception:
-                continue
-            drivers.update(_collect_kvstore_drivers_from_spec_json(spec_json))
-
-    return drivers
-
-
-def _tensorstore_metric_specs_for_drivers(kvstore_drivers: set[str]) -> dict[str, tuple[str, str]]:
-    metric_specs = {
-        "cache_hit_count": ("/tensorstore/cache/hit_count", "value"),
-        "cache_miss_count": ("/tensorstore/cache/miss_count", "value"),
-        "cache_evict_count": ("/tensorstore/cache/evict_count", "value"),
-        "cache_chunk_reads": ("/tensorstore/cache/chunk_cache/reads", "value"),
-        "cache_chunk_writes": ("/tensorstore/cache/chunk_cache/writes", "value"),
-    }
-
-    if "gcs" in kvstore_drivers:
-        metric_specs["gcs_read_count"] = ("/tensorstore/kvstore/gcs/read", "value")
-        metric_specs["gcs_bytes_read"] = ("/tensorstore/kvstore/gcs/bytes_read", "value")
-    if "gcs_grpc" in kvstore_drivers:
-        metric_specs["gcs_grpc_read_count"] = ("/tensorstore/kvstore/gcs_grpc/read", "value")
-        metric_specs["gcs_grpc_bytes_read"] = ("/tensorstore/kvstore/gcs_grpc/bytes_read", "value")
-
-    return metric_specs
-
-
-def _install_tensorstore_metrics_hook_if_enabled(trainer: Trainer, train_dataset) -> None:
-    every_env = os.environ.get("LEVANTER_LOG_TENSORSTORE_METRICS_EVERY")
-    if every_env is None:
-        return
-
-    every = int(every_env)
-    if every <= 0:
-        return
-
-    kvstore_drivers = _infer_tensorstore_kvstore_drivers(train_dataset)
-    metric_specs = _tensorstore_metric_specs_for_drivers(kvstore_drivers)
-    previous = {
-        name: _sum_tensorstore_metric(metric_name, value_key)
-        for name, (metric_name, value_key) in metric_specs.items()
-    }
-
-    logger.info(
-        "Enabling TensorStore metrics logging every %s step(s); kvstore drivers=%s metric_keys=%s",
-        every,
-        sorted(kvstore_drivers) if kvstore_drivers else [],
-        sorted(metric_specs),
-    )
-
-    def _log_tensorstore_metrics(step_info):
-        metrics: dict[str, float] = {}
-        current: dict[str, float] = {}
-
-        for metric_name, (tensorstore_name, value_key) in metric_specs.items():
-            total = _sum_tensorstore_metric(tensorstore_name, value_key)
-            current[metric_name] = total
-            metrics[f"data/tensorstore/{metric_name}_total"] = total
-            metrics[f"data/tensorstore/{metric_name}_delta"] = total - previous[metric_name]
-
-        hits_total = current["cache_hit_count"]
-        misses_total = current["cache_miss_count"]
-        total_accesses = hits_total + misses_total
-        if total_accesses > 0:
-            metrics["data/tensorstore/cache_hit_rate_total"] = hits_total / total_accesses
-
-        hits_delta = metrics["data/tensorstore/cache_hit_count_delta"]
-        misses_delta = metrics["data/tensorstore/cache_miss_count_delta"]
-        access_delta = hits_delta + misses_delta
-        if access_delta > 0:
-            metrics["data/tensorstore/cache_hit_rate_delta"] = hits_delta / access_delta
-
-        previous.update(current)
-        levanter.tracker.log(metrics, step=step_info.step)
-
-    trainer.add_hook(_log_tensorstore_metrics, every=every)
 
 
 def main(config: TrainLmConfig):
@@ -406,8 +165,7 @@ def main(config: TrainLmConfig):
             config.trainer.batch_schedule,
             key=data_key,
         )
-        _install_data_read_stats_hook_if_enabled(trainer, train_dataset)
-        _install_tensorstore_metrics_hook_if_enabled(trainer, train_dataset)
+        install_tensorstore_metrics_hook_if_enabled(trainer)
 
         # Get the tagged evaluation datasets
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)

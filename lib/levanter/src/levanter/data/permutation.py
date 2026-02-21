@@ -1,9 +1,7 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import functools
-from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -195,7 +193,6 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         io_block_size: int,
         *,
         window_blocks: int,
-        cache_windows: int = 0,
         key: PRNGKeyArray | int,
         perm_type: PermType = "feistel",
     ):
@@ -203,22 +200,17 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
             raise ValueError(f"io_block_size must be positive, got {io_block_size}")
         if window_blocks <= 0:
             raise ValueError(f"window_blocks must be positive, got {window_blocks}")
-        if cache_windows < 0:
-            raise ValueError(f"cache_windows must be non-negative, got {cache_windows}")
 
         self.dataset = dataset
         self.io_block_size = io_block_size
         self.window_blocks = window_blocks
-        self.cache_windows = cache_windows
         self._perm_type = perm_type
-        self._max_cached_blocks = cache_windows * window_blocks
 
         with local_cpu_mesh():
             if isinstance(key, int):
                 key = jax.random.PRNGKey(key)
             else:
                 key = _key_on_local_cpu(key)
-            key = _key_on_local_cpu(key)
             block_key, window_full_key, window_tail_key = jax.random.split(key, 3)
             self.key = _key_on_local_cpu(key)
             self._block_key = _key_on_local_cpu(block_key)
@@ -227,8 +219,6 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
 
         self._state: _BlockShuffleState | None = None
         self._full_block_permutation: Optional[Permutation] = None
-        self._block_cache: OrderedDict[int, tuple[T_co, ...]] = OrderedDict()
-        self._cache_lock = asyncio.Lock()
 
     def is_finite(self) -> bool:
         return self.dataset.is_finite()
@@ -245,51 +235,7 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         if not indices:
             return []
         mapped = [await self._map_index(i) for i in indices]
-        if self._max_cached_blocks <= 0:
-            return await self.dataset.get_batch(mapped)
-
-        state = self._state_or_error()
-        requested_block_ids = [idx // self.io_block_size for idx in mapped]
-
-        async with self._cache_lock:
-            missing_block_ids = [bid for bid in sorted(set(requested_block_ids)) if bid not in self._block_cache]
-
-        if missing_block_ids:
-            block_fetch_plan: list[tuple[int, int, int]] = []
-            fetch_indices: list[int] = []
-            for block_id in missing_block_ids:
-                start, stop = self._block_bounds(state, block_id)
-                block_fetch_plan.append((block_id, start, stop))
-                fetch_indices.extend(range(start, stop))
-
-            fetched = await self.dataset.get_batch(fetch_indices)
-
-            fetched_blocks: dict[int, tuple[T_co, ...]] = {}
-            start_idx = 0
-            for block_id, block_start, block_stop in block_fetch_plan:
-                block_len = block_stop - block_start
-                fetched_blocks[block_id] = tuple(fetched[start_idx : start_idx + block_len])
-                start_idx += block_len
-
-            async with self._cache_lock:
-                for block_id in missing_block_ids:
-                    self._block_cache[block_id] = fetched_blocks[block_id]
-                    self._block_cache.move_to_end(block_id)
-
-        async with self._cache_lock:
-            out: list[T_co] = []
-            for physical_idx in mapped:
-                block_id = physical_idx // self.io_block_size
-                offset_in_block = physical_idx - block_id * self.io_block_size
-                cached_block = self._block_cache.get(block_id)
-                if cached_block is None:
-                    raise RuntimeError(f"Missing cached block {block_id} for index {physical_idx}")
-                self._block_cache.move_to_end(block_id)
-                out.append(cached_block[offset_in_block])
-
-            self._evict_cache_locked()
-
-        return out
+        return await self.dataset.get_batch(mapped)
 
     async def _ensure_initialized(self) -> _BlockShuffleState:
         if self._state is not None:
@@ -329,21 +275,6 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         if self._state is None:
             raise RuntimeError("BlockShufflingDataset is not initialized")
         return self._state
-
-    def _block_bounds(self, state: _BlockShuffleState, block_id: int) -> tuple[int, int]:
-        if block_id < 0 or block_id >= state.total_blocks:
-            raise IndexError(f"Block id {block_id} out of bounds for {state.total_blocks} blocks")
-        block_start = block_id * self.io_block_size
-        block_stop = min(block_start + self.io_block_size, state.dataset_len)
-        return block_start, block_stop
-
-    def _evict_cache_locked(self) -> None:
-        if self._max_cached_blocks <= 0:
-            self._block_cache.clear()
-            return
-
-        while len(self._block_cache) > self._max_cached_blocks:
-            self._block_cache.popitem(last=False)
 
     @functools.lru_cache(maxsize=256)
     def _window_layout(self, window_id: int) -> _WindowLayout:
@@ -434,12 +365,12 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         return (
             "BlockShufflingDataset("
             f"{repr(self.dataset)}, io_block_size={self.io_block_size}, "
-            f"window_blocks={self.window_blocks}, cache_windows={self.cache_windows})"
+            f"window_blocks={self.window_blocks})"
         )
 
     def __str__(self):
         return (
             "BlockShufflingDataset("
             f"{str(self.dataset)}, io_block_size={self.io_block_size}, "
-            f"window_blocks={self.window_blocks}, cache_windows={self.cache_windows})"
+            f"window_blocks={self.window_blocks})"
         )

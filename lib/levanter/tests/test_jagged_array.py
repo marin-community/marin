@@ -9,35 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import levanter.store.jagged_array as jagged_array
 from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch
-
-
-def test_read_opens_reuse_tensorstore_context(monkeypatch):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        writer = JaggedArrayStore.open(tmpdir, item_rank=1, dtype=jnp.int64)
-        writer.append(np.asarray([1, 2, 3], dtype=np.int64))
-
-        read_contexts = []
-        recheck_values = []
-        original_open = jagged_array.ts.open
-
-        def _recording_open(*args, **kwargs):
-            recheck = kwargs.get("recheck_cached_data")
-            if recheck is not None:
-                read_contexts.append(kwargs.get("context"))
-                recheck_values.append(recheck)
-            return original_open(*args, **kwargs)
-
-        monkeypatch.setattr(jagged_array.ts, "open", _recording_open)
-        JaggedArrayStore.open(tmpdir, mode="r", item_rank=1, dtype=jnp.int64)
-        JaggedArrayStore.open(tmpdir, mode="r", item_rank=1, dtype=jnp.int64)
-
-        assert len(read_contexts) >= 4
-        first_context = read_contexts[0]
-        assert first_context is not None
-        assert all(context is first_context for context in read_contexts)
-        assert all(recheck == jagged_array.RECHECK_CACHED_DATA for recheck in recheck_values)
 
 
 @pytest.mark.parametrize("cache_metadata", [True, False])

@@ -44,14 +44,15 @@ DEFAULT_WRITE_CHUNK_SIZE = DEFAULT_CHUNK_SIZE * 512
 
 _READ_CONTEXT: ts.Context | None = None
 _READ_CONTEXT_LOCK = threading.Lock()
+_READ_CACHE_SETTINGS = {"total_bytes_limit": CACHE_BYTES_LIMIT}
 
 
-def _read_context(cache_settings: dict) -> ts.Context:
+def _read_context() -> ts.Context:
     global _READ_CONTEXT
     with _READ_CONTEXT_LOCK:
         if _READ_CONTEXT is None:
             # TensorStore only shares cache_pool entries across stores that share a Context.
-            _READ_CONTEXT = ts.Context({"cache_pool": cache_settings})
+            _READ_CONTEXT = ts.Context({"cache_pool": _READ_CACHE_SETTINGS})
     return _READ_CONTEXT
 
 
@@ -569,7 +570,7 @@ def _unshaped_spec(store: ts.TensorStore) -> ts.Spec:
 def _ts_open_kwargs(mode: str, cache_settings: dict) -> dict:
     kwargs: dict = {"context": ts.Context({"cache_pool": cache_settings})}
     if mode == "r":
-        kwargs["context"] = _read_context(cache_settings)
+        kwargs["context"] = _read_context()
         kwargs["recheck_cached_data"] = RECHECK_CACHED_DATA
     return kwargs
 
