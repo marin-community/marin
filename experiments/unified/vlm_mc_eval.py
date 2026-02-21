@@ -14,13 +14,13 @@ Supports two task types:
   log P(answer | prompt + image) → mean normalized log-likelihood.
 
 Both task types reuse the same Levanter loglikelihood infrastructure:
-PromptCompletion → greedy_pack → broadcast_shard → process_loglikelihood.
+PromptCompletion → greedy_pack → hax.shard → process_loglikelihood.
 
 All processes run the same eval loop (no coordinator/worker split). Each process
-independently builds batches, then broadcast_shard distributes process 0's data
-to all hosts as a JIT collective — providing both data identity and per-batch
-synchronization. sync_global_devices() JAX-level barriers between benchmarks
-prevent TPU collective mismatches from host drift.
+independently builds identical batches from the same GCS parquet files, then
+hax.shard places each host's data onto its devices with the training mesh
+sharding. multihost_broadcast_sync ensures all hosts iterate the same number
+of batches.
 
 Usage (standalone):
     uv run experiments/unified/vlm_mc_eval.py \
@@ -57,7 +57,7 @@ from levanter.eval_harness import (
     _LmEvalHarnessWorker,
     get_padding_count_from_batch,
 )
-from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync, sync_global_devices
+from levanter.utils.jax_utils import multihost_broadcast_sync
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -67,6 +67,28 @@ from experiments.unified.vlm_tokenize_captions import (
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
+
+
+def _shard_identical_batch(batch, axis_resources):
+    """Create global arrays from identical local data present on every host.
+
+    Uses jax.make_array_from_callback so each host only provides data for its
+    own local devices — the same pattern as Levanter's DataLoader (loader.py:408).
+    """
+    shardings = hax.partitioning.infer_resource_partitions(batch, axis_resources)
+
+    def _make_global(leaf, sharding):
+        if sharding is None:
+            return leaf
+        if isinstance(leaf, hax.NamedArray):
+            raw = np.asarray(leaf.array)
+            global_arr = jax.make_array_from_callback(raw.shape, sharding, lambda idx: raw[idx])
+            return hax.NamedArray(global_arr, leaf.axes)
+        raw = np.asarray(leaf)
+        return jax.make_array_from_callback(raw.shape, sharding, lambda idx: raw[idx])
+
+    return jax.tree.map(_make_global, batch, shardings, is_leaf=lambda x: isinstance(x, hax.NamedArray))
+
 
 MC_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
@@ -352,7 +374,7 @@ def evaluate_vlm_mc_benchmark(
     all_batches = list(stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch))
 
     # Synchronize batch count across hosts to prevent JAX collective desync.
-    # broadcast_shard is a JAX collective called per-batch, so all hosts
+    # process_loglikelihood is a JAX collective called per-batch, so all hosts
     # must iterate the same number of times.
     num_batches = multihost_broadcast_sync(len(all_batches))
     if len(all_batches) < num_batches:
@@ -370,8 +392,7 @@ def evaluate_vlm_mc_benchmark(
     for batch in all_batches:
         _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
 
-        shardings = hax.partitioning.infer_resource_partitions(batch, worker.axis_resources)
-        batch = broadcast_shard(batch, shardings)
+        batch = _shard_identical_batch(batch, worker.axis_resources)
         out_ids, out_lls, _out_correct = worker.process_loglikelihood(batch)
 
         out_ids = jax.device_get(out_ids.array)
@@ -588,8 +609,7 @@ def evaluate_vlm_open_ended_benchmark(
     for batch in all_batches:
         _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
 
-        shardings = hax.partitioning.infer_resource_partitions(batch, worker.axis_resources)
-        batch = broadcast_shard(batch, shardings)
+        batch = _shard_identical_batch(batch, worker.axis_resources)
         out_ids, out_lls, _out_correct = worker.process_loglikelihood(batch)
 
         out_ids = jax.device_get(out_ids.array)
@@ -756,7 +776,7 @@ def main():
 
         EvalPos = model.Pos if args.max_length is None else model.Pos.resize(args.max_length)
 
-        # All processes prepare data independently, then eval in lockstep via broadcast_shard.
+        # All processes prepare identical data independently, then eval in lockstep.
         prepared: dict[str, tuple] = {}
         for bench_name in args.benchmarks:
             parquet_paths = find_benchmark_parquets(bench_name, args.eval_parquet_path)
@@ -786,7 +806,6 @@ def main():
         )
 
         results = {}
-        sync_global_devices("vlm_eval_standalone_start")
         for bench_name, (task_type, completions, metadata) in prepared.items():
             if not completions:
                 continue
@@ -813,8 +832,6 @@ def main():
                         result["mean_ll"],
                         result["num_questions"],
                     )
-
-            sync_global_devices(f"vlm_eval_standalone_after_{bench_name}")
 
         if jax.process_index() == 0:
             # Print summary
@@ -913,11 +930,8 @@ def vlm_mc_eval_callback(
             f"{parameter_count(model):,}",
         )
 
-        # All processes prepare data independently, then run eval in lockstep.
-        # broadcast_shard distributes process 0's batch data to all hosts
-        # (tolerating any GCS download non-determinism) and acts as a per-batch
-        # collective barrier. sync_global_devices() adds JAX-level (TPU)
-        # barriers between benchmarks to prevent collective mismatches.
+        # All processes prepare identical data independently, then run eval
+        # in lockstep. hax.shard places each host's data onto its devices.
         prepared: dict[str, tuple] = {}
         for bench_name, parquet_paths in bench_parquets.items():
             task_type = bench_task_types[bench_name]
@@ -950,55 +964,50 @@ def vlm_mc_eval_callback(
             max_packed_segments=64,
         )
 
-        # All processes run the same eval loop with broadcast_shard providing
-        # per-batch synchronization. sync_global_devices between benchmarks
-        # forces a JAX-level (TPU) barrier to prevent "unexpected peer /
-        # different launch id" collective mismatches when transitioning
-        # between benchmarks.
-        sync_global_devices("vlm_eval_start")
-        for bench_name, (task_type, completions, metadata) in prepared.items():
-            if not completions:
-                continue
+        try:
+            for bench_name, (task_type, completions, metadata) in prepared.items():
+                if not completions:
+                    continue
 
-            logger.info("Evaluating %s [%s]", bench_name, task_type)
+                logger.info("Evaluating %s [%s]", bench_name, task_type)
 
-            if task_type == "multiple_choice":
-                result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
-                if jax.process_index() == 0:
-                    accuracy = result["accuracy"]
-                    loss = result["loss"]
-                    logger.info(
-                        "%s: accuracy=%.4f (%d/%d), loss=%.4f",
-                        bench_name,
-                        accuracy,
-                        result["num_correct"],
-                        result["num_questions"],
-                        loss,
-                    )
-                    levanter.tracker.log(
-                        {
-                            f"eval/{bench_name}/accuracy": accuracy,
-                            f"eval/{bench_name}/loss": loss,
-                        },
-                        step=step.step,
-                    )
+                if task_type == "multiple_choice":
+                    result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
+                    if jax.process_index() == 0:
+                        accuracy = result["accuracy"]
+                        loss = result["loss"]
+                        logger.info(
+                            "%s: accuracy=%.4f (%d/%d), loss=%.4f",
+                            bench_name,
+                            accuracy,
+                            result["num_correct"],
+                            result["num_questions"],
+                            loss,
+                        )
+                        levanter.tracker.log(
+                            {
+                                f"eval/{bench_name}/accuracy": accuracy,
+                                f"eval/{bench_name}/loss": loss,
+                            },
+                            step=step.step,
+                        )
 
-            elif task_type == "open_ended":
-                result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
-                if jax.process_index() == 0:
-                    mean_ll = result["mean_ll"]
-                    logger.info(
-                        "%s: mean_ll=%.4f (%d questions)",
-                        bench_name,
-                        mean_ll,
-                        result["num_questions"],
-                    )
-                    levanter.tracker.log(
-                        {f"eval/{bench_name}/mean_ll": mean_ll},
-                        step=step.step,
-                    )
-
-            sync_global_devices(f"vlm_eval_after_{bench_name}")
+                elif task_type == "open_ended":
+                    result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
+                    if jax.process_index() == 0:
+                        mean_ll = result["mean_ll"]
+                        logger.info(
+                            "%s: mean_ll=%.4f (%d questions)",
+                            bench_name,
+                            mean_ll,
+                            result["num_questions"],
+                        )
+                        levanter.tracker.log(
+                            {f"eval/{bench_name}/mean_ll": mean_ll},
+                            step=step.step,
+                        )
+        except Exception:
+            logger.exception("vlm_mc_eval crashed")
 
         logger.info("VLM eval done.")
 
