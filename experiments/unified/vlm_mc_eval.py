@@ -14,7 +14,7 @@ Supports two task types:
   log P(answer | prompt + image) → mean normalized log-likelihood.
 
 Both task types reuse the same Levanter loglikelihood infrastructure:
-PromptCompletion → greedy_pack → make_array_from_callback → process_loglikelihood.
+PromptCompletion → greedy_pack → make_array_from_callback → named_jit(eval_loglikelihood).
 
 All benchmarks are merged into a SINGLE continuous batch loop (via
 evaluate_all_vlm_benchmarks) to avoid TPU crashes at benchmark transitions.
@@ -45,6 +45,7 @@ import tempfile
 from collections import defaultdict
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pyarrow.parquet as pq
 from tqdm_loggable.auto import tqdm
@@ -52,11 +53,9 @@ from tqdm_loggable.auto import tqdm
 import haliax as hax
 
 from levanter.data.loader import stack_batches
-from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completions
-from levanter.eval_harness import (
-    _LmEvalHarnessWorker,
-    get_padding_count_from_batch,
-)
+from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completions, per_segment_loss
+from levanter.eval_harness import get_padding_count_from_batch
+from levanter.models.loss import next_token_loss
 from levanter.utils.jax_utils import multihost_broadcast_sync
 
 from experiments.unified.vlm_tokenize_captions import (
@@ -90,7 +89,48 @@ def _shard_identical_batch(batch, axis_resources):
     return jax.tree.map(_make_global, batch, shardings, is_leaf=lambda x: isinstance(x, hax.NamedArray))
 
 
-def _run_batch_loop(worker, all_completions, tokenizer):
+def _make_vlm_eval_jit(EvalBatch, EvalPos, max_packed_segments, axis_resources, mp):
+    """Create a JIT loglikelihood function for VLM evaluation.
+
+    Unlike _LmEvalHarnessWorker, this does NOT use out_axis_resources={}.
+    Outputs stay naturally sharded across hosts; jax.device_get gathers them
+    at the host/runtime level (not a TPU collective inside the XLA program).
+    This avoids the "unexpected peer with different launch id" TPU HALT that
+    occurs when transitioning between vlm_eval and training JIT functions.
+    """
+
+    def _eval_loglikelihood(model, packed_example):
+        if mp is not None:
+            model = mp.cast_to_compute(model)
+
+        logits = model(packed_example.tokens, attn_mask=packed_example.attn_mask)
+        logits = logits.astype(jnp.float32)
+        Pos = logits.resolve_axis(EvalPos.name)
+
+        loss = next_token_loss(
+            Pos=Pos,
+            Vocab=model.Vocab,
+            logits=logits,
+            true_ids=packed_example.tokens,
+            loss_weight=packed_example.loss_weight,
+            reduction=None,
+        )
+
+        max_Segments = hax.Axis("Segments", size=max_packed_segments + 1)
+
+        batched_segment_ids, batched_per_segment_losses = hax.vmap(per_segment_loss, EvalBatch)(
+            packed_example, loss, max_Segments
+        )
+
+        segments = hax.flatten(batched_segment_ids, "segment")
+        losses = hax.flatten(batched_per_segment_losses, "segment")
+
+        return segments, -losses
+
+    return hax.named_jit(_eval_loglikelihood, axis_resources=axis_resources)
+
+
+def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources):
     """Pack completions, batch, sync across hosts, and run one continuous loop.
 
     Returns (result_probs, covered_points) numpy arrays indexed by completion
@@ -103,13 +143,13 @@ def _run_batch_loop(worker, all_completions, tokenizer):
         pad_token = tokenizer.eos_token_id
 
     packed = greedy_pack_prompt_completions(
-        worker.EvalPos,
+        EvalPos,
         all_completions,
         pad_token=pad_token,
-        max_segments_per_example=worker.max_packed_segments,
+        max_segments_per_example=max_packed_segments,
     )
 
-    all_batches = list(stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch))
+    all_batches = list(stack_batches(iter(packed), EvalPos, EvalBatch))
 
     num_batches = multihost_broadcast_sync(len(all_batches))
     if len(all_batches) < num_batches:
@@ -121,13 +161,13 @@ def _run_batch_loop(worker, all_completions, tokenizer):
     result_probs = np.zeros(len(all_completions))
     covered_points = np.zeros(len(all_completions), dtype=bool)
 
-    total_tokens = len(packed) * worker.EvalPos.size
+    total_tokens = len(packed) * EvalPos.size
     pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok")
 
     for batch in all_batches:
         _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
-        batch = _shard_identical_batch(batch, worker.axis_resources)
-        out_ids, out_lls, _out_correct = worker.process_loglikelihood(batch)
+        batch = _shard_identical_batch(batch, axis_resources)
+        out_ids, out_lls = jit_fn(model, batch)
 
         out_ids = jax.device_get(out_ids.array)
         out_lls = jax.device_get(out_lls.array)
@@ -253,7 +293,7 @@ def _compute_open_ended_metrics(result_probs, covered_points, segment_metadata):
     }
 
 
-def evaluate_all_vlm_benchmarks(worker, prepared, tokenizer):
+def evaluate_all_vlm_benchmarks(jit_fn, model, prepared, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources):
     """Evaluate all VLM benchmarks in a single continuous batch loop.
 
     Merges all completions from all benchmarks into one flat list, runs one
@@ -297,7 +337,9 @@ def evaluate_all_vlm_benchmarks(worker, prepared, tokenizer):
             "Likely a GCS download inconsistency — all hosts must see identical data."
         )
 
-    result_probs, covered_points = _run_batch_loop(worker, all_completions, tokenizer)
+    result_probs, covered_points = _run_batch_loop(
+        jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources
+    )
 
     results = {}
     for bench_name, (start, length, task_type, metadata) in bench_slices.items():
@@ -557,10 +599,15 @@ def prepare_vlm_mc_data(
 
 
 def evaluate_vlm_mc_benchmark(
-    worker: _LmEvalHarnessWorker,
+    jit_fn,
+    model,
     all_completions: list[PromptCompletion],
     segment_metadata: dict[int, tuple[int, int, bool, int]],
     tokenizer,
+    EvalPos,
+    EvalBatch,
+    max_packed_segments,
+    axis_resources,
 ) -> dict:
     """Evaluate pre-prepared MC data using per-option log-likelihood comparison.
 
@@ -570,7 +617,9 @@ def evaluate_vlm_mc_benchmark(
     if not all_completions:
         return {"accuracy": 0.0, "loss": 0.0, "num_questions": 0, "num_correct": 0}
 
-    result_probs, covered_points = _run_batch_loop(worker, all_completions, tokenizer)
+    result_probs, covered_points = _run_batch_loop(
+        jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources
+    )
     return _compute_mc_metrics(result_probs, covered_points, segment_metadata)
 
 
@@ -660,10 +709,15 @@ def prepare_vlm_open_ended_data(
 
 
 def evaluate_vlm_open_ended_benchmark(
-    worker: _LmEvalHarnessWorker,
+    jit_fn,
+    model,
     all_completions: list[PromptCompletion],
     segment_metadata: dict[int, tuple[int, str, int]],
     tokenizer,
+    EvalPos,
+    EvalBatch,
+    max_packed_segments,
+    axis_resources,
 ) -> dict:
     """Evaluate pre-prepared open-ended data using length-normalized log-likelihood.
 
@@ -673,7 +727,9 @@ def evaluate_vlm_open_ended_benchmark(
     if not all_completions:
         return {"mean_ll": 0.0, "num_questions": 0, "num_covered": 0}
 
-    result_probs, covered_points = _run_batch_loop(worker, all_completions, tokenizer)
+    result_probs, covered_points = _run_batch_loop(
+        jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources
+    )
     return _compute_open_ended_metrics(result_probs, covered_points, segment_metadata)
 
 
@@ -809,17 +865,12 @@ def main():
             else:
                 logger.warning("Unsupported task_type=%s for %s, skipping", task_type, bench_name)
 
-        worker = _LmEvalHarnessWorker(
-            EvalBatch,
-            EvalPos,
-            model,
-            compute_axis_mapping,
-            tokenizer,
-            trainer_config.mp,
-            max_packed_segments=64,
-        )
+        max_packed_segments = 64
+        jit_fn = _make_vlm_eval_jit(EvalBatch, EvalPos, max_packed_segments, compute_axis_mapping, trainer_config.mp)
 
-        results = evaluate_all_vlm_benchmarks(worker, prepared, tokenizer)
+        results = evaluate_all_vlm_benchmarks(
+            jit_fn, model, prepared, tokenizer, EvalPos, EvalBatch, max_packed_segments, compute_axis_mapping
+        )
 
         if jax.process_index() == 0:
             # Print summary
@@ -942,20 +993,15 @@ def vlm_mc_eval_callback(
             else:
                 logger.warning("Unknown task_type=%s for %s, skipping", task_type, bench_name)
 
-        worker = _LmEvalHarnessWorker(
-            EvalBatch,
-            EvalPos,
-            model,
-            axis_resources,
-            tokenizer,
-            mp,
-            max_packed_segments=64,
-        )
+        max_packed_segments = 64
+        jit_fn = _make_vlm_eval_jit(EvalBatch, EvalPos, max_packed_segments, axis_resources, mp)
 
         # Run ALL benchmarks in a single continuous batch loop to avoid the
         # TPU crash that occurs at benchmark transitions.
         try:
-            results = evaluate_all_vlm_benchmarks(worker, prepared, tokenizer)
+            results = evaluate_all_vlm_benchmarks(
+                jit_fn, model, prepared, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources
+            )
             if jax.process_index() == 0:
                 for bench_name, result in results.items():
                     task_type = prepared[bench_name][0]
