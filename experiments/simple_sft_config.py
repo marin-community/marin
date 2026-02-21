@@ -12,6 +12,7 @@ def compute_per_device_parallelism(
     global_batch_size: int,
     microbatch_size: int,
     resources: ResourceConfig,
+    model_axis_size: int = 1,
 ) -> int:
     """Compute per_device_parallelism for gradient accumulation.
 
@@ -19,6 +20,9 @@ def compute_per_device_parallelism(
         global_batch_size: The effective batch size after gradient accumulation.
         microbatch_size: The batch size that fits in memory (local batch size).
         resources: The ResourceConfig specifying TPU/GPU resources.
+        model_axis_size: Size of the model (tensor parallelism) axis. Chips are split
+            between model parallelism and data parallelism, so the effective number of
+            data-parallel devices is total_chips / model_axis_size.
 
     Returns:
         per_device_parallelism: Number of examples each device processes per forward/backward pass.
@@ -28,7 +32,7 @@ def compute_per_device_parallelism(
         - per_device_parallelism = 8 / 4 = 2
         - gradient_accumulation = 128 / 8 = 16 steps
     """
-    num_devices = resources.chip_count()
+    num_devices = resources.chip_count() // model_axis_size
 
     if microbatch_size % num_devices != 0:
         raise ValueError(f"microbatch_size ({microbatch_size}) must be divisible by " f"num_devices ({num_devices})")
@@ -149,6 +153,12 @@ class SimpleSFTConfig:
     pad their vocab to be divisible by 4 for TPU efficiency)."""
 
     z_loss_weight: float = 0.0
+
+    model_axis_size: int = 1
+    """Size of the model (tensor parallelism) axis. Setting this > 1 enables tensor parallelism,
+    sharding attention heads and MLP across this many chips. The remaining chips are used for
+    data parallelism. For example, with 128 chips and model_axis_size=4, you get 32 data-parallel
+    groups of 4 chips each."""
 
     per_device_parallelism: int = -1
     """How many examples to process in parallel on each device. -1 (default) means

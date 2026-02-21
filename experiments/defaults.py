@@ -349,6 +349,7 @@ def default_train(
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
+                axes={"model": train_config.model_axis_size},
                 # Special axes for MoEs
                 # TODO: this is actually bad and we should remove, but keeping for now
                 compute_mapping={
@@ -493,6 +494,7 @@ def default_sft(
         beta2=sft_config.beta2,
         pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
         per_device_parallelism=sft_config.per_device_parallelism,
+        model_axis_size=sft_config.model_axis_size,
     )
 
     if sft_config.reinit_tokens:

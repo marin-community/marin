@@ -74,6 +74,10 @@ class SimpleTrainConfig:
     int8: bool = False
     """Int8 (quantized) training in Levanter."""
 
+    model_axis_size: int = 1
+    """Size of the model (tensor parallelism) axis. Setting this > 1 enables tensor parallelism,
+    sharding attention heads and MLP across this many chips."""
+
     pad_tokenizer_to_match_model: bool = False
     """If True, pad the tokenizer's vocab to match the model's vocab size by adding dummy tokens.
     Useful when the model checkpoint has a larger vocab than the tokenizer (e.g., Qwen models
