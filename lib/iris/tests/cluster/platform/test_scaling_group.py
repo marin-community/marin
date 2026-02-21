@@ -94,13 +94,14 @@ def make_mock_slice_handle(
     else:
         slice_state = CloudSliceState.CREATING
 
-    # Generate unique addresses by hashing slice_id
-    slice_hash = abs(hash(slice_id)) % 256
+    # Addresses are not valid IPs (e.g. "10.0.slice-001.0"), but that's fine —
+    # ScalingGroup only uses them as opaque dict keys for worker status lookups,
+    # never parsed or validated as IP addresses.
     worker_handles = []
     for i, state in enumerate(vm_states):
         worker_handle = make_mock_worker_handle(
             vm_id=f"{slice_id}-vm-{i}",
-            address=f"10.0.{slice_hash}.{i}",
+            address=f"10.0.{slice_id}.{i}",
             state=state,
         )
         worker_handles.append(worker_handle)
