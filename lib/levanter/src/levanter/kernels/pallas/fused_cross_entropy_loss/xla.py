@@ -23,7 +23,8 @@ def linear_softmax_cross_entropy_loss_xla(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     if block_sizes is None:
         v_block_size = infer_xla_v_block_size(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
     else:
@@ -36,6 +37,7 @@ def linear_softmax_cross_entropy_loss_xla(
         dtype=dtype,
         logit_soft_cap=logit_soft_cap,
         precision=precision,
+        return_argmax=return_argmax,
     )
 
 
