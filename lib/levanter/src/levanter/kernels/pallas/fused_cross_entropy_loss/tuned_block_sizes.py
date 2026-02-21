@@ -11,7 +11,6 @@ from .config import BlockSizes
 
 
 DEFAULT_DEVICE_KEY = "default"
-_GB10_FALLBACK_BLOCK_SIZES = BlockSizes(b_block_size=32, h_block_size=128, v_block_size=64)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +60,8 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "small-h-small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
         ("bfloat16", "gb10-large-vocab-mid-batch"): BlockSizes(b_block_size=1024, h_block_size=32, v_block_size=1024),
         ("float32", "gb10-large-vocab-mid-batch"): BlockSizes(b_block_size=1024, h_block_size=32, v_block_size=1024),
+        ("bfloat16", "gb10-fallback"): BlockSizes(b_block_size=32, h_block_size=128, v_block_size=64),
+        ("float32", "gb10-fallback"): BlockSizes(b_block_size=32, h_block_size=128, v_block_size=64),
     },
     "NVIDIA H100": {
         ("bfloat16", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
@@ -267,6 +268,15 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         v_min=120000,
         v_max=131072,
     ),
+    ShapeBucket(
+        name="gb10-fallback",
+        b_min=1,
+        b_max=1_048_576,
+        h_min=1,
+        h_max=1_048_576,
+        v_min=1,
+        v_max=1_048_576,
+    ),
 ]
 
 
@@ -310,20 +320,6 @@ def _shape_bucket(b: int, h: int, v: int) -> Optional[str]:
     return None
 
 
-def _fallback_block_sizes_for_device(
-    *,
-    b: int,
-    h: int,
-    v: int,
-    dtype: Optional[jnp.dtype],
-    device_key: Optional[str],
-) -> Optional[BlockSizes]:
-    del b, h, v, dtype
-    if device_key == "NVIDIA GB10":
-        return _GB10_FALLBACK_BLOCK_SIZES
-    return None
-
-
 def infer_block_sizes(
     b: int,
     h: int,
@@ -355,10 +351,6 @@ def infer_block_sizes(
             entry = TUNED_BLOCK_SIZES.get(key, {}).get((dtype_name, bucket))
             if entry is not None:
                 return entry
-
-    fallback = _fallback_block_sizes_for_device(b=b, h=h, v=v, dtype=dtype, device_key=device_key)
-    if fallback is not None:
-        return fallback
 
     return BlockSizes.get_default()
 

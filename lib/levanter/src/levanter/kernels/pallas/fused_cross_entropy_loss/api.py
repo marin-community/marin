@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence
+from functools import lru_cache
 from typing import Literal, Optional, TypeAlias, cast
 import warnings
 
@@ -26,7 +27,6 @@ IMPLEMENTATIONS: dict[str, ArrayImpl] = {
     "reference": linear_softmax_cross_entropy_loss_reference,
     "xla": linear_softmax_cross_entropy_loss_xla,
 }
-_DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 
 try:
     from .pallas_tpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas
@@ -42,14 +42,21 @@ try:
 except ImportError:
     pass
 
-if jax.default_backend() == "gpu" and "pallas_gpu" in IMPLEMENTATIONS:
-    device_kind = jax.devices()[0].device_kind.lower() if jax.devices() else ""
-    if "gb10" in device_kind:
-        _DEFAULT_IMPLEMENTATION = _DEFAULT_IMPLEMENTATION + ("pallas_gpu",)
-    else:
-        _DEFAULT_IMPLEMENTATION = ("pallas_gpu",) + _DEFAULT_IMPLEMENTATION
-elif jax.default_backend() == "tpu" and "pallas_tpu" in IMPLEMENTATIONS:
-    _DEFAULT_IMPLEMENTATION = ("pallas_tpu",) + _DEFAULT_IMPLEMENTATION
+
+@lru_cache(maxsize=1)
+def _default_implementations() -> tuple[Implementation, ...]:
+    implementations: tuple[Implementation, ...] = ("xla",)
+    backend = jax.default_backend()
+
+    if backend == "gpu" and "pallas_gpu" in IMPLEMENTATIONS:
+        devices = jax.devices()
+        device_kind = devices[0].device_kind.lower() if devices else ""
+        if "gb10" in device_kind:
+            return cast(tuple[Implementation, ...], implementations + ("pallas_gpu",))
+        return cast(tuple[Implementation, ...], ("pallas_gpu",) + implementations)
+    if backend == "tpu" and "pallas_tpu" in IMPLEMENTATIONS:
+        return cast(tuple[Implementation, ...], ("pallas_tpu",) + implementations)
+    return implementations
 
 
 def _validate_inputs(x: jax.Array, labels: jax.Array, w: jax.Array) -> None:
@@ -104,14 +111,6 @@ def _apply_reduction(loss: jax.Array, reduction: Reduction, weight: Optional[jax
     raise ValueError(f"Unsupported reduction: {reduction}")
 
 
-def _resolve_precision_for_impl(
-    impl: Implementation | ArrayImpl,
-    precision: jax.lax.PrecisionLike,
-) -> jax.lax.PrecisionLike:
-    del impl
-    return precision
-
-
 def fused_cross_entropy_loss_and_logsumexp_penalty(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -153,7 +152,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     )
 
     if implementation is None:
-        impls: Sequence[Implementation | ArrayImpl] = _DEFAULT_IMPLEMENTATION
+        impls = cast(Sequence[Implementation | ArrayImpl], _default_implementations())
         explicit = False
     elif isinstance(implementation, Sequence) and not isinstance(implementation, (str, bytes)):
         impls = cast(Sequence[Implementation | ArrayImpl], implementation)
@@ -171,7 +170,6 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         else:
             block_sizes_for_impl = infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
         if callable(impl):
-            precision_for_impl = _resolve_precision_for_impl(impl, precision)
             try:
                 loss, lse = impl(
                     x,
@@ -180,7 +178,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     block_sizes=block_sizes_for_impl,
                     dtype=dtype,
                     logit_soft_cap=logit_soft_cap,
-                    precision=precision_for_impl,
+                    precision=precision,
                 )
             except PallasUnsupportedError as e:
                 if explicit:
@@ -204,7 +202,6 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             fn = IMPLEMENTATIONS.get(impl)
             if fn is None:
                 raise ValueError(f"Unsupported implementation: {impl}")
-            precision_for_impl = _resolve_precision_for_impl(impl, precision)
             try:
                 loss, lse = fn(
                     x,
@@ -213,7 +210,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     block_sizes=block_sizes_for_impl,
                     dtype=dtype,
                     logit_soft_cap=logit_soft_cap,
-                    precision=precision_for_impl,
+                    precision=precision,
                 )
             except PallasUnsupportedError as e:
                 if explicit:
