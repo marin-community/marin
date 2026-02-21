@@ -4,11 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - lib/haliax/**
-      - lib/levanter/**
-      - uv.lock
-      - .github/workflows/levanter-tests.yaml
   pull_request:
     paths:
       - lib/haliax/**
@@ -103,6 +98,7 @@ jobs:
 
   cpu-torch-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         python-version: ["3.11"]
