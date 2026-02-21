@@ -67,6 +67,7 @@ def _build_arm(
     run_prefix: str,
     train_config: SimpleTrainConfig,
     model_config,
+    use_default_validation: bool,
 ) -> ExecutorStep:
     step = default_train(
         name=f"{run_prefix}-{arm_name}",
@@ -75,7 +76,7 @@ def _build_arm(
         train_config=train_config,
         tags=["ablation", "shuffle-block", EXP_TAG, "150m", "nemotron", arm_name],
         eval_harness_tasks=[],
-        use_default_validation=False,
+        use_default_validation=use_default_validation,
         wandb_group=run_prefix,
         wandb_name=f"{run_prefix}-{arm_name}",
     )
@@ -91,6 +92,13 @@ def _build_arm(
 
 
 def main() -> None:
+    use_default_validation = os.environ.get("SHUFFLE_ABLATION_USE_DEFAULT_VALIDATION", "1") not in {
+        "0",
+        "false",
+        "False",
+    }
+    steps_per_eval = _int_env("SHUFFLE_ABLATION_STEPS_PER_EVAL", 250)
+
     model_config = dataclasses.replace(llama_150m, max_seq_len=TRAIN_SEQ_LEN)
 
     model_flops_target = _int_env("SHUFFLE_ABLATION_MODEL_FLOPS_TARGET", DEFAULT_MODEL_FLOPS_TARGET)
@@ -114,7 +122,7 @@ def main() -> None:
         min_lr_ratio=0.1,
         weight_decay=0.1,
         z_loss_weight=1e-4,
-        steps_per_eval=500,
+        steps_per_eval=steps_per_eval,
         data_seed=42,
     )
 
@@ -138,6 +146,7 @@ def main() -> None:
             run_prefix=run_prefix,
             train_config=train_config,
             model_config=model_config,
+            use_default_validation=use_default_validation,
         )
         for arm_name, shuffle_policy in arms
     ]
