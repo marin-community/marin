@@ -79,6 +79,13 @@ class TokenizeConfig(TokenizeConfigBase):
     See Levanter's documentation for more details.
     """
     window_size_bytes: int = 10_000_000_000
+    """Files are bundled into groups up to this size; each group becomes one shard.
+    Smaller values produce more shards and thus more parallelism (up to max_workers)."""
+    max_workers: int = 4096
+    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
+    writer_batch_size: int = 65536
+    """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
+    overhead. Too large a value increases memory usage and delays progress checkpointing."""
     allow_test_in_train: bool = False
     """
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
@@ -137,6 +144,13 @@ class HfTokenizeConfig(TokenizeConfigBase):
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
     window_size_bytes: int = 10_000_000_000
+    """Files are bundled into groups up to this size; each group becomes one shard.
+    Smaller values produce more shards and thus more parallelism (up to max_workers)."""
+    max_workers: int = 4096
+    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
+    writer_batch_size: int = 65536
+    """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
+    overhead. Too large a value increases memory usage and delays progress checkpointing."""
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
@@ -350,12 +364,14 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        batch_size = 1024
         temp_shards = (
-            ds.window(batch_size)
+            ds.window(config.writer_batch_size)
             .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
             .write_levanter_cache(
-                f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}", metadata={}, batch_size=batch_size, skip_existing=True
+                f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}",
+                metadata={},
+                batch_size=config.writer_batch_size,
+                skip_existing=True,
             )
         )
 
@@ -408,8 +424,8 @@ def tokenize(config: TokenizeConfigBase):
     if train_paths and not split_already_done("train"):
         train_groups = local_preprocess_paths(train_paths)
         with ZephyrContext(
-            resources=ResourceConfig(ram="3g", disk="16g"),
-            max_workers=min(512, len(train_groups)),
+            resources=config.worker_resources,
+            max_workers=min(config.max_workers, len(train_groups)),
             name="tokenize-train",
             no_workers_timeout=20 * 60,
         ) as ctx:
@@ -418,8 +434,8 @@ def tokenize(config: TokenizeConfigBase):
     if validation_paths and not split_already_done("validation"):
         validation_groups = local_preprocess_paths(validation_paths)
         with ZephyrContext(
-            resources=ResourceConfig(ram="3g", disk="16g"),
-            max_workers=min(512, len(validation_groups)),
+            resources=config.worker_resources,
+            max_workers=min(config.max_workers, len(validation_groups)),
             name="tokenize-validation",
             no_workers_timeout=20 * 60,
         ) as ctx:
