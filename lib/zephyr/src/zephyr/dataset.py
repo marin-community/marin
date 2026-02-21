@@ -148,7 +148,7 @@ class WriteOp:
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
-    batch_size: int = 1000  # For parquet
+    batch_size: int = 1000  # For parquet and levanter_cache
     skip_existing: bool = False  # Skip writing if output file already exists
 
     def __repr__(self):
@@ -703,6 +703,7 @@ class Dataset(Generic[T]):
         output_pattern: str | Callable[[int, int], str],
         metadata: dict[str, Any],
         skip_existing: bool = False,
+        batch_size: int = 1024,
     ) -> Dataset[str]:
         """Write tokenized records to Levanter cache format.
 
@@ -720,6 +721,7 @@ class Dataset(Generic[T]):
                     writer_type="levanter_cache",
                     levanter_metadata=metadata,
                     skip_existing=skip_existing,
+                    batch_size=batch_size,
                 ),
             ],
         )
