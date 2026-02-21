@@ -18,6 +18,42 @@ from levanter.distributed import DistributedConfig, RayConfig
 from levanter.tracker import NoopConfig
 
 
+def test_sum_tensorstore_metric_filters_by_name(monkeypatch):
+    def _fake_collect(pattern: str, include_zero_metrics: bool = False):
+        assert include_zero_metrics
+        assert pattern == "/tensorstore/cache/hit_count"
+        return [
+            {"name": "/tensorstore/cache/hit_count", "values": [{"value": 3}, {"value": 5}]},
+            {"name": "/tensorstore/cache/miss_count", "values": [{"value": 99}]},
+            {"name": "/tensorstore/cache/hit_count", "values": [{"value": 2}]},
+        ]
+
+    monkeypatch.setattr(train_lm.ts, "experimental_collect_matching_metrics", _fake_collect)
+    assert train_lm._sum_tensorstore_metric("/tensorstore/cache/hit_count", "value") == 10.0
+
+
+def test_collect_kvstore_drivers_from_spec_json():
+    spec_json = {
+        "driver": "zarr3",
+        "kvstore": {"driver": "gcs", "bucket": "demo"},
+        "codecs": [
+            {"name": "something"},
+            {"nested": {"kvstore": {"driver": "gcs_grpc", "bucket": "demo"}}},
+        ],
+    }
+    assert train_lm._collect_kvstore_drivers_from_spec_json(spec_json) == {"gcs", "gcs_grpc"}
+
+
+def test_tensorstore_metric_specs_for_drivers():
+    gcs_specs = train_lm._tensorstore_metric_specs_for_drivers({"gcs"})
+    assert "gcs_read_count" in gcs_specs
+    assert "gcs_grpc_read_count" not in gcs_specs
+
+    grpc_specs = train_lm._tensorstore_metric_specs_for_drivers({"gcs_grpc"})
+    assert "gcs_read_count" not in grpc_specs
+    assert "gcs_grpc_read_count" in grpc_specs
+
+
 @pytest.mark.entry
 def test_train_lm():
     # just testing if train_lm has a pulse
