@@ -57,7 +57,7 @@ from levanter.eval_harness import (
     _LmEvalHarnessWorker,
     get_padding_count_from_batch,
 )
-from levanter.utils.jax_utils import barrier_sync, broadcast_shard
+from levanter.utils.jax_utils import barrier_sync, broadcast_shard, multihost_broadcast_sync
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -351,6 +351,16 @@ def evaluate_vlm_mc_benchmark(
 
     all_batches = list(stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch))
 
+    # Synchronize batch count across hosts to prevent JAX collective desync.
+    # broadcast_shard is a JAX collective called per-batch, so all hosts
+    # must iterate the same number of times.
+    num_batches = multihost_broadcast_sync(len(all_batches))
+    if len(all_batches) < num_batches:
+        dummy = all_batches[-1] if all_batches else None
+        all_batches.extend([dummy] * (num_batches - len(all_batches)))
+    elif len(all_batches) > num_batches:
+        all_batches = all_batches[:num_batches]
+
     result_probs = np.zeros(len(all_completions))
     covered_points = np.zeros(len(all_completions), dtype=bool)
 
@@ -560,6 +570,14 @@ def evaluate_vlm_open_ended_benchmark(
     )
 
     all_batches = list(stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch))
+
+    # Synchronize batch count across hosts to prevent JAX collective desync.
+    num_batches = multihost_broadcast_sync(len(all_batches))
+    if len(all_batches) < num_batches:
+        dummy = all_batches[-1] if all_batches else None
+        all_batches.extend([dummy] * (num_batches - len(all_batches)))
+    elif len(all_batches) > num_batches:
+        all_batches = all_batches[:num_batches]
 
     result_probs = np.zeros(len(all_completions))
     covered_points = np.zeros(len(all_completions), dtype=bool)
