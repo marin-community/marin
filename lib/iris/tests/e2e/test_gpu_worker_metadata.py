@@ -112,7 +112,6 @@ def test_gpu_worker_metadata_visible_to_controller(tmp_path):
                 assert meta.gpu_memory_mb == 81559, f"Expected gpu_memory_mb=81559, got {meta.gpu_memory_mb}"
 
                 # DeviceConfig GPU oneof
-                assert meta.device.HasField("gpu"), f"Expected device.gpu, got {meta.device}"
                 assert meta.device.gpu.count == 8, f"Expected device.gpu.count=8, got {meta.device.gpu.count}"
                 assert (
                     "H100" in meta.device.gpu.variant
