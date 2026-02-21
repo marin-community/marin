@@ -89,9 +89,9 @@ _GB10_BLOCKS: dict[tuple[str, str], AttentionBlockSizes] = {
     ("bfloat16", "llama125m-small-batch"): AttentionBlockSizes(32, 32, 16, 32, 32, 16),
     ("float16", "llama125m-small-batch"): AttentionBlockSizes(32, 32, 16, 32, 32, 16),
     ("float32", "llama125m-small-batch"): AttentionBlockSizes(32, 32, 16, 32, 32, 16),
-    ("bfloat16", "llama2-hd256"): AttentionBlockSizes(16, 16, 16, 32, 32, 16),
-    ("float16", "llama2-hd256"): AttentionBlockSizes(16, 16, 16, 32, 32, 16),
-    ("float32", "llama2-hd256"): AttentionBlockSizes(16, 16, 16, 32, 32, 16),
+    ("bfloat16", "llama2-hd256"): AttentionBlockSizes(16, 16, 16, 16, 16, 16),
+    ("float16", "llama2-hd256"): AttentionBlockSizes(16, 16, 16, 16, 16, 16),
+    ("float32", "llama2-hd256"): AttentionBlockSizes(16, 16, 16, 16, 16, 16),
     ("bfloat16", "default"): AttentionBlockSizes(32, 32, 16, 32, 32, 16),
     ("float16", "default"): AttentionBlockSizes(32, 32, 16, 32, 32, 16),
     ("float32", "default"): AttentionBlockSizes(32, 32, 16, 32, 32, 16),
@@ -128,17 +128,6 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         head_dim_max=128,
     ),
     ShapeBucket(
-        name="qwen3-ish",
-        batch_min=1,
-        batch_max=8,
-        seq_min=1024,
-        seq_max=8192,
-        heads_min=4,
-        heads_max=64,
-        head_dim_min=128,
-        head_dim_max=256,
-    ),
-    ShapeBucket(
         name="llama2-hd256",
         batch_min=1,
         batch_max=16,
@@ -147,6 +136,17 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         heads_min=1,
         heads_max=16,
         head_dim_min=256,
+        head_dim_max=256,
+    ),
+    ShapeBucket(
+        name="qwen3-ish",
+        batch_min=1,
+        batch_max=8,
+        seq_min=1024,
+        seq_max=8192,
+        heads_min=4,
+        heads_max=64,
+        head_dim_min=128,
         head_dim_max=256,
     ),
     ShapeBucket(
@@ -250,6 +250,12 @@ def infer_block_sizes(
                 entry = TUNED_BLOCK_SIZES.get(key, {}).get((candidate_dtype, bucket))
                 if entry is not None:
                     return entry
+
+    for key in (device_key, DEFAULT_DEVICE_KEY):
+        for candidate_dtype in dtype_names:
+            entry = TUNED_BLOCK_SIZES.get(key, {}).get((candidate_dtype, "default"))
+            if entry is not None:
+                return entry
 
     return TUNED_BLOCK_SIZES[DEFAULT_DEVICE_KEY][("bfloat16", "default")]
 

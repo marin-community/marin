@@ -144,3 +144,43 @@ Answer from this data:
 1. Fix segment-id backward mask shape bug in `pallas_mosaic` and rerun SWA+segment-id backward matrix.
 2. Adjust GB10 `llama2-hd256` backward defaults (or force safe fallback) to avoid runtime OOM.
 3. Add a benchmark matrix script to automate this report generation and prevent regression.
+
+## 2026-02-21 Follow-Up Fixes and Revalidation
+Implemented:
+1. `segment_mask` normalization in `pallas_mosaic` so singleton column views (`[N,1]`) are handled robustly in backward kernels.
+2. GB10 `llama2-hd256` tuned backward block sizes set to conservative `16/16/16/16` for stability.
+3. Shape bucket precedence updated so exact `head_dim=256` matches `llama2-hd256` before `qwen3-ish`.
+4. Fallback selection updated so unmatched shapes prefer device-specific (`NVIDIA GB10`) defaults before generic defaults.
+
+Revalidation runs (same failing cases):
+
+### Case A: HD256 backward auto (previously OOM)
+Command:
+```bash
+uv run python lib/levanter/scripts/bench/bench_grug_attention.py \
+  --impls reference,pallas_gpu --benchmark-backward \
+  --batch 8 --seq 2048 --heads 4 --kv_heads 4 --head_dim 256 \
+  --steps 1 --dtype bf16
+```
+Result:
+- reference: `478,617.60 tok/s`
+- pallas auto: `250,173.71 tok/s`
+- status: **PASS** (no OOM), but slower than reference (`0.523x`).
+
+### Case B: SWA + segment_ids backward auto (previously shape error)
+Command:
+```bash
+uv run python lib/levanter/scripts/bench/bench_grug_attention.py \
+  --impls reference,pallas_gpu --benchmark-backward \
+  --batch 4 --seq 4096 --heads 16 --kv_heads 8 --head_dim 128 \
+  --steps 1 --dtype bf16 --sliding-window 1024 --segment-id-mode 2d
+```
+Result:
+- reference: `77,162.70 tok/s`
+- pallas auto: `127,355.28 tok/s`
+- status: **PASS** (shape mismatch fixed), speedup `1.650x`.
+
+Updated interpretation:
+- On GB10 we should keep GB10-specific block sizes for essentially all regimes.
+- Non-GB10 can keep tokamax-like defaults.
+- For GB10 `head_dim=256` backward, stability is now fixed; perf remains a tuning target.

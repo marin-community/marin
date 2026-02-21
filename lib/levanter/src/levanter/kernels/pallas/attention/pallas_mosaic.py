@@ -23,9 +23,24 @@ DEFAULT_MASK_VALUE = -0.7 * float(np.finfo(np.dtype("float32")).max)
 
 
 def segment_mask(q_segment_ids: jax.Array, kv_segment_ids: jax.Array) -> jax.Array:
-    q_segment_ids = jnp.expand_dims(q_segment_ids, axis=-1)
-    kv_segment_ids = jnp.expand_dims(kv_segment_ids, axis=1)
-    return jnp.equal(q_segment_ids, kv_segment_ids).astype(jnp.bool_)
+    # Pallas block views may materialize singleton trailing dims (e.g. [Q, 1] / [K, 1]).
+    # Normalize those to 1D so blockwise backward masking remains shape-stable.
+    if q_segment_ids.ndim == 2 and 1 in q_segment_ids.shape:
+        q_segment_ids = jnp.reshape(q_segment_ids, (q_segment_ids.size,))
+    if kv_segment_ids.ndim == 2 and 1 in kv_segment_ids.shape:
+        kv_segment_ids = jnp.reshape(kv_segment_ids, (kv_segment_ids.size,))
+
+    if q_segment_ids.ndim == 1 and kv_segment_ids.ndim == 1:
+        return jnp.equal(q_segment_ids[:, None], kv_segment_ids[None, :]).astype(jnp.bool_)
+
+    if q_segment_ids.ndim == 2 and kv_segment_ids.ndim == 2:
+        if q_segment_ids.shape[0] != kv_segment_ids.shape[0]:
+            raise ValueError(
+                "segment-id batch mismatch in segment_mask: " f"q={q_segment_ids.shape}, kv={kv_segment_ids.shape}"
+            )
+        return jnp.equal(q_segment_ids[:, :, None], kv_segment_ids[:, None, :]).astype(jnp.bool_)
+
+    raise ValueError(f"segment ids must be rank-1 or rank-2, got q={q_segment_ids.ndim}, kv={kv_segment_ids.ndim}")
 
 
 def _apply_window_mask(
