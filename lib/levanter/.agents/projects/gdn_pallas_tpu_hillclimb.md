@@ -776,3 +776,63 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 
 - Next hypothesis:
   - Pursue correctness-preserving reformulations that reduce or amortize explicit triangular solves (for example, blockwise associative/state-space reformulation) while targeting the remaining dominant custom-call hotspots in backward recurrent kernels.
+
+### Iteration 19 - Macro Move F / triangular-transform tape reuse in backward
+
+- Date: 2026-02-21T14:48:57Z
+- Commit: d07b293baf588c6bf8f1ec2b746f4eec9e00eb52
+- Loop session/local index: `1/20`
+- Starting commit: `d07b293baf588c6bf8f1ec2b746f4eec9e00eb52`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_bf16iofix_i4_ray_130m_ch128_seg16_20steps-546ab9/plugins/profile/2026_02_20_15_14_27/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `custom-call`: `131.057 ms` (dominant category).
+  - Top GDN callsites:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `68.341 ms`
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `49.357 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move F**: tape and reuse `T=(I-A)^-1` from chunk prepare, replacing backward transpose-triangular solve with `T^T @ d_sol` MXU matmul (`+10-25%`, medium/high tape-memory risk).
+  2. **Macro Move D**: convert segmented backward chunk loop to `emit_pipeline` recurrent apply over chunks (`+15-30%`, high compile/vmem risk).
+  3. **Macro Move E**: V-tile backward recurrent state/apply to reduce per-program working set and improve occupancy (`+12-25%`, high implementation/reduction risk).
+
+- Selected macro-move category: **F) Match FlashLinearAttention’s kernel decomposition**.
+- Selected hypothesis: in the flash chunk path, compute the chunk solve transform once in prepare and reuse it in backward so the dominant backward closed-call hotspot becomes MXU-heavy matmul work instead of repeated transpose solve kernels.
+
+- Change summary:
+  - Extended chunk prepare output tape with per-chunk solve transform `solve_transform = (I - A)^-1` (`Ct x Ct`) in `lib/levanter/src/levanter/layers/gated_deltanet.py`.
+  - Reworked prepare kernel math from direct RHS solve calls to:
+    - compute `solve_transform` once per chunk,
+    - produce `v_pseudo/k_cumdecay` via `solve_transform @ rhs_all`.
+  - Threaded `solve_transform` through flash forward tape and custom-VJP residuals.
+  - Replaced backward transpose solve hot path with transform reuse:
+    - old: `_solve_I_minus_strict_lower_transpose_blockwise(A, d_sol_all, ...)`
+    - new: `_mxu_matmul_f32(solve_transform, d_sol_all, transpose_a=True, ...)` (`T^T @ d_sol_all`).
+  - Updated segmented/full-sequence wrapper scan plumbing and shard-map specs for the additional rank-5 tape tensor, including identity padding for padded chunks in backward.
+
+- Correctness checks:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+  - Result: `87 passed, 2 skipped, 1 warning`.
+
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_invreuse_i1_dev --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_invreuse_i1_dev_130m_ch128_seg16_20steps-2d1d85`
+  - W&B profiler artifact: `run-gdn_invreuse_i1_dev_130m_ch128_seg16_20steps-2d1d85-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_invreuse_i1_dev_130m_ch128_seg16_20steps-2d1d85/plugins/profile/2026_02_21_14_41_31/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_bf16iofix_i4_ray_130m_ch128_seg16_20steps-546ab9/plugins/profile/2026_02_20_15_14_27/perfetto_trace.json.gz`):
+  - `custom-call`: `131.057 ms -> 91.176 ms` (`-30.43%`), still dominant category.
+  - Same dominant backward closed-call hotspot became much faster:
+    - `transpose(jvp(...))/closed_call/shard_map/pallas_call:` `68.341 ms -> 26.256 ms` (`-61.58%`), source moved from old line `3043` to `gated_deltanet.py:3180` after refactor.
+  - Forward closed-call hotspot changed modestly:
+    - `jvp(...)/closed_call/shard_map/pallas_call:` `49.357 ms -> 51.550 ms` (`+4.44%`), with the largest source now at `gated_deltanet.py:1406`.
+  - Secondary shard-map path stayed flat:
+    - `jvp(...)/HackableDecoderLayer/shard_map/pallas_call:` `10.304 ms -> 10.317 ms` (`+0.13%`).
+  - `all-gather`: `20.092 ms -> 20.092 ms` (flat).
+
+- MFU/throughput delta (vs baseline run `gdn_bf16iofix_i4_ray_130m_ch128_seg16_20steps-546ab9`):
+  - `throughput/mfu`: `4.9270 -> 5.6402` (`+14.47%`).
+  - `throughput/tokens_per_second`: `159388.47 -> 182457.82` (`+14.47%`).
+  - `throughput/duration`: `0.20559s -> 0.17959s` (`-12.64%`).
+
+- Assessment: **high-impact win / champion-level**. This iteration sped up the same dominant train-path `custom-call` hotspot (especially backward closed-call shard-map pallas) rather than merely moving cost, and it cleared governance promotion thresholds by a wide margin.
+- Why this unlocked a large speedup: converting backward transpose-solve work into reused-transform MXU matmul dramatically shortened the previous critical-path backward custom-call while keeping other major categories flat.
+- Next bold hypothesis: keep this transform-tape reuse and target the now-leading forward closed-call shard-map path (`~51.6 ms`) with a launch-structure macro move (D or E) to reduce forward custom-call count/work imbalance without re-expanding backward cost.
