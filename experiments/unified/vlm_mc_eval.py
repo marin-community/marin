@@ -14,13 +14,13 @@ Supports two task types:
   log P(answer | prompt + image) → mean normalized log-likelihood.
 
 Both task types reuse the same Levanter loglikelihood infrastructure:
-PromptCompletion → greedy_pack → hax.shard → process_loglikelihood.
+PromptCompletion → greedy_pack → make_array_from_callback → process_loglikelihood.
 
-All processes run the same eval loop (no coordinator/worker split). Each process
-independently builds identical batches from the same GCS parquet files, then
-hax.shard places each host's data onto its devices with the training mesh
-sharding. multihost_broadcast_sync ensures all hosts iterate the same number
-of batches.
+All benchmarks are merged into a SINGLE continuous batch loop (via
+evaluate_all_vlm_benchmarks) to avoid TPU crashes at benchmark transitions.
+Each host independently builds identical completions from GCS parquet files;
+_shard_identical_batch uses jax.make_array_from_callback so each host only
+provides data for its local devices. Results are split by benchmark afterward.
 
 Usage (standalone):
     uv run experiments/unified/vlm_mc_eval.py \
@@ -57,7 +57,7 @@ from levanter.eval_harness import (
     _LmEvalHarnessWorker,
     get_padding_count_from_batch,
 )
-from levanter.utils.jax_utils import barrier_sync, multihost_broadcast_sync
+from levanter.utils.jax_utils import multihost_broadcast_sync
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -88,6 +88,228 @@ def _shard_identical_batch(batch, axis_resources):
         return jax.make_array_from_callback(raw.shape, sharding, lambda idx: raw[idx])
 
     return jax.tree.map(_make_global, batch, shardings, is_leaf=lambda x: isinstance(x, hax.NamedArray))
+
+
+def _run_batch_loop(worker, all_completions, tokenizer):
+    """Pack completions, batch, sync across hosts, and run one continuous loop.
+
+    Returns (result_probs, covered_points) numpy arrays indexed by completion
+    list position.  This is the shared "hot loop" — keeping it as a single
+    uninterrupted iteration prevents the TPU-crash that occurs when separate
+    benchmark loops are run back-to-back.
+    """
+    pad_token = tokenizer.pad_token_id
+    if pad_token is None:
+        pad_token = tokenizer.eos_token_id
+
+    packed = greedy_pack_prompt_completions(
+        worker.EvalPos,
+        all_completions,
+        pad_token=pad_token,
+        max_segments_per_example=worker.max_packed_segments,
+    )
+
+    all_batches = list(stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch))
+
+    num_batches = multihost_broadcast_sync(len(all_batches))
+    if len(all_batches) < num_batches:
+        dummy = all_batches[-1] if all_batches else None
+        all_batches.extend([dummy] * (num_batches - len(all_batches)))
+    elif len(all_batches) > num_batches:
+        all_batches = all_batches[:num_batches]
+
+    result_probs = np.zeros(len(all_completions))
+    covered_points = np.zeros(len(all_completions), dtype=bool)
+
+    total_tokens = len(packed) * worker.EvalPos.size
+    pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok")
+
+    for batch in all_batches:
+        _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
+        batch = _shard_identical_batch(batch, worker.axis_resources)
+        out_ids, out_lls, _out_correct = worker.process_loglikelihood(batch)
+
+        out_ids = jax.device_get(out_ids.array)
+        out_lls = jax.device_get(out_lls.array)
+
+        valid_indices = out_ids != -1
+        result_probs[out_ids[valid_indices]] = out_lls[valid_indices]
+        covered_points[out_ids[valid_indices]] = True
+        pbar.update(batch_tokens)
+
+    pbar.close()
+
+    missing = np.where(~covered_points)[0]
+    if len(missing) > 0:
+        logger.warning("Missing %d segments: %s", len(missing), missing[:10])
+
+    return result_probs, covered_points
+
+
+def _compute_mc_metrics(result_probs, covered_points, segment_metadata):
+    """Compute MC accuracy and loss from per-segment log-likelihoods.
+
+    segment_metadata maps local segment IDs (0-based) to
+    (question_idx, option_idx, is_correct, num_completion_tokens).
+    result_probs and covered_points are sliced to match.
+    """
+    num_questions = len({meta[0] for meta in segment_metadata.values()})
+
+    question_options: dict[int, list[tuple[int, bool, float]]] = defaultdict(list)
+    for seg_id, (q_idx, opt_idx, is_correct, _n_tokens) in segment_metadata.items():
+        if covered_points[seg_id]:
+            ll = float(result_probs[seg_id])
+            question_options[q_idx].append((opt_idx, is_correct, ll))
+
+    num_correct = 0
+    per_question = []
+    for q_idx in range(num_questions):
+        options = question_options.get(q_idx, [])
+        if not options:
+            per_question.append({"question_idx": q_idx, "predicted": -1, "correct": False})
+            continue
+
+        best = max(options, key=lambda x: x[2])
+        correct = best[1]
+        if correct:
+            num_correct += 1
+        per_question.append(
+            {
+                "question_idx": q_idx,
+                "predicted": best[0],
+                "correct": correct,
+                "log_likelihoods": {opt_idx: ll for opt_idx, _, ll in options},
+            }
+        )
+
+    accuracy = num_correct / max(num_questions, 1)
+
+    total_correct_norm_ll = 0.0
+    num_with_loss = 0
+    for seg_id, (_q_idx, _opt_idx, is_correct, n_tokens) in segment_metadata.items():
+        if is_correct and covered_points[seg_id]:
+            ll = float(result_probs[seg_id])
+            norm_ll = ll / max(n_tokens, 1)
+            total_correct_norm_ll += norm_ll
+            num_with_loss += 1
+
+    loss = total_correct_norm_ll / max(num_with_loss, 1)
+    logger.info(
+        "MC accuracy: %d/%d = %.4f, loss (mean norm LL): %.4f",
+        num_correct,
+        num_questions,
+        accuracy,
+        loss,
+    )
+
+    return {
+        "accuracy": accuracy,
+        "loss": loss,
+        "num_questions": num_questions,
+        "num_correct": num_correct,
+        "per_question": per_question,
+    }
+
+
+def _compute_open_ended_metrics(result_probs, covered_points, segment_metadata):
+    """Compute open-ended mean normalized log-likelihood from per-segment results.
+
+    segment_metadata maps local segment IDs (0-based) to
+    (question_idx, answer_str, num_answer_tokens).
+    """
+    num_questions = len(segment_metadata)
+    per_question = []
+    total_norm_ll = 0.0
+    num_covered = 0
+
+    for seg_id, (q_idx, answer, n_tokens) in segment_metadata.items():
+        if not covered_points[seg_id]:
+            per_question.append({"question_idx": q_idx, "answer": answer, "norm_ll": None})
+            continue
+
+        ll = float(result_probs[seg_id])
+        norm_ll = ll / max(n_tokens, 1)
+        total_norm_ll += norm_ll
+        num_covered += 1
+
+        per_question.append(
+            {
+                "question_idx": q_idx,
+                "answer": answer,
+                "log_likelihood": ll,
+                "norm_ll": norm_ll,
+                "num_answer_tokens": n_tokens,
+            }
+        )
+
+    mean_ll = total_norm_ll / max(num_covered, 1)
+    logger.info("Open-ended mean normalized LL: %.4f (%d questions)", mean_ll, num_covered)
+
+    return {
+        "mean_ll": mean_ll,
+        "num_questions": num_questions,
+        "num_covered": num_covered,
+        "per_question": per_question,
+    }
+
+
+def evaluate_all_vlm_benchmarks(worker, prepared, tokenizer):
+    """Evaluate all VLM benchmarks in a single continuous batch loop.
+
+    Merges all completions from all benchmarks into one flat list, runs one
+    packing/batching/eval loop, then splits results by benchmark for
+    per-benchmark metric computation.  Running everything in one loop avoids
+    the benchmark-transition TPU crash ("unexpected peer with different launch
+    id") that occurs when separate loops are run back-to-back.
+    """
+    all_completions = []
+    bench_slices = {}
+    offset = 0
+    for bench_name, (task_type, completions, metadata) in prepared.items():
+        if not completions:
+            continue
+        bench_slices[bench_name] = (offset, len(completions), task_type, metadata)
+        # Each prepare_* function assigns 0-based segment IDs.  When merging
+        # multiple benchmarks we must offset them so they don't collide in the
+        # packer (which uses segment_id for attention masking and result mapping).
+        if offset == 0:
+            all_completions.extend(completions)
+        else:
+            all_completions.extend(
+                PromptCompletion(
+                    ids=pc.ids,
+                    prompt_length=pc.prompt_length,
+                    segment_id=(pc.segment_id if pc.segment_id is not None else 0) + offset,
+                )
+                for pc in completions
+            )
+        offset += len(completions)
+
+    if not all_completions:
+        return {}
+
+    # One sync for the combined completion count
+    local_n = len(all_completions)
+    expected_n = multihost_broadcast_sync(local_n)
+    if local_n != expected_n:
+        raise RuntimeError(
+            f"Host {jax.process_index()} has {local_n} completions but leader has {expected_n}. "
+            "Likely a GCS download inconsistency — all hosts must see identical data."
+        )
+
+    result_probs, covered_points = _run_batch_loop(worker, all_completions, tokenizer)
+
+    results = {}
+    for bench_name, (start, length, task_type, metadata) in bench_slices.items():
+        bench_probs = result_probs[start : start + length]
+        bench_covered = covered_points[start : start + length]
+
+        if task_type == "multiple_choice":
+            results[bench_name] = _compute_mc_metrics(bench_probs, bench_covered, metadata)
+        elif task_type == "open_ended":
+            results[bench_name] = _compute_open_ended_metrics(bench_probs, bench_covered, metadata)
+
+    return results
 
 
 MC_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"]
@@ -342,145 +564,14 @@ def evaluate_vlm_mc_benchmark(
 ) -> dict:
     """Evaluate pre-prepared MC data using per-option log-likelihood comparison.
 
-    Data preparation (parquet loading, PromptCompletion building) must happen
-    BEFORE the coordinator/worker split via prepare_vlm_mc_data() to avoid
-    collective timeouts on multi-host TPU.
-
-    Args:
-        worker: Levanter eval harness worker (holds model + JIT loglikelihood).
-        all_completions: Pre-built PromptCompletion objects from prepare_vlm_mc_data.
-        segment_metadata: Segment metadata from prepare_vlm_mc_data.
-        tokenizer: Tokenizer (for pad token).
-
-    Returns:
-        Dict with accuracy, loss, num_questions, num_correct, and per-question details.
+    For multi-benchmark evaluation, prefer evaluate_all_vlm_benchmarks() which
+    runs all benchmarks in a single loop to avoid TPU crashes at transitions.
     """
-    num_questions = len({meta[0] for meta in segment_metadata.values()})
+    if not all_completions:
+        return {"accuracy": 0.0, "loss": 0.0, "num_questions": 0, "num_correct": 0}
 
-    # All hosts must agree on whether to skip; an early return on only some
-    # hosts would desync JAX collectives.
-    has_data = bool(multihost_broadcast_sync(int(num_questions > 0)))
-    if not has_data:
-        logger.warning("No MC questions found (consistent across all hosts)")
-        return {"accuracy": 0.0, "num_questions": 0, "num_correct": 0}
-
-    # Verify all hosts built the same number of completions — a mismatch here
-    # (e.g. from a GCS download glitch) would produce different batch counts
-    # and different JIT traces, causing "unexpected peer / different launch id".
-    local_n = len(all_completions)
-    expected_n = multihost_broadcast_sync(local_n)
-    if local_n != expected_n:
-        raise RuntimeError(
-            f"Host {jax.process_index()} has {local_n} MC completions but leader has {expected_n}. "
-            "Likely a GCS download inconsistency — all hosts must see identical data."
-        )
-
-    pad_token = tokenizer.pad_token_id
-    if pad_token is None:
-        pad_token = tokenizer.eos_token_id
-
-    packed = greedy_pack_prompt_completions(
-        worker.EvalPos,
-        all_completions,
-        pad_token=pad_token,
-        max_segments_per_example=worker.max_packed_segments,
-    )
-
-    all_batches = list(stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch))
-
-    # Synchronize batch count across hosts to prevent JAX collective desync.
-    # process_loglikelihood is a JAX collective called per-batch, so all hosts
-    # must iterate the same number of times.
-    num_batches = multihost_broadcast_sync(len(all_batches))
-    if len(all_batches) < num_batches:
-        dummy = all_batches[-1] if all_batches else None
-        all_batches.extend([dummy] * (num_batches - len(all_batches)))
-    elif len(all_batches) > num_batches:
-        all_batches = all_batches[:num_batches]
-
-    result_probs = np.zeros(len(all_completions))
-    covered_points = np.zeros(len(all_completions), dtype=bool)
-
-    total_tokens_expected = len(packed) * worker.EvalPos.size
-    pbar = tqdm(total=total_tokens_expected, desc="vlm_mc_eval", unit="tok")
-
-    for batch in all_batches:
-        _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
-
-        batch = _shard_identical_batch(batch, worker.axis_resources)
-        out_ids, out_lls, _out_correct = worker.process_loglikelihood(batch)
-
-        out_ids = jax.device_get(out_ids.array)
-        out_lls = jax.device_get(out_lls.array)
-
-        valid_indices = out_ids != -1
-        result_probs[out_ids[valid_indices]] = out_lls[valid_indices]
-        covered_points[out_ids[valid_indices]] = True
-
-        pbar.update(batch_tokens)
-
-    pbar.close()
-
-    missing_points = np.where(~covered_points)[0]
-    if len(missing_points) > 0:
-        logger.warning("Missing %d segments: %s", len(missing_points), missing_points[:10])
-
-    # Group by question, pick highest log-likelihood → accuracy
-    question_options: dict[int, list[tuple[int, bool, float]]] = defaultdict(list)
-    for seg_id, (q_idx, opt_idx, is_correct, _n_tokens) in segment_metadata.items():
-        if covered_points[seg_id]:
-            ll = float(result_probs[seg_id])
-            question_options[q_idx].append((opt_idx, is_correct, ll))
-
-    num_correct = 0
-    per_question = []
-    for q_idx in range(num_questions):
-        options = question_options.get(q_idx, [])
-        if not options:
-            per_question.append({"question_idx": q_idx, "predicted": -1, "correct": False})
-            continue
-
-        best = max(options, key=lambda x: x[2])
-        correct = best[1]
-        if correct:
-            num_correct += 1
-        per_question.append(
-            {
-                "question_idx": q_idx,
-                "predicted": best[0],
-                "correct": correct,
-                "log_likelihoods": {opt_idx: ll for opt_idx, _, ll in options},
-            }
-        )
-
-    accuracy = num_correct / max(num_questions, 1)
-
-    # Compute mean length-normalized LL of correct answers (loss metric)
-    total_correct_norm_ll = 0.0
-    num_with_loss = 0
-    for seg_id, (_q_idx, _opt_idx, is_correct, n_tokens) in segment_metadata.items():
-        if is_correct and covered_points[seg_id]:
-            ll = float(result_probs[seg_id])
-            norm_ll = ll / max(n_tokens, 1)
-            total_correct_norm_ll += norm_ll
-            num_with_loss += 1
-
-    loss = total_correct_norm_ll / max(num_with_loss, 1)
-    logger.info(
-        "MC accuracy: %d/%d = %.4f, loss (mean norm LL): %.4f",
-        num_correct,
-        num_questions,
-        accuracy,
-        loss,
-    )
-
-    return {
-        "accuracy": accuracy,
-        "loss": loss,
-        "num_questions": num_questions,
-        "num_correct": num_correct,
-        "per_question": per_question,
-    }
+    result_probs, covered_points = _run_batch_loop(worker, all_completions, tokenizer)
+    return _compute_mc_metrics(result_probs, covered_points, segment_metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -576,116 +667,14 @@ def evaluate_vlm_open_ended_benchmark(
 ) -> dict:
     """Evaluate pre-prepared open-ended data using length-normalized log-likelihood.
 
-    Data preparation (parquet loading, PromptCompletion building) must happen
-    BEFORE the coordinator/worker split via prepare_vlm_open_ended_data() to avoid
-    collective timeouts on multi-host TPU.
-
-    Args:
-        worker: Levanter eval harness worker (holds model + JIT loglikelihood).
-        all_completions: Pre-built PromptCompletion objects from prepare_vlm_open_ended_data.
-        segment_metadata: Segment metadata from prepare_vlm_open_ended_data.
-        tokenizer: Tokenizer (for pad token).
-
-    Returns:
-        Dict with mean_ll, num_questions, and per-question details.
+    For multi-benchmark evaluation, prefer evaluate_all_vlm_benchmarks() which
+    runs all benchmarks in a single loop to avoid TPU crashes at transitions.
     """
-    num_questions = len(segment_metadata)
+    if not all_completions:
+        return {"mean_ll": 0.0, "num_questions": 0, "num_covered": 0}
 
-    has_data = bool(multihost_broadcast_sync(int(num_questions > 0)))
-    if not has_data:
-        logger.warning("No open-ended questions found (consistent across all hosts)")
-        return {"mean_ll": 0.0, "num_questions": 0}
-
-    local_n = len(all_completions)
-    expected_n = multihost_broadcast_sync(local_n)
-    if local_n != expected_n:
-        raise RuntimeError(
-            f"Host {jax.process_index()} has {local_n} open-ended completions but leader has {expected_n}. "
-            "Likely a GCS download inconsistency — all hosts must see identical data."
-        )
-
-    pad_token = tokenizer.pad_token_id
-    if pad_token is None:
-        pad_token = tokenizer.eos_token_id
-
-    packed = greedy_pack_prompt_completions(
-        worker.EvalPos,
-        all_completions,
-        pad_token=pad_token,
-        max_segments_per_example=worker.max_packed_segments,
-    )
-
-    all_batches = list(stack_batches(iter(packed), worker.EvalPos, worker.EvalBatch))
-
-    # Synchronize batch count across hosts to prevent JAX collective desync.
-    num_batches = multihost_broadcast_sync(len(all_batches))
-    if len(all_batches) < num_batches:
-        dummy = all_batches[-1] if all_batches else None
-        all_batches.extend([dummy] * (num_batches - len(all_batches)))
-    elif len(all_batches) > num_batches:
-        all_batches = all_batches[:num_batches]
-
-    result_probs = np.zeros(len(all_completions))
-    covered_points = np.zeros(len(all_completions), dtype=bool)
-
-    total_tokens_expected = len(packed) * worker.EvalPos.size
-    pbar = tqdm(total=total_tokens_expected, desc="vlm_open_ended_eval", unit="tok")
-
-    for batch in all_batches:
-        _padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token)
-
-        batch = _shard_identical_batch(batch, worker.axis_resources)
-        out_ids, out_lls, _out_correct = worker.process_loglikelihood(batch)
-
-        out_ids = jax.device_get(out_ids.array)
-        out_lls = jax.device_get(out_lls.array)
-
-        valid_indices = out_ids != -1
-        result_probs[out_ids[valid_indices]] = out_lls[valid_indices]
-        covered_points[out_ids[valid_indices]] = True
-
-        pbar.update(batch_tokens)
-
-    pbar.close()
-
-    missing_points = np.where(~covered_points)[0]
-    if len(missing_points) > 0:
-        logger.warning("Missing %d segments: %s", len(missing_points), missing_points[:10])
-
-    # Compute length-normalized log-likelihood per question
-    per_question = []
-    total_norm_ll = 0.0
-    num_covered = 0
-
-    for seg_id, (q_idx, answer, n_tokens) in segment_metadata.items():
-        if not covered_points[seg_id]:
-            per_question.append({"question_idx": q_idx, "answer": answer, "norm_ll": None})
-            continue
-
-        ll = float(result_probs[seg_id])
-        norm_ll = ll / max(n_tokens, 1)
-        total_norm_ll += norm_ll
-        num_covered += 1
-
-        per_question.append(
-            {
-                "question_idx": q_idx,
-                "answer": answer,
-                "log_likelihood": ll,
-                "norm_ll": norm_ll,
-                "num_answer_tokens": n_tokens,
-            }
-        )
-
-    mean_ll = total_norm_ll / max(num_covered, 1)
-    logger.info("Open-ended mean normalized LL: %.4f (%d questions)", mean_ll, num_covered)
-
-    return {
-        "mean_ll": mean_ll,
-        "num_questions": num_questions,
-        "num_covered": num_covered,
-        "per_question": per_question,
-    }
+    result_probs, covered_points = _run_batch_loop(worker, all_completions, tokenizer)
+    return _compute_open_ended_metrics(result_probs, covered_points, segment_metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -830,33 +819,7 @@ def main():
             max_packed_segments=64,
         )
 
-        results = {}
-        for bench_name, (task_type, completions, metadata) in prepared.items():
-            if not completions:
-                continue
-
-            if task_type == "multiple_choice":
-                result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
-                results[bench_name] = result
-                if jax.process_index() == 0:
-                    logger.info(
-                        "%s: accuracy=%.4f (%d/%d), loss=%.4f",
-                        bench_name,
-                        result["accuracy"],
-                        result["num_correct"],
-                        result["num_questions"],
-                        result["loss"],
-                    )
-            elif task_type == "open_ended":
-                result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
-                results[bench_name] = result
-                if jax.process_index() == 0:
-                    logger.info(
-                        "%s: mean_ll=%.4f (%d questions)",
-                        bench_name,
-                        result["mean_ll"],
-                        result["num_questions"],
-                    )
+        results = evaluate_all_vlm_benchmarks(worker, prepared, tokenizer)
 
         if jax.process_index() == 0:
             # Print summary
@@ -989,56 +952,45 @@ def vlm_mc_eval_callback(
             max_packed_segments=64,
         )
 
-        # Use a fixed iteration order so all hosts process the same benchmarks
-        # in the same sequence. For each benchmark, synchronize the "has data"
-        # decision across hosts so no host silently skips a collective.
-        for bench_name, (task_type, completions, metadata) in prepared.items():
-            has_data = bool(multihost_broadcast_sync(int(len(completions) > 0)))
-            if not has_data:
-                logger.info("Skipping %s: no completions on any host", bench_name)
-                continue
-
-            logger.info("Evaluating %s [%s]", bench_name, task_type)
-
-            if task_type == "multiple_choice":
-                result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
-                if jax.process_index() == 0:
-                    accuracy = result["accuracy"]
-                    loss = result["loss"]
-                    logger.info(
-                        "%s: accuracy=%.4f (%d/%d), loss=%.4f",
-                        bench_name,
-                        accuracy,
-                        result["num_correct"],
-                        result["num_questions"],
-                        loss,
-                    )
-                    levanter.tracker.log(
-                        {
-                            f"eval/{bench_name}/accuracy": accuracy,
-                            f"eval/{bench_name}/loss": loss,
-                        },
-                        step=step.step,
-                    )
-
-            elif task_type == "open_ended":
-                result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
-                if jax.process_index() == 0:
-                    mean_ll = result["mean_ll"]
-                    logger.info(
-                        "%s: mean_ll=%.4f (%d questions)",
-                        bench_name,
-                        mean_ll,
-                        result["num_questions"],
-                    )
-                    levanter.tracker.log(
-                        {f"eval/{bench_name}/mean_ll": mean_ll},
-                        step=step.step,
-                    )
-
-            # Barrier between benchmarks: ensure all hosts finish one benchmark
-            # before any host starts the next, preventing collective desync.
-            barrier_sync()
+        # Run ALL benchmarks in a single continuous batch loop to avoid the
+        # TPU crash that occurs at benchmark transitions.
+        try:
+            results = evaluate_all_vlm_benchmarks(worker, prepared, tokenizer)
+            if jax.process_index() == 0:
+                for bench_name, result in results.items():
+                    task_type = prepared[bench_name][0]
+                    if task_type == "multiple_choice":
+                        accuracy = result["accuracy"]
+                        loss = result["loss"]
+                        logger.info(
+                            "%s: accuracy=%.4f (%d/%d), loss=%.4f",
+                            bench_name,
+                            accuracy,
+                            result["num_correct"],
+                            result["num_questions"],
+                            loss,
+                        )
+                        levanter.tracker.log(
+                            {
+                                f"eval/{bench_name}/accuracy": accuracy,
+                                f"eval/{bench_name}/loss": loss,
+                            },
+                            step=step.step,
+                        )
+                    elif task_type == "open_ended":
+                        mean_ll = result["mean_ll"]
+                        logger.info(
+                            "%s: mean_ll=%.4f (%d questions)",
+                            bench_name,
+                            mean_ll,
+                            result["num_questions"],
+                        )
+                        levanter.tracker.log(
+                            {f"eval/{bench_name}/mean_ll": mean_ll},
+                            step=step.step,
+                        )
+        except Exception:
+            logger.exception("vlm_mc_eval crashed")
 
         logger.info("VLM eval done.")
 
