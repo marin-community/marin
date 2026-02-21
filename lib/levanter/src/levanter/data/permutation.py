@@ -206,16 +206,15 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         self.window_blocks = window_blocks
         self._perm_type = perm_type
 
+        if isinstance(key, int):
+            key = jax.random.PRNGKey(key)
+        key = _key_on_local_cpu(key)
         with local_cpu_mesh():
-            if isinstance(key, int):
-                key = jax.random.PRNGKey(key)
-            else:
-                key = _key_on_local_cpu(key)
             block_key, window_full_key, window_tail_key = jax.random.split(key, 3)
-            self.key = _key_on_local_cpu(key)
-            self._block_key = _key_on_local_cpu(block_key)
-            self._window_full_key = _key_on_local_cpu(window_full_key)
-            self._window_tail_key = _key_on_local_cpu(window_tail_key)
+        self.key = key
+        self._block_key = _key_on_local_cpu(block_key)
+        self._window_full_key = _key_on_local_cpu(window_full_key)
+        self._window_tail_key = _key_on_local_cpu(window_tail_key)
 
         self._state: _BlockShuffleState | None = None
         self._full_block_permutation: Optional[Permutation] = None
