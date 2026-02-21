@@ -346,13 +346,15 @@ class ZephyrCoordinator:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
 
     def _log_status(self) -> None:
+        alive = sum(1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY})
         logger.info(
-            "[%s] %d/%d complete, %d in-flight, %d queued, %d workers",
+            "[%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive",
             self._stage_name,
             self._completed_shards,
             self._total_shards,
             len(self._in_flight),
             len(self._task_queue),
+            alive,
             len(self._worker_handles),
         )
 

@@ -132,6 +132,58 @@ def test_chunk_cleanup(fray_client, tmp_path):
         assert len(files) == 0, f"Expected cleanup but found: {files}"
 
 
+def test_status_reports_alive_workers_not_total(tmp_path):
+    """After heartbeat timeout, get_status workers dict reflects FAILED state,
+    and the status log distinguishes alive from total workers."""
+    from zephyr.execution import Shard, ShardTask, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord.set_shared_data({})
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+
+    # Register 3 workers
+    from unittest.mock import MagicMock
+
+    for i in range(3):
+        coord.register_worker(f"worker-{i}", MagicMock())
+
+    status = coord.get_status()
+    assert len(status.workers) == 3
+    assert all(w["state"] == "ready" for w in status.workers.values())
+
+    # Simulate 2 workers dying via heartbeat timeout
+    coord._last_seen["worker-0"] = 0.0
+    coord._last_seen["worker-1"] = 0.0
+    coord.check_heartbeats(timeout=30.0)
+
+    status = coord.get_status()
+    assert status.workers["worker-0"]["state"] == "failed"
+    assert status.workers["worker-1"]["state"] == "failed"
+    assert status.workers["worker-2"]["state"] == "ready"
+
+    # Total workers in dict is still 3, but only 1 is alive
+    alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
+    assert alive == 1
+    assert len(status.workers) == 3
+
+    # Simulate worker-0 re-registering (as if Ray restarted it)
+    coord.register_worker("worker-0", MagicMock())
+    status = coord.get_status()
+    assert status.workers["worker-0"]["state"] == "ready"
+    alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
+    assert alive == 2
+
+
 def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
     """When a task is requeued after heartbeat timeout, the original worker's
     stale result (from a previous attempt) is rejected by the coordinator."""
