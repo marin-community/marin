@@ -21,22 +21,6 @@ def _materialize_cotangent(
     return jnp.asarray(cotangent, dtype=reference.dtype)
 
 
-def _use_v4_custom_xla_vjp(
-    *,
-    backend: Optional[str] = None,
-    device_kind: Optional[str] = None,
-) -> bool:
-    if backend is None:
-        backend = jax.default_backend()
-    if backend != "tpu":
-        return False
-    if device_kind is None:
-        if not jax.devices():
-            return False
-        device_kind = jax.devices()[0].device_kind
-    return "tpu v4" in device_kind.lower()
-
-
 def _linear_softmax_cross_entropy_loss_streaming_bwd(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
