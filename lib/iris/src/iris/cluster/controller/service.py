@@ -11,7 +11,6 @@ aggregated from task states.
 import json
 import logging
 import uuid
-from dataclasses import dataclass
 from typing import Any, Protocol
 
 from connectrpc.code import Code
@@ -32,6 +31,7 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerWorker,
 )
+from iris.cluster import task_logging
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2, vm_pb2
@@ -47,57 +47,6 @@ DEFAULT_MAX_TOTAL_LINES = 10000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
-
-# Log fetching configuration
-LOG_FETCH_DEFAULT_TIMEOUT_MS = 10_000  # 10s default if no deadline from client
-LOG_FETCH_MIN_TIMEOUT_MS = 1_000  # 1s minimum per-worker timeout
-
-
-@dataclass
-class _LogFetchRequest:
-    """Request to fetch logs from a single worker."""
-
-    task_id_wire: str
-    worker_id: WorkerId
-    worker_address: str
-    attempt_id: int  # -1 for all attempts
-    log_filter: cluster_pb2.Worker.FetchLogsFilter
-
-
-@dataclass
-class _LogFetchResult:
-    """Result of fetching logs from a single worker."""
-
-    task_id_wire: str
-    worker_id: WorkerId
-    logs: list[cluster_pb2.Worker.LogEntry]
-    error: str | None
-
-
-def _fetch_worker_logs(req: _LogFetchRequest, stub: WorkerServiceClientSync, timeout_ms: int) -> _LogFetchResult:
-    """Fetch logs from a single worker with timeout."""
-    try:
-        worker_resp = stub.fetch_task_logs(
-            cluster_pb2.Worker.FetchTaskLogsRequest(
-                task_id=req.task_id_wire,
-                filter=req.log_filter,
-                attempt_id=req.attempt_id,
-            ),
-            timeout_ms=timeout_ms,
-        )
-        return _LogFetchResult(
-            task_id_wire=req.task_id_wire,
-            worker_id=req.worker_id,
-            logs=list(worker_resp.logs),
-            error=None,
-        )
-    except Exception as e:
-        return _LogFetchResult(
-            task_id_wire=req.task_id_wire,
-            worker_id=req.worker_id,
-            logs=[],
-            error=str(e),
-        )
 
 
 class AutoscalerProtocol(Protocol):
@@ -293,6 +242,7 @@ class ControllerServiceImpl:
                 error=task.error or "",
                 current_attempt_id=task.current_attempt_id,
                 attempts=attempts,
+                log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
             )
             if current_attempt and current_attempt.started_at:
                 proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
@@ -562,6 +512,7 @@ class ControllerServiceImpl:
             exit_code=task.exit_code or 0,
             error=task.error or "",
             current_attempt_id=task.current_attempt_id,
+            log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
         )
         if current_attempt and current_attempt.started_at:
             proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
@@ -632,6 +583,7 @@ class ControllerServiceImpl:
                 pending_reason=pending_reason,
                 can_be_scheduled=can_be_scheduled,
                 attempts=attempts,
+                log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
             )
             if current_attempt and current_attempt.started_at:
                 proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
@@ -872,24 +824,18 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetTaskLogsRequest,
         ctx: RequestContext,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Get logs for a task or all tasks in a job.
+        """Get logs for a task or all tasks in a job from storage.
 
-        Fetches logs in parallel from all workers that have run tasks for this job.
-        Workers that are unhealthy are skipped with an error message. The incoming
-        request deadline (from connect-timeout-ms header) is used to compute per-worker
-        timeouts.
+        Fetches logs from durable storage (GCS) instead of proxying from workers.
+        This enables post-mortem access to logs after worker VMs terminate.
 
         If request.id ends in a numeric index, treat as single task.
         Otherwise treat as job ID and fetch logs from all tasks.
 
-        When attempt_id is specified (>= 0), fetches logs only from that specific
-        attempt, routing to the worker that ran that attempt (which may differ from
-        the current worker if the task was retried).
+        When attempt_id is specified (>= 0), fetches logs only from that specific attempt.
         """
         job_name = JobName.from_wire(request.id)
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
-        # attempt_id=0 is valid (first attempt), so use the value directly
-        # Convention: -1 means "all attempts", caller sets explicitly
         requested_attempt_id = request.attempt_id
 
         # Detect if this is a task ID (ends in /N) or job ID and collect tasks
@@ -907,164 +853,98 @@ class ControllerServiceImpl:
             else:
                 tasks.extend(self._state.get_job_tasks(job_name))
 
-        # Phase 1: Collect all fetch requests and immediate errors
-        fetch_requests: list[_LogFetchRequest] = []
-        immediate_errors: list[cluster_pb2.Controller.TaskLogBatch] = []
+        # Fetch logs from storage for each task/attempt
+        task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
+        total_lines = 0
+        truncated = False
+        last_timestamp_ms = request.since_ms
 
         for task in tasks:
             task_id_wire = task.task_id.to_wire()
 
+            # Determine which attempts to fetch
+            attempts_to_fetch = []
             if requested_attempt_id >= 0:
                 # Specific attempt requested
                 if requested_attempt_id >= len(task.attempts):
-                    immediate_errors.append(
+                    task_logs.append(
                         cluster_pb2.Controller.TaskLogBatch(
                             task_id=task_id_wire,
                             error=f"Attempt {requested_attempt_id} not found (task has {len(task.attempts)} attempts)",
                         )
                     )
                     continue
-
-                attempt = task.attempts[requested_attempt_id]
-                worker_id = attempt.worker_id
-
-                if not worker_id:
-                    immediate_errors.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_id_wire,
-                            error=f"Attempt {requested_attempt_id} has no assigned worker",
-                        )
-                    )
-                    continue
-
-                worker = self._state.get_worker(worker_id)
-                if not worker:
-                    immediate_errors.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_id_wire,
-                            worker_id=str(worker_id),
-                            error=f"Worker {worker_id} not found (attempt {requested_attempt_id})",
-                        )
-                    )
-                    continue
-
-                if not worker.healthy:
-                    immediate_errors.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_id_wire,
-                            worker_id=str(worker_id),
-                            error=f"Worker {worker_id} is unhealthy (attempt {requested_attempt_id})",
-                        )
-                    )
-                    continue
-
-                fetch_requests.append(
-                    _LogFetchRequest(
-                        task_id_wire=task_id_wire,
-                        worker_id=worker_id,
-                        worker_address=worker.address,
-                        attempt_id=requested_attempt_id,
-                        log_filter=cluster_pb2.Worker.FetchLogsFilter(
-                            start_ms=request.since_ms,
-                            max_lines=max_lines,
-                            regex=request.regex,
-                        ),
-                    )
-                )
+                attempts_to_fetch = [task.attempts[requested_attempt_id]]
             else:
-                # All attempts - group by worker
-                workers_to_attempts: dict[WorkerId, list[int]] = {}
-                for attempt in task.attempts:
-                    if attempt.worker_id:
-                        if attempt.worker_id not in workers_to_attempts:
-                            workers_to_attempts[attempt.worker_id] = []
-                        workers_to_attempts[attempt.worker_id].append(attempt.attempt_id)
+                # All attempts
+                attempts_to_fetch = task.attempts
 
-                if not workers_to_attempts:
-                    immediate_errors.append(
+            # Fetch logs for each attempt
+            for attempt in attempts_to_fetch:
+                if not attempt.worker_id:
+                    task_logs.append(
                         cluster_pb2.Controller.TaskLogBatch(
                             task_id=task_id_wire,
-                            error="Task has no attempts with assigned workers",
+                            error=f"Attempt {attempt.attempt_id} has no assigned worker",
                         )
                     )
                     continue
 
-                for worker_id in workers_to_attempts:
-                    worker = self._state.get_worker(worker_id)
-                    if not worker:
-                        immediate_errors.append(
-                            cluster_pb2.Controller.TaskLogBatch(
-                                task_id=task_id_wire,
-                                worker_id=str(worker_id),
-                                error=f"Worker {worker_id} not found",
-                            )
-                        )
-                        continue
-
-                    if not worker.healthy:
-                        immediate_errors.append(
-                            cluster_pb2.Controller.TaskLogBatch(
-                                task_id=task_id_wire,
-                                worker_id=str(worker_id),
-                                error=f"Worker {worker_id} is unhealthy",
-                            )
-                        )
-                        continue
-
-                    fetch_requests.append(
-                        _LogFetchRequest(
-                            task_id_wire=task_id_wire,
-                            worker_id=worker_id,
-                            worker_address=worker.address,
-                            attempt_id=-1,  # All attempts on this worker
-                            log_filter=cluster_pb2.Worker.FetchLogsFilter(
-                                start_ms=request.since_ms,
-                                max_lines=max_lines,
-                                regex=request.regex,
+                if not attempt.log_directory:
+                    task_logs.append(
+                        cluster_pb2.Controller.TaskLogBatch(
+                            task_id=task_id_wire,
+                            worker_id=str(attempt.worker_id),
+                            error=(
+                                f"Attempt {attempt.attempt_id} has no log directory "
+                                "(worker may not have reported it yet)"
                             ),
                         )
                     )
+                    continue
 
-        # Phase 2: Compute per-worker timeout from incoming deadline
-        remaining_ms = ctx.timeout_ms()
-        if remaining_ms is not None and remaining_ms > 0:
-            # Leave 100ms buffer for aggregation
-            per_worker_timeout_ms = max(int(remaining_ms - 100), LOG_FETCH_MIN_TIMEOUT_MS)
-        else:
-            per_worker_timeout_ms = LOG_FETCH_DEFAULT_TIMEOUT_MS
+                try:
+                    reader = task_logging.LogReader.from_log_directory(log_directory=attempt.log_directory)
+                    log_entries = reader.read_logs(
+                        source=None,  # All sources
+                        regex_filter=request.regex if request.regex else None,
+                        max_lines=max(0, max_lines - total_lines) if max_lines > 0 else 0,
+                    )
 
-        # Phase 3: Fetch logs sequentially using cached stubs
-        fetch_results: list[_LogFetchResult] = []
-        for req in fetch_requests:
-            stub = self._controller.stub_factory.get_stub(req.worker_address)
-            fetch_results.append(_fetch_worker_logs(req, stub, per_worker_timeout_ms))
+                    worker_logs = []
+                    for entry in log_entries:
+                        # Filter by timestamp if requested
+                        if request.since_ms > 0 and entry.timestamp.epoch_ms <= request.since_ms:
+                            continue
 
-        # Phase 4: Aggregate results
-        task_logs: list[cluster_pb2.Controller.TaskLogBatch] = list(immediate_errors)
-        total_lines = 0
-        truncated = False
-        last_timestamp_ms = request.since_ms
+                        worker_logs.append(entry)
 
-        for result in fetch_results:
-            batch = cluster_pb2.Controller.TaskLogBatch(
-                task_id=result.task_id_wire,
-                worker_id=str(result.worker_id),
-            )
+                        if entry.timestamp.epoch_ms > last_timestamp_ms:
+                            last_timestamp_ms = entry.timestamp.epoch_ms
 
-            if result.error:
-                batch.error = result.error
-            else:
-                batch.logs.extend(result.logs)
-                total_lines += len(result.logs)
+                    batch = cluster_pb2.Controller.TaskLogBatch(
+                        task_id=task_id_wire,
+                        worker_id=str(attempt.worker_id),
+                        logs=worker_logs,
+                    )
+                    task_logs.append(batch)
 
-                for log in result.logs:
-                    if log.timestamp.epoch_ms > last_timestamp_ms:
-                        last_timestamp_ms = log.timestamp.epoch_ms
+                    total_lines += len(worker_logs)
+                    if max_lines > 0 and total_lines >= max_lines:
+                        truncated = True
+                        break
 
-                if total_lines >= max_lines:
-                    truncated = True
+                except Exception as e:
+                    task_logs.append(
+                        cluster_pb2.Controller.TaskLogBatch(
+                            task_id=task_id_wire,
+                            worker_id=str(attempt.worker_id),
+                            error=f"Failed to fetch logs from storage: {e}",
+                        )
+                    )
 
-            task_logs.append(batch)
+            if truncated:
+                break
 
         return cluster_pb2.Controller.GetTaskLogsResponse(
             task_logs=task_logs,

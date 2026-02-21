@@ -245,8 +245,15 @@ class RayClient:
                 pass
         return self._address
 
-    def submit(self, request: JobRequest) -> RayJobHandle:
-        """Submit a job, routing to TPU/binary/callable based on device type."""
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> RayJobHandle:
+        """Submit a job, routing to TPU/binary/callable based on device type.
+
+        Args:
+            request: The job request to submit.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
+                          RayClient currently doesn't enforce unique names, so this
+                          parameter has no effect but is included for API compatibility.
+        """
         logger.info("Submitting job: %s", request.name)
 
         if isinstance(request.resources.device, TpuConfig):
@@ -397,6 +404,11 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
         options["memory"] = humanfriendly.parse_size(resources.ram, binary=True)
     if not resources.preemptible:
         options["resources"] = {"head_node": 0.0001}
+    else:
+        # Preemptible actors should be restarted automatically by Ray when their
+        # node is preempted. Without this, the actor dies permanently and the
+        # pool degrades over time (see marin#2943).
+        options["max_restarts"] = -1
     if resources.max_concurrency > 1:
         options["max_concurrency"] = resources.max_concurrency
     return options

@@ -79,8 +79,8 @@ def test_gemma_config():
 
 
 def test_gemma_param_counts_dont_change_with_seqlen():
-    model = GemmaLMHeadModel.init(hax.Axis("v", 2048), _get_gemma_config(seq_len=128), key=random.PRNGKey(0))
-    model2 = GemmaLMHeadModel.init(hax.Axis("v", 2048), _get_gemma_config(seq_len=256), key=random.PRNGKey(0))
+    model = GemmaLMHeadModel.init(hax.Axis("v", 512), _get_gemma_config(seq_len=32), key=random.PRNGKey(0))
+    model2 = GemmaLMHeadModel.init(hax.Axis("v", 512), _get_gemma_config(seq_len=64), key=random.PRNGKey(0))
     assert parameter_count(model) == parameter_count(model2)
 
 
@@ -381,6 +381,8 @@ def _get_gemma_config(use_flash=False, num_kv_heads=4, seq_len=128) -> GemmaConf
     return GemmaConfig(
         max_seq_len=seq_len,
         hidden_dim=16,
+        intermediate_dim=64,
+        num_layers=2,
         num_heads=4,
         num_kv_heads=num_kv_heads,
         gradient_checkpointing=False,  # disable for tests so debugging is easier
@@ -396,6 +398,8 @@ def _get_gemma2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma2Co
     return Gemma2Config(
         max_seq_len=seq_len,
         hidden_dim=16,
+        intermediate_dim=64,
+        num_layers=2,
         num_heads=4,
         num_kv_heads=num_kv_heads,
         gradient_checkpointing=False,  # disable for tests so debugging is easier
@@ -415,6 +419,8 @@ def _get_gemma3_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma3Co
     return Gemma3Config(
         max_seq_len=seq_len,
         hidden_dim=16,
+        intermediate_dim=64,
+        num_layers=2,
         num_heads=4,
         num_kv_heads=num_kv_heads,
         gradient_checkpointing=False,

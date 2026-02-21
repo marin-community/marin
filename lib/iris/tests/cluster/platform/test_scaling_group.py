@@ -16,7 +16,7 @@ from iris.cluster.controller.scaling_group import (
     SliceState,
     _zones_from_config,
 )
-from iris.cluster.platform.base import CloudSliceState, CloudVmState, QuotaExhaustedError, SliceStatus, VmStatus
+from iris.cluster.platform.base import CloudSliceState, CloudWorkerState, QuotaExhaustedError, SliceStatus, WorkerStatus
 from iris.cluster.types import VmWorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -38,24 +38,25 @@ def _with_resources(config: config_pb2.ScaleGroupConfig, *, num_vms: int = 1) ->
     return config
 
 
-def _cloud_vm_state_from_iris(state: vm_pb2.VmState) -> CloudVmState:
-    """Reverse map from Iris VM state to CloudVmState for test setup."""
+def _cloud_worker_state_from_iris(state: vm_pb2.VmState) -> CloudWorkerState:
+    """Reverse map from Iris VM state to CloudWorkerState for test setup."""
     if state == vm_pb2.VM_STATE_READY:
-        return CloudVmState.RUNNING
+        return CloudWorkerState.RUNNING
     if state == vm_pb2.VM_STATE_FAILED:
-        return CloudVmState.STOPPED
+        return CloudWorkerState.STOPPED
     if state == vm_pb2.VM_STATE_TERMINATED:
-        return CloudVmState.TERMINATED
-    return CloudVmState.UNKNOWN
+        return CloudWorkerState.TERMINATED
+    return CloudWorkerState.UNKNOWN
 
 
-def make_mock_vm_handle(vm_id: str, address: str, state: vm_pb2.VmState) -> MagicMock:
-    """Create a mock VmHandle for testing."""
+def make_mock_worker_handle(vm_id: str, address: str, state: vm_pb2.VmState) -> MagicMock:
+    """Create a mock RemoteWorkerHandle for testing."""
     handle = MagicMock()
     handle.vm_id = vm_id
+    handle.worker_id = vm_id
     handle.internal_address = address
     handle.external_address = None
-    handle.status.return_value = VmStatus(state=_cloud_vm_state_from_iris(state))
+    handle.status.return_value = WorkerStatus(state=_cloud_worker_state_from_iris(state))
     return handle
 
 
@@ -93,18 +94,19 @@ def make_mock_slice_handle(
     else:
         slice_state = CloudSliceState.CREATING
 
-    # Generate unique addresses by hashing slice_id
-    slice_hash = abs(hash(slice_id)) % 256
-    vm_handles = []
+    # Addresses are not valid IPs (e.g. "10.0.slice-001.0"), but that's fine —
+    # ScalingGroup only uses them as opaque dict keys for worker status lookups,
+    # never parsed or validated as IP addresses.
+    worker_handles = []
     for i, state in enumerate(vm_states):
-        vm_handle = make_mock_vm_handle(
+        worker_handle = make_mock_worker_handle(
             vm_id=f"{slice_id}-vm-{i}",
-            address=f"10.0.{slice_hash}.{i}",
+            address=f"10.0.{slice_id}.{i}",
             state=state,
         )
-        vm_handles.append(vm_handle)
+        worker_handles.append(worker_handle)
 
-    handle.describe.return_value = SliceStatus(state=slice_state, vm_count=len(vm_states), vms=vm_handles)
+    handle.describe.return_value = SliceStatus(state=slice_state, worker_count=len(vm_states), workers=worker_handles)
 
     return handle
 
@@ -116,7 +118,7 @@ def make_mock_platform(slice_handles_to_discover: list[MagicMock] | None = None)
 
     create_count = [0]
 
-    def create_slice_side_effect(config: config_pb2.SliceConfig) -> MagicMock:
+    def create_slice_side_effect(config: config_pb2.SliceConfig, bootstrap_config=None) -> MagicMock:
         create_count[0] += 1
         slice_id = f"new-slice-{create_count[0]}"
         return make_mock_slice_handle(slice_id)
@@ -128,7 +130,7 @@ def make_mock_platform(slice_handles_to_discover: list[MagicMock] | None = None)
 def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock]) -> None:
     """Mark discovered slices as READY with their VM addresses."""
     for handle in handles:
-        vm_addresses = [vm.internal_address for vm in handle.describe().vms]
+        vm_addresses = [vm.internal_address for vm in handle.describe().workers]
         group.mark_slice_ready(handle.slice_id, vm_addresses)
 
 
@@ -140,7 +142,7 @@ def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> No
 
 def _get_vm_address(handle: MagicMock) -> str:
     """Get the first VM's internal_address from a SliceHandle."""
-    return handle.describe().vms[0].internal_address
+    return handle.describe().workers[0].internal_address
 
 
 def _get_slice_state(group: ScalingGroup, handle: MagicMock) -> SliceState:
@@ -909,7 +911,7 @@ class TestVerifySliceIdle:
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1000000)
         handle = _tracked_scale_up(group, timestamp=ts)
-        vm_addresses = [vm.internal_address for vm in handle.describe().vms]
+        vm_addresses = [vm.internal_address for vm in handle.describe().workers]
         group.mark_slice_ready(handle.slice_id, vm_addresses)
         state = _get_slice_state(group, handle)
 
@@ -1056,11 +1058,12 @@ class TestMarkSliceLockDiscipline:
         group.mark_slice_failed("nonexistent")
 
 
-def _make_vm_handle(vm_id: str, cloud_state: CloudVmState, address: str = "10.0.0.1") -> MagicMock:
+def _make_worker_handle(vm_id: str, cloud_state: CloudWorkerState, address: str = "10.0.0.1") -> MagicMock:
     handle = MagicMock()
     handle.vm_id = vm_id
+    handle.worker_id = vm_id
     handle.internal_address = address
-    handle.status.return_value = VmStatus(state=cloud_state)
+    handle.status.return_value = WorkerStatus(state=cloud_state)
     return handle
 
 
@@ -1071,5 +1074,5 @@ def _make_slice_handle(
 ) -> MagicMock:
     handle = MagicMock()
     handle.slice_id = slice_id
-    handle.describe.return_value = SliceStatus(state=slice_state, vm_count=len(vm_handles), vms=vm_handles)
+    handle.describe.return_value = SliceStatus(state=slice_state, worker_count=len(vm_handles), workers=vm_handles)
     return handle

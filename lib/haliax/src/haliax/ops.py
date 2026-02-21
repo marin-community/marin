@@ -45,6 +45,14 @@ def where(
 
 @typing.overload
 def where(
+    condition: ArrayLike | bool,
+    x: ArrayLike,
+    y: ArrayLike,
+) -> ArrayLike: ...
+
+
+@typing.overload
+def where(
     condition: NamedArray,
     *,
     fill_value: int,
@@ -58,7 +66,7 @@ def where(
     y: NamedOrNumeric | None = None,
     fill_value: int | None = None,
     new_axis: Axis | None = None,
-) -> NamedArray | tuple[NamedArray, ...]:
+) -> NamedArray | ArrayLike | tuple[NamedArray, ...]:
     """Like jnp.where, but with named axes."""
 
     if (x is None) != (y is None):
@@ -94,17 +102,18 @@ def where(
             condition = ensure_scalar(condition, name="condition")
         return jax.lax.cond(condition, lambda _: x, lambda _: y, None)
 
-    condition, x, y = broadcast_arrays(condition, x, y)  # type: ignore
-
-    assert isinstance(condition, NamedArray)
+    condition, x, y = broadcast_arrays(condition, x, y)  # type: ignore[arg-type]
 
     def _array_if_named(x):
         if isinstance(x, NamedArray):
             return x.array
         return x
 
-    raw = jnp.where(condition.array, _array_if_named(x), _array_if_named(y))
-    return NamedArray(raw, condition.axes)
+    if isinstance(condition, NamedArray):
+        raw = jnp.where(condition.array, _array_if_named(x), _array_if_named(y))
+        return NamedArray(raw, condition.axes)
+
+    return jnp.where(_array_if_named(condition), _array_if_named(x), _array_if_named(y))
 
 
 def nonzero(array: NamedArray, *, size: Axis, fill_value: int = 0) -> tuple[NamedArray, ...]:

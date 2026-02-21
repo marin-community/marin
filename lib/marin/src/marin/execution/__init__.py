@@ -14,6 +14,7 @@ from .executor import (
     executor_main,
     get_executor_step,
     output_path_of,
+    resolve_executor_step,
     this_output_path,
     unwrap_versioned_value,
     versioned,

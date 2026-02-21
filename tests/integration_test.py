@@ -181,8 +181,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=tokenizer,
-        zephyr_num_cpus=1,
-        zephyr_memory=humanfriendly.parse_size("1MB", binary=True),
     )
 
     tokenize_step = ExecutorStep(
@@ -256,6 +254,8 @@ def main(config: ExecutorMainConfig):
         config = dataclasses.replace(
             config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
         )
+
+        os.environ["MARIN_PREFIX"] = bucket_prefix
 
         # start Ray explicitly and set it as the current cluster
         # N.B. This script must not be launched via `uv run`, or Ray will prefer to use `uv` for all execution

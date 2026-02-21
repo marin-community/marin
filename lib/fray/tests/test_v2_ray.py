@@ -262,3 +262,12 @@ def test_actor_options_non_preemptible_pins_head_node():
     options = _actor_ray_options(ResourceConfig(preemptible=False))
     assert options["num_cpus"] == 1
     assert options["resources"] == {"head_node": 0.0001}
+    assert "max_restarts" not in options
+
+
+def test_actor_options_preemptible_sets_max_restarts():
+    from fray.v2.ray_backend.backend import _actor_ray_options
+
+    options = _actor_ray_options(ResourceConfig(preemptible=True))
+    assert options["max_restarts"] == -1
+    assert "resources" not in options
