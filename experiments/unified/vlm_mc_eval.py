@@ -902,9 +902,6 @@ def vlm_mc_eval_callback(
             logger.warning("No parquets found for benchmark %s, skipping", bench_name)
 
     def vlm_eval(step: StepInfo, force=False):
-        if step.step == 0 and not force:
-            return
-
         model = inference_mode(step.eval_model, True)
         EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
 
