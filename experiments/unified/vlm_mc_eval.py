@@ -19,8 +19,8 @@ PromptCompletion → greedy_pack → broadcast_shard → process_loglikelihood.
 All processes run the same eval loop (no coordinator/worker split). Each process
 independently builds batches, then broadcast_shard distributes process 0's data
 to all hosts as a JIT collective — providing both data identity and per-batch
-synchronization. barrier_sync() TCP barriers between benchmarks prevent host
-drift from CPU work (logging, result aggregation).
+synchronization. sync_global_devices() JAX-level barriers between benchmarks
+prevent TPU collective mismatches from host drift.
 
 Usage (standalone):
     uv run experiments/unified/vlm_mc_eval.py \
@@ -57,7 +57,7 @@ from levanter.eval_harness import (
     _LmEvalHarnessWorker,
     get_padding_count_from_batch,
 )
-from levanter.utils.jax_utils import barrier_sync, broadcast_shard, multihost_broadcast_sync
+from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync, sync_global_devices
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -786,7 +786,7 @@ def main():
         )
 
         results = {}
-        barrier_sync()
+        sync_global_devices("vlm_eval_standalone_start")
         for bench_name, (task_type, completions, metadata) in prepared.items():
             if not completions:
                 continue
@@ -814,7 +814,7 @@ def main():
                         result["num_questions"],
                     )
 
-            barrier_sync()
+            sync_global_devices(f"vlm_eval_standalone_after_{bench_name}")
 
         if jax.process_index() == 0:
             # Print summary
@@ -916,8 +916,8 @@ def vlm_mc_eval_callback(
         # All processes prepare data independently, then run eval in lockstep.
         # broadcast_shard distributes process 0's batch data to all hosts
         # (tolerating any GCS download non-determinism) and acts as a per-batch
-        # collective barrier. barrier_sync() adds TCP-level barriers between
-        # benchmarks to prevent host drift.
+        # collective barrier. sync_global_devices() adds JAX-level (TPU)
+        # barriers between benchmarks to prevent collective mismatches.
         prepared: dict[str, tuple] = {}
         for bench_name, parquet_paths in bench_parquets.items():
             task_type = bench_task_types[bench_name]
@@ -951,9 +951,11 @@ def vlm_mc_eval_callback(
         )
 
         # All processes run the same eval loop with broadcast_shard providing
-        # per-batch synchronization. barrier_sync between benchmarks prevents
-        # host drift from CPU work (logging, result aggregation).
-        barrier_sync()
+        # per-batch synchronization. sync_global_devices between benchmarks
+        # forces a JAX-level (TPU) barrier to prevent "unexpected peer /
+        # different launch id" collective mismatches when transitioning
+        # between benchmarks.
+        sync_global_devices("vlm_eval_start")
         for bench_name, (task_type, completions, metadata) in prepared.items():
             if not completions:
                 continue
@@ -996,7 +998,7 @@ def vlm_mc_eval_callback(
                         step=step.step,
                     )
 
-            barrier_sync()
+            sync_global_devices(f"vlm_eval_after_{bench_name}")
 
         logger.info("VLM eval done.")
 
