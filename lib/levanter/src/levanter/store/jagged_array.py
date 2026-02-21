@@ -568,11 +568,12 @@ def _unshaped_spec(store: ts.TensorStore) -> ts.Spec:
 
 
 def _ts_open_kwargs(mode: str, cache_settings: dict) -> dict:
-    kwargs: dict = {"context": ts.Context({"cache_pool": cache_settings})}
     if mode == "r":
-        kwargs["context"] = _read_context()
-        kwargs["recheck_cached_data"] = RECHECK_CACHED_DATA
-    return kwargs
+        return {
+            "context": _read_context(),
+            "recheck_cached_data": RECHECK_CACHED_DATA,
+        }
+    return {"context": ts.Context({"cache_pool": cache_settings})}
 
 
 def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_settings: dict):
