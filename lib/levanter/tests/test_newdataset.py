@@ -4,7 +4,7 @@
 import jax.random
 import pytest
 
-from levanter.data import EraShufflingDataset, PermutationDataset
+from levanter.data import BlockShufflingDataset, EraShufflingDataset, PermutationDataset
 from levanter.data.dataset import ListAsyncDataset
 
 
@@ -86,3 +86,74 @@ async def test_era_shuffling_raises_on_out_of_bounds_index():
     shuffling_dataset = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0))
     with pytest.raises(IndexError, match="out of bounds"):
         await shuffling_dataset.getitem_async(16)
+
+
+@pytest.mark.asyncio
+async def test_block_shuffling_dataset_is_deterministic_and_a_permutation():
+    data = list(range(37))
+    dataset = ListAsyncDataset(data)
+    key = jax.random.PRNGKey(0)
+
+    ds1 = BlockShufflingDataset(dataset, io_block_size=4, window_blocks=3, key=key)
+    ds2 = BlockShufflingDataset(dataset, io_block_size=4, window_blocks=3, key=key)
+
+    indices = list(range(len(data)))
+    batch1 = await ds1.get_batch(indices)
+    batch2 = await ds2.get_batch(indices)
+
+    assert batch1 == batch2
+    assert sorted(batch1) == data
+
+
+@pytest.mark.asyncio
+async def test_block_shuffling_dataset_is_often_nontrivial():
+    data = list(range(37))
+    dataset = ListAsyncDataset(data)
+
+    nontrivial = 0
+    for seed in range(10):
+        block_shuffled = BlockShufflingDataset(
+            dataset,
+            io_block_size=4,
+            window_blocks=3,
+            key=jax.random.PRNGKey(seed),
+        )
+        batch = await block_shuffled.get_batch(list(range(len(data))))
+        if batch != data:
+            nontrivial += 1
+
+    assert nontrivial >= 7, f"Expected non-trivial permutation for most seeds, got {nontrivial}/10"
+
+
+@pytest.mark.asyncio
+async def test_block_shuffling_keeps_tiny_tail_block_at_end():
+    data = list(range(10))  # tiny tail block has 2 examples when io_block_size=4
+    dataset = ListAsyncDataset(data)
+    block_shuffled = BlockShufflingDataset(dataset, io_block_size=4, window_blocks=2, key=jax.random.PRNGKey(0))
+
+    batch = await block_shuffled.get_batch(list(range(len(data))))
+
+    # By design, the final tiny block stays at the very end (possibly permuted within itself).
+    assert set(batch[-2:]) == {8, 9}
+    assert all(x < 8 for x in batch[:-2])
+    assert sorted(batch) == data
+
+
+@pytest.mark.asyncio
+async def test_block_shuffling_handles_dataset_smaller_than_block():
+    data = list(range(3))
+    dataset = ListAsyncDataset(data)
+    block_shuffled = BlockShufflingDataset(dataset, io_block_size=8, window_blocks=4, key=jax.random.PRNGKey(0))
+
+    batch = await block_shuffled.get_batch([0, 1, 2])
+    assert sorted(batch) == data
+
+
+@pytest.mark.asyncio
+async def test_block_shuffle_convenience_api():
+    data = list(range(12))
+    dataset = ListAsyncDataset(data)
+    block_shuffled = dataset.block_shuffle(io_block_size=4, window_blocks=2, key=jax.random.PRNGKey(0))
+
+    batch = await block_shuffled.get_batch(list(range(12)))
+    assert sorted(batch) == data

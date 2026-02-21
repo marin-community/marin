@@ -75,6 +75,7 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         self.doc_cache = doc_cache
         self.seq_len = seq_len
         self._store: TreeStore | None = doc_cache.store
+        self._read_stats = _TokenSeqReadStats()
 
     async def async_len(self) -> int:
         token_arrays = await self._await_token_cache()
@@ -88,23 +89,78 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
     def is_finite(self) -> bool:
         return True
 
+    @property
+    def read_stats(self) -> "_TokenSeqReadStats":
+        """Cumulative read-efficiency counters for this dataset instance."""
+        return dataclasses.replace(self._read_stats)
+
+    def reset_read_stats(self):
+        self._read_stats = _TokenSeqReadStats()
+
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         if not indices:
             return []
 
         token_arrays = await self._await_token_cache()
-        # logger.info(f"Time to get token cache: {time.time() - time_in}")
         ds_len = await self.async_len()
+        if min(indices) < 0:
+            raise ValueError("Negative indices are not supported")
         if ds_len < max(indices) + 1:
             raise ValueError("Requested indices beyond the end of the dataset")
-        offsets = np.array(indices, dtype=np.int64) * self.seq_len
-        with ts.Batch():
-            out = []
-            for offset in offsets:
-                out.append(token_arrays.data[offset : offset + self.seq_len].read())
 
-        out = await asyncio.gather(*out)
-        return out
+        unique_sorted_indices = sorted(set(indices))
+        index_runs = _coalesce_sorted_indices(unique_sorted_indices)
+        index_to_tokens: dict[int, np.ndarray] = {}
+
+        with ts.Batch():
+            run_reads = [
+                token_arrays.data[start * self.seq_len : stop * self.seq_len].read() for start, stop in index_runs
+            ]
+
+        run_data = await asyncio.gather(*run_reads)
+        for (run_start, run_stop), contiguous_tokens in zip(index_runs, run_data, strict=True):
+            run_len = run_stop - run_start
+            contiguous_tokens = np.asarray(contiguous_tokens)
+            reshaped = contiguous_tokens.reshape(run_len, self.seq_len)
+            for offset, row in enumerate(reshaped):
+                index_to_tokens[run_start + offset] = row
+
+        self._read_stats.examples_requested += len(indices)
+        self._read_stats.unique_examples_requested += len(unique_sorted_indices)
+        self._read_stats.coalesced_ranges += len(index_runs)
+        self._read_stats.tensorstore_reads_issued += len(run_reads)
+
+        return [index_to_tokens[i] for i in indices]
+
+
+@dataclass
+class _TokenSeqReadStats:
+    examples_requested: int = 0
+    unique_examples_requested: int = 0
+    coalesced_ranges: int = 0
+    tensorstore_reads_issued: int = 0
+
+
+def _coalesce_sorted_indices(sorted_indices: Sequence[int]) -> list[tuple[int, int]]:
+    """Convert sorted unique indices into half-open contiguous runs."""
+    if not sorted_indices:
+        return []
+
+    runs: list[tuple[int, int]] = []
+    run_start = sorted_indices[0]
+    run_prev = sorted_indices[0]
+
+    for idx in sorted_indices[1:]:
+        if idx == run_prev + 1:
+            run_prev = idx
+            continue
+
+        runs.append((run_start, run_prev + 1))
+        run_start = idx
+        run_prev = idx
+
+    runs.append((run_start, run_prev + 1))
+    return runs
 
 
 def _single_cpu_sharding() -> jax.sharding.SingleDeviceSharding:
@@ -540,6 +596,15 @@ def _split_into_trainval_sets(
 
 
 @dataclass(frozen=True)
+class BlockShuffleConfig:
+    """Configuration for hierarchical block shuffling."""
+
+    io_block_size: int
+    window_blocks: int
+    perm_type: Literal["feistel", "linear"] = "feistel"
+
+
+@dataclass(frozen=True)
 class LmDataConfig:
     """Unified LM data config built from components."""
 
@@ -559,9 +624,14 @@ class LmDataConfig:
 
     chat_template: str | None = None  # If set, use this template for chat datasets. Otherwise, use the tokenizer's.
 
-    shuffle: bool | int = False
-    """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
-    If you want to shuffle in eras, set this to the era length"""
+    shuffle: bool | int | BlockShuffleConfig = False
+    """Shuffle policy.
+
+    - `True`: full permutation shuffle
+    - `False`: no shuffle
+    - positive `int`: era shuffle with this era length
+    - `BlockShuffleConfig`: hierarchical block shuffle
+    """
     permutation_type: Literal["feistel", "linear"] | None = None
     """
     Type of permutation to use for shuffle.
@@ -709,21 +779,29 @@ class LmDataConfig:
         if key is None:
             key = jax.random.PRNGKey(0)
 
+        shuffle_cfg = self.shuffle
         perm_type = self.permutation_type
-        if perm_type is None and self.shuffle is not False:
+        if perm_type is None and shuffle_cfg is not False and not isinstance(shuffle_cfg, BlockShuffleConfig):
             logger.warning(
                 "Defaulting to linear permutation for shuffling. This will change to Feistel in the future."
             )
             perm_type = "linear"
 
         def shuffle_ds(ds, k):
-            if self.shuffle is True:
+            if isinstance(shuffle_cfg, BlockShuffleConfig):
+                ds = ds.block_shuffle(
+                    io_block_size=shuffle_cfg.io_block_size,
+                    window_blocks=shuffle_cfg.window_blocks,
+                    key=k,
+                    perm_type=shuffle_cfg.perm_type,
+                )
+            elif shuffle_cfg is True:
                 ds = ds.shuffle(k, perm_type=perm_type)
-            elif isinstance(self.shuffle, int) and self.shuffle > 0:
-                ds = ds.era_shuffle(self.shuffle, key=k, perm_type=perm_type)
+            elif isinstance(shuffle_cfg, int) and not isinstance(shuffle_cfg, bool) and shuffle_cfg > 0:
+                ds = ds.era_shuffle(shuffle_cfg, key=k, perm_type=perm_type)
             return ds
 
-        if self.shuffle:
+        if shuffle_cfg:
             key_iter = key_iterator(key)
             datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
 

@@ -4,6 +4,7 @@
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from transformers import AutoTokenizer
 
@@ -14,11 +15,14 @@ import pytest
 
 import haliax as hax
 
+from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import (
     BatchTokenizer,
+    BlockShuffleConfig,
     ChatLmDatasetFormat,
     ChatDataset,
     DatasetComponent,
+    DirectDatasetComponent,
     GrugLmExample,
     LmDataConfig,
     PrebuiltLmDatasetFormat,
@@ -29,6 +33,7 @@ from levanter.data.text import (
     named_lm_example_from_grug,
     preprocessor_for_format,
 )
+from levanter.data.text.datasets import TokenSeqDataset
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
@@ -50,6 +55,92 @@ def test_dont_blow_up_without_validation_set():
         Pos = hax.Axis("position", 10)
         # mostly just making sure this doesn't blow up
         assert config.validation_sets(Pos) == {}
+
+
+def test_lm_data_config_accepts_block_shuffle_as_shuffle_policy():
+    cfg = LmDataConfig(shuffle=BlockShuffleConfig(io_block_size=128, window_blocks=8))
+    assert isinstance(cfg.shuffle, BlockShuffleConfig)
+
+
+def test_train_sets_applies_block_shuffle_policy_for_direct_component():
+    Pos = hax.Axis("position", 1)
+    examples = [GrugLmExample.causal(jnp.array([i], dtype=jnp.int32)) for i in range(10)]
+    direct_component = DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})
+    cfg = LmDataConfig(
+        components={"direct": direct_component},
+        shuffle=BlockShuffleConfig(io_block_size=4, window_blocks=2, perm_type="feistel"),
+    )
+
+    train_sets = cfg.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))
+    shuffled_examples = train_sets["direct"].as_sync_dataset().get_batch(list(range(10)))
+    shuffled_ids = [int(ex.tokens[0]) for ex in shuffled_examples]
+
+    assert sorted(shuffled_ids) == list(range(10))
+    assert set(shuffled_ids[-2:]) == {8, 9}
+
+
+class _FakeReadHandle:
+    def __init__(self, payload: np.ndarray, read_counter: dict[str, int]):
+        self._payload = payload
+        self._read_counter = read_counter
+
+    async def _read(self):
+        self._read_counter["reads"] += 1
+        return self._payload
+
+    def read(self):
+        return self._read()
+
+
+class _FakeTensorData:
+    def __init__(self, flat_tokens: np.ndarray, read_counter: dict[str, int]):
+        self._flat_tokens = flat_tokens
+        self._read_counter = read_counter
+
+    def __getitem__(self, item):
+        return _FakeReadHandle(self._flat_tokens[item], self._read_counter)
+
+
+@pytest.mark.asyncio
+async def test_token_seq_dataset_coalesces_reads_and_preserves_order():
+    read_counter = {"reads": 0}
+    flat_tokens = np.arange(30, dtype=np.int32)
+    token_array = SimpleNamespace(
+        data_size=len(flat_tokens),
+        data=_FakeTensorData(flat_tokens, read_counter),
+    )
+    doc_cache = SimpleNamespace(store=SimpleNamespace(tree={"input_ids": token_array}))
+
+    ds = TokenSeqDataset(doc_cache, seq_len=3)
+    indices = [3, 1, 2, 2, 4, 9, 8]
+    batch = await ds.get_batch(indices)
+
+    expected = [flat_tokens[i * 3 : (i + 1) * 3] for i in indices]
+    for actual, exp in zip(batch, expected, strict=True):
+        np.testing.assert_array_equal(actual, exp)
+
+    # Unique sorted indices [1,2,3,4,8,9] -> runs [1..5) and [8..10)
+    assert read_counter["reads"] == 2
+    stats = ds.read_stats
+    assert stats.examples_requested == len(indices)
+    assert stats.unique_examples_requested == 6
+    assert stats.coalesced_ranges == 2
+    assert stats.tensorstore_reads_issued == 2
+
+
+@pytest.mark.asyncio
+async def test_token_seq_dataset_rejects_negative_indices():
+    read_counter = {"reads": 0}
+    flat_tokens = np.arange(12, dtype=np.int32)
+    token_array = SimpleNamespace(
+        data_size=len(flat_tokens),
+        data=_FakeTensorData(flat_tokens, read_counter),
+    )
+    doc_cache = SimpleNamespace(store=SimpleNamespace(tree={"input_ids": token_array}))
+    ds = TokenSeqDataset(doc_cache, seq_len=3)
+
+    with pytest.raises(ValueError, match="Negative indices"):
+        await ds.get_batch([0, -1])
 
 
 def test_lm_example_handles_ignore_id():

@@ -14,6 +14,7 @@
 - Begin with the agent-friendly recipes in `docs/recipes/`.
 - The first step for dataset addition is schema inspection. See the [add_dataset.md](docs/recipes/add_dataset.md) recipe for details.
 - You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
+- For new training/eval scripts, follow the [write_experiment.md](docs/recipes/write_experiment.md) recipe (naming, tagging, launch shape).
 - For long-running benchmark/research threads, follow [agent_research.md](docs/recipes/agent_research.md).
 - When making significant changes to Grug/Grugformer, follow [change_grug.md](docs/recipes/change_grug.md).
 - Follow the rules and examples in each recipe to ensure compatibility and automation-friendliness.
