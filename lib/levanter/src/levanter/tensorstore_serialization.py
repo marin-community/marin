@@ -30,6 +30,35 @@ from levanter.utils import fsspec_utils, jax_utils
 logger = logging.getLogger(__name__)
 
 
+def build_kvstore_spec(path: str) -> dict:
+    """Build a tensorstore kvstore spec for the given URI, handling S3, GCS, and local files.
+
+    For S3, tensorstore does not read AWS_ENDPOINT_URL or AWS_DEFAULT_REGION from the
+    environment, so we pass them explicitly when set. This is required for S3-compatible
+    endpoints like CoreWeave object storage.
+    """
+    parsed = urllib.parse.urlparse(path)
+    if parsed.scheme == "s3":
+        spec: dict = {"driver": "s3", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
+        endpoint = os.environ.get("AWS_ENDPOINT_URL")
+        if endpoint:
+            spec["endpoint"] = endpoint
+        region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
+        if region:
+            spec["aws_region"] = region
+        elif endpoint:
+            # Custom endpoint with no explicit region: use a placeholder to prevent
+            # tensorstore from trying (and failing) to discover the region via HEAD bucket.
+            spec["aws_region"] = "us-east-1"
+        return spec
+    elif parsed.scheme == "gs":
+        return {"driver": "gcs", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
+    elif parsed.scheme in ("", "file"):
+        return {"driver": "file", "path": os.path.abspath(path)}
+    else:
+        raise ValueError(f"Unsupported URI scheme for tensorstore: {parsed.scheme!r} in {path!r}")
+
+
 def _create_ocdbt_spec(checkpoint_root: str, array_path: str | None) -> dict:
     """
     Create a TensorStore spec with OCDBT (Optionally-Cooperative Distributed B-Tree) enabled.
@@ -41,18 +70,10 @@ def _create_ocdbt_spec(checkpoint_root: str, array_path: str | None) -> dict:
     Returns:
         TensorStore spec dict with OCDBT kvstore driver
     """
-    parsed = urllib.parse.urlparse(checkpoint_root)
-
-    spec: dict[str, Any] = {"driver": "zarr3", "kvstore": {"driver": "ocdbt", "base": {}}}
-
-    if parsed.scheme in ("", "file"):
-        spec["kvstore"]["base"] = {"driver": "file", "path": checkpoint_root}
-    elif parsed.scheme == "gs":
-        bucket = parsed.netloc
-        gcs_path = parsed.path.lstrip("/")
-        spec["kvstore"]["base"] = {"driver": "gcs", "bucket": bucket, "path": gcs_path}
-    else:
-        raise ValueError(f"Unsupported protocol: {parsed.scheme}. Supported: file, gs")
+    spec: dict[str, Any] = {
+        "driver": "zarr3",
+        "kvstore": {"driver": "ocdbt", "base": build_kvstore_spec(checkpoint_root)},
+    }
 
     if array_path:
         spec["kvstore"]["path"] = array_path

@@ -434,6 +434,24 @@ def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConf
     )
 
 
+def gpu_device(variant: str, count: int = 1) -> cluster_pb2.DeviceConfig:
+    """Create a DeviceConfig for a GPU device.
+
+    Args:
+        variant: GPU variant string (e.g., "H100", "A100").
+        count: Number of GPUs per node.
+
+    Returns:
+        DeviceConfig with the gpu field set.
+    """
+    return cluster_pb2.DeviceConfig(
+        gpu=cluster_pb2.GpuDevice(
+            variant=variant,
+            count=count,
+        )
+    )
+
+
 def parse_memory_string(memory_str: str) -> int:
     """Parse human-readable memory string to bytes.
 
@@ -489,9 +507,6 @@ class ResourceSpec:
         if self.device is not None:
             spec.device.CopyFrom(self.device)
         return spec
-
-
-DEFAULT_BASE_IMAGE = "iris-task:latest"
 
 
 CALLABLE_RUNNER = """\
@@ -611,18 +626,21 @@ def zone_constraint(zone: str) -> Constraint:
     return Constraint(key=ZONE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=zone)
 
 
-def region_constraint(regions: Sequence[str]) -> Constraint:
+def region_constraint(regions: list[str]) -> Constraint:
     """Constraint requiring workers to be in one of the given regions.
 
     Emits an EQ constraint for a single region or an IN constraint for multiple
     regions.
 
     Args:
-        regions: Non-empty sequence of region strings.
+        regions: Non-empty list of region strings. Must be a list, not a bare string.
 
     Raises:
+        TypeError: If regions is a string (common mistake — pass [region] instead).
         ValueError: If regions is empty or contains empty strings.
     """
+    if isinstance(regions, str):
+        raise TypeError("region_constraint() requires a list of strings, not a bare string. Use [region] instead.")
     if not regions:
         raise ValueError("regions must be non-empty")
     for r in regions:

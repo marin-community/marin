@@ -11,6 +11,8 @@ FROM python:3.11-slim
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
 LABEL org.opencontainers.image.description="Iris worker image"
 
+ARG KUBECTL_VERSION=v1.32.2
+
 # Install system dependencies (docker.io on Debian doesn't include CLI, need docker-ce-cli)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -39,6 +41,16 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
     apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin && \
     rm -rf /var/lib/apt/lists/*
 
+# Install crictl for containerd-based platforms (CoreWeave bare metal nodes run containerd, not Docker)
+RUN curl -fsSL https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.32.0/crictl-v1.32.0-linux-amd64.tar.gz \
+    | tar -xz -C /usr/local/bin
+
+# Install kubectl (required for KubernetesRuntime task Pod management)
+RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+        -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && kubectl version --client
+
 # Install uv from official image
 COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 
@@ -58,6 +70,9 @@ RUN mkdir -p /var/cache/iris
 # Health check endpoint
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:10001/health || exit 1
+
+ARG IRIS_GIT_HASH=unknown
+ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 
 # No entrypoint - bootstrap script controls the command
 CMD [".venv/bin/python", "-m", "iris.cluster.worker.main", "serve", "--host", "0.0.0.0", "--port", "10001"]

@@ -131,23 +131,15 @@ sudo systemctl start docker || true
 sudo mkdir -p {{ cache_dir }}
 
 echo "[iris-init] Phase: docker_pull"
-echo "[iris-init] Configuring docker authentication"
-WORKER_REGISTRY=$(echo "{{ docker_image }}" | cut -d'/' -f1)
-sudo gcloud auth configure-docker $WORKER_REGISTRY --quiet 2>/dev/null || true
-
 echo "[iris-init] Pulling image: {{ docker_image }}"
 sudo docker pull {{ docker_image }}
 
-# Pull the pre-built task image (base image for job containers).
-# Derive registry path from the worker image by replacing the image name.
-TASK_IMAGE_REGISTRY=$(echo "{{ docker_image }}" | sed 's|/iris-worker:|/iris-task:|')
-echo "[iris-init] Pulling task image: $TASK_IMAGE_REGISTRY"
-if sudo docker pull "$TASK_IMAGE_REGISTRY"; then
-    sudo docker tag "$TASK_IMAGE_REGISTRY" iris-task:latest
-    echo "[iris-init] Task image tagged as iris-task:latest"
-else
-    echo "[iris-init] WARNING: Failed to pull task image, jobs may fail"
-fi
+echo "[iris-init] Phase: config_setup"
+sudo mkdir -p /etc/iris
+cat > /tmp/iris_config.json << 'IRIS_CONFIG_EOF'
+{{ config_json }}
+IRIS_CONFIG_EOF
+sudo mv /tmp/iris_config.json /etc/iris/config.json
 
 echo "[iris-init] Phase: worker_start"
 
@@ -166,12 +158,14 @@ sudo docker run -d --name iris-worker \\
     --network=host \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
+    -v /etc/iris/config.json:/etc/iris/config.json:ro \\
     {{ env_flags }} \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.worker.main serve \\
         --host 0.0.0.0 --port {{ worker_port }} \\
         --cache-dir {{ cache_dir }} \\
-        --controller-address {{ controller_address }}
+        --controller-address {{ controller_address }} \\
+        --config /etc/iris/config.json
 
 echo "[iris-init] Worker container started"
 echo "[iris-init] Phase: registration"
@@ -242,14 +236,21 @@ def build_worker_bootstrap_script(
     env_flags = build_worker_env_flags(bootstrap_config, vm_address)
     if not bootstrap_config.controller_address:
         raise ValueError("bootstrap_config.controller_address is required for worker bootstrap")
+    if not bootstrap_config.docker_image:
+        raise ValueError("bootstrap_config.docker_image is required for worker bootstrap")
+    if bootstrap_config.worker_port <= 0:
+        raise ValueError("bootstrap_config.worker_port must be > 0 for worker bootstrap")
+    if not bootstrap_config.cache_dir:
+        raise ValueError("bootstrap_config.cache_dir is required for worker bootstrap")
 
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
-        cache_dir=bootstrap_config.cache_dir or "/var/cache/iris",
+        cache_dir=bootstrap_config.cache_dir,
         docker_image=bootstrap_config.docker_image,
-        worker_port=bootstrap_config.worker_port or 10001,
+        worker_port=bootstrap_config.worker_port,
         controller_address=bootstrap_config.controller_address,
         env_flags=env_flags,
+        config_json=bootstrap_config.config_json,
     )
 
 
@@ -289,13 +290,7 @@ else
     exit 1
 fi
 
-# Configure docker for GCP Artifact Registry
-echo "[iris-controller] [3/5] Configuring Docker for GCP Artifact Registry..."
-CONTROLLER_REGISTRY=$(echo "{{ docker_image }}" | cut -d'/' -f1)
-sudo gcloud auth configure-docker $CONTROLLER_REGISTRY --quiet 2>/dev/null || true
-echo "[iris-controller] [3/5] Docker registry configuration complete"
-
-echo "[iris-controller] [4/5] Pulling image: {{ docker_image }}"
+echo "[iris-controller] [3/5] Pulling image: {{ docker_image }}"
 echo "[iris-controller]       This may take several minutes for large images..."
 if sudo docker pull {{ docker_image }}; then
     echo "[iris-controller] [4/5] Image pull complete"

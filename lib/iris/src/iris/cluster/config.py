@@ -228,6 +228,33 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     _validate_scale_group_resources(config)
     _validate_slice_templates(config)
     _validate_worker_settings(config)
+    _validate_bootstrap_defaults(config)
+
+
+def _validate_bootstrap_defaults(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate bootstrap defaults required for worker-based platforms.
+
+    Local platform runs workers in-process and does not require bootstrap image/runtime.
+    GCP/manual/CoreWeave create remote worker processes and must provide a worker image.
+    """
+    # Some unit tests validate partial proto configs directly (without load_config/apply_defaults).
+    # Only enforce bootstrap image checks once defaults/platform are explicitly present.
+    if not config.HasField("defaults"):
+        return
+
+    platform_kind = config.platform.WhichOneof("platform")
+    if platform_kind in (None, "local"):
+        return
+
+    docker_image = config.defaults.bootstrap.docker_image.strip()
+    if not docker_image:
+        raise ValueError(
+            "defaults.bootstrap.docker_image is required for non-local platforms " "(gcp/manual/coreweave)."
+        )
+
+    runtime = config.defaults.bootstrap.runtime.strip()
+    if runtime and runtime not in {"docker", "containerd", "kubernetes"}:
+        raise ValueError(f"defaults.bootstrap.runtime must be one of docker/containerd/kubernetes, got {runtime!r}.")
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
@@ -279,10 +306,24 @@ def _merge_proto_fields(target, source) -> None:
 def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.DefaultsConfig) -> None:
     """Deep merge source defaults into target, field by field.
 
+    Sub-messages (timeouts, ssh, autoscaler, bootstrap) are merged field-by-field
+    so that partially-specified user configs overlay hardcoded defaults without
+    wiping unset siblings. Top-level scalar fields (e.g. default_task_image) are
+    merged via _merge_proto_fields which copies any explicitly-set value.
+
     Args:
         target: DefaultsConfig to merge into (modified in place)
         source: DefaultsConfig to merge from
     """
+    # Merge top-level scalar fields (e.g. default_task_image).
+    # We skip message fields here since sub-messages need deep merging below.
+    for field_desc in source.DESCRIPTOR.fields:
+        if field_desc.message_type is not None:
+            continue
+        if source.HasField(field_desc.name):
+            setattr(target, field_desc.name, getattr(source, field_desc.name))
+
+    # Deep-merge sub-messages so partial overrides work
     if source.HasField("timeouts"):
         _merge_proto_fields(target.timeouts, source.timeouts)
     if source.HasField("ssh"):
@@ -290,7 +331,6 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
     if source.HasField("autoscaler"):
         _merge_proto_fields(target.autoscaler, source.autoscaler)
     if source.HasField("bootstrap"):
-        # Use standard merge for bootstrap fields, trusting HasField
         _merge_proto_fields(target.bootstrap, source.bootstrap)
         # Merge env_vars map separately (map fields don't use HasField)
         for key, value in source.bootstrap.env_vars.items():
@@ -410,7 +450,7 @@ def make_local_config(
     # Transform controller to local
     config.controller.ClearField("controller")
     config.controller.local.port = 0  # auto-assign
-    config.controller.bundle_prefix = ""  # LocalController will set temp path
+    config.storage.bundle_prefix = ""  # LocalController will set temp path
 
     # Apply local defaults (fast timings for testing)
     # Unconditionally use fast timings for local mode - this overrides any production timings
@@ -631,7 +671,12 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
 
 
 def _normalize_scale_group_resources(data: dict) -> None:
-    """Normalize scale_group resources from YAML into proto-friendly fields."""
+    """Normalize scale_group resources from YAML into proto-friendly fields.
+
+    Accepts both YAML-friendly names (ram, disk) and proto field names
+    (memory_bytes, disk_bytes) so configs serialized from protos (e.g.
+    the controller ConfigMap JSON) can be loaded via load_config().
+    """
     scale_groups = data.get("scale_groups")
     if not isinstance(scale_groups, dict):
         return
@@ -646,7 +691,7 @@ def _normalize_scale_group_resources(data: dict) -> None:
         if not isinstance(resources, dict):
             raise ValueError(f"scale_groups.{name}.resources must be a mapping")
 
-        allowed_keys = {"cpu", "ram", "disk", "gpu_count", "tpu_count"}
+        allowed_keys = {"cpu", "ram", "disk", "gpu_count", "tpu_count", "memory_bytes", "disk_bytes"}
         unknown_keys = set(resources.keys()) - allowed_keys
         if unknown_keys:
             unknown = ", ".join(sorted(unknown_keys))
@@ -661,10 +706,14 @@ def _normalize_scale_group_resources(data: dict) -> None:
         memory = resources.get("ram")
         if memory is not None:
             normalized["memory_bytes"] = _parse_memory_value(memory, f"scale_groups.{name}.resources.ram")
+        elif "memory_bytes" in resources:
+            normalized["memory_bytes"] = int(resources["memory_bytes"])
 
         disk = resources.get("disk")
         if disk is not None:
             normalized["disk_bytes"] = _parse_memory_value(disk, f"scale_groups.{name}.resources.disk")
+        elif "disk_bytes" in resources:
+            normalized["disk_bytes"] = int(resources["disk_bytes"])
 
         gpu = resources.get("gpu_count")
         if gpu is not None:
@@ -894,6 +943,21 @@ def create_autoscaler(
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
+        )
+        resources = group_config.resources
+        worker_attrs = dict(group_config.worker.attributes) if group_config.HasField("worker") else {}
+        slice_template = group_config.slice_template
+        cw_instance = slice_template.coreweave.instance_type if slice_template.HasField("coreweave") else ""
+        logger.info(
+            "Scale group %s: accel=%s:%s gpu_count=%d min=%d max=%d instance=%s worker_attrs=%s",
+            name,
+            group_config.accelerator_type,
+            group_config.accelerator_variant,
+            resources.gpu_count,
+            group_config.min_slices,
+            group_config.max_slices,
+            cw_instance or "n/a",
+            worker_attrs or "none",
         )
         logger.info("Created scale group %s", name)
 

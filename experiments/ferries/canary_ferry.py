@@ -9,7 +9,16 @@ and pretraining regressions early. See #2873 for the proposal.
 Optimal hyperparameters from mega-sweep-bs64-1b-hid512-v3 (trial 26, macro_loss=3.754):
   lr=0.00864, beta1=0.894, adam_lr=0.000502, beta2=0.999, eps=2.32e-07,
   max_grad_norm=0.1, z_loss_weight=1.10e-05
+
+Usage:
+    # Default: TPU v5p-8
+    python -m experiments.ferries.canary_ferry
+
+    # GPU (8x H100): set CANARY_ACCELERATOR=gpu
+    CANARY_ACCELERATOR=gpu python -m experiments.ferries.canary_ferry
 """
+
+import os
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
@@ -38,37 +47,52 @@ SEQ_LEN = 4096
 TARGET_TOKENS = 1_000_000_000
 NUM_STEPS = TARGET_TOKENS // (BATCH_SIZE * SEQ_LEN)
 
-train_config = SimpleTrainConfig(
-    resources=ResourceConfig.with_tpu("v5p-8"),
-    train_batch_size=BATCH_SIZE,
-    num_train_steps=NUM_STEPS,
-    learning_rate=0.00864,
-    train_seq_len=SEQ_LEN,
-    z_loss_weight=1.10e-05,
-    optimizer_config=AdamHConfig(
-        learning_rate=0.00864,
-        adam_lr=0.000502,
-        min_lr_ratio=0.0,
-        warmup=0.1,
-        decay=0.2,
-        lr_schedule="linear",
-        beta1=0.894,
-        beta2=0.999,
-        epsilon=2.32e-07,
-        max_grad_norm=0.1,
-        nesterov=False,
-    ),
-    steps_per_eval=500,
-)
 
-training_step = default_train(
-    name="canary-ferry",
-    tokenized=nemotron_mix,
-    model_config=model,
-    train_config=train_config,
-    tags=["canary", "ferry", "qwen3", "adamh", "hid512", "1b"],
-    eval_harness_tasks=[],
-)
+def _resources(accelerator: str) -> ResourceConfig:
+    if accelerator == "gpu":
+        return ResourceConfig.with_gpu(count=8, cpu=128, ram="256g", disk="256g")
+    elif accelerator == "tpu":
+        return ResourceConfig.with_tpu("v5p-8")
+    else:
+        raise ValueError(f"Unknown accelerator: {accelerator!r}. Expected 'tpu' or 'gpu'.")
+
+
+def main():
+    accelerator = os.environ.get("CANARY_ACCELERATOR", "tpu")
+    train_config = SimpleTrainConfig(
+        resources=_resources(accelerator),
+        train_batch_size=BATCH_SIZE,
+        num_train_steps=NUM_STEPS,
+        learning_rate=0.00864,
+        train_seq_len=SEQ_LEN,
+        z_loss_weight=1.10e-05,
+        optimizer_config=AdamHConfig(
+            learning_rate=0.00864,
+            adam_lr=0.000502,
+            min_lr_ratio=0.0,
+            warmup=0.1,
+            decay=0.2,
+            lr_schedule="linear",
+            beta1=0.894,
+            beta2=0.999,
+            epsilon=2.32e-07,
+            max_grad_norm=0.1,
+            nesterov=False,
+        ),
+        steps_per_eval=500,
+    )
+
+    training_step = default_train(
+        name="canary-ferry",
+        tokenized=nemotron_mix,
+        model_config=model,
+        train_config=train_config,
+        tags=["canary", "ferry", "qwen3", "adamh", "hid512", "1b"],
+        eval_harness_tasks=[],
+    )
+
+    executor_main(steps=[training_step])
+
 
 if __name__ == "__main__":
-    executor_main(steps=[training_step])
+    main()
