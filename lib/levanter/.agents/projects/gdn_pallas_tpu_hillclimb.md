@@ -836,3 +836,55 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **high-impact win / champion-level**. This iteration sped up the same dominant train-path `custom-call` hotspot (especially backward closed-call shard-map pallas) rather than merely moving cost, and it cleared governance promotion thresholds by a wide margin.
 - Why this unlocked a large speedup: converting backward transpose-solve work into reused-transform MXU matmul dramatically shortened the previous critical-path backward custom-call while keeping other major categories flat.
 - Next bold hypothesis: keep this transform-tape reuse and target the now-leading forward closed-call shard-map path (`~51.6 ms`) with a launch-structure macro move (D or E) to reduce forward custom-call count/work imbalance without re-expanding backward cost.
+
+### Iteration 20 - Macro Move A / train-path singleton-layout rewrite (infra blocked)
+
+- Date: 2026-02-21T17:34:52Z
+- Commit: none (failed attempt)
+- Loop session/local index: `2/20`
+- Starting commit: `6a5194916199f8df9bf1c1ada3d87565e74121a9`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_invreuse_i1_dev_130m_ch128_seg16_20steps-2d1d85/plugins/profile/2026_02_21_14_41_31/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `custom-call`: `91.176 ms` (dominant category).
+  - Top GDN callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `51.550 ms` (forward closed-call hotspot; source at `gated_deltanet.py:1406` in prior run).
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.256 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move A**: remove train-path `(..., Ct, 1)` style row-broadcast patterns inside flash prepare/recurrent kernels using TPU-friendly broadcast maps (`+10-18%`, medium risk from broad kernel math rewrite).
+  2. **Macro Move D**: full-sequence `emit_pipeline` for prepare/recurrent staging to reduce segmented launch overhead (`+8-20%`, high compile/layout risk).
+  3. **Macro Move F**: further split forward chunk prepare into transform-build and RHS-apply stages to reduce per-kernel pressure (`+10-25%`, high memory/launch-balance risk).
+
+- Selected macro-move category: **A) Fix vector-layout pathologies**.
+- Selected hypothesis: replace hot train flash row-scaling/diff patterns that rely on `[:, None]` expansion with explicit TPU-safe broadcasts to avoid last-axis singleton cliffs in forward/backward chunk kernels.
+
+- Change attempt:
+  - Implemented helper-based row scaling and pairwise-diff rewrites in `lib/levanter/src/levanter/layers/gated_deltanet.py` for flash prepare/recurrent/bwd kernels.
+  - Reverted the speculative kernel edit after profiling infrastructure blocked completion, leaving no unvalidated optimization code in the working tree.
+
+- Correctness checks:
+  - Dev TPU command attempted: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+  - Dev TPU result: failed (`ssh: connect to host 136.112.108.150 port 22: Operation timed out`).
+  - Ray fallback (final pass): `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+  - Ray job: `ray-run-calvinxu-levanter-20260221-170543`
+  - Result: `49 passed, 40 skipped`.
+
+- Profile attempts (blocked):
+  - Dev TPU attempt (us-central1) failed:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_layoutfix_i2_dev --no-sync`
+    - Failure: `ssh: connect to host 136.112.108.150 port 22: Operation timed out`.
+  - Ray profile submit (us-central1): `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_layoutfix_i2_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260221-171123`
+    - Status remained `RUNNING` for extended time with repeated autoscaler churn and worker startup failures in logs (for example, `worker_pool.cc:586 ... workers ... have not registered within the timeout`; missing virtualenv activation path), and no training/profile metrics surfaced.
+    - Stop requested: `uv run scripts/ray/cluster.py --cluster us-central1 stop-job ray-run-calvinxu-bash-20260221-171123`.
+  - Ray retry submit (us-east5-a): `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_layoutfix_i2_ray_east5 --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260221-172726`
+    - Status remained `PENDING` (`waiting for resources/runtime env setup`), no profile artifact produced.
+  - Dev TPU retry (us-east5-a) also failed with the same SSH timeout:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_layoutfix_i2_dev_east5 --marin-prefix gs://marin-us-east5 --no-sync`.
+
+- Outcome:
+  - **Infra-blocked iteration**: no completed profile run, no trace artifact, and no measurable MFU/tokens/sec delta for this code attempt.
+  - Per failed-attempt handling, reverted speculative optimization code; tree left clean.
+
+- Next bold hypothesis:
+  - Retry the Macro Move A singleton-layout rewrite once profiling infra is healthy; if blocked again, pivot to Macro Move F decomposition targeting the forward closed-call hotspot while explicitly minimizing dependence on contested TPU queues.
