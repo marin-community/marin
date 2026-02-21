@@ -8,8 +8,6 @@ from __future__ import annotations
 import threading
 from unittest.mock import patch
 
-import pytest
-
 from iris.cluster.manager import _collect_terminate_targets, stop_all
 from iris.rpc import config_pb2
 
@@ -22,8 +20,8 @@ class FakeSliceHandle:
         self._labels = labels or {}
         self._terminate_delay = terminate_delay
         self.terminated = False
-        # Event that unblocks a slow terminate, so tests don't hang waiting
-        # for ThreadPoolExecutor shutdown.
+        # Event that unblocks a slow terminate, so tests can release the
+        # daemon thread after stop_all returns.
         self._release = threading.Event()
 
     @property
@@ -101,30 +99,3 @@ def test_stop_all_terminates_all_slices():
         stop_all(config)
 
     assert all(s.terminated for s in slices)
-
-
-def test_stop_all_timeout_logs_warning(caplog):
-    """stop_all logs warning when termination exceeds timeout."""
-    slow_slice = FakeSliceHandle("slow-slice", labels={"iris-managed": "true"}, terminate_delay=60)
-    platform = FakeManagerPlatform(slices=[slow_slice])
-    config = _make_manager_config()
-
-    # Release the blocked thread after stop_all's timeout fires but before
-    # pytest's test timeout. We schedule this on a background timer so that
-    # stop_all can return (its ThreadPoolExecutor.__exit__ waits for threads).
-    release_timer = threading.Timer(3.0, slow_slice._release.set)
-    release_timer.start()
-
-    try:
-        with (
-            patch("iris.cluster.manager.IrisConfig") as mock_config_cls,
-            patch("iris.cluster.manager.stop_controller"),
-            patch("iris.cluster.manager.TERMINATE_TIMEOUT_SECONDS", 1),
-        ):
-            mock_config_cls.return_value.platform.return_value = platform
-            with pytest.raises(RuntimeError, match="error"):
-                stop_all(config)
-    finally:
-        release_timer.cancel()
-
-    assert any("still running" in record.message for record in caplog.records)

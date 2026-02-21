@@ -151,6 +151,29 @@ while not deadline.expired():
     time.sleep(0.1)
 ```
 
+### Deployment Topology
+
+The controller is a plain GCE VM with no zone affinity to workers — it can run
+in any zone and serve workers across all regions.
+
+**When changing the controller zone**, update in `examples/marin.yaml`:
+- `controller.gcp.zone` — the GCE zone
+- `controller.image` and `defaults.bootstrap.docker_image` — use a registry in
+  the same region (see below). `cluster start` auto-builds and pushes images to
+  the region parsed from the image tag, so no manual push is needed.
+
+**Docker registries** are configured in `platform/bootstrap.py` (both worker and
+controller bootstrap scripts). If you add a new region's Artifact Registry, add
+it to both `gcloud auth configure-docker` lines. List existing repos with:
+`gcloud artifacts repositories list --project=hai-gcp-models`
+
+**Bundle storage** (`controller.bundle_prefix`) is a GCS URI with no zone
+affinity — globally accessible.
+
+**Zone validation**: `cluster/config.py` validates that every scale group zone
+appears in `platform.gcp.zones`. Multi-zone scale groups are auto-expanded by
+`_expand_multi_zone_groups()`.
+
 ### Architecture Layers
 
 Iris follows a clean layering architecture:
@@ -236,9 +259,36 @@ src/iris/cluster/static/
 - Jobs displayed as a hierarchical tree based on name structure
 
 **When modifying the dashboard:**
-1. Test locally with `uv run lib/iris/scripts/screenshot-dashboard.py --stay-open`
+1. Run dashboard tests: `uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="`
 2. Ensure any new UI features have corresponding RPC endpoints
 3. Follow existing component patterns (functional components, hooks)
+
+## Testing
+
+All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
+Tests use three core fixtures:
+
+- `cluster`: Booted local cluster with `IrisClient` and RPC access
+- `page`: Playwright page pointed at the dashboard (request only when needed)
+- `screenshot`: Capture labeled screenshots to `IRIS_SCREENSHOT_DIR`
+
+Chaos injection is auto-reset between tests. Call `enable_chaos()` directly.
+Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
+
+Run all E2E tests:
+    uv run pytest lib/iris/tests/e2e/ -m e2e -o "addopts="
+
+Run E2E tests without Docker (fast):
+    uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker" -o "addopts="
+
+Run Docker-only tests:
+    uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
+
+Run dashboard tests with saved screenshots:
+    IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_dashboard.py -o "addopts="
+
+When modifying the dashboard:
+    uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="
 
 ## Debugging Container Failures
 

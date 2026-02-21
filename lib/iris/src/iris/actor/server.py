@@ -223,6 +223,7 @@ class ActorServer:
             host=self._host,
             port=self._actual_port,
             log_level="error",
+            timeout_keep_alive=120,
         )
         self._server = uvicorn.Server(config)
 

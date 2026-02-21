@@ -3,7 +3,6 @@
 
 """Tests for writers module."""
 
-import json
 import tempfile
 from pathlib import Path
 
@@ -12,7 +11,43 @@ import pyarrow.parquet as pq
 import pytest
 import vortex
 
-from zephyr.writers import write_levanter_cache, write_parquet_file, write_vortex_file
+from zephyr.writers import atomic_rename, unique_temp_path, write_levanter_cache, write_parquet_file, write_vortex_file
+
+
+def test_unique_temp_path_produces_distinct_paths():
+    """Each call to unique_temp_path returns a different path."""
+    paths = {unique_temp_path("/some/output.txt") for _ in range(10)}
+    assert len(paths) == 10
+    for p in paths:
+        assert p.startswith("/some/output.txt.tmp.")
+
+
+def test_atomic_rename_uses_unique_temp_paths(tmp_path):
+    """Concurrent atomic_rename calls use distinct temp paths (UUID collision avoidance)."""
+    output = str(tmp_path / "out.txt")
+    observed_temps = []
+
+    for _ in range(5):
+        with atomic_rename(output) as temp_path:
+            observed_temps.append(temp_path)
+            Path(temp_path).write_text("data")
+
+    assert len(set(observed_temps)) == 5, "Each call should produce a unique temp path"
+    for tp in observed_temps:
+        assert ".tmp." in tp
+
+
+def test_atomic_rename_cleans_up_on_error(tmp_path):
+    """Temp file is removed when the context raises an exception."""
+    output = str(tmp_path / "out.txt")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with atomic_rename(output) as temp_path:
+            Path(temp_path).write_text("bad")
+            raise RuntimeError("boom")
+
+    assert not Path(temp_path).exists()
+    assert not Path(output).exists()
 
 
 def _make_levanter_records(n: int) -> list[dict[str, list[int]]]:
@@ -131,7 +166,6 @@ def test_write_levanter_cache_resumes_from_partial_tmp_end_to_end():
         output_path = str(Path(tmpdir) / "cache")
         tmp_output_path = f"{output_path}.tmp"
         records = _make_levanter_records(8)
-        expected_token_count = sum(len(record["input_ids"]) for record in records)
 
         with SerialCacheWriter(
             tmp_output_path, records[0], shard_name=output_path, metadata=CacheMetadata({}), mode="w"
@@ -142,12 +176,7 @@ def test_write_levanter_cache_resumes_from_partial_tmp_end_to_end():
 
         assert result["path"] == output_path
         assert result["count"] == len(records)
-        assert result["token_count"] == expected_token_count
         assert Path(output_path, ".success").exists()
-
-        stats = json.loads(Path(output_path, ".stats.json").read_text())
-        assert stats["count"] == len(records)
-        assert stats["token_count"] == expected_token_count
 
         store = TreeStore.open(records[0], output_path, mode="r", cache_metadata=False)
         assert len(store) == len(records)

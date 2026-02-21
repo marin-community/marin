@@ -14,6 +14,7 @@ Provides:
 from __future__ import annotations
 
 import tempfile
+import threading
 from pathlib import Path
 from typing import Protocol
 
@@ -63,6 +64,14 @@ def create_local_autoscaler(
 
     port_allocator = PortAllocator()
 
+    # Extract worker attributes from each scale group config so that LocalPlatform
+    # can propagate them to local workers (mirroring what IRIS_WORKER_ATTRIBUTES
+    # does in the real bootstrap path).
+    worker_attributes_by_group: dict[str, dict[str, str | int | float]] = {}
+    for name, sg_config in config.scale_groups.items():
+        if sg_config.HasField("worker") and sg_config.worker.attributes:
+            worker_attributes_by_group[name] = dict(sg_config.worker.attributes)
+
     platform = LocalPlatform(
         label_prefix=label_prefix,
         threads=threads,
@@ -70,6 +79,7 @@ def create_local_autoscaler(
         cache_path=cache_path,
         fake_bundle=fake_bundle,
         port_allocator=port_allocator,
+        worker_attributes_by_group=worker_attributes_by_group,
     )
 
     scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
@@ -83,7 +93,6 @@ def create_local_autoscaler(
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
-            threads=threads,
         )
 
     autoscaler = Autoscaler.from_config(
@@ -127,8 +136,10 @@ class LocalController:
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
+        self._stopped = threading.Event()
 
     def start(self) -> str:
+        self._stopped = threading.Event()
         # Create temp dir for controller's bundle storage
         self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_")
         bundle_dir = Path(self._temp_dir.name) / "bundles"
@@ -147,17 +158,13 @@ class LocalController:
             threads=autoscaler_threads,
         )
 
-        worker_timeout = (
-            Duration.from_proto(self._config.controller.worker_timeout)
-            if self._config.controller.worker_timeout.milliseconds > 0
-            else Duration.from_seconds(60.0)
-        )
         self._controller = _InnerController(
             config=_InnerControllerConfig(
                 host="127.0.0.1",
                 port=port,
                 bundle_prefix=self._config.controller.bundle_prefix or f"file://{bundle_dir}",
-                worker_timeout=worker_timeout,
+                heartbeat_interval=Duration.from_seconds(0.5),
+                heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=self._autoscaler,
@@ -167,6 +174,7 @@ class LocalController:
         return self._controller.url
 
     def stop(self) -> None:
+        self._stopped.set()
         if self._controller:
             self._controller.stop()
             self._controller = None
@@ -178,6 +186,10 @@ class LocalController:
         if self._temp_dir:
             self._temp_dir.cleanup()
             self._temp_dir = None
+
+    def wait(self) -> None:
+        """Block until stop() is called."""
+        self._stopped.wait()
 
     def restart(self) -> str:
         self.stop()

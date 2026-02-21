@@ -11,6 +11,7 @@ from pathlib import Path
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.time_utils import Duration
 
@@ -30,7 +31,6 @@ def cli():
     "--bundle-prefix", default=None, help="URI prefix for job bundles (e.g., gs://bucket/path or file:///path)"
 )
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
-@click.option("--worker-timeout", default=60.0, type=float, help="Worker heartbeat timeout (seconds)")
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
 def serve(
@@ -38,7 +38,6 @@ def serve(
     port: int,
     bundle_prefix: str | None,
     scheduler_interval: float,
-    worker_timeout: float,
     config_file: str | None,
     log_level: str,
 ):
@@ -49,8 +48,8 @@ def serve(
     """
     from iris.cluster.controller.autoscaler import Autoscaler
     from iris.cluster.config import load_config, create_autoscaler
-    from iris.cluster.platform.bootstrap import WorkerBootstrap
     from iris.cluster.platform.factory import create_platform
+    from iris.rpc import config_pb2
 
     configure_logging(level=getattr(logging, log_level))
 
@@ -80,48 +79,41 @@ def serve(
             )
             logger.info("Platform created")
 
-            worker_bootstrap = (
-                WorkerBootstrap(cluster_config) if cluster_config.defaults.bootstrap.docker_image else None
-            )
+            # Pass only BootstrapConfig through to platform.create_slice().
+            bootstrap_config = None
+            if cluster_config.defaults.bootstrap.docker_image:
+                bootstrap_config = config_pb2.BootstrapConfig()
+                bootstrap_config.CopyFrom(cluster_config.defaults.bootstrap)
+                if not bootstrap_config.controller_address:
+                    bootstrap_config.controller_address = platform.discover_controller(cluster_config.controller)
 
             autoscaler = create_autoscaler(
                 platform=platform,
                 autoscaler_config=cluster_config.defaults.autoscaler,
                 scale_groups=cluster_config.scale_groups,
                 label_prefix=cluster_config.platform.label_prefix or "iris",
-                worker_bootstrap=worker_bootstrap,
+                bootstrap_config=bootstrap_config,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
             logger.exception("Failed to create autoscaler from config")
             raise click.ClickException(f"Failed to create autoscaler: {e}") from e
-
-        try:
-            autoscaler.reconcile()
-            logger.info("Autoscaler initial reconcile completed")
-        except Exception as e:
-            logger.exception("Autoscaler initial reconcile failed")
-            raise click.ClickException(f"Autoscaler reconcile failed: {e}") from e
     else:
         logger.info("No cluster config provided, autoscaler disabled")
 
-    # Use worker_timeout from cluster config if available
-    if cluster_config and cluster_config.controller.worker_timeout.milliseconds > 0:
-        effective_timeout = Duration.from_proto(cluster_config.controller.worker_timeout)
-    else:
-        effective_timeout = Duration.from_seconds(worker_timeout)
+    heartbeat_failure_threshold = (
+        cluster_config.controller.heartbeat_failure_threshold if cluster_config else HEARTBEAT_FAILURE_THRESHOLD
+    )
 
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
-    logger.info(
-        "Configuration: scheduler_interval=%.2fs worker_timeout=%.0fms", scheduler_interval, effective_timeout.to_ms()
-    )
+    logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
 
     config = ControllerConfig(
         host=host,
         port=port,
         bundle_prefix=bundle_prefix,
-        scheduler_interval_seconds=scheduler_interval,
-        worker_timeout=effective_timeout,
+        scheduler_interval=Duration.from_seconds(scheduler_interval),
+        heartbeat_failure_threshold=heartbeat_failure_threshold,
     )
 
     try:
