@@ -1182,6 +1182,73 @@ def _solve_I_minus_strict_lower_blockwise(
     return jnp.concatenate([x1, x2], axis=0).astype(jnp.float32)
 
 
+def _invert_I_minus_strict_lower_blockwise(
+    A_strict: jnp.ndarray,
+    *,
+    precision_mode: str = "fp32",
+    base_block: int = 32,
+) -> jnp.ndarray:
+    """Compute ``(I - A_strict)^-1`` for strictly lower-triangular ``A_strict``.
+
+    This specializes the block recursion to inverse construction, avoiding the
+    wider ``rhs=I`` solves used by the generic solve helper.
+    """
+    if A_strict.ndim != 2:
+        raise ValueError(f"Expected 2D A_strict, got {A_strict.ndim}D")
+
+    n = A_strict.shape[0]
+    if A_strict.shape[1] != n:
+        raise ValueError(f"A_strict must be square, got {A_strict.shape}")
+
+    if precision_mode == "bf16":
+        solve_dtype = jnp.bfloat16
+    elif precision_mode == "fp32":
+        solve_dtype = jnp.float32
+    else:
+        raise ValueError(f"precision_mode must be 'fp32' or 'bf16', got {precision_mode!r}")
+
+    A_strict = A_strict.astype(solve_dtype, copy=False)
+
+    idx = jnp.arange(n)
+    strict_mask = idx[:, None] > idx[None, :]
+    A_strict = jnp.where(strict_mask, A_strict, jnp.asarray(0, dtype=solve_dtype))
+
+    eye = jnp.eye(n, dtype=solve_dtype)
+    if _GDN_TRIANGULAR_SOLVE_PROBE != "off":
+        return _triangular_probe_approx(
+            A_strict,
+            eye,
+            transpose=False,
+            precision_mode=precision_mode,
+        )
+
+    if n <= base_block:
+        x = eye
+        term = A_strict
+        steps = (n - 1).bit_length()
+        for _ in range(steps):
+            x = x + _mxu_matmul_f32(term, x, precision_mode=precision_mode)
+            term = _mxu_matmul_f32(term, term, precision_mode=precision_mode)
+        return x.astype(jnp.float32)
+
+    if n % 2 != 0:
+        raise ValueError(f"Blockwise inverse expects even n (power-of-two chunks recommended). Got n={n}.")
+
+    m = n // 2
+    A11 = A_strict[:m, :m]
+    A21 = A_strict[m:, :m]
+    A22 = A_strict[m:, m:]
+
+    T11 = _invert_I_minus_strict_lower_blockwise(A11, precision_mode=precision_mode, base_block=base_block)
+    T22 = _invert_I_minus_strict_lower_blockwise(A22, precision_mode=precision_mode, base_block=base_block)
+    T21 = _mxu_matmul_f32(T22, _mxu_matmul_f32(A21, T11, precision_mode=precision_mode), precision_mode=precision_mode)
+
+    z12 = jnp.zeros((m, m), dtype=jnp.float32)
+    top = jnp.concatenate([T11, z12], axis=1)
+    bot = jnp.concatenate([T21, T22], axis=1)
+    return jnp.concatenate([top, bot], axis=0).astype(jnp.float32)
+
+
 def _solve_I_minus_strict_lower_transpose_blockwise(
     A_strict: jnp.ndarray,
     rhs: jnp.ndarray,
@@ -1325,7 +1392,6 @@ def _gdn_chunk_segment_prepare_kernel_tpu(
     ii = idx[:, None]
     jj = idx[None, :]
     tril_strict = (ii > jj).astype(jnp.float32)
-    eye = (ii == jj).astype(jnp.float32)
 
     for c in range(int(Seg)):
         k = (
@@ -1356,7 +1422,7 @@ def _gdn_chunk_segment_prepare_kernel_tpu(
 
         k_scaled = k_beta * exp_g[:, None]
         rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)  # (Ct, V+K)
-        solve_transform = _solve_I_minus_strict_lower_blockwise(A, eye, precision_mode=precision_mode)  # (Ct, Ct)
+        solve_transform = _invert_I_minus_strict_lower_blockwise(A, precision_mode=precision_mode)  # (Ct, Ct)
         sol_all = _mxu_matmul_f32(solve_transform, rhs_all, precision_mode=precision_mode)  # (Ct, V+K)
 
         v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))  # (Ct, V)
@@ -1475,7 +1541,6 @@ def _gdn_chunk_fullseq_prepare_pipeline_kernel_tpu(
     ii = idx[:, None]
     jj = idx[None, :]
     tril_strict = (ii > jj).astype(jnp.float32)
-    eye = (ii == jj).astype(jnp.float32)
 
     def _stage_body(
         k_chunk_ref,
@@ -1516,7 +1581,7 @@ def _gdn_chunk_fullseq_prepare_pipeline_kernel_tpu(
 
         k_scaled = k_beta * exp_g[:, None]
         rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)
-        solve_transform = _solve_I_minus_strict_lower_blockwise(A, eye, precision_mode=precision_mode)
+        solve_transform = _invert_I_minus_strict_lower_blockwise(A, precision_mode=precision_mode)
         sol_all = _mxu_matmul_f32(solve_transform, rhs_all, precision_mode=precision_mode)
 
         v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))
@@ -3100,7 +3165,7 @@ def _forward_subst(A: jnp.ndarray, C: int) -> jnp.ndarray:
         A_row_masked = A_row_i * mask
 
         # contrib[k] = sum_j A[i,j] * T[j,k]
-        contrib = jnp.einsum("...j,...jk->...k", A_row_masked, T_acc)
+        contrib = jnp.einsum("...j,...jk->...k", A_row_masked, T_acc, precision=lax.Precision.HIGHEST)
 
         # Update row i of T
         T_row_i = lax.dynamic_slice_in_dim(T_acc, i, 1, axis=-2)
@@ -3174,7 +3239,7 @@ def _chunk_gated_delta_rule_fused_reference(
         g_cum = jnp.cumsum(g_i, axis=-1)  # (B,H,C)
 
         # (2) Build A
-        KKT = jnp.einsum("bhid,bhjd->bhij", k_beta, k_i)  # (B,H,C,C)
+        KKT = jnp.einsum("bhid,bhjd->bhij", k_beta, k_i, precision=lax.Precision.HIGHEST)  # (B,H,C,C)
         g_i_exp = g_cum[..., :, None]  # (B,H,C,1)
         g_j_exp = g_cum[..., None, :]  # (B,H,1,C)
         diff_ij = g_i_exp - g_j_exp
@@ -3194,16 +3259,16 @@ def _chunk_gated_delta_rule_fused_reference(
 
         # (5) Within-chunk decay-weighted attention
         decay_attn = jnp.exp(diff_ij_clamped) * causal_mask
-        attn_i = jnp.einsum("bhid,bhjd->bhij", q_i, k_i) * decay_attn  # (B,H,C,C)
+        attn_i = jnp.einsum("bhid,bhjd->bhij", q_i, k_i, precision=lax.Precision.HIGHEST) * decay_attn  # (B,H,C,C)
 
         # (6) Cross-chunk contribution
-        v_prime = jnp.einsum("bhid,bhdm->bhim", k_cumdecay, S_prev)  # (B,H,C,dv)
+        v_prime = jnp.einsum("bhid,bhdm->bhim", k_cumdecay, S_prev, precision=lax.Precision.HIGHEST)  # (B,H,C,dv)
         v_new = v_pseudo - v_prime
 
         # (7) Output
         q_scaled = q_i * jnp.exp(g_cum_clamped)[..., None]  # (B,H,C,dk)
-        inter = jnp.einsum("bhid,bhdm->bhim", q_scaled, S_prev)  # (B,H,C,dv)
-        intra = jnp.einsum("bhij,bhjm->bhim", attn_i, v_new)  # (B,H,C,dv)
+        inter = jnp.einsum("bhid,bhdm->bhim", q_scaled, S_prev, precision=lax.Precision.HIGHEST)  # (B,H,C,dv)
+        intra = jnp.einsum("bhij,bhjm->bhim", attn_i, v_new, precision=lax.Precision.HIGHEST)  # (B,H,C,dv)
         out_i = inter + intra
 
         # (8) Update state
@@ -3214,7 +3279,7 @@ def _chunk_gated_delta_rule_fused_reference(
         decay_diff = jnp.clip(g_tail[..., None] - g_cum, -80.0, 80.0)  # (B,H,C)
         decay_weights = jnp.exp(decay_diff)[..., None]  # (B,H,C,1)
 
-        add = jnp.einsum("bhid,bhim->bhdm", k_i * decay_weights, v_new)  # (B,H,dk,dv)
+        add = jnp.einsum("bhid,bhim->bhdm", k_i * decay_weights, v_new, precision=lax.Precision.HIGHEST)  # (B,H,dk,dv)
         S_new = S_prev * decay_tail + add
         return S_new, out_i
 
