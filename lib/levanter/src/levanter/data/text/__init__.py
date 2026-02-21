@@ -4,6 +4,7 @@
 # Re-export public API for levanter.data.text
 from .cache import build_lm_dataset_cache, cached_token_count, load_lm_dataset_cache
 from .datasets import (
+    BlockShuffleConfig,
     CausalLmDataset,
     ChatDataset,
     DatasetComponent,
@@ -48,6 +49,7 @@ __all__ = [
     "ProcessedChatDict",
     "preprocessor_for_format",
     "TokenSeqDataset",
+    "BlockShuffleConfig",
     "NamedLmDataset",
     "CausalLmDataset",
     "ChatDataset",

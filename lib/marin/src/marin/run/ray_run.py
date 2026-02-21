@@ -118,6 +118,18 @@ def tpu_type_from_cluster_config(cluster_config: str) -> str:
     raise ValueError("Unable to infer TPU worker type from cluster config.")
 
 
+def project_id_from_cluster_config(cluster_config: str) -> str | None:
+    """Infer GCP project_id from a Ray cluster config."""
+    with open(cluster_config, "r") as f:
+        data = yaml.safe_load(f) or {}
+
+    provider = data.get("provider", {})
+    project_id = provider.get("project_id")
+    if project_id is None:
+        return None
+    return str(project_id)
+
+
 def make_client() -> JobSubmissionClient:
     """Create a JobSubmissionClient based on environment variables."""
     address = os.environ.get("RAY_ADDRESS", REMOTE_DASHBOARD_URL)
@@ -294,7 +306,7 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to parse {marin_yaml}: {e}")
 
-    for key in ("HF_TOKEN", "WANDB_API_KEY"):
+    for key in ("HF_TOKEN", "WANDB_API_KEY", "LIBTPU_INIT_ARGS"):
         if key not in env_vars and os.environ.get(key) is not None:
             env_vars[key] = os.environ[key]
 
@@ -339,6 +351,12 @@ def main():
             cluster_config = find_config_by_region(args.cluster)
 
     _maybe_enable_ray_token_auth(require_token=cluster_config is None)
+
+    if cluster_config:
+        project_id = project_id_from_cluster_config(cluster_config)
+        if project_id:
+            env_vars.setdefault("GOOGLE_CLOUD_PROJECT", project_id)
+            env_vars.setdefault("GCLOUD_PROJECT", project_id)
 
     entrypoint_resources = args.entrypoint_resources
     if args.tpu:

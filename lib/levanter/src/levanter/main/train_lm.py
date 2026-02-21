@@ -5,6 +5,7 @@ import dataclasses
 import gc
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -71,6 +72,118 @@ class TrainLmConfig:
 
     # TODO: really need to add callback framework
     log_entropy: bool = False
+
+
+def _collect_token_seq_datasets(
+    dataset: "levanter.data.dataset.AsyncDataset",
+    *,
+    prefix: str = "train",
+    _seen: set[int] | None = None,
+) -> dict[str, "TokenSeqDataset"]:
+    from levanter.data.dataset import AsyncDataset
+    from levanter.data.text.datasets import TokenSeqDataset
+
+    seen = _seen if _seen is not None else set()
+    dataset_id = id(dataset)
+    if dataset_id in seen:
+        return {}
+    seen.add(dataset_id)
+
+    if isinstance(dataset, TokenSeqDataset):
+        return {prefix: dataset}
+
+    out: dict[str, TokenSeqDataset] = {}
+
+    wrapped = getattr(dataset, "dataset", None)
+    if isinstance(wrapped, AsyncDataset):
+        out.update(_collect_token_seq_datasets(wrapped, prefix=prefix, _seen=seen))
+
+    nested = getattr(dataset, "datasets", None)
+    if isinstance(nested, Mapping):
+        for name, child in nested.items():
+            if not isinstance(name, str):
+                continue
+            if isinstance(child, AsyncDataset):
+                out.update(_collect_token_seq_datasets(child, prefix=f"{prefix}/{name}", _seen=seen))
+
+    return out
+
+
+def _install_data_read_stats_hook_if_enabled(trainer: Trainer, train_dataset) -> None:
+    every_env = os.environ.get("LEVANTER_LOG_DATA_READ_STATS_EVERY")
+    if every_env is None:
+        return
+
+    every = int(every_env)
+    if every <= 0:
+        return
+
+    token_seq_datasets = _collect_token_seq_datasets(train_dataset)
+    if not token_seq_datasets:
+        logger.warning(
+            "LEVANTER_LOG_DATA_READ_STATS_EVERY=%s set, but no TokenSeqDataset found in training dataset.",
+            every,
+        )
+        return
+
+    previous = {name: ds.read_stats for name, ds in token_seq_datasets.items()}
+    logger.info(
+        "Enabling data read-stats logging every %s step(s) for datasets: %s",
+        every,
+        sorted(token_seq_datasets.keys()),
+    )
+
+    def _log_data_read_stats(step_info):
+        metrics: dict[str, float | int] = {}
+        total_examples = 0
+        total_reads = 0
+        total_examples_delta = 0
+        total_reads_delta = 0
+
+        for name, ds in token_seq_datasets.items():
+            stats = ds.read_stats
+            prev = previous[name]
+
+            examples_delta = stats.examples_requested - prev.examples_requested
+            reads_delta = stats.tensorstore_reads_issued - prev.tensorstore_reads_issued
+            unique_examples_delta = stats.unique_examples_requested - prev.unique_examples_requested
+            coalesced_ranges_delta = stats.coalesced_ranges - prev.coalesced_ranges
+
+            total_examples += stats.examples_requested
+            total_reads += stats.tensorstore_reads_issued
+            total_examples_delta += examples_delta
+            total_reads_delta += reads_delta
+
+            prefix = f"data/read_stats/{name}"
+            metrics[f"{prefix}/examples_requested_total"] = stats.examples_requested
+            metrics[f"{prefix}/tensorstore_reads_total"] = stats.tensorstore_reads_issued
+            metrics[f"{prefix}/unique_examples_requested_total"] = stats.unique_examples_requested
+            metrics[f"{prefix}/coalesced_ranges_total"] = stats.coalesced_ranges
+            metrics[f"{prefix}/examples_requested_delta"] = examples_delta
+            metrics[f"{prefix}/tensorstore_reads_delta"] = reads_delta
+            metrics[f"{prefix}/unique_examples_requested_delta"] = unique_examples_delta
+            metrics[f"{prefix}/coalesced_ranges_delta"] = coalesced_ranges_delta
+            if stats.examples_requested > 0:
+                metrics[f"{prefix}/reads_per_example_total"] = (
+                    stats.tensorstore_reads_issued / stats.examples_requested
+                )
+            if examples_delta > 0:
+                metrics[f"{prefix}/reads_per_example_delta"] = reads_delta / examples_delta
+
+            previous[name] = stats
+
+        metrics["data/read_stats/total/examples_requested_total"] = total_examples
+        metrics["data/read_stats/total/tensorstore_reads_total"] = total_reads
+        metrics["data/read_stats/total/examples_requested_delta"] = total_examples_delta
+        metrics["data/read_stats/total/tensorstore_reads_delta"] = total_reads_delta
+        if total_examples > 0:
+            metrics["data/read_stats/total/reads_per_example_total"] = total_reads / total_examples
+        if total_examples_delta > 0:
+            metrics["data/read_stats/total/reads_per_example_delta"] = total_reads_delta / total_examples_delta
+
+        levanter.tracker.log(metrics, step=step_info.step)
+
+    trainer.add_hook(_log_data_read_stats, every=every)
 
 
 def main(config: TrainLmConfig):
@@ -164,6 +277,7 @@ def main(config: TrainLmConfig):
             config.trainer.batch_schedule,
             key=data_key,
         )
+        _install_data_read_stats_hook_if_enabled(trainer, train_dataset)
 
         # Get the tagged evaluation datasets
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
