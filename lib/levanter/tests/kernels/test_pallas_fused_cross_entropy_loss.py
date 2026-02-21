@@ -11,8 +11,12 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
+    linear_softmax_cross_entropy_loss_streaming,
 )
 from levanter.kernels.pallas.fused_cross_entropy_loss.tuned_block_sizes import infer_block_sizes
+from levanter.kernels.pallas.fused_cross_entropy_loss.xla import (
+    _linear_softmax_cross_entropy_loss_streaming_custom_vjp,
+)
 
 
 def _make_toy_inputs():
@@ -103,6 +107,42 @@ def test_fused_cross_entropy_grad_matches_reference():
 
     assert jnp.allclose(gx_api, gx_ref, atol=1e-5, rtol=1e-5)
     assert jnp.allclose(gw_api, gw_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
+    x, w, y = _make_toy_inputs()
+    logsumexp_weight = 0.2
+    logit_soft_cap = 1.5
+    block_size = 4
+
+    def loss_custom(x_raw, w_raw):
+        loss, lse = _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
+            block_size,
+            jnp.float32,
+            logit_soft_cap,
+            None,
+            x_raw.reshape(6, 4),
+            y.reshape(6),
+            w_raw,
+        )
+        return (loss + logsumexp_weight * (lse**2)).mean()
+
+    def loss_streaming(x_raw, w_raw):
+        loss, lse = linear_softmax_cross_entropy_loss_streaming(
+            x_raw.reshape(6, 4),
+            y.reshape(6),
+            w_raw,
+            block_size=block_size,
+            dtype=jnp.float32,
+            logit_soft_cap=logit_soft_cap,
+        )
+        return (loss + logsumexp_weight * (lse**2)).mean()
+
+    gx_custom, gw_custom = jax.grad(loss_custom, argnums=(0, 1))(x, w)
+    gx_stream, gw_stream = jax.grad(loss_streaming, argnums=(0, 1))(x, w)
+
+    assert jnp.allclose(gx_custom, gx_stream, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
 
 
 def test_fused_cross_entropy_pallas_requires_tpu():
