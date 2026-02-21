@@ -1346,6 +1346,31 @@ def _append_axis(pspec, *, min_rank: int):
     return P(*tup, None)
 
 
+def _pairwise_from_vector(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Build row/column pairwise views without introducing trailing singleton axes."""
+    if x.ndim != 1:
+        raise ValueError(f"Expected rank-1 vector, got shape {x.shape}")
+    n = x.shape[0]
+    row = lax.broadcast_in_dim(x, shape=(n, n), broadcast_dimensions=(0,))
+    col = lax.broadcast_in_dim(x, shape=(n, n), broadcast_dimensions=(1,))
+    return row, col
+
+
+def _scale_rows_no_singleton(
+    matrix: jnp.ndarray,
+    weights: jnp.ndarray,
+    *,
+    out_dtype: jnp.dtype = jnp.float32,
+) -> jnp.ndarray:
+    """Scale matrix rows by ``weights`` using full-shape broadcasts (no ``[..., 1]`` views)."""
+    if matrix.ndim != 2 or weights.ndim != 1:
+        raise ValueError(f"Expected matrix/vector inputs, got {matrix.shape} and {weights.shape}")
+    if matrix.shape[0] != weights.shape[0]:
+        raise ValueError(f"Row mismatch for row scaling: matrix={matrix.shape}, weights={weights.shape}")
+    row_weights = lax.broadcast_in_dim(weights.astype(out_dtype, copy=False), matrix.shape, (0,))
+    return matrix.astype(out_dtype, copy=False) * row_weights
+
+
 def _in_specs_chunk_segment_prepare_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):
     """Chunk-local solve kernel specs (per (b,h), Seg chunks per program)."""
 
@@ -1389,8 +1414,7 @@ def _gdn_chunk_segment_prepare_kernel_tpu(
     matmul_dtype = jnp.bfloat16 if precision_mode == "bf16" else jnp.float32
 
     idx = jnp.arange(Ct, dtype=jnp.int32)
-    ii = idx[:, None]
-    jj = idx[None, :]
+    ii, jj = _pairwise_from_vector(idx)
     tril_strict = (ii > jj).astype(jnp.float32)
 
     for c in range(int(Seg)):
@@ -1407,20 +1431,21 @@ def _gdn_chunk_segment_prepare_kernel_tpu(
         g_cum = gcum_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
         beta = b_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
 
-        v_beta = v.astype(jnp.float32) * beta[:, None]  # (Ct, V)
-        k_beta = k.astype(jnp.float32) * beta[:, None]  # (Ct, K)
+        v_beta = _scale_rows_no_singleton(v, beta)  # (Ct, V)
+        k_beta = _scale_rows_no_singleton(k, beta)  # (Ct, K)
 
         g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_g = jnp.exp(g_cum_cl)  # (Ct,)
 
-        diff = g_cum[:, None] - g_cum[None, :]
+        g_row, g_col = _pairwise_from_vector(g_cum)
+        diff = g_row - g_col
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)  # (Ct, Ct)
 
         KKT = _mxu_matmul_f32(k_beta, k, transpose_b=True, precision_mode=precision_mode)
         A = -KKT * exp_diff * tril_strict
 
-        k_scaled = k_beta * exp_g[:, None]
+        k_scaled = _scale_rows_no_singleton(k_beta, exp_g)
         rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)  # (Ct, V+K)
         solve_transform = _invert_I_minus_strict_lower_blockwise(A, precision_mode=precision_mode)  # (Ct, Ct)
         sol_all = _mxu_matmul_f32(solve_transform, rhs_all, precision_mode=precision_mode)  # (Ct, V+K)
@@ -1538,8 +1563,7 @@ def _gdn_chunk_fullseq_prepare_pipeline_kernel_tpu(
     matmul_dtype = jnp.bfloat16 if precision_mode == "bf16" else jnp.float32
 
     idx = jnp.arange(Ct, dtype=jnp.int32)
-    ii = idx[:, None]
-    jj = idx[None, :]
+    ii, jj = _pairwise_from_vector(idx)
     tril_strict = (ii > jj).astype(jnp.float32)
 
     def _stage_body(
@@ -1566,20 +1590,21 @@ def _gdn_chunk_fullseq_prepare_pipeline_kernel_tpu(
         )
         beta = b_chunk_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, Ct)].astype(jnp.float32).reshape((Ct,))
 
-        v_beta = v.astype(jnp.float32) * beta[:, None]
-        k_beta = k.astype(jnp.float32) * beta[:, None]
+        v_beta = _scale_rows_no_singleton(v, beta)
+        k_beta = _scale_rows_no_singleton(k, beta)
 
         g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_g = jnp.exp(g_cum_cl)
 
-        diff = g_cum[:, None] - g_cum[None, :]
+        g_row, g_col = _pairwise_from_vector(g_cum)
+        diff = g_row - g_col
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)
 
         KKT = _mxu_matmul_f32(k_beta, k, transpose_b=True, precision_mode=precision_mode)
         A = -KKT * exp_diff * tril_strict
 
-        k_scaled = k_beta * exp_g[:, None]
+        k_scaled = _scale_rows_no_singleton(k_beta, exp_g)
         rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)
         solve_transform = _invert_I_minus_strict_lower_blockwise(A, precision_mode=precision_mode)
         sol_all = _mxu_matmul_f32(solve_transform, rhs_all, precision_mode=precision_mode)
@@ -1730,8 +1755,7 @@ def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
     matmul_dtype = jnp.bfloat16 if precision_mode == "bf16" else jnp.float32
 
     idx = jnp.arange(Ct, dtype=jnp.int32)
-    ii = idx[:, None]
-    jj = idx[None, :]
+    ii, jj = _pairwise_from_vector(idx)
     causal_mask = (ii >= jj).astype(jnp.float32)
     mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
 
@@ -1777,7 +1801,8 @@ def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
         g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_g = jnp.exp(g_cum_cl)  # (Ct,)
 
-        diff = g_cum[:, None] - g_cum[None, :]
+        g_row, g_col = _pairwise_from_vector(g_cum)
+        diff = g_row - g_col
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)  # (Ct, Ct)
 
@@ -1787,7 +1812,8 @@ def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
         v_prime = _mxu_matmul_f32(k_cumdecay, S, precision_mode=precision_mode)
         v_new = v_pseudo - v_prime
 
-        inter = _mxu_matmul_f32(q * exp_g[:, None], S, precision_mode=precision_mode)
+        q_scaled = _scale_rows_no_singleton(q, exp_g)
+        inter = _mxu_matmul_f32(q_scaled, S, precision_mode=precision_mode)
         intra = _mxu_matmul_f32(attn, v_new, precision_mode=precision_mode)
         out = inter + intra
 
@@ -1795,7 +1821,7 @@ def _gdn_chunk_segment_recurrent_fwd_kernel_tpu(
         decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
 
         decay_w = jnp.exp(jnp.clip(g_tail - g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))  # (Ct,)
-        k_w = k * decay_w[:, None]
+        k_w = _scale_rows_no_singleton(k, decay_w)
         add = _mxu_matmul_f32(k_w, v_new, transpose_a=True, precision_mode=precision_mode)  # (K, V)
         S = S * decay_tail + add
 
@@ -1934,8 +1960,7 @@ def _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu(
     matmul_dtype = jnp.bfloat16 if precision_mode == "bf16" else jnp.float32
 
     idx = jnp.arange(Ct, dtype=jnp.int32)
-    ii = idx[:, None]
-    jj = idx[None, :]
+    ii, jj = _pairwise_from_vector(idx)
     causal_mask = (ii >= jj).astype(jnp.float32)
     mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
 
@@ -1994,7 +2019,8 @@ def _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu(
         g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_g = jnp.exp(g_cum_cl)
 
-        diff = g_cum[:, None] - g_cum[None, :]
+        g_row, g_col = _pairwise_from_vector(g_cum)
+        diff = g_row - g_col
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)
 
@@ -2004,7 +2030,8 @@ def _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu(
         v_prime = _mxu_matmul_f32(k_cumdecay, S, precision_mode=precision_mode)
         v_new = v_pseudo - v_prime
 
-        inter = _mxu_matmul_f32(q * exp_g[:, None], S, precision_mode=precision_mode)
+        q_scaled = _scale_rows_no_singleton(q, exp_g)
+        inter = _mxu_matmul_f32(q_scaled, S, precision_mode=precision_mode)
         intra = _mxu_matmul_f32(attn, v_new, precision_mode=precision_mode)
         out = inter + intra
 
@@ -2012,7 +2039,7 @@ def _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu(
         decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
 
         decay_w = jnp.exp(jnp.clip(g_tail - g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
-        k_w = k * decay_w[:, None]
+        k_w = _scale_rows_no_singleton(k, decay_w)
         add = _mxu_matmul_f32(k_w, v_new, transpose_a=True, precision_mode=precision_mode)
         S_next = S * decay_tail + add
 
@@ -2256,8 +2283,7 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
 
     # Precompute constant masks
     idx = jnp.arange(Ct, dtype=jnp.int32)
-    ii = idx[:, None]
-    jj = idx[None, :]
+    ii, jj = _pairwise_from_vector(idx)
     tril_strict = (ii > jj).astype(jnp.float32)
     causal_mask = (ii >= jj).astype(jnp.float32)
     mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
@@ -2280,13 +2306,14 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_g = jnp.exp(g_cum_cl)
 
-        diff = g_cum[:, None] - g_cum[None, :]
+        g_row, g_col = _pairwise_from_vector(g_cum)
+        diff = g_row - g_col
         diff_inrange = ((diff >= -_GDN_EXP_CLIP) & (diff <= _GDN_EXP_CLIP)).astype(jnp.float32)
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)
 
         # Recompute chunk-local KKT / attenuation terms; consume solve outputs from fwd tape.
-        k_beta = k * beta[:, None]
+        k_beta = _scale_rows_no_singleton(k, beta)
 
         QK = _mxu_matmul_f32(q, k, transpose_b=True, precision_mode=precision_mode)
         attn = QK * exp_diff * causal_mask
@@ -2298,7 +2325,7 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         v_prime = _mxu_matmul_f32(k_cumdecay, S_prev, precision_mode=precision_mode)
         v_new = v_pseudo - v_prime
 
-        q_scaled = q * exp_g[:, None]
+        q_scaled = _scale_rows_no_singleton(q, exp_g)
 
         g_tail = jnp.sum(g_cum * mask_last)
         gt_inrange = ((g_tail >= -_GDN_EXP_CLIP) & (g_tail <= _GDN_EXP_CLIP)).astype(jnp.float32)
@@ -2310,7 +2337,7 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         )
         decay_diff_cl = jnp.clip(raw_decay_diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         decay_w = jnp.exp(decay_diff_cl)
-        k_w = k * decay_w[:, None]
+        k_w = _scale_rows_no_singleton(k, decay_w)
 
         # --- backward ---
         d_inter = d_out
@@ -2331,7 +2358,7 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         d_k_w = _mxu_matmul_f32(v_new, d_add, transpose_b=True, precision_mode=precision_mode)
         d_v_new = d_v_new + _mxu_matmul_f32(k_w, d_add, precision_mode=precision_mode)
 
-        d_k = d_k_w * decay_w[:, None]
+        d_k = _scale_rows_no_singleton(d_k_w, decay_w)
         d_decay_w = jnp.sum(d_k_w * k, axis=-1)
 
         d_decay_diff = d_decay_w * decay_w
@@ -2354,7 +2381,7 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         d_q = _mxu_matmul_f32(d_QK, k, precision_mode=precision_mode)
         d_k = d_k + _mxu_matmul_f32(d_QK, q, transpose_a=True, precision_mode=precision_mode)
 
-        d_q = d_q + d_q_scaled * exp_g[:, None]
+        d_q = d_q + _scale_rows_no_singleton(d_q_scaled, exp_g)
         d_exp_g = jnp.sum(d_q_scaled * q, axis=-1)
 
         # Reuse forward transform: (I - A)^(-T) @ d_sol_all == T^T @ d_sol_all.
@@ -2366,7 +2393,7 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
 
         dA = _mxu_matmul_f32(tmp_all, sol_all, transpose_b=True, precision_mode=precision_mode)  # (Ct,Ct)
 
-        d_k_beta = d_k_scaled * exp_g[:, None]
+        d_k_beta = _scale_rows_no_singleton(d_k_scaled, exp_g)
         d_exp_g = d_exp_g + jnp.sum(d_k_scaled * k_beta, axis=-1)
 
         dA = dA * tril_strict
@@ -2384,10 +2411,10 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         # reverse_cumsum(d_g_cum) via MXU: d_g = U_rev @ d_g_cum
         d_g = _mxu_matmul_f32(U_rev, d_g_cum[:, None], precision_mode=precision_mode).reshape((Ct,))
 
-        d_v = d_v_beta * beta[:, None]
+        d_v = _scale_rows_no_singleton(d_v_beta, beta)
         d_beta = jnp.sum(d_v_beta * v, axis=-1)
 
-        d_k = d_k + d_k_beta * beta[:, None]
+        d_k = d_k + _scale_rows_no_singleton(d_k_beta, beta)
         d_beta = d_beta + jnp.sum(d_k_beta * k, axis=-1)
 
         return d_q, d_k, d_v, d_g, d_beta, dS_prev

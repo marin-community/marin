@@ -948,3 +948,77 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / regression**. Despite lower dominant `shard_map` kernel time in trace, end-to-end MFU regressed by more than governance threshold and the dominant hotspot class remained unchanged.
 - Governance action: regression exceeded threshold; reverted speculative kernel change per `revert-count-failure` policy.
 - Next bold hypothesis: avoid monolithic forward fusion and instead target the unchanged train-path shard-map/custom-call bottleneck with a more radical decomposition that reduces gradient-path launch/work imbalance (for example Macro Move E V-tiling or a staged D+E train pipeline with lower tape write/read pressure).
+
+### Iteration 22 - Macro Move A / train-path row-broadcast singleton layout rewrite
+
+- Date: 2026-02-21T21:18:12Z
+- Commit: 6b73167640ba3d4c4c8ccadf907aeb2ccf8ac90e
+- Loop session/local index: `6/20`
+- Starting commit: `6b73167640ba3d4c4c8ccadf907aeb2ccf8ac90e`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_invreuse_i1_dev_130m_ch128_seg16_20steps-2d1d85/plugins/profile/2026_02_21_14_41_31/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` (custom-call equivalent bucket in this trace format): `88.123 ms` (dominant category).
+  - Top train-path callsites:
+    - `gated_deltanet.py:1406`: `44.314 ms` (forward closed-call shard-map path).
+    - `gated_deltanet.py:3180`: `26.256 ms` (transpose/jvp backward closed-call shard-map path).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move A**: rewrite train-path row scaling and pairwise diff construction to avoid `(..., Ct, 1)` singleton-broadcast layouts in flash prepare/recurrent/bwd kernels (`+10-20%`, medium risk).
+  2. **Macro Move E**: add V-tiling (`vblock`) to recurrent/train kernels to reduce per-program VMEM and raise occupancy (`+15-30%`, high risk).
+  3. **Macro Move D**: full-sequence backward `emit_pipeline` to reduce per-segment launch count in backward (`+12-25%`, high compile/runtime risk).
+
+- Selected macro-move category: **A) Fix vector-layout pathologies**.
+- Selected hypothesis: remove train-path `[:, None]` row-broadcast idioms that create pathological lane-axis singletons in hot flash custom-calls, replacing them with full-shape `lax.broadcast_in_dim` row scaling and pairwise row/column expansion.
+
+- Change summary:
+  - Added layout helpers in `lib/levanter/src/levanter/layers/gated_deltanet.py`:
+    - `_pairwise_from_vector` for singleton-free pairwise row/column matrices.
+    - `_scale_rows_no_singleton` for row scaling without trailing singleton axes.
+  - Rewrote flash train-path kernels to use these helpers in place of `x[:, None]` row broadcasts:
+    - chunk prepare kernels (segmented + full-sequence pipeline),
+    - recurrent forward kernels (segmented + full-sequence pipeline),
+    - chunk backward kernel math (row scaling for `k_beta`, `q_scaled`, `k_w`, `d_k`, `d_q`, `d_k_beta`, `d_v`).
+  - Kept algorithm/semantics unchanged while changing dataflow/layout construction in the dominant train-path custom-call stack.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU attempt (failed, TPU lock):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Failure: `ABORTED: The TPU is already in use by another process`.
+  - Ray fallback (success):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260221-210025`
+    - Result: `49 passed, 40 skipped`.
+
+- Profile run:
+  - Dev TPU attempt (failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_rowsafe_i6_dev --no-sync`
+    - Failure: startup segfault after distributed service bind (`Failed to add port to server` / `Segmentation fault`).
+  - Ray fallback submit:
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_rowsafe_i6_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260221-210559`
+    - Status: `SUCCEEDED`.
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937`
+  - W&B profiler artifact: `run-gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_invreuse_i1_dev_130m_ch128_seg16_20steps-2d1d85/plugins/profile/2026_02_21_14_41_31/perfetto_trace.json.gz`):
+  - Dominant train-path bucket (`shard_map`): `88.123 ms -> 76.743 ms` (`-12.91%`), still dominant.
+  - Forward closed-call callsite moved by line offsets but sped up materially:
+    - `gated_deltanet.py:1406 -> gated_deltanet.py:1497`: `44.314 ms -> 32.945 ms` (`-25.66%`).
+  - Dominant backward closed-call path remained flat:
+    - `gated_deltanet.py:3180 -> gated_deltanet.py:3432`: `26.256 ms -> 26.254 ms` (`-0.01%`).
+  - Secondary path remained flat:
+    - `gated_deltanet.py:199`: `10.317 ms -> 10.307 ms` (`-0.10%`).
+  - Collective cost near-flat/slightly worse:
+    - `all-gather`: `20.092 ms -> 20.193 ms` (`+0.50%`).
+
+- MFU/throughput delta (vs baseline run `gdn_invreuse_i1_dev_130m_ch128_seg16_20steps-2d1d85`):
+  - `throughput/mfu`: `5.640151 -> 5.759190` (`+2.11%`).
+  - `throughput/tokens_per_second`: `182457.82 -> 186308.71` (`+2.11%`).
+  - `throughput/duration`: `0.179592s -> 0.175880s` (`-2.07%`).
+
+- Assessment: **low-impact (escalation-triggering)**. This move accelerated the same dominant train-path `shard_map/custom-call` hotspot, but end-to-end MFU gain stayed below 3% with dominant hotspot class unchanged.
+- Governance note: improvement cleared the `>=0.250%` promotion threshold, but per escalation rule (`<3%` and unchanged dominant hotspot), the next hypothesis must be more radical.
+- Next bold hypothesis: pivot to a stronger structural move that attacks unchanged backward hotspot critical path and launch structure (for example Macro Move E V-tiling across recurrent+bwd, or Macro Move D full-sequence backward pipeline) rather than additional singleton/layout-only rewrites.
