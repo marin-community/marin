@@ -404,6 +404,11 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
         options["memory"] = humanfriendly.parse_size(resources.ram, binary=True)
     if not resources.preemptible:
         options["resources"] = {"head_node": 0.0001}
+    else:
+        # Preemptible actors should be restarted automatically by Ray when their
+        # node is preempted. Without this, the actor dies permanently and the
+        # pool degrades over time (see marin#2943).
+        options["max_restarts"] = -1
     if resources.max_concurrency > 1:
         options["max_concurrency"] = resources.max_concurrency
     return options
