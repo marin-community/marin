@@ -123,6 +123,52 @@ def test_fused_cross_entropy_pallas_requires_tpu():
         )
 
 
+def test_infer_block_sizes_adapts_to_supported_divisors():
+    block_sizes = infer_block_sizes(
+        b=512,
+        h=128,
+        v=4096,
+        dtype=jnp.float32,
+        device_kind="TPU v5e",
+    )
+
+    assert block_sizes.b_block_size == 512
+    assert block_sizes.h_block_size == 128
+
+
+def test_infer_block_sizes_preserves_defaults_without_128_aligned_divisors():
+    block_sizes = infer_block_sizes(
+        b=96,
+        h=64,
+        v=4096,
+        dtype=jnp.float32,
+        device_kind="TPU v5e",
+    )
+
+    assert block_sizes.b_block_size == 1024
+    assert block_sizes.h_block_size == 512
+
+
+def test_default_implementation_on_cpu_skips_expected_tpu_warning():
+    if jax.default_backend() == "tpu":
+        pytest.skip("requires non-TPU backend")
+
+    x = jnp.zeros((32, 64), dtype=jnp.float32)
+    w = jnp.zeros((64, 128), dtype=jnp.float32)
+    y = jnp.zeros((32,), dtype=jnp.int32)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x,
+            y,
+            w,
+            reduction=None,
+        )
+
+    assert not any("requires TPU backend" in str(warning.message) for warning in caught)
+
+
 def test_fused_cross_entropy_default_matches_reference():
     backend = jax.default_backend()
     if backend == "tpu":
