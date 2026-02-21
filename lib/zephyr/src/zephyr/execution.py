@@ -347,8 +347,9 @@ class ZephyrCoordinator:
 
     def _log_status(self) -> None:
         alive = sum(1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY})
+        dead = sum(1 for s in self._worker_states.values() if s in {WorkerState.FAILED, WorkerState.DEAD})
         logger.info(
-            "[%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive",
+            "[%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
             self._stage_name,
             self._completed_shards,
             self._total_shards,
@@ -356,6 +357,7 @@ class ZephyrCoordinator:
             len(self._task_queue),
             alive,
             len(self._worker_handles),
+            dead,
         )
 
     def _check_worker_heartbeats(self, timeout: float = 30.0) -> None:
