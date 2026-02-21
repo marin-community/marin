@@ -11,6 +11,7 @@ import jax.random as jrandom
 import haliax.random
 
 import levanter
+import levanter.eval
 from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.text import LmDataConfig
