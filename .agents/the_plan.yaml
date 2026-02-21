@@ -40,90 +40,32 @@ meta:
     michael: XenonMolecule
     "moo jin": moojink
 
-milestone_2025_12_basic_ingredients:
-  title: "December 2025: Basic ingredients (evals, scaling laws, MoEs, long-context, SFT, RL)"
-  type: milestone
-  status: planned
-  target_date: "2025-12-31"
-  labels: [timeline_v1]
-  dependencies:
-    - pretraining_evals_and_models
-    - dense_scaling_laws
-    - moe_scaling_laws_issue
-    - long_context_data_training_evals
-    - sft_existing_datasets_models
-    - dedup_pipeline_robust
-    - iris_design_doc
-    - speedrun_polish
-    - marin_paper
-    - ferry_muonh_feistel_comparison
-    - rl_math_llama_qwen_8b
-    - release_multilingual_8b
-
-
-milestone_2026_01_scaling_up:
-  title: "January 2026: Scaling up MoEs, new architectures, aggressive data mixing, SFT"
-  type: milestone
-  status: planned
-  target_date: "2026-01-31"
-  labels: [timeline]
-  dependencies:
-    - data_mixing_poc_jan
-    - html2text_benchmark_jan
-    - moe_stable_systems
-    - pretraining_evals_and_models
-    - modernized_pythia
-    - grug_speedrun_ready
-    - reasoning_data_generation_plan
-    - reasoning_data_generation_experiments
-    - long_context_data_training_evals
-    - posttraining_evalchemy_evals
-    - vlms_multimodality
-    - dedup_pipeline_robust
-    - iris_scheduler_mvp
-
-
 milestone_2026_02_beat_nemotron_3:
   title: "February 2026: Stable MoEs, data, SFT recipe"
   type: milestone
   status: active
   target_date: "2026-02-28"
   labels: [timeline]
+  description: |
+    Strict February committed milestone.
+    Only true critical-path dependencies should gate completion here.
+    Research/stretch tracks continue in parallel but are not milestone blockers.
   dependencies:
     - delphi_dense_scaling_suite
     - training_throughput_critical_path
-    - data_mixing_poc_jan
-    - data_mixing_swarm_feb
-    - data_mixing_midtraining_prediction
-    - data_mixing_multiphase_two_domain
-    - html2text_model_feb
-    - raw2quality_generate_tokens_200m
-    - raw2quality_scaling_suite_eval
     - pretraining_evals_and_models
     - moe_scaling_laws_issue
-    - moe_variants_ablation
-    - moe_scaling_systems
     - gather_pretraining_data_sources
-    - grug_moe_40_mfu_8x1b
-    - train_500b_moe_40_mfu
-    - sft_agentic_evals
     - posttraining_evalchemy_evals
-    - harbor_evals_setup
-    - add_openthoughts_agent_v1_dataset
-    - add_togethercoder_data
     - sft_existing_datasets_models
     - sft_synthetic_datasets
-    - synthetic_mixture_ablation
-    - release_strong_sft_models
-    - vlms_multimodality
-    - alignment_spec_to_model
     - data_ingestion_pipeline_scale
     - remove_ray_rollout
     - experiments_reliable
     - marin_as_library
-    - support_nvidia_gpu_clusters
-    - marin_paper
-    - ml_agents_issue_feedback
+  definition_of_done: |
+    This milestone is complete when every dependency above is `done` with evidence
+    in linked issues/PRs. Research/stretch tracks are explicitly non-gating.
 
 
 milestone_2026_03_long_running_automation:
@@ -260,8 +202,7 @@ training_throughput_critical_path:
   title: "Training throughput (critical path)"
   type: epic
   status: planned
-  owners: [dlwh]
-  owner_names: [Larry, Pranshu]
+  owners: [dlwh, ClassicLarry]
   target_date: "2026-02-28"
   labels: [timeline, systems, pretraining, moe]
   dependencies:
@@ -273,7 +214,7 @@ grug_moe_40_mfu_8x1b:
   title: "MoE Grugformer with 40% MFU on 8x1B"
   type: task
   status: planned
-  owner_names: [Larry]
+  owners: [ClassicLarry]
   target_date: "2026-02-28"
   issue: 2371
   labels: [timeline, grug, moe, performance]
@@ -283,18 +224,19 @@ train_500b_moe_40_mfu:
   title: "Can train 500B MoE with 40% MFU"
   type: task
   status: planned
-  owners: [dlwh]
-  owner_names: [Larry, Pranshu]
+  owners: [dlwh, ClassicLarry]
   target_date: "2026-02-28"
   issue: null
   labels: [timeline, moe, performance, pretraining]
+  dependencies:
+    - grug_moe
 
 
 moe_variants_ablation:
   title: "Ablation over all MoE variants"
   type: task
   status: planned
-  owner_names: [Larry]
+  owners: [ClassicLarry]
   target_date: "2026-02-28"
   issue: null
   labels: [timeline, moe, scaling_laws, pretraining]
@@ -362,7 +304,7 @@ harbor_evals_setup:
   status: planned
   owners: [AlienKevin]
   target_date: "2026-02-28"
-  issue: 2660
+  issue: 2500
   labels: [timeline, evals, posttraining]
 
 
@@ -437,6 +379,10 @@ sft_existing_datasets_models:
   target_date: "2026-02-28"
   issue: 2198
   labels: [timeline, sft, posttraining]
+  dependencies:
+    - harbor_evals_setup
+    - add_openthoughts_agent_v1_dataset
+    - add_togethercoder_data
 
 
 rl_math_llama_qwen_8b:
@@ -612,7 +558,7 @@ moe_stable_systems:
   title: "Stable MoE systems (40–50 MFU vs 1B dense, OLMoE settings)"
   type: epic
   status: planned
-  owner_names: [Pranshu]
+  owners: [dlwh]
   target_date: "2026-01-31"
   issue: 2314
   labels: [timeline, moe, pretraining, systems]
@@ -623,7 +569,6 @@ moe_scaling_systems:
   type: epic
   status: planned
   owners: [ravwojdyla]
-  owner_names: [Pranshu]
   target_date: "2026-02-28"
   issue: null
   labels: [timeline, moe, pretraining, systems]
@@ -633,7 +578,7 @@ grug_speedrun_ready:
   title: "Grug speedrun-ready spec + requirements"
   type: task
   status: planned
-  owner_names: [Larry]
+  owners: [ClassicLarry]
   target_date: "2026-01-31"
   issue: null
   labels: [timeline, grug, community, speedrun]
@@ -731,8 +676,6 @@ sft_synthetic_datasets:
   target_date: "2026-02-28"
   issue: 2277
   labels: [timeline, sft, synthetic_data, agent_friendly]
-  dependencies:
-    - openthoughts_4_dataset
 
 
 sft_agentic_datasets:
@@ -1163,7 +1106,7 @@ speedrun_launch:
   title: "Launch speedrun (external testing + release candidate)"
   type: task
   status: planned
-  owner_names: [Larry]
+  owners: [ClassicLarry]
   target_date: "2026-02-28"
   issue: 2499
   labels: [timeline, community, speedrun]
@@ -1223,7 +1166,7 @@ medium_moe_release_candidate:
   title: "Medium-sized MoE release candidate"
   type: epic
   status: planned
-  owner_names: [Pranshu]
+  owners: [dlwh]
   target_date: "2026-03-31"
   issue: null
   labels: [timeline, pretraining, moe]
@@ -1750,20 +1693,32 @@ moe_100b_readiness:
   description: |
     Close the critical gaps before a 100B-scale MoE run: kernel performance, routing correctness,
     scaling choices, data mix plan, long-context strategy, and inference/serving path.
+
+    For this run we intentionally do **not** optimize pipeline parallelism (PP). We focus on
+    EP/TP/DP choices and perf-max iteration loops. Hardware conclusions before our target fleet
+    arrives are expected to be partially speculative; keep assumptions explicit.
+
+    Fault tolerance hardening is currently out of scope for this MoE track.
   dependencies:
     - moe_block_perf
+    - moe_correctness_stability_harness
     - moe_load_balancing_correctness
     - moe_scaling_granularity_sweep
+    - moe_ep_parallelism_map
+    - moe_shape_search_token_wallclock_adjusted
+    - moe_frontier_tradeoff_report
+    - moe_data_mix_stability_check
     - midtrain_mix_sources
     - long_context_strategy
     - moe_inference_story
+    - moe_one_command_sweeps
 
 
 moe_block_perf:
   title: "MoE block performance (fast fwd/bwd + comm overlap)"
   type: task
   status: planned
-  owner_names: [Pranshu]
+  owners: [dlwh]
   target_date: "2026-04-15"
   issue: null
   labels: [pretraining, moe, systems, performance]
@@ -1776,7 +1731,7 @@ moe_load_balancing_correctness:
   title: "MoE load balancing correctness (routing + overflow policy)"
   type: task
   status: planned
-  owner_names: [Pranshu]
+  owners: [ClassicLarry]
   target_date: "2026-04-15"
   issue: null
   labels: [pretraining, moe, correctness]
@@ -1828,7 +1783,7 @@ long_context_strategy:
 
 
 moe_inference_story:
-  title: "Inference story for big MoE (vLLM vs Levanter inference)"
+  title: "Inference story for big MoE (vLLM-first serving path)"
   type: task
   status: planned
   owners: [dlwh]
@@ -1836,8 +1791,118 @@ moe_inference_story:
   issue: null
   labels: [inference, moe, pretraining]
   description: |
-    Pick the serving backend and checkpoint/export path for a 100B MoE. Validate KV cache
-    behavior, routing latency, and throughput targets on a representative cluster.
+    Prioritize a vLLM serving path for the first 100B MoE release and define checkpoint/export
+    requirements accordingly. Validate KV cache behavior, routing latency, and throughput targets
+    on a representative cluster.
+
+
+moe_correctness_stability_harness:
+  title: "MoE correctness and stability harness (value/grad + long-run guards)"
+  type: task
+  status: planned
+  owners: [dlwh, ClassicLarry]
+  target_date: "2026-04-10"
+  issue: null
+  labels: [pretraining, moe, correctness, testing]
+  description: |
+    Build a reusable harness that checks:
+    - value/grad parity vs reference paths
+    - router/drop/overflow correctness
+    - NaN/divergence and instability alerts in long-running jobs
+
+
+moe_ep_parallelism_map:
+  title: "MoE EP/TP/DP scaling map (no PP for this run)"
+  type: task
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-20"
+  issue: null
+  labels: [pretraining, moe, systems, performance]
+  description: |
+    Produce a scaling map across EP/TP/DP settings with throughput, MFU, and communication overhead.
+    Pipeline parallelism (PP) is explicitly out of scope for this cycle.
+
+    Because target hardware is not fully available yet, include explicit "speculative" annotations
+    and expected confidence ranges for projected configs.
+
+
+moe_shape_search_token_wallclock_adjusted:
+  title: "Find token- and wall-clock-adjusted MoE shapes (with tuning)"
+  type: task
+  status: planned
+  owners: [Helw150, ClassicLarry]
+  target_date: "2026-04-25"
+  issue: null
+  labels: [pretraining, moe, scaling_laws, performance]
+  description: |
+    Search architecture shapes and key tuning knobs with two objectives:
+    - best quality per token
+    - best quality per wall-clock
+    Include practical tuning budget assumptions in the comparison.
+
+
+moe_frontier_tradeoff_report:
+  title: "MoE throughput-vs-quality frontier report"
+  type: task
+  status: planned
+  owners: [Helw150, ClassicLarry]
+  target_date: "2026-04-30"
+  issue: null
+  labels: [pretraining, moe, evals, performance]
+  description: |
+    Produce a report selecting recommended configs from the observed frontier
+    (quality, throughput, MFU, estimated cost, and risk).
+  dependencies:
+    - moe_correctness_stability_harness
+    - moe_scaling_granularity_sweep
+    - moe_ep_parallelism_map
+    - moe_shape_search_token_wallclock_adjusted
+    - moe_data_mix_stability_check
+
+
+moe_data_mix_stability_check:
+  title: "Validate MoE hypers across realistic data phases/mixes"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-04-30"
+  issue: null
+  labels: [pretraining, moe, data]
+  description: |
+    Confirm that "stable" MoE hyperparameters from sweeps remain stable and performant
+    under realistic multi-phase data mixtures, not only clean benchmark runs.
+
+
+moe_readiness_gates:
+  title: "Optional: define fixed MoE readiness gates (core evals + systems limits)"
+  type: task
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-04-20"
+  issue: null
+  labels: [pretraining, moe, evals, release]
+  description: |
+    Optional track: only needed if we decide to formalize release-candidate gating.
+
+    Lock the required gate set for MoE release candidates:
+    - core quality evals
+    - stability checks
+    - throughput/MFU thresholds
+    - cost or runtime limits
+
+
+moe_one_command_sweeps:
+  title: "One-command MoE sweeps/ablations with reproducible reports"
+  type: task
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-04-15"
+  issue: null
+  labels: [pretraining, moe, infra, agent_friendly]
+  description: |
+    Package the main MoE experiments (isoflop sweeps, ablations, shape runs) as one-command
+    workflows that emit standardized artifacts and comparison summaries.
 
 
 data_tools_and_mixture_ready:
@@ -3049,7 +3114,33 @@ grug_moe:
     description: |
       We need to wire up MOE for grugformer. Goal is high MFU, load balancing, etc.
     dependencies:
+        - baseline_grug_moe
+        - fast_grug_moe_block
+
+
+baseline_grug_moe:
+    title: "[Grug] baseline MoE path that runs end-to-end"
+    type: task
+    status: planned
+    owners: [ClassicLarry, pc0618]
+    labels: [grug, moe]
+    description: |
+      Build a baseline Grug-style MoE model that trains/runs end-to-end, prioritizing correctness
+      and integration over speed.
+    dependencies:
         - grugformer
+
+
+fast_grug_moe_block:
+    title: "[Grug] fast MoE block path (post-baseline perf-max)"
+    type: task
+    status: planned
+    owners: [dlwh]
+    labels: [grug, moe, performance]
+    description: |
+      Build the fast MoE block path focused on throughput/MFU.
+      This track builds on learnings from #2704 / #2710 and potentially #2851.
+    dependencies:
         - fast_moe
 
 
