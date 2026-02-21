@@ -112,6 +112,7 @@ class AsyncDataset(DatasetBase[T_co]):
         *,
         io_block_size: int,
         window_blocks: int,
+        cache_windows: int = 0,
         key: PRNGKeyArray,
         perm_type: PermType = "feistel",
     ):
@@ -121,6 +122,7 @@ class AsyncDataset(DatasetBase[T_co]):
             self,
             io_block_size,
             window_blocks=window_blocks,
+            cache_windows=cache_windows,
             key=key,
             perm_type=perm_type,
         )

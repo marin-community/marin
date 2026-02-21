@@ -601,6 +601,8 @@ class BlockShuffleConfig:
 
     io_block_size: int
     window_blocks: int
+    # Number of block-shuffle windows to keep in the host-local LRU data cache.
+    cache_windows: int = 0
     perm_type: Literal["feistel", "linear"] = "feistel"
 
 
@@ -792,6 +794,7 @@ class LmDataConfig:
                 ds = ds.block_shuffle(
                     io_block_size=shuffle_cfg.io_block_size,
                     window_blocks=shuffle_cfg.window_blocks,
+                    cache_windows=shuffle_cfg.cache_windows,
                     key=k,
                     perm_type=shuffle_cfg.perm_type,
                 )
