@@ -223,9 +223,20 @@ def test_fused_cross_entropy_default_grad_matches_reference():
     assert jnp.allclose(gw_default, gw_ref, atol=1e-4, rtol=1e-4)
 
 
-def test_fused_cross_entropy_pallas_gpu_matches_reference():
-    if jax.default_backend() != "gpu":
-        pytest.skip("requires GPU backend")
+@pytest.mark.parametrize(
+    ("implementation", "required_backend", "block_sizes"),
+    [
+        ("pallas_tpu", "tpu", fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)),
+        ("pallas_gpu", "gpu", None),
+    ],
+)
+def test_fused_cross_entropy_pallas_matches_reference(
+    implementation: str,
+    required_backend: str,
+    block_sizes: fused_api.BlockSizes | None,
+):
+    if jax.default_backend() != required_backend:
+        pytest.skip(f"requires {required_backend.upper()} backend")
 
     x = jnp.zeros((128, 128), dtype=jnp.float32)
     w = jnp.zeros((128, 128), dtype=jnp.float32)
@@ -236,7 +247,8 @@ def test_fused_cross_entropy_pallas_gpu_matches_reference():
         y,
         w,
         reduction=None,
-        implementation="pallas_gpu",
+        implementation=implementation,
+        block_sizes=block_sizes,
     )
 
     loss_ref, _ = linear_softmax_cross_entropy_loss_reference(
