@@ -148,9 +148,13 @@ Answer from this data:
 ## 2026-02-21 Follow-Up Fixes and Revalidation
 Implemented:
 1. `segment_mask` normalization in `pallas_mosaic` so singleton column views (`[N,1]`) are handled robustly in backward kernels.
-2. GB10 `llama2-hd256` tuned backward block sizes set to conservative `16/16/16/16` for stability.
+2. GB10 `llama2-hd256` tuned block sizes updated and validated with a faster stable config:
+   - `block_q=32`, `block_k=16`, `block_q_dkv=16`, `block_kv_dkv=32`, `block_q_dq=32`, `block_kv_dq=16`, `num_warps=4`.
 3. Shape bucket precedence updated so exact `head_dim=256` matches `llama2-hd256` before `qwen3-ish`.
 4. Fallback selection updated so unmatched shapes prefer device-specific (`NVIDIA GB10`) defaults before generic defaults.
+5. Added benchmark regression targets to `bench_grug_attention.py`:
+   - `--target gb10_segment_swa_backward`
+   - `--target gb10_hd256_backward_auto`
 
 Revalidation runs (same failing cases):
 
@@ -163,9 +167,9 @@ uv run python lib/levanter/scripts/bench/bench_grug_attention.py \
   --steps 1 --dtype bf16
 ```
 Result:
-- reference: `478,617.60 tok/s`
-- pallas auto: `250,173.71 tok/s`
-- status: **PASS** (no OOM), but slower than reference (`0.523x`).
+- reference: `490,341.10 tok/s`
+- pallas auto: `429,395.66 tok/s`
+- status: **PASS** (no OOM), improved materially vs earlier conservative setting (`0.876x` vs reference).
 
 ### Case B: SWA + segment_ids backward auto (previously shape error)
 Command:
@@ -176,11 +180,18 @@ uv run python lib/levanter/scripts/bench/bench_grug_attention.py \
   --steps 1 --dtype bf16 --sliding-window 1024 --segment-id-mode 2d
 ```
 Result:
-- reference: `77,162.70 tok/s`
-- pallas auto: `127,355.28 tok/s`
-- status: **PASS** (shape mismatch fixed), speedup `1.650x`.
+- reference: `77,816.44 tok/s`
+- pallas auto: `128,008.90 tok/s`
+- status: **PASS** (shape mismatch fixed), speedup `1.645x`.
+
+Additional focused hd256 tuning notes (GB10):
+- Baseline stable config (`16/16/16/16/16/16`) was ~`256,938 tok/s` fwd+bwd.
+- Best stable config found in focused sweep:
+  - `bq=32,bk=16,bq_dkv=16,bk_dkv=32,bq_dq=32,bk_dq=16,num_warps=4`
+  - ~`445,607 tok/s` fwd+bwd (near reference).
+- Configs using larger KV tiles (for example `bk=32`, `bk_dkv=64`, or `q_dkv=32`) repeatedly exceeded GB10 shared-memory limits.
 
 Updated interpretation:
 - On GB10 we should keep GB10-specific block sizes for essentially all regimes.
 - Non-GB10 can keep tokamax-like defaults.
-- For GB10 `head_dim=256` backward, stability is now fixed; perf remains a tuning target.
+- For GB10 `head_dim=256` backward, stability is fixed and perf is substantially improved, though still slightly below reference in the tested shape.
