@@ -57,7 +57,7 @@ from levanter.eval_harness import (
     _LmEvalHarnessWorker,
     get_padding_count_from_batch,
 )
-from levanter.utils.jax_utils import multihost_broadcast_sync
+from levanter.utils.jax_utils import barrier_sync, multihost_broadcast_sync
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -356,9 +356,24 @@ def evaluate_vlm_mc_benchmark(
         Dict with accuracy, loss, num_questions, num_correct, and per-question details.
     """
     num_questions = len({meta[0] for meta in segment_metadata.values()})
-    if num_questions == 0:
-        logger.warning("No MC questions found")
+
+    # All hosts must agree on whether to skip; an early return on only some
+    # hosts would desync JAX collectives.
+    has_data = bool(multihost_broadcast_sync(int(num_questions > 0)))
+    if not has_data:
+        logger.warning("No MC questions found (consistent across all hosts)")
         return {"accuracy": 0.0, "num_questions": 0, "num_correct": 0}
+
+    # Verify all hosts built the same number of completions — a mismatch here
+    # (e.g. from a GCS download glitch) would produce different batch counts
+    # and different JIT traces, causing "unexpected peer / different launch id".
+    local_n = len(all_completions)
+    expected_n = multihost_broadcast_sync(local_n)
+    if local_n != expected_n:
+        raise RuntimeError(
+            f"Host {jax.process_index()} has {local_n} MC completions but leader has {expected_n}. "
+            "Likely a GCS download inconsistency — all hosts must see identical data."
+        )
 
     pad_token = tokenizer.pad_token_id
     if pad_token is None:
@@ -575,9 +590,19 @@ def evaluate_vlm_open_ended_benchmark(
         Dict with mean_ll, num_questions, and per-question details.
     """
     num_questions = len(segment_metadata)
-    if num_questions == 0:
-        logger.warning("No open-ended questions found")
+
+    has_data = bool(multihost_broadcast_sync(int(num_questions > 0)))
+    if not has_data:
+        logger.warning("No open-ended questions found (consistent across all hosts)")
         return {"mean_ll": 0.0, "num_questions": 0}
+
+    local_n = len(all_completions)
+    expected_n = multihost_broadcast_sync(local_n)
+    if local_n != expected_n:
+        raise RuntimeError(
+            f"Host {jax.process_index()} has {local_n} open-ended completions but leader has {expected_n}. "
+            "Likely a GCS download inconsistency — all hosts must see identical data."
+        )
 
     pad_token = tokenizer.pad_token_id
     if pad_token is None:
@@ -964,50 +989,56 @@ def vlm_mc_eval_callback(
             max_packed_segments=64,
         )
 
-        try:
-            for bench_name, (task_type, completions, metadata) in prepared.items():
-                if not completions:
-                    continue
+        # Use a fixed iteration order so all hosts process the same benchmarks
+        # in the same sequence. For each benchmark, synchronize the "has data"
+        # decision across hosts so no host silently skips a collective.
+        for bench_name, (task_type, completions, metadata) in prepared.items():
+            has_data = bool(multihost_broadcast_sync(int(len(completions) > 0)))
+            if not has_data:
+                logger.info("Skipping %s: no completions on any host", bench_name)
+                continue
 
-                logger.info("Evaluating %s [%s]", bench_name, task_type)
+            logger.info("Evaluating %s [%s]", bench_name, task_type)
 
-                if task_type == "multiple_choice":
-                    result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
-                    if jax.process_index() == 0:
-                        accuracy = result["accuracy"]
-                        loss = result["loss"]
-                        logger.info(
-                            "%s: accuracy=%.4f (%d/%d), loss=%.4f",
-                            bench_name,
-                            accuracy,
-                            result["num_correct"],
-                            result["num_questions"],
-                            loss,
-                        )
-                        levanter.tracker.log(
-                            {
-                                f"eval/{bench_name}/accuracy": accuracy,
-                                f"eval/{bench_name}/loss": loss,
-                            },
-                            step=step.step,
-                        )
+            if task_type == "multiple_choice":
+                result = evaluate_vlm_mc_benchmark(worker, completions, metadata, tokenizer)
+                if jax.process_index() == 0:
+                    accuracy = result["accuracy"]
+                    loss = result["loss"]
+                    logger.info(
+                        "%s: accuracy=%.4f (%d/%d), loss=%.4f",
+                        bench_name,
+                        accuracy,
+                        result["num_correct"],
+                        result["num_questions"],
+                        loss,
+                    )
+                    levanter.tracker.log(
+                        {
+                            f"eval/{bench_name}/accuracy": accuracy,
+                            f"eval/{bench_name}/loss": loss,
+                        },
+                        step=step.step,
+                    )
 
-                elif task_type == "open_ended":
-                    result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
-                    if jax.process_index() == 0:
-                        mean_ll = result["mean_ll"]
-                        logger.info(
-                            "%s: mean_ll=%.4f (%d questions)",
-                            bench_name,
-                            mean_ll,
-                            result["num_questions"],
-                        )
-                        levanter.tracker.log(
-                            {f"eval/{bench_name}/mean_ll": mean_ll},
-                            step=step.step,
-                        )
-        except Exception:
-            logger.exception("vlm_mc_eval crashed")
+            elif task_type == "open_ended":
+                result = evaluate_vlm_open_ended_benchmark(worker, completions, metadata, tokenizer)
+                if jax.process_index() == 0:
+                    mean_ll = result["mean_ll"]
+                    logger.info(
+                        "%s: mean_ll=%.4f (%d questions)",
+                        bench_name,
+                        mean_ll,
+                        result["num_questions"],
+                    )
+                    levanter.tracker.log(
+                        {f"eval/{bench_name}/mean_ll": mean_ll},
+                        step=step.step,
+                    )
+
+            # Barrier between benchmarks: ensure all hosts finish one benchmark
+            # before any host starts the next, preventing collective desync.
+            barrier_sync()
 
         logger.info("VLM eval done.")
 
