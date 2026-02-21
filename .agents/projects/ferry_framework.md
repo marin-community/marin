@@ -63,6 +63,7 @@ Out of scope for this phase:
 5. Launch + monitor helpers:
 - `scripts/pm/ferries/launch_daily_ferry.py` (or equivalent command wrapper)
 - recipe-driven monitoring using `.agents/docs/job-monitoring-loop.md`
+- optional high-value helper: `scripts/pm/ferries/monitor_job.py` to standardize 570s cadence, exact progress parsing, and terminal summary output
 
 6. Notification bridge (minimum viable):
 - `scripts/pm/ferries/notify_discord.py` (or GitHub Action webhook)
@@ -109,6 +110,64 @@ Out of scope for this phase:
 7. Publish updates:
 - GitHub issue comment with status and key links
 - optional manual Discord post for run state
+
+## Operational Controls
+
+### Known-Good Envelopes
+
+Maintain and regularly validate known-good envelopes for each ferry lane.
+
+| Lane | Script | Primary Intent | Baseline Envelope | First Fallback |
+|---|---|---|---|---|
+| canary | `experiments/ferries/canary.py` | fast health signal | stable canary defaults on `us-central1` | reduce per-step pressure (batch/seq) before broader infra changes |
+| daily | `experiments/ferries/daily.py` | higher-scale integration test | Nemo mix, seq 4096, batch 512, ~1e19 FLOPs on `us-central1` | reduce batch size first, then revisit kernel/block-size tuning |
+
+Envelope maintenance rules:
+- update this table when a new configuration proves reliably better and stable
+- if a run fails in a known-good envelope, treat it as a potential infra regression first
+- keep fallback order deterministic to avoid random walk debugging
+
+### Run Record Contract
+
+Every ferry launch/update should include a minimal run record with these fields:
+- `run_name`
+- `script`
+- `git_sha`
+- `cluster`
+- `ray_job_id`
+- `wandb_run_id`
+- `wandb_url`
+- `start_time`
+- `terminal_status`
+- `notes`
+
+This record can live in the canonical GitHub issue comments, but all fields should be present by terminal state.
+
+Update cadence policy for run issues:
+- send major-event updates (not spam): launch, first eval, major incident, terminal state
+
+### Monitoring Ownership Rule
+
+Monitoring ownership must be explicit from launch until terminal state.
+
+Rules:
+- assign one owner when the job is launched
+- keep `.agents/docs/job-monitoring-loop.md` running until terminal state
+- expected ownership window is often 4-5 hours
+- handoff is allowed only with an explicit replacement owner and a state handoff containing:
+  - current job status
+  - latest error/signals
+  - last known Ray and W&B links
+
+### Canary Freeze Policy
+
+Canary config is frozen by default.
+
+Rules:
+- do not proactively tune canary
+- only edit canary after identifying a concrete failure mode it should detect or avoid
+- canary-change PRs should be narrowly scoped and include rationale tied to observed failures
+- after canary changes, verify the canary still behaves as a low-latency health signal
 
 ### Change Budget Policy (Daily Integration Ferry)
 
@@ -163,6 +222,15 @@ Promotion signals (examples):
 Operationally:
 - open a follow-up PR that updates the canonical recipe/template (`experiments/ferries/daily.py` and recipe docs) to match the better variant
 - include a short comparison table in the PR showing before/after metrics and any tradeoffs
+
+### Daily Promotion Gate (Checklist)
+
+Before promoting a daily variant to baseline, require all of:
+- eval delta: most key eval losses are improved or neutral with clear wins
+- reliability delta: no regression in launch/compile/checkpoint/monitoring behavior
+- throughput delta: MFU/throughput is at least non-regressive for the same envelope
+- stability delta: no new recurring failure signatures in the run window
+- rollback trigger defined: clear condition for immediate revert to previous baseline
 
 ## Suggested Command Skeletons
 

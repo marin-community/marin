@@ -61,6 +61,8 @@ If objective is ambiguous, ask before editing.
 - If canary fails, treat as urgent infrastructure/training-health triage.
 - If daily fails, debug with one bounded fix attempt, then escalate.
 - Never restart/recreate/mutate cluster without explicit human consent in-thread.
+- Keep cluster mutation guardrails exactly aligned with `.agents/docs/job-monitoring-loop.md`, including the TPU bad-node exception path.
+- Use major-event updates (not spam): launch, first eval, major incident, terminal state.
 
 ## Workflows
 
@@ -125,6 +127,17 @@ Post in the ferry issue:
 - key metrics/regressions,
 - Ray job ID and W&B link(s),
 - recommendation for next ferry.
+
+Required terminal issue comment template:
+
+```markdown
+Final status: <SUCCEEDED|FAILED|STOPPED>
+Ray job id: <job_id>
+W&B link: <url>
+Final eval summary: <short summary + key metrics>
+Experiment link: <experiment JSON/browser link>
+Recommendation / victory decision: <next action>
+```
 
 ### Canary lane (steady-state run)
 Default mode: launch the existing canary script as-is and monitor. Do not run the daily proposal/PR loop unless you are intentionally changing canary.
