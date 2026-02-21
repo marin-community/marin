@@ -105,8 +105,12 @@ def test_fused_cross_entropy_grad_matches_reference():
     gx_api, gw_api = jax.grad(loss_api, argnums=(0, 1))(x, w)
     gx_ref, gw_ref = jax.grad(loss_ref, argnums=(0, 1))(x, w)
 
-    assert jnp.allclose(gx_api, gx_ref, atol=1e-5, rtol=1e-5)
-    assert jnp.allclose(gw_api, gw_ref, atol=1e-5, rtol=1e-5)
+    # TPU reductions can differ by a few ulps vs the reference path; keep
+    # CPU/GPU strict while allowing slight TPU noise.
+    grad_tol = 3e-5 if jax.default_backend() == "tpu" else 1e-5
+
+    assert jnp.allclose(gx_api, gx_ref, atol=grad_tol, rtol=grad_tol)
+    assert jnp.allclose(gw_api, gw_ref, atol=grad_tol, rtol=grad_tol)
 
 
 def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():

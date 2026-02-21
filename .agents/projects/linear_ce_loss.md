@@ -618,3 +618,69 @@ Notes:
     - `streaming_custom_vjp`: `0.365443s` (`~89.7k tok/s`)
 - Conclusion:
   - Raising scoped VMEM lets pallas run large shapes again, but streaming custom VJP remains faster on all tested v5p backward-inclusive shapes.
+
+### 2026-02-21: Tokamax vs xla(custom-vjp) vs pallas on v5e-8/v6e-8 (eu-west4)
+- Request:
+  - compare Tokamax kernel vs our new default `xla` path (streaming custom VJP) and our `pallas_tpu` kernel.
+  - target TPUs:
+    - `v5e-8` in `europe-west4-b` (`infra/marin-eu-west4.yaml`)
+    - `v6e-8` in `europe-west4-a` (`infra/marin-eu-west4-a.yaml`)
+  - shape used for all runs: `B=8192, H=4096, V=128256`.
+
+#### Infra notes
+- `v5e-8` allocation had intermittent autoscaler/preemption churn:
+  - initial attempts timed out waiting for actor start.
+  - one successful allocation was later terminated (`ActorDiedError`, node SIGTERM) and had to be reacquired.
+- `v6e-8` allocation was stable in this session.
+
+#### Tokamax install/runtime notes
+- A dedicated Tokamax env was used on each TPU VM:
+  - `uv venv .venv_tokamax --python 3.11`
+  - `uv pip install tokamax`
+  - `uv pip install 'jax[tpu]==0.9.0' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html`
+- This produced:
+  - `jax==0.9.0`, `jaxlib==0.9.0`, `libtpu==0.0.34` for Tokamax runs.
+- Levanter xla/pallas runs stayed on project-locked env (`jax==0.8.0`, `jaxlib==0.8.0`, `libtpu==0.0.24`).
+
+#### Dtype compatibility findings (Tokamax `mosaic_tpu`)
+- `bf16` failed on both `v5e` and `v6e` with Pallas verifier error:
+  - `'tpu.matmul' op Expected matmul acc to be 32-bit`
+- `float32` runs were successful for Tokamax on both `v5e` and `v6e`.
+- Per follow-up request, comparison was done in a shared working dtype (`float32`).
+
+#### Float32 comparison (value+grad, `B=8192,H=4096,V=128256`)
+- v5e-8 (`europe-west4-b`):
+  - `xla` (custom-vjp default):
+    - fwd: `128,056 tok/s`
+    - bwd: `36,612 tok/s`
+    - combined (harmonic): `28,472 tok/s`
+  - `pallas_tpu` (`block-sizes=infer`):
+    - fwd: `128,223 tok/s`
+    - bwd: `25,737 tok/s`
+    - combined: `21,435 tok/s`
+  - Tokamax `mosaic_tpu`:
+    - fwd: `11,036 tok/s`
+    - bwd: `22,999 tok/s`
+    - combined: `7,458 tok/s`
+- v6e-8 (`europe-west4-a`):
+  - `xla` (custom-vjp default):
+    - fwd: `259,456 tok/s`
+    - bwd: `86,501 tok/s`
+    - combined: `64,873 tok/s`
+  - `pallas_tpu` (`block-sizes=infer`):
+    - fwd: `243,238 tok/s`
+    - bwd: `53,753 tok/s`
+    - combined: `44,024 tok/s`
+  - Tokamax `mosaic_tpu`:
+    - fwd: `11,451 tok/s`
+    - bwd: `76,094 tok/s`
+    - combined: `9,953 tok/s`
+
+#### Extra bf16 context (our kernels)
+- On both TPUs, our bf16 `xla`/`pallas` runs completed; `xla` remained ahead on combined throughput.
+- Tokamax bf16 remained blocked by the verifier error above.
+
+#### Bottom line
+- In the only shared working dtype (`float32`), our `xla` custom-vjp path is clearly fastest on combined throughput on both `v5e-8` and `v6e-8`.
+- `pallas_tpu` remains competitive on forward but trails on backward, so combined is below `xla`.
+- Tokamax `mosaic_tpu` is not competitive in this setup and cannot currently run bf16 on these TPUs due the matmul-accumulator verification failure.
