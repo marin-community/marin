@@ -1,0 +1,48 @@
+2026-02-21 06:32:58,159 - INFO - Creating SSH proxy chain through marin-us-central2
+2026-02-21 06:32:58,159 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8268, gcs_port=6382, api_port=10004)}
+2026-02-21 06:32:58,163 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '35.186.50.221' (ED25519) to the list of known hosts.
+2026-02-21 06:32:59,237 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-02-21 06:32:59,398 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
+2026-02-21 06:32:59,399 - INFO - Extras: 
+2026-02-21 06:32:59,399 - INFO - env_vars: {
+    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
+    "TPU_TYPE": "v4-64",
+    "EXP_NAME": "unified-qwen3-0.6b-demo29",
+    "GIT_COMMIT": "735f61e4cdbd5176c7a5f9e7a2139eba5f4fe9ab",
+    "FRAY_CLUSTER_SPEC": "ray"
+}
+Resolved 535 packages in 22ms
+2026-02-21 06:32:59,515 - INFO - Terminal command: 
+ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-0.6b-demo29", "GIT_COMMIT": "735f61e4cdbd5176c7a5f9e7a2139eba5f4fe9ab", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260221-063255  --  python experiments/unified/unified_pretrain_demo.py
+2026-02-21 06:32:59,523	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-02-21 06:32:59,581	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-02-21 06:32:59,639	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-02-21 06:32:59,639	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-02-21 06:32:59,646	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-02-21 06:32:59,805	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-02-21 06:32:59,806	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-02-21 06:32:59,882	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-02-21 06:32:59,890	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-02-21 06:32:59,896	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-02-21 06:32:59,953	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-02-21 06:33:00,009	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-02-21 06:33:00,010	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-02-21 06:33:00,016	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-02-21 06:33:00,174	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-02-21 06:33:00,175	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-02-21 06:33:00,251	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-02-21 06:33:00,258	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-02-21 06:33:00,340	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_4abea17dfb0953f1.zip.
+2026-02-21 06:33:00,340	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
+2026-02-21 06:33:00,341	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-02-21 06:33:00,417	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-02-21 06:33:00,496	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-02-21 06:33:00,496	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-02-21 06:33:00,504	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-02-21 06:33:00,712	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-02-21 06:33:00,713	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-02-21 06:33:00,836	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-02-21 06:33:00,847	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-02-21 06:33:01,956 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260221-063255
+2026-02-21 06:33:01,956 - INFO - Job URL: http://localhost:8268/#/jobs/ray-run-ruili-unified_pretrain_demo-20260221-063255
