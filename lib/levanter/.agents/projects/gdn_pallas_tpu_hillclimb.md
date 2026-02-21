@@ -1022,3 +1022,66 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact (escalation-triggering)**. This move accelerated the same dominant train-path `shard_map/custom-call` hotspot, but end-to-end MFU gain stayed below 3% with dominant hotspot class unchanged.
 - Governance note: improvement cleared the `>=0.250%` promotion threshold, but per escalation rule (`<3%` and unchanged dominant hotspot), the next hypothesis must be more radical.
 - Next bold hypothesis: pivot to a stronger structural move that attacks unchanged backward hotspot critical path and launch structure (for example Macro Move E V-tiling across recurrent+bwd, or Macro Move D full-sequence backward pipeline) rather than additional singleton/layout-only rewrites.
+
+### Iteration 23 - Macro Move C / BF16 prepare-tape outputs (infra blocked, reverted)
+
+- Date: 2026-02-21T22:27:44Z
+- Commit: none (failed attempt)
+- Loop session/local index: `7/20`
+- Starting commit: `f7eab9057e32e34ae3062edc627b033a9087ddd7`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` (custom-call equivalent bucket): `76.743 ms` (dominant category).
+  - Top train-path callsites:
+    - forward closed-call shard-map (`gated_deltanet.py:1497` in prior run): `32.945 ms`.
+    - backward closed-call shard-map (`gated_deltanet.py:3432` in prior run): `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: force full-sequence `emit_pipeline` path for 64-dim train heads to reduce segmented launch structure (`+10-20%`, high TPU tiling-risk).
+  2. **Macro Move C**: keep compute accumulation in FP32 but store flash prepare tapes (`v_pseudo`, `k_cumdecay`, `solve_transform`) in BF16 to reduce train-path tape bandwidth/conversion overhead (`+10-18%`, medium numerical-risk).
+  3. **Macro Move E**: V-tiling of recurrent/bwd state path (`KxV -> KxVb`) to improve occupancy (`+15-30%`, high implementation-risk).
+
+- Selected macro-move category: **C) Switch kernel math to BF16 inputs + FP32 accumulation**.
+- Selected hypothesis: preserve FP32 accumulation in matmuls, but materialize flash prepare outputs in BF16 (matching downstream bf16 usage) so train-path custom calls move less tape data and avoid redundant f32<->bf16 conversions.
+
+- Change attempts:
+  - Attempt 1 (exploratory, then reverted): widened full-sequence `emit_pipeline` gating for 64-dim heads (Macro D). Ray profile compile failed with Mosaic tiling error (`Slice shape ... must be aligned to tiling (128), but is 64`), so this path was reverted.
+  - Attempt 2 (selected Macro C): changed prepare pallas out dtypes for `v_pseudo`, `k_cumdecay`, and `solve_transform` from `float32` to bf16 when `precision_mode="bf16"` in:
+    - `lib/levanter/src/levanter/layers/gated_deltanet.py` (`_gdn_chunk_segment_prepare_pallas`, `_gdn_chunk_fullseq_prepare_pallas`).
+  - Reverted attempt-2 code after profiling infrastructure failed to produce a completed profile run for this revision.
+
+- Correctness checks for attempt 2:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU test attempt:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Failure: `ABORTED: The TPU is already in use by another process`.
+  - Ray fallback test:
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260221-220713`
+    - Result: `49 passed, 40 skipped`.
+
+- Profile attempts (blocked, no completed trace for this revision):
+  - Dev TPU profile attempt 1 (us-central1):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_fullseq64_i7_dev --no-sync`
+    - Failure: distributed service bind + segfault (`Failed to add port to server`, `Segmentation fault`).
+  - Ray profile attempt 1 (us-central1, exploratory D attempt):
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_fullseq64_i7_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260221-215653` (stopped)
+    - Failure in logs: Mosaic compile error (`Slice shape along dimension 4 must be aligned to tiling (128), but is 64`).
+  - Dev TPU profile attempt 2 (us-central1, selected C attempt):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bf16tape_i7_dev --no-sync`
+    - Failure: same distributed service bind + segfault.
+  - Ray profile attempt 2 (us-central1, selected C attempt):
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bf16tape_i7_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260221-221301` (stopped after prolonged RUNNING with no completed train/profile output).
+  - Ray profile attempt 3 (us-east5-a fallback, selected C attempt):
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bf16tape_i7_ray_east5 --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260221-222004` (stopped after prolonged RUNNING/launch with no completed profile artifact).
+
+- Outcome:
+  - **Infra-blocked iteration**: no completed profile run and no trace artifact for the selected revision, so no MFU/tokens/sec delta can be claimed.
+  - Per failed-attempt handling, reverted speculative kernel changes and left the tree clean.
+
+- Next bold hypothesis:
+  - Once profiling infra is healthy, retry a bandwidth-focused Macro C pass (BF16 tapes with FP32 accumulation) or pivot to Macro E (V-tiling) if custom-call dominance persists.
