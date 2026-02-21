@@ -245,34 +245,44 @@ def batchify(batch: Iterable, n: int = 1024) -> Iterable:
 _SENTINEL = object()
 
 
+def _queue_iterable(q: queue.Queue) -> Iterable:
+    """Yield items from a bounded queue until the sentinel is received.
+
+    Designed for use with ``ThreadedBatchWriter``: the background thread passes
+    this iterable to a writer function so the writer can consume items naturally
+    as they arrive through the queue.
+    """
+    while True:
+        item = q.get()
+        if item is _SENTINEL:
+            return
+        yield item
+
+
 class ThreadedBatchWriter:
     """Offloads batch writes to a background thread so the producer isn't blocked on IO.
 
     Uses a bounded queue for backpressure: the producer blocks when the writer
     falls behind, preventing unbounded memory growth.
 
-    Generic over the write function — works with Levanter's ``write_batch``,
-    PyArrow's ``write_table``, or any other ``Callable[[T], None]``.
+    The ``write_fn`` receives an iterable that yields submitted items from the
+    internal queue, allowing the writer to consume items as a natural stream
+    rather than via per-item callbacks.
     """
 
-    def __init__(self, write_fn: Callable, maxsize: int = 128):
+    def __init__(self, write_fn: Callable[[Iterable], None], maxsize: int = 128):
         self._write_fn = write_fn
         self._queue_maxsize = maxsize
         self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
         self._error: BaseException | None = None
-        self._thread = threading.Thread(target=self._drain, daemon=True, name="ZephyrWriter")
+        self._thread = threading.Thread(target=self._run, daemon=True, name="ZephyrWriter")
         self._thread.start()
 
-    def _drain(self) -> None:
-        while True:
-            item = self._queue.get()
-            if item is _SENTINEL:
-                return
-            try:
-                self._write_fn(item)
-            except Exception as e:
-                self._error = e
-                return
+    def _run(self) -> None:
+        try:
+            self._write_fn(_queue_iterable(self._queue))
+        except Exception as e:
+            self._error = e
 
     def submit(self, batch: Any) -> None:
         """Enqueue *batch* for writing. Raises if the background thread failed."""
@@ -403,7 +413,12 @@ def write_levanter_cache(
     with SerialCacheWriter(
         tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata), mode=mode
     ) as writer:
-        with ThreadedBatchWriter(writer.write_batch) as threaded:
+
+        def _drain_batches(batches: Iterable) -> None:
+            for batch in batches:
+                writer.write_batch(batch)
+
+        with ThreadedBatchWriter(_drain_batches) as threaded:
             if write_exemplar:
                 threaded.submit([exemplar])
             for batch in batchify(record_iter, n=batch_size):
