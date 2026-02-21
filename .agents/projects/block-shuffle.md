@@ -80,6 +80,28 @@ Locality score (higher means more contiguous block reuse, using `same_block_tran
 - `era`: 0.311 `###############`
 - `block`: 0.306 `###############`
 
+## Uncheatable Eval Snapshot (2026-02-21)
+
+Using the exp2917 sweep runs with default validation on, and comparing at the shared eval horizon (`global_step=1000`):
+
+| Strategy | Uncheatable macro loss | Uncheatable micro loss | Macro vs full | Micro vs full |
+|---|---:|---:|---:|---:|
+| `full` | 4.2613 | 4.3572 | baseline | baseline |
+| `era` | 4.7481 | 4.8700 | +11.43% | +11.77% |
+| `block_w8` | 4.3364 | 4.4457 | +1.76% | +2.03% |
+| `block_w16` | 4.3007 | 4.4114 | +0.92% | +1.25% |
+| `block_w32` | 4.3167 | 4.4258 | +1.30% | +1.58% |
+
+Artifacts:
+
+- `.agents/analysis/exp2917/uncheatable_eval_macro_loss_by_step.png`
+- `.agents/analysis/exp2917/uncheatable_eval_micro_loss_by_step.png`
+- `.agents/analysis/exp2917/uncheatable_eval_summary.json`
+
+Note on robustness:
+
+- These eval plots are preemption-safe by construction (deduped by `global_step`, no cumulative counters).
+
 ### Read-Op Snapshot (same day, synthetic cache)
 
 From `bench_data_loading_block_shuffle.py` with `seq_len=2048`, `steps=20`, `batch_size=128`, `prefetch=16`:
