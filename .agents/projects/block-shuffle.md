@@ -102,6 +102,90 @@ Note on robustness:
 
 - These eval plots are preemption-safe by construction (deduped by `global_step`, no cumulative counters).
 
+## Final Trio Snapshot (2026-02-21, step 2061)
+
+Runs:
+
+- `full_shuffle`: `exp2917_shuffle_block_150m_2026-02-20-full_shuffle-e638fd`
+- `era_shuffle`: `exp2917_shuffle_block_150m_2026-02-20-era_shuffle-d4b30e`
+- `block_shuffle` (16GiB TensorStore cache): `exp2917_shuffle_block_150m_2026-02-20-block_shuffle-5dab59`
+
+| Strategy | tokens/s | eval loss | uncheatable macro | gcs_read_count_total | gcs_bytes_read_total |
+|---|---:|---:|---:|---:|---:|
+| `full` | 882,216 | 3.8418 | 3.8546 | 1,932,354 | 621,914,747,700 |
+| `era` | 869,611 | 4.1593 | 4.4147 | 4,899 | 2,608,161,636 |
+| `block` | 874,715 | 3.9114 | 3.9424 | 9,137 | 2,642,644,048 |
+
+Relative to `full`:
+
+- `era`: `-1.43%` tokens/s, `-99.58%` GCS bytes, `+14.53%` uncheatable macro loss.
+- `block`: `-0.85%` tokens/s, `-99.58%` GCS bytes, `+2.28%` uncheatable macro loss.
+
+Tail loss stability (`step >= 1000`, same logging horizon):
+
+| Strategy | train loss std | jitter std of first diff |
+|---|---:|---:|
+| `full` | 0.0862 | 0.03443 |
+| `era` | 0.0821 | 0.03222 |
+| `block` | 0.0890 | 0.03696 |
+
+Artifacts:
+
+- `.agents/analysis/exp2917/report_latest.md`
+- `.agents/analysis/exp2917/metrics_summary_latest.json`
+- `.agents/analysis/exp2917/loss_loglog_vs_tokens_latest.png`
+- `.agents/analysis/exp2917/throughput_tokens_per_s_by_step_latest.png`
+- `.agents/analysis/exp2917/loading_time_by_step_latest.png`
+- `.agents/analysis/exp2917/tensorstore_gcs_reads_total_by_step_latest.png`
+- `.agents/analysis/exp2917/uncheatable_eval_macro_loss_by_step_latest.png`
+- `.agents/analysis/exp2917/uncheatable_eval_micro_loss_by_step_latest.png`
+
+## Block-Window Report (w8/w16/w32)
+
+Runs:
+
+- `block_w8`: https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_20260220-190441-exp2-block_shuffle_w8-1d74bd
+- `block_w16`: https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_20260220-190441-exp-block_shuffle_w16-c50e53
+- `block_w32`: https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_20260220-190441-exp-block_shuffle_w32-01502f
+
+### Final metrics (step 2061)
+
+| run | train_loss | eval_loss | uncheatable_macro | uncheatable_micro | tokens/s | tensorstore_reads_total |
+|---|---:|---:|---:|---:|---:|---:|
+| block_w8 | 3.6543 | 3.9034 | 3.9164 | 4.0272 | 871570 | 4465 |
+| block_w16 | 3.6524 | 3.8860 | 3.8931 | 4.0068 | 868988 | 3089 |
+| block_w32 | 3.5904 | 3.8841 | 3.8801 | 3.9859 | 873077 | 4577 |
+
+### Relative to w16 (%)
+
+| run | tokens/s | eval_loss | uncheatable_macro | uncheatable_micro | tensorstore_reads_total |
+|---|---:|---:|---:|---:|---:|
+| block_w8 | +0.30% | +0.45% | +0.60% | +0.51% | +44.55% |
+| block_w32 | +0.47% | -0.05% | -0.33% | -0.52% | +48.17% |
+
+### Tail loss stability (step >= 1000)
+
+| run | loss_std | jitter_std_diff |
+|---|---:|---:|
+| block_w8 | 0.110942 | 0.045568 |
+| block_w16 | 0.112688 | 0.045551 |
+| block_w32 | 0.125579 | 0.036995 |
+
+### Takeaways
+
+- `w16` minimizes read count in this sweep (`3089` total reads).
+- `w32` has best final quality metrics (lowest eval and uncheatable losses) and slightly best throughput, but read count is highest (`4577`).
+- `w8` is in-between on throughput/quality, with read count above `w16`.
+
+### Artifacts
+
+- `.agents/analysis/exp2917/block_window_summary_latest.json`
+- `.agents/analysis/exp2917/block_window_loss_loglog_vs_tokens_latest.png`
+- `.agents/analysis/exp2917/block_window_throughput_tokens_per_s_by_step_latest.png`
+- `.agents/analysis/exp2917/block_window_tensorstore_reads_total_by_step_latest.png`
+- `.agents/analysis/exp2917/block_window_uncheatable_macro_by_step_latest.png`
+- `.agents/analysis/exp2917/block_window_uncheatable_micro_by_step_latest.png`
+
 ### Read-Op Snapshot (same day, synthetic cache)
 
 From `bench_data_loading_block_shuffle.py` with `seq_len=2048`, `steps=20`, `batch_size=128`, `prefetch=16`:
@@ -111,6 +195,67 @@ From `bench_data_loading_block_shuffle.py` with `seq_len=2048`, `steps=20`, `bat
 | `full` | 35,650 | 40,960 | 0.8704 | 12.96% |
 | `era` | 20 | 40,960 | 0.00049 | 99.95% |
 | `block` | 287 | 40,960 | 0.00701 | 99.30% |
+
+## Large-Window Report (w64/w128/w256/w512/w1024)
+
+Baselines:
+
+- `full_shuffle`: https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-20-full_shuffle-e638fd
+- `legacy_block` (small-window): https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-20-block_shuffle-5dab59
+
+Runs:
+
+- `w64`: https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle_w64-27229c
+- `w128`: https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle_w128-53ab01
+- `w256`: https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle_w256-daeeaa
+- `w512`: https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle_w512-b8c967
+- `w1024`: https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle-8ba290
+
+### Final metrics (step 2061)
+
+| window | eval_loss | uncheatable_macro | uncheatable_micro |
+|---|---:|---:|---:|
+| `w64` | 3.876324 | 3.862838 | 3.975510 |
+| `w128` | 3.868693 | 3.862938 | 3.976528 |
+| `w256` | 3.865820 | 3.875195 | 3.983520 |
+| `w512` | 3.850497 | 3.853288 | 3.962978 |
+| `w1024` | 3.846557 | 3.860804 | 3.966571 |
+
+### Relative to full shuffle (%)
+
+| window | eval_loss | uncheatable_macro | uncheatable_micro |
+|---|---:|---:|---:|
+| `w64` | +0.899% | +0.213% | +0.564% |
+| `w128` | +0.700% | +0.216% | +0.590% |
+| `w256` | +0.625% | +0.534% | +0.767% |
+| `w512` | +0.226% | -0.034% | +0.247% |
+| `w1024` | +0.124% | +0.160% | +0.338% |
+
+### Relative to legacy small-window block (%)
+
+| window | eval_loss | uncheatable_macro | uncheatable_micro |
+|---|---:|---:|---:|
+| `w64` | -0.897% | -2.018% | -1.914% |
+| `w128` | -1.092% | -2.015% | -1.889% |
+| `w256` | -1.166% | -1.704% | -1.716% |
+| `w512` | -1.557% | -2.260% | -2.223% |
+| `w1024` | -1.658% | -2.069% | -2.135% |
+
+### Takeaways
+
+- This sweep supports a clear quality trend with larger window sizes.
+- `w512` nearly closes the full-shuffle validation gap and is best on uncheatable macro in this set.
+- `w1024` is similarly close to full and slightly improves eval loss vs `w512`, but is slightly worse on uncheatable macro/micro than `w512`.
+- Practical guidance: target `window_blocks ~= batch_size_examples` as a default starting point.
+- Follow-up in flight: `w1024` run launched to test the `~2x batch-size` window regime.
+- `w1024` Ray job: `ray-run-dlwh-exp2917_shuffle_block-20260221-104457`
+- `w1024` W&B run: https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle-8ba290
+
+### Artifacts
+
+- `.agents/analysis/exp2917/block_window_large_summary_latest.json`
+- `.agents/analysis/exp2917/block_window_large_report_latest.md`
+- `.agents/analysis/exp2917/block_window_large_eval_gap_vs_full_latest.png`
 
 ## Problem
 

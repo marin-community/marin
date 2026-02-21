@@ -1,0 +1,103 @@
+{
+  "runs": {
+    "block_w8": {
+      "id": "exp2917_shuffle_block_150m_20260220-190441-exp2-block_shuffle_w8-1d74bd",
+      "state": "finished"
+    },
+    "block_w16": {
+      "id": "exp2917_shuffle_block_150m_20260220-190441-exp-block_shuffle_w16-c50e53",
+      "state": "finished"
+    },
+    "block_w32": {
+      "id": "exp2917_shuffle_block_150m_20260220-190441-exp-block_shuffle_w32-01502f",
+      "state": "finished"
+    }
+  },
+  "shared_train_step_window": [
+    0,
+    2061
+  ],
+  "final_metrics": {
+    "block_w8": {
+      "step": 2061,
+      "train_loss": 3.6542623043060303,
+      "eval_loss": 3.9034335613250732,
+      "uncheatable_macro": 3.9163663387298584,
+      "uncheatable_micro": 4.027242183685303,
+      "tokens_per_s": 871570.497725481,
+      "loading_time_s": 0.0026229200011584908,
+      "reads_per_example_total": 0.003907121637053339,
+      "tensorstore_reads_total": 4465.0
+    },
+    "block_w16": {
+      "step": 2061,
+      "train_loss": 3.6523890495300293,
+      "eval_loss": 3.886037588119507,
+      "uncheatable_macro": 3.8930702209472656,
+      "uncheatable_micro": 4.006805896759033,
+      "tokens_per_s": 868988.3018573495,
+      "loading_time_s": 0.0019165639987477334,
+      "reads_per_example_total": 0.00390751003441999,
+      "tensorstore_reads_total": 3089.0
+    },
+    "block_w32": {
+      "step": 2061,
+      "train_loss": 3.590376138687134,
+      "eval_loss": 3.884070634841919,
+      "uncheatable_macro": 3.880126953125,
+      "uncheatable_micro": 3.9859111309051514,
+      "tokens_per_s": 873077.2317336332,
+      "loading_time_s": 0.0026289630004612263,
+      "reads_per_example_total": 0.0039071003032975175,
+      "tensorstore_reads_total": 4577.0
+    }
+  },
+  "tail_stats_step_ge_1000": {
+    "block_w8": {
+      "n_points": 6,
+      "loss_mean": 3.8245391050974527,
+      "loss_std": 0.11094210041179102,
+      "loss_jitter_std_diff": 0.04556832369400131,
+      "loss_jitter_mean_abs_diff": 0.06922588348388672,
+      "tokens_per_s_mean": 876604.4210684906,
+      "tokens_per_s_p50": 877568.967420374,
+      "loading_time_mean_s": 0.0017042036658191744
+    },
+    "block_w16": {
+      "n_points": 6,
+      "loss_mean": 3.8028854926427207,
+      "loss_std": 0.11268768535890142,
+      "loss_jitter_std_diff": 0.04555121793211236,
+      "loss_jitter_mean_abs_diff": 0.05797047615051269,
+      "tokens_per_s_mean": 877422.5723863979,
+      "tokens_per_s_p50": 879319.263129849,
+      "loading_time_mean_s": 0.0011517181649954484
+    },
+    "block_w32": {
+      "n_points": 6,
+      "loss_mean": 3.8034027020136514,
+      "loss_std": 0.1255792431227793,
+      "loss_jitter_std_diff": 0.0369950054297302,
+      "loss_jitter_mean_abs_diff": 0.07809443473815918,
+      "tokens_per_s_mean": 878136.5147804869,
+      "tokens_per_s_p50": 877213.9817209251,
+      "loading_time_mean_s": 0.001671978333433799
+    }
+  },
+  "relative_vs_w16_pct": {
+    "block_w8": {
+      "tokens_per_s_pct": 0.29714966963449996,
+      "eval_loss_pct": 0.4476532408937528,
+      "uncheatable_macro_pct": 0.5983996296096583,
+      "uncheatable_micro_pct": 0.5100393543595372,
+      "tensorstore_reads_total_pct": 44.54516024603432
+    },
+    "block_w32": {
+      "tokens_per_s_pct": 0.4705391162969752,
+      "eval_loss_pct": -0.050615909727724784,
+      "uncheatable_macro_pct": -0.33246941585133305,
+      "uncheatable_micro_pct": -0.5214818584245107,
+      "tensorstore_reads_total_pct": 48.17092910326968
+    }
+  }
+}

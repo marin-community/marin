@@ -1,0 +1,122 @@
+{
+  "baseline": {
+    "full_shuffle": {
+      "eval_loss": 3.8418004512786865,
+      "uncheatable_macro": 3.8546175956726074,
+      "uncheatable_micro": 3.953198194503784,
+      "url": "https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-20-full_shuffle-e638fd"
+    },
+    "legacy_block": {
+      "eval_loss": 3.911410093307495,
+      "uncheatable_macro": 3.9423909187316895,
+      "uncheatable_micro": 4.053084850311279,
+      "url": "https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-20-block_shuffle-5dab59"
+    }
+  },
+  "final_metrics": {
+    "64": {
+      "eval_loss": 3.876324415206909,
+      "eval_total_time": 36.68913822900049,
+      "loading_time": 24.280932616999053,
+      "run": "block_shuffle_w64",
+      "step": 2061,
+      "uncheatable_macro": 3.862837553024292,
+      "uncheatable_micro": 3.9755098819732666,
+      "url": "https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle_w64-27229c"
+    },
+    "128": {
+      "eval_loss": 3.8686933517456055,
+      "eval_total_time": 35.44840947800003,
+      "loading_time": 23.059207176997916,
+      "run": "block_shuffle_w128",
+      "step": 2061,
+      "uncheatable_macro": 3.862938165664673,
+      "uncheatable_micro": 3.9765281677246094,
+      "url": "https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle_w128-53ab01"
+    },
+    "256": {
+      "eval_loss": 3.8658196926116943,
+      "eval_total_time": 29.49142102399992,
+      "loading_time": 17.38537381099968,
+      "run": "block_shuffle_w256",
+      "step": 2061,
+      "uncheatable_macro": 3.875195264816284,
+      "uncheatable_micro": 3.9835197925567627,
+      "url": "https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle_w256-daeeaa"
+    },
+    "512": {
+      "eval_loss": 3.850496530532837,
+      "eval_total_time": 38.594065084999784,
+      "loading_time": 17.222381867997683,
+      "run": "block_shuffle_w512",
+      "step": 2061,
+      "uncheatable_macro": 3.853288412094116,
+      "uncheatable_micro": 3.9629781246185303,
+      "url": "https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle_w512-b8c967"
+    },
+    "1024": {
+      "eval_loss": 3.8465566635131836,
+      "eval_total_time": 28.708379611000055,
+      "loading_time": 16.286152917000436,
+      "run": "block_shuffle_w1024",
+      "step": 2061,
+      "uncheatable_macro": 3.8608038425445557,
+      "uncheatable_micro": 3.9665708541870117,
+      "url": "https://wandb.ai/marin-community/marin/runs/exp2917_shuffle_block_150m_2026-02-21-block_shuffle-8ba290"
+    }
+  },
+  "relative_to_full_pct": {
+    "64": {
+      "eval_loss_pct": 0.8986402174202428,
+      "uncheatable_macro_pct": 0.21324961938929346,
+      "uncheatable_micro_pct": 0.5643958732072386
+    },
+    "128": {
+      "eval_loss_pct": 0.7000077387665473,
+      "uncheatable_macro_pct": 0.21585980413223171,
+      "uncheatable_micro_pct": 0.5901544034210416
+    },
+    "256": {
+      "eval_loss_pct": 0.6252079366853467,
+      "uncheatable_macro_pct": 0.5338446326498979,
+      "uncheatable_micro_pct": 0.7670143656125129
+    },
+    "512": {
+      "eval_loss_pct": 0.22635426707954154,
+      "uncheatable_macro_pct": -0.03448289085753723,
+      "uncheatable_micro_pct": 0.24739286100917832
+    },
+    "1024": {
+      "eval_loss_pct": 0.12380164703541631,
+      "uncheatable_macro_pct": 0.16048925005928583,
+      "uncheatable_micro_pct": 0.3382744559030669
+    }
+  },
+  "relative_to_legacy_block_pct": {
+    "64": {
+      "eval_loss_pct": -0.8970084256984014,
+      "uncheatable_macro_pct": -2.017896432578803,
+      "uncheatable_micro_pct": -1.9139734597970455
+    },
+    "128": {
+      "eval_loss_pct": -1.092105929648719,
+      "uncheatable_macro_pct": -2.0153443609437245,
+      "uncheatable_micro_pct": -1.8888497382627043
+    },
+    "256": {
+      "eval_loss_pct": -1.1655745526097332,
+      "uncheatable_macro_pct": -1.7044391411347624,
+      "uncheatable_micro_pct": -1.7163484191349698
+    },
+    "512": {
+      "eval_loss_pct": -1.5573299991960083,
+      "uncheatable_macro_pct": -2.2601134305128348,
+      "uncheatable_micro_pct": -2.2231640594898665
+    },
+    "1024": {
+      "eval_loss_pct": -1.6580575354467972,
+      "uncheatable_macro_pct": -2.069482145960839,
+      "uncheatable_micro_pct": -2.1345222051698043
+    }
+  }
+}
