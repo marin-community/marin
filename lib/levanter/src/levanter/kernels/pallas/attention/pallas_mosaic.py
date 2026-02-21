@@ -1,4 +1,4 @@
-# Copyright 2026 The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """GPU attention kernel used by Grug with optional sliding-window masking."""
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 import functools
-from typing import Any
+from typing import cast
 
 import jax
 from jax import lax
@@ -28,7 +28,6 @@ def segment_mask(q_segment_ids: jax.Array, kv_segment_ids: jax.Array) -> jax.Arr
     return jnp.equal(q_segment_ids, kv_segment_ids).astype(jnp.bool_)
 
 
-
 def _apply_window_mask(
     mask: jax.Array | None,
     span_q: jax.Array,
@@ -46,9 +45,7 @@ def _apply_window_mask(
 
 def _validate_block_sizes(block_sizes: BlockSizes) -> None:
     if block_sizes.block_q <= 0 or block_sizes.block_k <= 0:
-        raise ValueError(
-            f"block sizes must be positive: block_q={block_sizes.block_q}, block_k={block_sizes.block_k}"
-        )
+        raise ValueError(f"block sizes must be positive: block_q={block_sizes.block_q}, block_k={block_sizes.block_k}")
     if block_sizes.block_q_dkv is not None and block_sizes.block_q_dkv <= 0:
         raise ValueError(f"block_q_dkv must be positive, got {block_sizes.block_q_dkv}.")
     if block_sizes.block_kv_dkv is not None and block_sizes.block_kv_dkv <= 0:
@@ -227,9 +224,7 @@ def _mha_call(
     block_k = min(block_sizes.block_k, kv_seq_len)
 
     if (q.shape[-1] != k.shape[-1]) or (q.shape[-1] != v.shape[-1]):
-        raise ValueError(
-            f"q, k, and v must share head dim, got q={q.shape}, k={k.shape}, v={v.shape}."
-        )
+        raise ValueError(f"q, k, and v must share head dim, got q={q.shape}, k={k.shape}, v={v.shape}.")
     if q_seq_len % block_q != 0:
         raise ValueError(f"{q_seq_len=}, must be divisible by {block_q=}")
     if kv_seq_len % block_k != 0:
@@ -316,12 +311,8 @@ def _mha_call(
             pl.BlockSpec((None, block_q, None, head_dim_padded), lambda i, j, k: (j, i, k, 0)),
             pl.BlockSpec((None, kv_seq_len, None, head_dim_padded), lambda _, j, k: (j, 0, k, 0)),
             pl.BlockSpec((None, kv_seq_len, None, head_dim_padded), lambda _, j, k: (j, 0, k, 0)),
-            None
-            if segment_ids is None
-            else pl.BlockSpec((None, q_seq_len), lambda _, j, k: (j, 0)),
-            None
-            if segment_ids is None
-            else pl.BlockSpec((None, kv_seq_len), lambda _, j, k: (j, 0)),
+            None if segment_ids is None else pl.BlockSpec((None, q_seq_len), lambda _, j, k: (j, 0)),
+            None if segment_ids is None else pl.BlockSpec((None, kv_seq_len), lambda _, j, k: (j, 0)),
         ],
         out_shape=out_shape,
         out_specs=out_specs,
@@ -502,22 +493,13 @@ def _mha_backward(
         ]
 
         in_specs = [
-            pl.BlockSpec((None, q_seq_len, None, head_dim_padded),
-                         lambda i, j, _: (i, 0, j, 0)),
-            pl.BlockSpec((None, kv_seq_len, None, head_dim_padded),
-                         lambda i, j, _: (i, 0, j, 0)),
-            pl.BlockSpec((None, kv_seq_len, None, head_dim_padded),
-                         lambda i, j, _: (i, 0, j, 0)),
-            None
-            if q_segment_ids is None
-            else pl.BlockSpec((None, q_seq_len), lambda i, j, _: (i, 0)),
-            None
-            if kv_segment_ids is None
-            else pl.BlockSpec((None, kv_seq_len), lambda i, j, _: (i, 0)),
-            pl.BlockSpec((None, q_seq_len, None, head_dim_padded),
-                         lambda i, j, _: (i, 0, j, 0)),
-            pl.BlockSpec((None, q_seq_len, None, head_dim_padded),
-                         lambda i, j, _: (i, 0, j, 0)),
+            pl.BlockSpec((None, q_seq_len, None, head_dim_padded), lambda i, j, _: (i, 0, j, 0)),
+            pl.BlockSpec((None, kv_seq_len, None, head_dim_padded), lambda i, j, _: (i, 0, j, 0)),
+            pl.BlockSpec((None, kv_seq_len, None, head_dim_padded), lambda i, j, _: (i, 0, j, 0)),
+            None if q_segment_ids is None else pl.BlockSpec((None, q_seq_len), lambda i, j, _: (i, 0)),
+            None if kv_segment_ids is None else pl.BlockSpec((None, kv_seq_len), lambda i, j, _: (i, 0)),
+            pl.BlockSpec((None, q_seq_len, None, head_dim_padded), lambda i, j, _: (i, 0, j, 0)),
+            pl.BlockSpec((None, q_seq_len, None, head_dim_padded), lambda i, j, _: (i, 0, j, 0)),
             pl.BlockSpec((None, None, q_seq_len), lambda i, j, _: (i, j, 0)),
             pl.BlockSpec((None, None, q_seq_len), lambda i, j, _: (i, j, 0)),
         ]
@@ -525,10 +507,7 @@ def _mha_backward(
         grid = (batch_size, num_heads, pl.cdiv(kv_seq_len, block_kv_dkv))
         num_warps_ = num_warps
         if num_warps_ is None:
-            if (
-                block_q_dkv * block_kv_dkv < 128 * 128
-                or block_q_dq * block_kv_dq < 128 * 128
-            ):
+            if block_q_dkv * block_kv_dkv < 128 * 128 or block_q_dq * block_kv_dq < 128 * 128:
                 num_warps_ = 4
             else:
                 num_warps_ = 8
@@ -592,10 +571,8 @@ def _preprocess_backward(out, do, lse, block_q: int, debug: bool, interpret: boo
         functools.partial(_preprocess_backward_kernel, head_dim=head_dim),
         grid=(pl.cdiv(seq_len, block_q), batch_size, num_heads),
         in_specs=[
-            pl.BlockSpec((None, block_q, None, head_dim_padded),
-                         lambda i, j, k: (j, i, k, 0)),
-            pl.BlockSpec((None, block_q, None, head_dim_padded),
-                         lambda i, j, k: (j, i, k, 0)),
+            pl.BlockSpec((None, block_q, None, head_dim_padded), lambda i, j, k: (j, i, k, 0)),
+            pl.BlockSpec((None, block_q, None, head_dim_padded), lambda i, j, k: (j, i, k, 0)),
         ],
         out_specs=pl.BlockSpec((None, None, block_q), lambda i, j, k: (j, k, i)),
         compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=3),
@@ -709,6 +686,8 @@ def mha_backward_kernel(
     lse = lse_ref[curr_q_slice]
     do = plgpu.load(do_scaled_ref.at[curr_q_slice, :], mask=head_mask, other=0.0)
     di = delta_ref[curr_q_slice]
+    if q_segment_ids_ref is not None and kv_segment_ids_ref is None:
+        raise ValueError("q and kv segment ids must be provided together.")
 
     def inner_loop_dq(start_k, dq_):
         curr_k_slice = pl.dslice(start_k * block_kv_dq, block_kv_dq)
@@ -724,7 +703,7 @@ def mha_backward_kernel(
         if causal or q_segment_ids_ref is not None or sliding_window is not None:
             mask = None
             if q_segment_ids_ref is not None:
-                kv_segment_ids = kv_segment_ids_ref[curr_k_slice]
+                kv_segment_ids = cast(jax.Array, kv_segment_ids_ref)[curr_k_slice]
                 mask = segment_mask(q_segment_ids, kv_segment_ids)
             if causal:
                 span_k = start_k * block_kv_dq + jnp.arange(block_kv_dq)

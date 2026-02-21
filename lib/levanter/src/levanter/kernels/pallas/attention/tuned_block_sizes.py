@@ -1,4 +1,4 @@
-# Copyright 2026 The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -49,7 +49,31 @@ class AttentionBlockSizes:
 # key:
 #   - dtype_name
 #   - shape_bucket
-_GPU_DEFAULT_BLOCKS: dict[tuple[str, str], AttentionBlockSizes] = {
+_TOKAMAX_LIKE_BLOCKS: dict[tuple[str, str], AttentionBlockSizes] = {
+    ("bfloat16", "llama3-ish"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float16", "llama3-ish"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float32", "llama3-ish"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("bfloat16", "llama8b-ish"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float16", "llama8b-ish"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float32", "llama8b-ish"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("bfloat16", "qwen3-ish"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float16", "qwen3-ish"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float32", "qwen3-ish"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("bfloat16", "llama125m-high-batch"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float16", "llama125m-high-batch"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float32", "llama125m-high-batch"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("bfloat16", "llama125m-small-batch"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float16", "llama125m-small-batch"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float32", "llama125m-small-batch"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("bfloat16", "llama2-hd256"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float16", "llama2-hd256"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float32", "llama2-hd256"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("bfloat16", "default"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float16", "default"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+    ("float32", "default"): AttentionBlockSizes(128, 128, 32, 32, 32, 32),
+}
+
+_GB10_BLOCKS: dict[tuple[str, str], AttentionBlockSizes] = {
     ("bfloat16", "llama3-ish"): AttentionBlockSizes(32, 32, 16, 32, 32, 16),
     ("float16", "llama3-ish"): AttentionBlockSizes(32, 32, 16, 32, 32, 16),
     ("float32", "llama3-ish"): AttentionBlockSizes(32, 32, 16, 32, 32, 16),
@@ -75,8 +99,8 @@ _GPU_DEFAULT_BLOCKS: dict[tuple[str, str], AttentionBlockSizes] = {
 
 
 TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], AttentionBlockSizes]] = {
-    DEFAULT_DEVICE_KEY: _GPU_DEFAULT_BLOCKS,
-    "NVIDIA GB10": _GPU_DEFAULT_BLOCKS,
+    DEFAULT_DEVICE_KEY: _TOKAMAX_LIKE_BLOCKS,
+    "NVIDIA GB10": _GB10_BLOCKS,
 }
 
 

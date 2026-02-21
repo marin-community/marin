@@ -678,21 +678,26 @@ def _ensure_attention_batch_dim(
     q: Float[Array, "B Q Hq D"] | Float[Array, "Q Hq D"],
     k: Float[Array, "B K Hkv D"] | Float[Array, "K Hkv D"],
     v: Float[Array, "B K Hkv D"] | Float[Array, "K Hkv D"],
-) -> tuple[
-    Float[Array, "B Q Hq D"], Float[Array, "B K Hkv D"], Float[Array, "B K Hkv D"], bool
-]:
+) -> tuple[Float[Array, "B Q Hq D"], Float[Array, "B K Hkv D"], Float[Array, "B K Hkv D"], bool]:
     if q.ndim == 4 and k.ndim == 4 and v.ndim == 4:
         return q, k, v, False
 
     if q.ndim == 3 and k.ndim == 3 and v.ndim == 3:
         return q[None, ...], k[None, ...], v[None, ...], True
 
-    raise ValueError(f"q/k/v must be all rank-4 (batched) or all rank-3 (unbatched), got ndim={[q.ndim, k.ndim, v.ndim]}")
+    raise ValueError(
+        f"q/k/v must be all rank-4 (batched) or all rank-3 (unbatched), got ndim={[q.ndim, k.ndim, v.ndim]}"
+    )
 
 
 Implementation: TypeAlias = Literal["pallas_tpu", "pallas_gpu", "reference"]
 ArrayImpl = Callable[
-    [Float[Array, "B Q Hq D"], Float[Array, "B K Hkv D"], Float[Array, "B K Hkv D"], AttentionMask | jnp.ndarray | None],
+    [
+        Float[Array, "B Q Hq D"],
+        Float[Array, "B K Hkv D"],
+        Float[Array, "B K Hkv D"],
+        AttentionMask | jnp.ndarray | None,
+    ],
     Float[Array, "B Q Hq D"],
 ]
 BackendBlockSizes: TypeAlias = BlockSizes | dict[str, BlockSizes]
@@ -754,8 +759,7 @@ def attention(
                 if explicit:
                     raise
                 warnings.warn(
-                    "Pallas splash attention unavailable, falling back to reference: "
-                    f"{e}",
+                    "Pallas splash attention unavailable, falling back to reference: " f"{e}",
                     RuntimeWarning,
                 )
                 errors.append(e)
@@ -784,8 +788,7 @@ def attention(
                 if explicit:
                     raise
                 warnings.warn(
-                    "Pallas splash attention unavailable, falling back to reference: "
-                    f"{e}",
+                    "Pallas splash attention unavailable, falling back to reference: " f"{e}",
                     RuntimeWarning,
                 )
                 errors.append(e)
