@@ -46,6 +46,36 @@ def test_fused_cross_entropy_xla_matches_reference():
     assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
 
 
+def test_fused_cross_entropy_xla_return_argmax_matches_reference():
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+
+    loss, argmax = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        logsumexp_weight=0.0,
+        logit_soft_cap=1.3,
+        implementation="xla",
+        return_argmax=True,
+    )
+
+    loss_ref, _ = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        logit_soft_cap=1.3,
+    )
+    logits = jax.lax.dot_general(x, w, (((1,), (0,)), ((), ())))
+    logits = jnp.tanh(logits / 1.3) * 1.3
+    argmax_ref = jnp.argmax(logits, axis=-1).astype(jnp.int32)
+
+    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+    assert jnp.array_equal(argmax, argmax_ref)
+
+
 def test_fused_cross_entropy_reduction_and_penalty():
     x, w, y = _make_toy_inputs()
     weight = jnp.array([1.0, 0.0, 1.0, 1.0, 1.0, 0.0], dtype=jnp.float32)
