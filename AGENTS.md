@@ -34,6 +34,11 @@
 - You never credit yourself in commits.
 - NEVER EVER EVER credit yourself in commit messages.
 
+### Agent-Generated GitHub Activity
+
+- When an agent creates a PR or an issue using the user's auth token, it must add the `agent-generated` label.
+- When an agent comments on a PR or issue using the user's auth token, the comment must include a `🤖` emoji unless the exact comment text was explicitly approved by the user.
+
 ### Code Style
 
 - Put all imports at the top of the file. Avoid local imports unless technically necessary (for example, to break circular dependencies or guard optional dependencies).
