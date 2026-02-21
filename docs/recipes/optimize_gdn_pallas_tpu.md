@@ -13,6 +13,7 @@ This recipe standardizes the loop:
 Current phase goal:
 - Push MFU toward ~50% with large kernel-level wins.
 - Treat small tuning wins as secondary; prioritize architecture/kernel redesigns first.
+- Optimize training throughput first; prioritize `chunk_gated_delta_rule` hotspots over decode-only paths.
 
 The current baseline bottlenecks (from issue [#1884 comment 3714287157](https://github.com/marin-community/marin/issues/1884#issuecomment-3714287157), updated January 6, 2026):
 - strict lower-triangular inversion is expensive on TPU; sequential dependencies hurt MXU occupancy,
@@ -50,6 +51,7 @@ These are easy to miss and can dominate performance even when the math is optima
 - Every iteration must target a meaningful reduction in dominant hotspot cost, not only parameter retuning.
 - Prefer changes that reduce Pallas custom-call launch count, increase work per call, improve tiling/layout, or remove serial dependencies.
 - Equivalent mathematical reformulations are encouraged when they preserve model semantics and remove expensive operations (including explicit triangular inversion).
+- For bottleneck attribution probes, temporarily approximate triangular solves is allowed if explicitly marked as probe-only and never promoted as champion code.
 - Do not run standalone iterations that only tweak scalar constants (`unroll`, `chunk`, `segment`, `batch`) unless paired with a structural kernel/dataflow change.
 - If an iteration delivers <3% MFU gain and hotspots are unchanged, the next iteration must escalate to a more radical design.
 - Use FlashLinearAttention and Pallas TPU docs as design references before implementing.
@@ -231,6 +233,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --model gpt-5.3-codex \
   --reasoning-effort xhigh \
   --resilient \
+  --directive-preset training-chunk-kernel-focus \
   --directive-preset tpu-layout-and-dtypes \
   --directive-preset triangular-inversion \
   --dirty-policy stash \
@@ -256,8 +259,13 @@ Notes:
 - `--directive`, `--directive-file`, and `--directive-preset` inject per-session guidance (for example triangular inversion focus) without editing prompt files.
 - Preset directives are stored as markdown docs under `scripts/gdn/session_directives/` (`triangular-inversion` maps to `scripts/gdn/session_directives/triangular-inversion.md`).
   Useful presets:
+  - `training-chunk-kernel-focus`: prioritize chunked train kernels and de-prioritize decode-only wins.
   - `tpu-layout-and-dtypes`: avoid TPU register-layout cliffs (singleton last-axis, transpose fusion, BF16/F32 policy).
   - `emit-pipeline-fullseq`: design sketch for collapsing segmentation using `pltpu.emit_pipeline`.
+- Use `--validation-mode profile-only` when running intentional ablation probes that may fail correctness tests.
+- Use `--validation-profile-env KEY=VALUE` (repeatable) to inject profile-only environment switches such as:
+  - `--validation-profile-env GDN_TRIANGULAR_SOLVE_PROBE=identity`
+  - `--validation-profile-env GDN_TRIANGULAR_SOLVE_PROBE=first_order`
 - Prefer `--dirty-policy stash --no-commit-policy count-failure` for unattended long runs so failed attempts do not permanently block progress.
 - `--dirty-policy stash` restores the stashed tree automatically after each iteration.
 - If stash restore conflicts with edits produced in the iteration, default `--stash-restore-policy warn-keep` keeps the stash and continues; use `--stash-restore-policy fail` for strict stop-on-conflict.

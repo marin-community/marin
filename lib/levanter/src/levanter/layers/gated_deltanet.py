@@ -48,6 +48,12 @@ import haliax.nn as hnn
 from haliax import Axis, NamedArray
 
 _GDN_DBG_SHARDING = bool(int(os.environ.get("GDN_DEBUG_SHARDING", "0")))
+_GDN_TRIANGULAR_SOLVE_PROBE = os.environ.get("GDN_TRIANGULAR_SOLVE_PROBE", "off").strip().lower()
+if _GDN_TRIANGULAR_SOLVE_PROBE not in {"off", "identity", "first_order"}:
+    raise ValueError(
+        "GDN_TRIANGULAR_SOLVE_PROBE must be one of: off, identity, first_order. "
+        f"Got {_GDN_TRIANGULAR_SOLVE_PROBE!r}."
+    )
 
 
 def _dbg(tag: str, arr):
@@ -1075,6 +1081,32 @@ def _mxu_matmul_f32(
     return out.astype(jnp.float32)
 
 
+def _triangular_probe_approx(
+    A_strict: jnp.ndarray,
+    rhs: jnp.ndarray,
+    *,
+    transpose: bool,
+    precision_mode: str,
+) -> jnp.ndarray:
+    """Fast probe-only approximation for triangular solves.
+
+    This intentionally trades correctness for speed to isolate the solve bottleneck
+    in end-to-end profiling runs.
+    """
+    max_abs = jnp.asarray(1e4, dtype=jnp.float32)
+
+    if _GDN_TRIANGULAR_SOLVE_PROBE == "identity":
+        approx = rhs
+    elif _GDN_TRIANGULAR_SOLVE_PROBE == "first_order":
+        term = A_strict if not transpose else jnp.transpose(A_strict)
+        approx = rhs + _mxu_matmul_f32(term, rhs, precision_mode=precision_mode)
+    else:
+        raise ValueError(f"Unknown triangular solve probe mode: {_GDN_TRIANGULAR_SOLVE_PROBE!r}")
+
+    approx32 = jnp.nan_to_num(approx.astype(jnp.float32), nan=0.0, posinf=max_abs, neginf=-max_abs)
+    return jnp.clip(approx32, -max_abs, max_abs)
+
+
 def _solve_I_minus_strict_lower_blockwise(
     A_strict: jnp.ndarray,
     rhs: jnp.ndarray,
@@ -1114,6 +1146,14 @@ def _solve_I_minus_strict_lower_blockwise(
     idx = jnp.arange(n)
     strict_mask = idx[:, None] > idx[None, :]
     A_strict = jnp.where(strict_mask, A_strict, jnp.asarray(0, dtype=solve_dtype))
+
+    if _GDN_TRIANGULAR_SOLVE_PROBE != "off":
+        return _triangular_probe_approx(
+            A_strict,
+            rhs,
+            transpose=False,
+            precision_mode=precision_mode,
+        )
 
     if n <= base_block:
         # After k rounds, this applies powers up to A^(2^k - 1). We need >= n - 1.
@@ -1180,6 +1220,14 @@ def _solve_I_minus_strict_lower_transpose_blockwise(
     idx = jnp.arange(n)
     strict_mask = idx[:, None] > idx[None, :]
     A_strict = jnp.where(strict_mask, A_strict, jnp.asarray(0, dtype=solve_dtype))
+
+    if _GDN_TRIANGULAR_SOLVE_PROBE != "off":
+        return _triangular_probe_approx(
+            A_strict,
+            rhs,
+            transpose=True,
+            precision_mode=precision_mode,
+        )
 
     if n <= base_block:
         x = rhs

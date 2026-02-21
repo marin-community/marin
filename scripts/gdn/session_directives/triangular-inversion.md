@@ -3,6 +3,7 @@ Triangular inversion focus for this session:
 - Target the strict lower-triangular inversion bottleneck in GDN kernels with high-upside redesigns.
 - Bold changes are explicitly allowed if they preserve end-to-end model behavior and improve throughput/MFU.
 - Equivalent mathematical reformulations are in scope, including approaches that avoid explicit chunk-size-by-chunk-size matrix inversion.
+- For explicit process guidance, follow `docs/recipes/optimize_gdn_pallas_tpu.md` and record outcomes in `lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md`.
 
 Optimization direction:
 
@@ -41,6 +42,10 @@ Validation bar:
 - Keep correctness tests green (`test_gdn_kernels.py`, `test_gdn_layer.py`).
 - Verify end-to-end behavior remains aligned with reference implementation semantics.
 - Require a completed profile run with measured throughput/MFU change before claiming success.
+- For probe-only bottleneck attribution runs, use profile-only validation and optionally set:
+  - `GDN_TRIANGULAR_SOLVE_PROBE=identity`
+  - `GDN_TRIANGULAR_SOLVE_PROBE=first_order`
+  via `gdnctl --validation-profile-env` / `--profile-env`.
 
 Numerics guardrails:
 

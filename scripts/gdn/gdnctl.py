@@ -46,6 +46,7 @@ DEFAULT_HF_TRACE_PATTERN_WITH_XPLANE = r"(perfetto_trace\\.json\\.gz$|trace\\.js
 DEFAULT_HILLCLIMB_LOG = REPO_ROOT / "lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md"
 
 SESSION_DIRECTIVE_PRESET_FILES = {
+    "training-chunk-kernel-focus": REPO_ROOT / "scripts/gdn/session_directives/training-chunk-kernel-focus.md",
     "triangular-inversion": REPO_ROOT / "scripts/gdn/session_directives/triangular-inversion.md",
     "tpu-layout-and-dtypes": REPO_ROOT / "scripts/gdn/session_directives/tpu-layout-and-dtypes.md",
     "emit-pipeline-fullseq": REPO_ROOT / "scripts/gdn/session_directives/emit-pipeline-fullseq.md",
@@ -1054,6 +1055,11 @@ def _load_session_directives(args: argparse.Namespace) -> list[str]:
 
 def _managed_dev_tpu_session_directive(args: argparse.Namespace) -> str:
     active_cluster = getattr(args, "active_dev_tpu_cluster", args.dev_tpu_cluster)
+    validation_requirement = "both validation tests and a profile result"
+    if args.validation_mode == "profile-only":
+        validation_requirement = "a profile result"
+    elif args.validation_mode == "off":
+        validation_requirement = "post-check/profile evidence configured for this run"
     return (
         "Managed dev TPU mode is active for this run.\n\n"
         f"- Prefer dev TPU commands for validation/profiling on `--cluster {active_cluster}` "
@@ -1066,11 +1072,19 @@ def _managed_dev_tpu_session_directive(args: argparse.Namespace) -> str:
         "- Fallback if dev TPU path fails:\n"
         "  - `uv run python scripts/gdn/gdnctl.py ray-test --cluster <cluster> --tpu auto --tests both`\n"
         "  - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster <cluster> --tpu v5p-8 ...`\n"
-        "- Do not finish an iteration without both validation tests and a profile result."
+        f"- Do not finish an iteration without {validation_requirement}."
     )
 
 
 def _validation_gate_session_directive(args: argparse.Namespace) -> str:
+    if args.validation_mode == "profile-only":
+        return (
+            "Do not end an iteration without TPU profiling evidence.\n\n"
+            "- Validation mode: profile-only (tests are intentionally skipped for this run).\n"
+            "- Required profile: one completed profile run per iteration.\n"
+            "- If dev TPU path is unavailable/fails, fall back to ray-profile and wait for completion."
+        )
+
     return (
         "Do not end an iteration without TPU validation + profiling evidence.\n\n"
         f"- Required tests target: `{args.validation_tests}`\n"
@@ -1301,6 +1315,23 @@ def _profile_command_lines(
     return lines
 
 
+def _parse_profile_env(profile_env: Sequence[str]) -> list[tuple[str, str]]:
+    parsed: list[tuple[str, str]] = []
+    key_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    for raw in profile_env:
+        item = raw.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise SystemExit(f"[gdnctl] invalid --profile-env entry (expected KEY=VALUE): {raw!r}")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        if not key_pattern.match(key):
+            raise SystemExit(f"[gdnctl] invalid --profile-env key {key!r}; expected [A-Za-z_][A-Za-z0-9_]*")
+        parsed.append((key, value))
+    return parsed
+
+
 def _append_profile_env(cmd: list[str], args: argparse.Namespace) -> None:
     cmd += ["-e", "EQX_ON_ERROR=nan"]
     cmd += ["-e", f"WANDB_MODE={args.wandb_mode}"]
@@ -1316,6 +1347,9 @@ def _append_profile_env(cmd: list[str], args: argparse.Namespace) -> None:
         cmd += ["-e", f"GDN_PROFILE_CHUNK_SIZE={args.chunk_size}"]
     if args.segment_size is not None:
         cmd += ["-e", f"GDN_PROFILE_SEGMENT_SIZE={args.segment_size}"]
+    extra_env = _parse_profile_env(getattr(args, "profile_env", []))
+    for key, value in extra_env:
+        cmd += ["-e", f"{key}={value}"]
 
 
 def cmd_ray_profile(args: argparse.Namespace) -> int:
@@ -1665,6 +1699,7 @@ def _run_validation_ray_profile_once(
         batch_size=args.validation_profile_batch_size,
         chunk_size=args.validation_profile_chunk_size,
         segment_size=args.validation_profile_segment_size,
+        profile_env=args.validation_profile_env,
     )
     _append_profile_env(cmd, profile_env_args)
 
@@ -1703,6 +1738,7 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             segment_size=args.validation_profile_segment_size,
             run_name_prefix=profile_prefix,
             wandb_mode=args.validation_profile_wandb_mode,
+            profile_env=args.validation_profile_env,
             marin_prefix=args.validation_profile_marin_prefix,
             dry_run=args.validation_profile_dry_run,
             no_sync=args.validation_dev_no_sync,
@@ -1768,7 +1804,7 @@ def _run_validation_gate_for_iteration(
     *,
     iteration: int,
 ) -> tuple[bool, int, dict[str, object]]:
-    if args.validation_mode != "required":
+    if args.validation_mode == "off":
         return True, 0, {}
 
     def should_continue(attempt: int) -> bool:
@@ -1776,23 +1812,24 @@ def _run_validation_gate_for_iteration(
             return True
         return attempt < args.validation_max_attempts
 
-    attempt = 1
-    while True:
-        print(f"[gdnctl] validation tests attempt {attempt}")
-        rc, retryable = _run_validation_tests_once(args)
-        if rc == 0:
-            break
-        if not retryable:
-            return False, rc, {}
-        if not should_continue(attempt):
-            return False, rc, {}
-        if args.validation_retry_sleep > 0:
-            print(
-                "[gdnctl] validation tests failed; waiting " f"{args.validation_retry_sleep:.1f}s before retry.",
-                file=sys.stderr,
-            )
-            time.sleep(args.validation_retry_sleep)
-        attempt += 1
+    if args.validation_mode == "required":
+        attempt = 1
+        while True:
+            print(f"[gdnctl] validation tests attempt {attempt}")
+            rc, retryable = _run_validation_tests_once(args)
+            if rc == 0:
+                break
+            if not retryable:
+                return False, rc, {}
+            if not should_continue(attempt):
+                return False, rc, {}
+            if args.validation_retry_sleep > 0:
+                print(
+                    "[gdnctl] validation tests failed; waiting " f"{args.validation_retry_sleep:.1f}s before retry.",
+                    file=sys.stderr,
+                )
+                time.sleep(args.validation_retry_sleep)
+            attempt += 1
 
     attempt = 1
     validation_info: dict[str, object] = {}
@@ -1838,7 +1875,8 @@ def _apply_resilient_defaults(args: argparse.Namespace) -> None:
     args.stash_restore_policy = "warn-keep"
     args.codex_retries = max(args.codex_retries, 2)
     args.post_check_retries = max(args.post_check_retries, 2)
-    args.validation_mode = "required"
+    if args.validation_mode == "off":
+        args.validation_mode = "required"
     args.perf_mode = "required"
     if args.perf_regression_policy == "fail":
         args.perf_regression_policy = "revert-count-failure"
@@ -2028,8 +2066,11 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     if args.validation_retry_sleep < 0:
         raise SystemExit("[gdnctl] --validation-retry-sleep must be >= 0.")
 
-    if args.perf_mode == "required" and args.validation_mode != "required":
-        raise SystemExit("[gdnctl] --perf-mode=required requires --validation-mode=required.")
+    if args.perf_mode == "required" and args.validation_mode == "off":
+        raise SystemExit("[gdnctl] --perf-mode=required requires --validation-mode=required or profile-only.")
+
+    # Fail fast on malformed profile env overrides before entering the loop.
+    _parse_profile_env(args.validation_profile_env)
 
     if args.perf_min_improvement_pct < 0:
         raise SystemExit("[gdnctl] --perf-min-improvement-pct must be >= 0.")
@@ -2070,7 +2111,7 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                 "[gdnctl] managed dev TPU hold is not active for this run; continuing without hold-specific directives.",
                 file=sys.stderr,
             )
-        if args.validation_mode == "required":
+        if args.validation_mode in {"required", "profile-only"}:
             session_directives.append(_validation_gate_session_directive(args))
         if args.perf_mode == "required":
             session_directives.append(_performance_policy_session_directive(args, perf_state_path=perf_state_path))
@@ -2293,6 +2334,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dev_profile.add_argument("--chunk-size", type=int, default=None, help="Optional GDN chunk override")
     dev_profile.add_argument("--segment-size", type=int, default=None, help="Optional GDN segment override")
+    dev_profile.add_argument(
+        "--profile-env",
+        action="append",
+        default=[],
+        help="Extra profile env var override in KEY=VALUE form (repeatable).",
+    )
     dev_profile.add_argument("--run-name-prefix", default="gdn_tinyprof", help="Run name prefix")
     dev_profile.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     dev_profile.add_argument(
@@ -2319,6 +2366,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ray_profile.add_argument("--chunk-size", type=int, default=None, help="Optional GDN chunk override")
     ray_profile.add_argument("--segment-size", type=int, default=None, help="Optional GDN segment override")
+    ray_profile.add_argument(
+        "--profile-env",
+        action="append",
+        default=[],
+        help="Extra profile env var override in KEY=VALUE form (repeatable).",
+    )
     ray_profile.add_argument("--run-name-prefix", default="gdn_tinyprof", help="Run name prefix")
     ray_profile.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     ray_profile.add_argument("--dry-run", action="store_true", help="Executor dry-run")
@@ -2416,9 +2469,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     codex_loop.add_argument(
         "--validation-mode",
-        choices=["required", "off"],
+        choices=["required", "profile-only", "off"],
         default="required",
-        help="Whether each successful codex iteration must complete TPU test+profile validation.",
+        help="Validation gate mode: tests+profile, profile-only, or off.",
     )
     codex_loop.add_argument(
         "--validation-policy",
@@ -2511,6 +2564,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Optional GDN segment override for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-env",
+        action="append",
+        default=[],
+        help="Extra profile env var override for validation profile runs in KEY=VALUE form (repeatable).",
     )
     codex_loop.add_argument(
         "--validation-profile-run-name-prefix",

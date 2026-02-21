@@ -50,6 +50,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --model gpt-5.3-codex \
   --reasoning-effort xhigh \
   --resilient \
+  --directive-preset training-chunk-kernel-focus \
   --directive-preset triangular-inversion \
   --dirty-policy stash \
   --no-commit-policy count-failure
@@ -83,6 +84,7 @@ Keep `--post-check` cluster/name aligned to the held allocation (`--cluster` + `
 Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`
 - session directive presets:
+  - `training-chunk-kernel-focus` -> `scripts/gdn/session_directives/training-chunk-kernel-focus.md`
   - `triangular-inversion` -> `scripts/gdn/session_directives/triangular-inversion.md`
 
 The default prompt is aggressive by design:
@@ -96,6 +98,8 @@ The default prompt is aggressive by design:
 - `--resilient` is the recommended unattended mode: unlimited failure budget (`--max-failures -1`), retry-enabled codex/post-check paths, and best-effort managed dev TPU hold.
 - Validation gate behavior:
   - tests + profile are required each iteration by default (`--validation-mode required`).
+  - use `--validation-mode profile-only` for explicit ablation/probe runs where correctness may be intentionally relaxed.
   - execution path prefers held dev TPU and falls back to `ray_run` when dev TPU path fails/unavailable.
   - retries are unbounded by default (`--validation-max-attempts -1`) so TPU queue wait is handled in-loop.
   - for harness debugging only, disable with `--validation-mode off`.
+  - pass extra profile env vars with `--validation-profile-env KEY=VALUE` (or `--profile-env KEY=VALUE` on direct `ray-profile` / `dev-tpu-profile` commands).

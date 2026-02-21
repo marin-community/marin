@@ -8,6 +8,7 @@ Primary objective:
 - Reach major end-to-end speedups and push MFU toward ~50%.
 - This is still the architecture/kernel-design phase, not fine-grained tuning.
 - Favor bold, high-upside kernel redesigns over safe micro-optimizations.
+- Prioritize the training chunk path (`chunk_gated_delta_rule` / flash train kernels) over decode/recurrent paths.
 
 Repo context:
 - Kernel implementation: `lib/levanter/src/levanter/layers/gated_deltanet.py`
@@ -41,11 +42,13 @@ Major-bet requirement:
   - more useful work per kernel (higher arithmetic intensity),
   - changed dataflow/layout/tiling that increases MXU utilization,
   - replaced sequential dependencies with more parallel blockwise/associative structure.
+  - directly reduced end-to-end training-step time in the chunked train path.
 
 Disallowed as a standalone iteration:
 - only tweaking scalar constants (unroll/chunk/segment/batch) with no structural kernel changes,
 - only toggling config flags/checkpointing/remat,
 - only log formatting or measurement plumbing.
+- only optimizing recurrent/decode-only code paths with no measurable train-step impact.
 
 Escalation rule:
 - If measured MFU gain is <3% and dominant hotspot is unchanged, mark the attempt as low-impact in the log and set the next hypothesis to a more radical design (not another small tuning step).
@@ -62,6 +65,7 @@ Constraints:
 - No backward-compatibility shims/fallback hacks.
 - Do not relax test tolerances.
 - If blocked on infra/transient cluster issues, document blocker + exact failing command in the running log and stop without speculative code changes.
+- Probe runs that intentionally relax correctness (for bottleneck attribution) must be clearly labeled as probe/ablation and must not be promoted as champions.
 
 Preferred commands:
 - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`

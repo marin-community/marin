@@ -741,3 +741,38 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **meaningful win**. The same dominant hotspot category (`custom-call`) got faster, with most gain coming from the forward closed-call shard-map path and lower collective cost; this clears the performance-governance promotion threshold by a wide margin.
 - Why this did not unlock a larger speedup: the top backward closed-call shard-map pallas hotspot stayed flat (~68 ms), so remaining speedup headroom is concentrated in backward recurrent math/launch structure.
 - Next bold hypothesis: keep this BF16 I/O policy and target the unchanged backward dominant hotspot with a structural decomposition move (Macro Move F Experiment B or Macro Move D backward recurrent pipeline) rather than additional dtype-only tweaks.
+
+### Iteration 18 - Probe: triangular-solve bottleneck sensitivity (profile-only A/B)
+
+- Date: 2026-02-21T01:02:30Z
+- Commit: 586daf1c0a2d2cb229fb5bbe2652acc2babf56e1
+- Purpose: measure an upper bound on strict-lower-triangular solve bottleneck share in the training chunk path by intentionally bypassing solve work.
+- Probe policy: **ablation only** (not correctness-preserving; not champion-eligible).
+
+- Probe setup:
+  - Baseline mode: `GDN_TRIANGULAR_SOLVE_PROBE=off`
+  - Ablation mode: `GDN_TRIANGULAR_SOLVE_PROBE=identity` (approximate no-op solve)
+  - Matched run shape: `v5p-8`, `size=130m`, `num_steps=12`, `profile_start_step=2`, `profile_num_steps=4`, `batch_size=8`
+  - Dev TPU path used due Ray queue instability.
+
+- Commands:
+  - Baseline:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 12 --profile-start-step 2 --profile-num-steps 4 --batch-size 8 --run-name-prefix gdn_trisolve_probe_baseline_dev --profile-env GDN_TRIANGULAR_SOLVE_PROBE=off --marin-prefix gs://marin-us-east5 --no-sync`
+  - Identity ablation:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 12 --profile-start-step 2 --profile-num-steps 4 --batch-size 8 --run-name-prefix gdn_trisolve_probe_identity_dev --profile-env GDN_TRIANGULAR_SOLVE_PROBE=identity --marin-prefix gs://marin-us-east5 --no-sync`
+
+- Runs:
+  - Baseline: `https://wandb.ai/marin-community/marin/runs/gdn_trisolve_probe_baseline_dev_130m_ch128_seg16_12step-2cd08b`
+  - Identity ablation: `https://wandb.ai/marin-community/marin/runs/gdn_trisolve_probe_identity_dev_130m_ch128_seg16_12step-9c0571`
+
+- Measured delta (identity vs baseline):
+  - `throughput/mfu`: `5.1181 -> 6.2805` (`+22.71%`)
+  - `throughput/tokens_per_second`: `165569.79 -> 203173.29` (`+22.71%`)
+  - `throughput/duration`: `0.19791s -> 0.16128s` (`-18.51%`)
+
+- Interpretation:
+  - Strict-lower-triangular solve is a **material bottleneck** in the current training chunk path.
+  - This probe is an upper-bound sensitivity test: making solve nearly free improved throughput by ~22.7%, so solve-path speedups can matter but are unlikely alone to explain the full MFU gap to target.
+
+- Next hypothesis:
+  - Pursue correctness-preserving reformulations that reduce or amortize explicit triangular solves (for example, blockwise associative/state-space reformulation) while targeting the remaining dominant custom-call hotspots in backward recurrent kernels.
