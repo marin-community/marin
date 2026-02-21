@@ -888,3 +888,63 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 
 - Next bold hypothesis:
   - Retry the Macro Move A singleton-layout rewrite once profiling infra is healthy; if blocked again, pivot to Macro Move F decomposition targeting the forward closed-call hotspot while explicitly minimizing dependence on contested TPU queues.
+
+### Iteration 21 - Macro Move D / fused full-sequence train forward pipeline (reverted)
+
+- Date: 2026-02-21T20:31:14Z
+- Commit: none (failed attempt)
+- Loop session/local index: `5/20`
+- Starting commit: `740b9fbc09f1caa52d8314b2f1b457878c20cf69`
+- Dominant bottleneck carried in (latest successful train trace baseline `.profiles/wandb/gdn_invreuse_i1_dev_130m_ch128_seg16_20steps-2d1d85/plugins/profile/2026_02_21_14_41_31/perfetto_trace.json.gz`):
+  - Prior loop trace summary: train-path `custom-call` remained dominant (`91.176 ms`) with forward closed-call shard-map pallas as the leading site (`~51.550 ms`).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: fuse full-sequence train forward chunk prepare + recurrent apply into a single `emit_pipeline` Pallas custom-call (`+10-25%`, high compile/layout risk).
+  2. **Macro Move E**: V-tile recurrent/train state update (`K x Vb`) to reduce per-program VMEM and improve occupancy (`+12-25%`, high reduction-correctness risk).
+  3. **Macro Move F**: split backward/train path into chunk-local adjoint precompute + recurrent apply stage (`+15-30%`, very high tape-I/O and implementation risk).
+
+- Selected macro-move category: **D) Use `pltpu.emit_pipeline` to fuse across chunk/segment loops**.
+- Selected hypothesis: reduce train-path launch overhead and intermediate HBM traffic by replacing the 2-kernel full-sequence forward train path (prepare + recurrent) with one fused full-sequence `emit_pipeline` kernel that emits `out`, `chunk_starts`, and backward tape tensors in one call.
+
+- Change attempt summary:
+  - Implemented a fused full-sequence forward train kernel/wrapper path in `lib/levanter/src/levanter/layers/gated_deltanet.py` for `return_prepare_tape=True`.
+  - Reverted the kernel change after profiling showed a meaningful end-to-end regression against champion MFU.
+
+- Correctness checks:
+  - Dev TPU attempt (failed, TPU lock):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Failure: `ABORTED: The TPU is already in use by another process`.
+  - Ray fallback (success):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260221-201309`
+    - Result: `49 passed, 40 skipped`.
+
+- Profile run:
+  - Dev TPU attempt (failed, TPU lock):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_fusedfullseq_i5_dev --no-sync`
+    - Failure: `ABORTED: The TPU is already in use by another process`.
+  - Ray fallback submit:
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_fusedfullseq_i5_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260221-201916`
+  - Wait:
+    - `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-bash-20260221-201916 --show-logs --tail 400`
+    - Result: `status=SUCCEEDED`.
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_fusedfullseq_i5_ray_130m_ch128_seg16_20steps-323825`
+  - W&B profiler artifact: `run-gdn_fusedfullseq_i5_ray_130m_ch128_seg16_20steps-323825-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_fusedfullseq_i5_ray_130m_ch128_seg16_20steps-323825/plugins/profile/2026_02_21_12_25_54/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_invreuse_i1_dev_130m_ch128_seg16_20steps-2d1d85/plugins/profile/2026_02_21_14_41_31/perfetto_trace.json.gz`):
+  - Dominant custom-call-equivalent bucket (`shard_map` in this trace format): `88.123 ms -> 76.750 ms` (`-12.91%`), still dominant.
+  - `all-gather`: `20.092 ms -> 20.057 ms` (`-0.18%`) (flat).
+  - Repeated dominant shard-map kernels improved but hotspot class did not change:
+    - `shard_map.3841`: `2.218 ms -> 1.650 ms` (`-25.61%`)
+    - `shard_map.3823`: `2.217 ms -> 1.649 ms` (`-25.62%`)
+
+- MFU/throughput delta (vs baseline run `gdn_invreuse_i1_dev_130m_ch128_seg16_20steps-2d1d85`):
+  - `throughput/mfu`: `5.640151 -> 5.457648` (`-3.24%`).
+  - `throughput/tokens_per_second`: `182457.82 -> 176553.86` (`-3.24%`).
+  - `throughput/duration`: `0.179592s -> 0.185598s` (`+3.34%`).
+
+- Assessment: **low-impact / regression**. Despite lower dominant `shard_map` kernel time in trace, end-to-end MFU regressed by more than governance threshold and the dominant hotspot class remained unchanged.
+- Governance action: regression exceeded threshold; reverted speculative kernel change per `revert-count-failure` policy.
+- Next bold hypothesis: avoid monolithic forward fusion and instead target the unchanged train-path shard-map/custom-call bottleneck with a more radical decomposition that reduces gradient-path launch/work imbalance (for example Macro Move E V-tiling or a staged D+E train pipeline with lower tape write/read pressure).
