@@ -92,11 +92,10 @@ def _shard_identical_batch(batch, axis_resources):
 def _make_vlm_eval_jit(EvalBatch, EvalPos, max_packed_segments, axis_resources, mp):
     """Create a JIT loglikelihood function for VLM evaluation.
 
-    Unlike _LmEvalHarnessWorker, this does NOT use out_axis_resources={}.
-    Outputs stay naturally sharded across hosts; jax.device_get gathers them
-    at the host/runtime level (not a TPU collective inside the XLA program).
-    This avoids the "unexpected peer with different launch id" TPU HALT that
-    occurs when transitioning between vlm_eval and training JIT functions.
+    Uses out_axis_resources={} to replicate outputs on every host (needed for
+    correct multi-host metrics).  The caller must run a post-loop sync JIT
+    (all-reduce + .item()) after the batch loop to synchronize all hosts
+    before returning to training — see _run_batch_loop.
     """
 
     def _eval_loglikelihood(model, packed_example):
@@ -127,7 +126,7 @@ def _make_vlm_eval_jit(EvalBatch, EvalPos, max_packed_segments, axis_resources, 
 
         return segments, -losses
 
-    return hax.named_jit(_eval_loglikelihood, axis_resources=axis_resources)
+    return hax.named_jit(_eval_loglikelihood, axis_resources=axis_resources, out_axis_resources={})
 
 
 def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources):
@@ -178,6 +177,17 @@ def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatc
         pbar.update(batch_tokens)
 
     pbar.close()
+
+    # Sync all hosts before returning — matches standard eval's post-loop
+    # pattern (eval.py:414).  The all-reduce forces all hosts to participate;
+    # .item() blocks until it completes on every host.  Without this, hosts
+    # diverge in timing during post-loop Python code and the next training JIT
+    # sees mismatched launch groups → TPU HALT.
+    dummy = hax.zeros(EvalBatch, dtype=jnp.float32)
+    dummy = _shard_identical_batch(dummy, axis_resources)
+    _sync = hax.named_jit(lambda x: hax.mean(x).array, axis_resources=axis_resources)(dummy)
+    _sync.item()
+    logger.info("vlm_eval post-loop sync complete")
 
     missing = np.where(~covered_points)[0]
     if len(missing) > 0:
