@@ -1274,3 +1274,73 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact (escalation-triggering)**. End-to-end MFU improved modestly, but the dominant train-path `shard_map/custom-call` hotspot was unchanged and key forward/backward closed-call costs remained flat.
 - Governance note: improvement clears the `>=0.250%` promotion threshold, but per escalation rule (`<3%` MFU gain + unchanged dominant hotspot), this attempt is treated as low-impact and the speculative kernel code was reverted.
 - Next bold hypothesis: pursue a more radical decomposition that changes backward/forward launch structure and work balance (for example Macro Move E with explicit shared K-only precompute or staged Macro F backward decomposition), rather than additional forward fusion variants.
+
+### Iteration 27 - Macro Move C / BF16 train-tape outputs across flash prepare+recurrent kernels (low-impact, reverted)
+
+- Date: 2026-02-22T02:18:26Z
+- Commit: none (failed attempt)
+- Loop session/local index: `11/20`
+- Starting commit: `194214d73ec1088b8d561d6932f3206cebd9824d`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` (custom-call equivalent bucket): `76.743 ms` (dominant category).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move C**: write flash prepare/recurrent training tapes in BF16 (instead of FP32) while keeping FP32 accumulation (`+10-18%`, medium-high numerical/trace risk).
+  2. **Macro Move E**: V-tiling recurrent+bwd state (`KxV -> KxVb`) with shared precompute to raise occupancy (`+15-30%`, high decomposition risk).
+  3. **Macro Move F**: split backward into staged adjoint precompute + recurrent apply kernels to rebalance custom-call critical path (`+15-30%`, very high integration risk).
+
+- Selected macro-move category: **C) Switch kernel math to BF16 inputs + FP32 accumulation**.
+- Selected hypothesis: reduce train-path tape bandwidth by emitting BF16 outputs for flash prepare/recurrent tape tensors (`v_pseudo`, `k_cumdecay`, `solve_transform`, `chunk_starts`) on the hot `Ct>=128` path while preserving FP32 accumulation in MXU dots.
+
+- Change attempt summary:
+  - Updated `lib/levanter/src/levanter/layers/gated_deltanet.py` so segmented/fullseq prepare and segmented/fullseq recurrent wrappers emitted BF16 tape dtypes on the BF16 precision path.
+  - Kept compute kernels and accumulation semantics unchanged.
+  - Reverted speculative kernel edits after end-to-end profile showed <3% MFU gain with unchanged dominant hotspot class.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation attempt (failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Failure: `ABORTED: The TPU is already in use by another process`.
+  - Ray fallback validation (success):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260222-020154`
+    - Result: `49 passed, 40 skipped`.
+
+- Profile run:
+  - Dev TPU profile attempt (failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bf16tape_i11_dev --no-sync`
+    - Failure: `ABORTED: The TPU is already in use by another process`.
+  - Ray fallback submit:
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_bf16tape_i11_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260222-020720`
+  - Wait:
+    - `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-bash-20260222-020720 --show-logs --tail 400`
+    - Result: `status=SUCCEEDED`.
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_bf16tape_i11_ray_130m_ch128_seg16_20steps-2f3238`
+  - W&B profiler artifact: `run-gdn_bf16tape_i11_ray_130m_ch128_seg16_20steps-2f3238-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_bf16tape_i11_ray_130m_ch128_seg16_20steps-2f3238/plugins/profile/2026_02_21_18_14_48/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`):
+  - Dominant train-path bucket (`shard_map`): `76.743 ms -> 76.645 ms` (`-0.13%`), still dominant.
+  - Forward closed-call tf_op improved slightly:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms -> 39.916 ms` (`-0.66%`).
+  - Backward closed-call tf_op remained effectively flat:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms -> 26.238 ms` (`-0.06%`).
+  - Secondary train-path shard-map callsite regressed slightly:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/shard_map/pallas_call:` `10.307 ms -> 10.491 ms` (`+1.78%`).
+  - `all-gather`: `20.193 ms -> 20.083 ms` (`-0.54%`) (minor).
+
+- MFU/throughput delta (vs baseline run `gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937`):
+  - `throughput/mfu`: `5.759190 -> 5.719097` (`-0.70%`).
+  - `throughput/tokens_per_second`: `186308.71 -> 185011.71` (`-0.70%`).
+  - `throughput/duration`: `0.175880s -> 0.177113s` (`+0.70%`).
+
+- Assessment: **low-impact / regression**. Dominant train-path `shard_map/custom-call` hotspot remained unchanged, with only sub-1% callsite movement and negative end-to-end MFU.
+- Governance note: regression did not cross the 1.0% hard regression threshold, but escalation rule still applies (`<3%` gain + unchanged dominant hotspot), so this attempt is treated as low-impact and reverted.
+- Next bold hypothesis: move to a stronger structural decomposition (Macro Move E or staged Macro Move F) that changes backward train-path work balance, e.g. V-tiling with shared `QK` precompute to increase MXU utilization without duplicating the dominant closed-call path.
