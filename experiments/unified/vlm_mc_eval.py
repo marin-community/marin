@@ -45,6 +45,7 @@ import tempfile
 from collections import defaultdict
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pyarrow.parquet as pq
 from tqdm_loggable.auto import tqdm
@@ -90,20 +91,18 @@ def _shard_identical_batch(batch, axis_resources):
 def _make_vlm_eval_jit(axis_resources, mp):
     """Create a JIT loglikelihood function for VLM evaluation.
 
-    Matches the standard eval JIT pattern (eval.py:340 accum_for_batch) exactly:
-    - @hax.named_jit with NO axis_resources or out_axis_resources args
-    - inference_mode and hax.axis_mapping set INSIDE the traced function
-    - model.compute_next_token_loss instead of manual forward pass
-    - hax.sum for an all-reduce sync value
+    Uses out_axis_resources={} to force all outputs to be fully replicated
+    across hosts, matching eval_harness.py's pattern. Without this, returning
+    the full (EvalBatch, EvalPos) loss tensor lets XLA choose different output
+    shardings per host, causing "unexpected peer" TPU crashes.
 
-    Returns (per_token_losses, sync_val) where per_token_losses has loss_weight
-    already applied (prompt tokens are zeroed). Per-segment aggregation is done
-    in NumPy on the host after process_allgather.
+    Returns (per_token_losses, sync_chain) where per_token_losses has loss_weight
+    already applied (prompt tokens are zeroed). sync_chain is a scalar accumulator
+    chained across iterations (input → output) to serialize XLA execution.
     """
     from levanter.utils.tree_utils import inference_mode
 
-    @hax.named_jit
-    def _eval_step(model, packed_example):
+    def _eval_step(model, packed_example, sync_chain):
         model = inference_mode(model, True)
         if mp is not None:
             model = mp.cast_to_compute(model)
@@ -111,10 +110,10 @@ def _make_vlm_eval_jit(axis_resources, mp):
             losses = model.compute_next_token_loss(
                 packed_example, reduction=None, reduction_axis=()
             )
-            sync_val = hax.sum(packed_example.loss_weight)
-        return losses, sync_val
+            sync_chain = sync_chain + hax.sum(packed_example.loss_weight).array
+        return losses, sync_chain
 
-    return _eval_step
+    return hax.named_jit(_eval_step, out_axis_resources={})
 
 
 def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources):
@@ -154,68 +153,36 @@ def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatc
     total_tokens = len(packed) * EvalPos.size
     pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok")
 
-    last_sync = None
+    # Initialize sync_chain as a scalar accumulator. The first JIT call will
+    # place it on devices; subsequent calls chain through it to serialize
+    # XLA execution. out_axis_resources={} ensures replicated outputs.
+    sync_chain = jnp.zeros(())
     for batch_orig in all_batches:
         _padding_count, batch_tokens = get_padding_count_from_batch(batch_orig, pad_token)
 
-        # Save segment_ids from the original (unsharded, CPU) batch for
-        # per-segment aggregation after the JIT call.
         seg_ids = batch_orig.attn_mask.segment_ids
         if isinstance(seg_ids, tuple):
             seg_ids = seg_ids[0]
         seg_ids_np = np.asarray(seg_ids.array)
 
         batch = _shard_identical_batch(batch_orig, axis_resources)
-        losses, last_sync = jit_fn(model, batch)
+        losses, sync_chain = jit_fn(model, batch, sync_chain)
 
-        # Extract local losses from sharded array (device → host, NO JIT).
-        # Deduplicate MP replicas by tracking seen index tuples.
-        seen = set()
-        for shard in losses.array.addressable_shards:
-            idx = shard.index
-            idx_key = tuple(
-                (s.start, s.stop, s.step) if isinstance(s, slice) else s
-                for s in idx
-            )
-            if idx_key in seen:
+        # out_axis_resources={} means outputs are fully replicated on every
+        # host, so we can read them directly without shard iteration.
+        local_losses = np.asarray(losses.array)
+        for seg_id in np.unique(seg_ids_np):
+            if seg_id < 0:
                 continue
-            seen.add(idx_key)
-            local_losses = np.asarray(shard.data)
-            local_seg_ids = seg_ids_np[idx]
-            for seg_id in np.unique(local_seg_ids):
-                if seg_id < 0:
-                    continue
-                mask = local_seg_ids == seg_id
-                result_probs[int(seg_id)] = -float(np.sum(local_losses[mask]))
-                covered_points[int(seg_id)] = True
+            mask = seg_ids_np == seg_id
+            result_probs[int(seg_id)] = -float(np.sum(local_losses[mask]))
+            covered_points[int(seg_id)] = True
 
         pbar.update(batch_tokens)
 
     pbar.close()
-
-    # Block until all hosts complete — matches standard eval's .item()
-    # call at eval.py:410. The sync_val was computed by hax.sum (an
-    # all-reduce) inside the JIT, so .item() blocks until all hosts finish.
-    if last_sync is not None:
-        last_sync.item()
+    sync_chain.item()
     logger.info("vlm_eval batch loop complete")
-
-    # Gather per-segment results across hosts. Each host processed a
-    # different subset of batch elements (DP sharding). Use
-    # multihost_broadcast_sync (KV store, no JIT) to merge.
-    if jax.process_count() > 1:
-        local_entries = {
-            str(int(i)): float(result_probs[i])
-            for i in np.where(covered_points)[0]
-        }
-        for host_idx in range(jax.process_count()):
-            received = multihost_broadcast_sync(
-                local_entries if jax.process_index() == host_idx else {},
-                is_source=(jax.process_index() == host_idx),
-            )
-            for idx_str, val in received.items():
-                result_probs[int(idx_str)] = val
-                covered_points[int(idx_str)] = True
 
     missing = np.where(~covered_points)[0]
     if len(missing) > 0:
@@ -983,6 +950,9 @@ def vlm_mc_eval_callback(
     from levanter.utils.jax_utils import parameter_count
     from levanter.utils.tree_utils import inference_mode
 
+    # Create JIT function once in the factory, not per eval call.
+    jit_fn = _make_vlm_eval_jit(axis_resources, mp)
+
     # Pre-resolve parquet paths and detect task types
     bench_parquets: dict[str, list[str]] = {}
     bench_task_types: dict[str, str] = {}
@@ -1032,7 +1002,6 @@ def vlm_mc_eval_callback(
                 logger.warning("Unknown task_type=%s for %s, skipping", task_type, bench_name)
 
         max_packed_segments = 64
-        jit_fn = _make_vlm_eval_jit(axis_resources, mp)
 
         # Run ALL benchmarks in a single continuous batch loop to avoid the
         # TPU crash that occurs at benchmark transitions.
@@ -1075,6 +1044,7 @@ def vlm_mc_eval_callback(
                         )
         except Exception:
             logger.exception("vlm_mc_eval crashed")
+            raise
 
         logger.info("VLM eval done.")
 
