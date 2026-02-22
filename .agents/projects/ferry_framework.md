@@ -6,7 +6,7 @@ Build a repeatable ferry workflow that launches a daily ~125M-parameter pretrain
 This is the initial target; we plan to expand to broader ferry scales/cadences once the daily integration loop is stable.
 
 The workflow should support:
-- proposing the next ferry as a PR based on the previous ferry + recent repo changes/issues
+- proposing the next ferry in a run issue based on the previous ferry + recent repo changes/issues
 - bounded config evolution (not identical every day, but not high-risk churn)
 - explicit requester approval before every launch, unless requester explicitly waives "ask before launch"
 - monitored execution to completion
@@ -23,7 +23,7 @@ This plan maps to `.agents/the_plan.yaml` items:
 Focus only on **daily ferry as integration test**:
 - single canonical ferry template (`experiments/ferries/daily.py`)
 - keep daily and canary ferry data-mix assumptions aligned (`experiments/ferries/canary.py`)
-- one PR-generation workflow (agent/manual-triggered)
+- one issue-driven proposal workflow (agent/manual-triggered)
 - one launch flow on TPU infra
 - one monitoring loop using `.agents/docs/job-monitoring-loop.md`
 - optional manual Discord update (automation deferred)
@@ -49,15 +49,25 @@ Out of scope for this phase:
 
 3. Ferry metadata source of truth:
 - GitHub tagged ferry PRs/issues are the canonical source of truth.
-  - each ferry PR should carry a ferry tag/label and link to the run issue
+  - each run-closure ferry PR should carry a ferry tag/label and link to the run issue
   - ferry issue should contain launch metadata (job id, cluster, links, outcome)
+  - each completed daily run should be sealed with a pushed git tag for the exact launch commit
+  - `docs/experiments/daily-ferry-log.md` is the canonical compact run index
   - local metadata files are optional and non-canonical
+- Canonical PR labels for run closure:
+  - `ferry`
+  - lane label: `ferry-daily` or `ferry-canary`
+  - `ferry-log-only`
+  - `ferry-sealed`
+- Canonical seal tag format:
+  - daily: `ferry/daily/YYYYMMDD/<run_slug>`
+  - canary: `ferry/canary/YYYYMMDD/<run_slug>`
 
 4. Proposal workflow (markdown-first):
 - Start with recipe-driven agent workflow (no required script initially).
   - reads last ferry metadata + recent commits/issues
   - proposes a constrained edit to `experiments/ferries/daily.py`
-  - emits PR notes (what changed + why + risk level)
+  - emits issue notes (what changed + why + risk level)
 - Optional follow-up: add `scripts/pm/ferries/propose_daily_ferry.py` if manual repetition becomes expensive.
 
 5. Launch + monitor helpers:
@@ -85,10 +95,10 @@ Out of scope for this phase:
 - apply bounded changes (see "Change Budget")
 - update run name with date (`daily-125m-YYYY-MM-DD`)
 
-3. Open PR:
+3. Record proposal in issue + push launch commit:
 - include rationale, risk estimate, and rollback plan
 - include "why this is not identical to prior run"
-- target `main`
+- push the launch commit and record its SHA in the issue
 
 4. Human gate:
 - explicit requester yes/no approval to launch every run
@@ -98,7 +108,7 @@ Out of scope for this phase:
 5. Launch on TPU cluster:
 - verify the requester approval gate is satisfied
 - run the canonical launch command
-- capture job id + links into issue/PR
+- capture job id + links into issue
 
 6. Monitor to completion:
 - execute `.agents/docs/job-monitoring-loop.md`
@@ -110,6 +120,7 @@ Out of scope for this phase:
 7. Publish updates:
 - GitHub issue comment with status and key links
 - optional manual Discord post for run state
+- after terminal state, open a log-only PR that updates `docs/experiments/daily-ferry-log.md`
 
 ## Operational Controls
 
@@ -142,6 +153,12 @@ Every ferry launch/update should include a minimal run record with these fields:
 - `notes`
 
 This record can live in the canonical GitHub issue comments, but all fields should be present by terminal state.
+Run log entries in `docs/experiments/daily-ferry-log.md` should include at minimum:
+- issue link
+- W&B link
+- experiment file link
+- seal tag (or explicit `N/A` for pre-policy runs)
+- short summary/observations
 
 Update cadence policy for run issues:
 - send major-event updates (not spam): launch, first eval, major incident, terminal state
@@ -264,18 +281,13 @@ Monitoring handoff:
   - `cluster`
   - `experiment=experiments/ferries/daily.py`
 
-## PR Template Requirements (for Ferry Proposals)
+## PR Requirements (Run Closure Only)
 
-Every ferry PR should include:
-- last ferry reference (issue + commit + run link)
-- summary of interval changes considered
-- exact config delta (before/after)
-- risk level (`low`/`medium`/`high`)
-- launch checklist:
-  - [ ] explicit requester approval (or explicit waiver recorded in-thread)
-  - [ ] issue created/updated
-  - [ ] (optional/manual) Discord update posted
-  - [ ] monitoring loop started
+Run-closure PRs (post-terminal):
+- PR should update only `docs/experiments/daily-ferry-log.md`
+- all detailed run narrative/debug notes remain in the issue
+- include or reference the pushed seal tag for the launch commit
+- apply canonical labels: `ferry`, lane label, `ferry-log-only`, `ferry-sealed`
 
 ## Failure and Escalation Policy
 
@@ -300,7 +312,7 @@ Phase-2:
 - establish `experiments/ferries/daily.py`
 
 2. **Proposal Workflow**
-- run the markdown recipe in an agent session to generate deterministic, reviewable diffs and PR body text
+- run the markdown recipe in an agent session to generate deterministic, reviewable diffs and issue update text
 - optionally add `scripts/pm/ferries/propose_daily_ferry.py` later if repetition cost justifies it
 
 3. **Launch + Monitoring**
@@ -312,21 +324,21 @@ Phase-2:
 - connect launch and completion events
 
 5. **Scheduled Daily Trigger**
-- add cron/automation entry to open daily proposal PR
+- add cron/automation entry to open/update the daily ferry run issue
 - retain explicit requester approval before launch (unless explicitly waived in-thread)
 
 ## Success Criteria
 
-- A new ferry proposal PR can be generated daily in under 10 minutes of agent time.
+- A new ferry proposal issue update can be generated daily in under 10 minutes of agent time.
 - Daily ferry run is launchable from one documented path.
-- Each run has issue + PR + run link traceability.
+- Each run has issue + sealed tag + run link traceability.
 - Monitoring loop is consistently used until terminal state.
 - Monitoring ownership is maintained for the full run duration (often 4-5 hours), not handed off early.
 - Discord automation is intentionally deferred to Phase 2.
 
 ## Resolved Decisions
 
-1. Daily ferry proposal PRs target `main`.
+1. Ferry run closure uses a log-only PR (`docs/experiments/daily-ferry-log.md`); proposal/debug details live in issues.
 2. Default cluster for now is `us-central1` (Ray CLI cluster key; maps to zone `us-central1-a`).
 3. "Experiment-relevant issues" filter starts with label `experiment` only.
 4. "Max 2 knobs changed" remains policy guidance, not script-enforced.

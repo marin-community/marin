@@ -19,6 +19,7 @@ Current intent:
 Shared baseline:
 - data: shared `nemotron_mix` baseline
 - default cluster: `us-central1` (zone `us-central1-a`)
+- run log: `docs/experiments/daily-ferry-log.md`
 
 Daily baseline defaults:
 - model size: Llama ~125M (`llama_150m`)
@@ -63,6 +64,16 @@ If objective is ambiguous, ask before editing.
 - Never restart/recreate/mutate cluster without explicit human consent in-thread.
 - Keep cluster mutation guardrails exactly aligned with `.agents/docs/job-monitoring-loop.md`, including the TPU bad-node exception path.
 - Use major-event updates (not spam): launch, first eval, major incident, terminal state.
+- Seal each completed daily run with a pushed git tag that points to the exact launch commit.
+- PR scope for run closure is log-only: update `docs/experiments/daily-ferry-log.md` and keep detailed debug/run narrative in the issue.
+- Canonical run-closure PR labels:
+  - `ferry`
+  - lane label: `ferry-daily` or `ferry-canary`
+  - `ferry-log-only`
+  - `ferry-sealed`
+- Canonical seal-tag format:
+  - daily: `ferry/daily/YYYYMMDD/<run_slug>`
+  - canary: `ferry/canary/YYYYMMDD/<run_slug>`
 
 ## Workflows
 
@@ -88,12 +99,14 @@ Notes:
 #### 2) Edit `experiments/ferries/daily.py`
 - Keep edits bounded (typically 1-2 knobs).
 
-#### 3) Open PR targeting `main`
-Include:
-- last ferry links (issue + PR/commit + W&B/job link),
+#### 3) Record proposal in issue and push launch commit
+In the run issue, record:
+- last ferry links (issue + commit + W&B/job link),
 - exact config delta and rationale,
 - risk level (`low`/`medium`/`high`),
 - launch checklist (explicit requester approval or explicit waiver + monitoring started).
+
+Then push the launch commit (no proposal PR by default).
 
 #### 4) Launch
 Before launch, confirm requester approval in-thread unless they already gave explicit "launch without asking" permission.
@@ -139,6 +152,12 @@ Experiment link: <experiment JSON/browser link>
 Recommendation / victory decision: <next action>
 ```
 
+#### 7) Seal and open log-only PR
+- Create and push a sealing tag for the exact launch commit (the commit containing the `experiments/ferries/daily.py` used for the run).
+- Open a PR that updates only `docs/experiments/daily-ferry-log.md`.
+- Keep all detailed launch/retry/debug narrative in the run issue, not in the PR.
+- Apply canonical labels on the run-closure PR: `ferry`, lane label, `ferry-log-only`, `ferry-sealed`.
+
 ### Canary lane (steady-state run)
 Default mode: launch the existing canary script as-is and monitor. Do not run the daily proposal/PR loop unless you are intentionally changing canary.
 Even for unchanged canary runs, ask the requester before launch unless they explicitly waived that requirement.
@@ -170,11 +189,13 @@ When promoting:
 
 ## Validation Checklist
 - Diff is intentional and bounded for the selected lane.
-- If daily was edited, PR targets `main`.
+- If daily was edited, launch commit is pushed and referenced in the run issue.
+- Run-closure PR only updates `docs/experiments/daily-ferry-log.md`.
 - Ferry issue has updated launch metadata.
 - Monitoring loop ran until terminal state.
 
 ## See Also
+- `docs/experiments/daily-ferry-log.md`
 - `.agents/docs/job-monitoring-loop.md`
 - `.agents/projects/ferry_framework.md`
 - `docs/recipes/agent_research.md`
