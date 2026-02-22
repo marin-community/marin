@@ -33,7 +33,6 @@ try:
     from .pallas_tpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas
 
     IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
-    _DEFAULT_IMPLEMENTATION = ("pallas_tpu",) + _DEFAULT_IMPLEMENTATION
 except ImportError:
     PallasUnsupportedError = NotImplementedError  # type: ignore[assignment]
 

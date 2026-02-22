@@ -431,3 +431,256 @@ Notes:
   - Relative: pallas is `~1.17x` faster on fwd and `~1.13x` faster on bwd.
 - Note:
   - Loss values matched closely between backends in these runs.
+
+### 2026-02-21: v4-8 VMEM pressure triage + XLA custom VJP direction
+- Environment:
+  - `scripts/ray/dev_tpu.py --config infra/marin-us-central2.yaml --tpu-type v4-8`
+  - TPU: `TPU v4` (4 local devices)
+- Core finding on VMEM failures:
+  - At large failing configs (e.g. `B=65536,H=512,V=128256`, `b/h/v=1024/128/1024`), `fwd_only` already fails with scoped VMEM OOM (`~41.11M / 16M` bytes), so forward is the first cliff.
+  - Backward-only can fail at even higher VMEM (`~47.05M / 16M`), but this is secondary at the tested boundaries.
+  - Boundary probing:
+    - `B=512,H=512,v_block=768`: forward fails while direct backward can pass.
+    - `B=512,H=512,v_block=640`: both pass.
+- Pallas speed check versus XLA on v4:
+  - For `B=512,H=512,V=128256` forward-only, best Pallas config observed was around `~110k tok/s`.
+  - XLA forward-only on same shape was around `~572k tok/s` (about `5x` faster).
+  - For value+grad on same shape, Pallas `~49k tok/s` vs XLA streaming `~122k tok/s`.
+- Conclusion:
+  - For v4, Pallas path is constrained by VMEM and is not competitive at these tested settings.
+  - We should favor an XLA streaming path with a custom backward on v4.
+
+#### XLA streaming custom-VJP prototype result (v4-8)
+- Prototype behavior:
+  - forward uses existing streaming CE (`linear_softmax_cross_entropy_loss_streaming`)
+  - backward manually streams over vocab blocks to avoid full autodiff materialization.
+- Measured on `B=512,H=512,V=128256`:
+  - builtin `xla` (`v_block=32768`) value+grad: `~121.6k tok/s` (`~0.00421s`)
+  - custom streaming VJP (`v_block=32768`): `~212.5k tok/s` (`~0.00241s`)
+  - custom streaming VJP (`v_block=8192`): `~161k tok/s`
+- Prototype correctness spot-check (same env):
+  - `loss_builtin == loss_custom` exactly in the sampled run.
+  - gradient deltas:
+    - `gx_max_abs = 4.8828125e-04`
+    - `gw_max_abs = 5.9604645e-08`
+    - `gx_rel = 2.2317406e-03`
+    - `gw_rel = 9.1245504e-08`
+
+#### Repo changes (this branch)
+- `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py`
+  - Added `_use_v4_custom_xla_vjp()` gate: enable custom VJP only for TPU v4.
+  - Added `_linear_softmax_cross_entropy_loss_streaming_custom_vjp(...)` with manual streaming backward:
+    - computes blockwise `delta = (dL + dLSE)*prob - dL*one_hot`
+    - applies soft-cap derivative when enabled
+    - accumulates `dx` and writes `dw` blockwise.
+  - `linear_softmax_cross_entropy_loss_xla(...)` now dispatches to custom VJP on v4; other backends keep existing behavior.
+- `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+  - Added `test_v4_custom_xla_vjp_gate`
+  - Added `test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff`
+  - Local test run (`-k 'xla or custom_vjp or gate'`): `3 passed, 1 skipped`.
+
+#### In-repo TPU validation after patch (v4-8)
+- API bench (`linear_softmax_cross_entropy_loss_xla` through fused loss API):
+  - shape `B=512,H=512,V=128256` (`batch=1,pos=512` in bench script)
+  - fwd `steady_time_s=0.00090334` (`~566.8k tok/s`)
+  - bwd `bwd_steady_time_s=0.00243601` (`~210.2k tok/s`)
+- Direct head-to-head on the same TPU run (`v_block=32768`, value+grad):
+  - API path (now v4 custom VJP): `0.002495s` (`~205.2k tok/s`)
+  - baseline streaming autodiff (`linear_softmax_cross_entropy_loss_streaming`): `0.004175s` (`~122.6k tok/s`)
+  - speedup: `~1.67x` for backward-inclusive step time.
+- Correctness spot-check on TPU after integration:
+  - `_use_v4_custom_xla_vjp()` returned `True` on `TPU v4`.
+  - max abs diff versus streaming-autodiff gradient at sample shape (`B=128,H=128,V=4096`):
+    - `gx_max_abs = 1.220703125e-04`
+    - `gw_max_abs = 1.220703125e-04`
+
+### 2026-02-21: v5p-8 sanity run (us-central1 dev TPU)
+- Environment:
+  - `scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-type v5p-8`
+  - TPU: `tpu v5` (`4` local devices on this slice)
+- API bench (`implementation=xla`, same shape as v4 check):
+  - shape `B=512,H=512,V=128256` (`batch=1,pos=512`)
+  - fwd `steady_time_s=0.000687716` (`~744.5k tok/s`)
+  - bwd `bwd_steady_time_s=0.00283721` (`~180.5k tok/s`)
+- Direct API-vs-baseline check (`v_block=32768`, value+grad):
+  - `_use_v4_custom_xla_vjp()` returned `False` (expected on v5p/v5).
+  - API (`linear_softmax_cross_entropy_loss_xla`): `0.00290257s` (`~176.4k tok/s`)
+  - baseline (`linear_softmax_cross_entropy_loss_streaming` autodiff): `0.00289034s` (`~177.1k tok/s`)
+  - delta is negligible (`~0.4%`), confirming the v4-only gate preserves v5 behavior.
+
+### 2026-02-21: What XLA is actually implementing (and why tile size is hard to extract)
+- HLO inspection on v4 (`linear_softmax_cross_entropy_loss_xla`, `B=512,H=512,V=128256`) shows:
+  - explicit while-loop over vocab blocks with trip count `4` (`131072 padded vocab / 32768 block`).
+  - per-iteration `dynamic-slice` of `w` with `dynamic_slice_sizes={512,32768}`.
+  - one block GEMM-equivalent op per iteration in unoptimized HLO:
+    - `dot(Arg_1.9, dynamic_slice.1)` in `closed_call.7`.
+  - masked logits (`where` with `-inf`), per-block `reduce_max` / `exp` / `reduce_sum`, `logaddexp` accumulation, and label-logit gather.
+- In optimized TPU HLO dump, that dot is canonicalized into a convolution-form op:
+  - `convolution(...), dim_labels=bf_io->bf` with metadata tracing back to `dot_general`.
+  - This is why searching for `dot(` in late dumps is often misleading.
+- What is visible as “tiling”:
+  - layout annotations such as `bf16[512,131072]{1,0:T(8,128)(2,1)}` and `f32[512,32768]{1,0:T(8,128)}`.
+  - These are layout/packing tiles (memory layout tiling), not a direct “MXU kernel tile size” parameter.
+- What is **not** directly exposed:
+  - the backend-selected microkernel tile/schedule/unrolling used by TPU codegen/libtpu for the matmul-like op.
+  - There is no stable single field in emitted HLO that says “the matmul tile size is X by Y”.
+- Practical conclusion:
+  - We can reliably recover **algorithmic blocking** (`v_block_size=32768`) and loop structure from HLO.
+  - We can see **layout tile annotations** (`T(8,128)` etc.).
+  - We generally cannot recover a single definitive backend GEMM micro-tile from user-facing HLO text alone.
+
+### 2026-02-21: Forced custom-VJP trial on v5p-8
+- Goal:
+  - Evaluate enabling the new custom VJP on v5p (currently gated off in code) by directly calling
+    `_linear_softmax_cross_entropy_loss_streaming_custom_vjp(...)`.
+- Environment:
+  - `marin-us-central1` dev TPU `v5p-8`, device kind reported as `TPU v5`.
+  - Gate check: `_use_v4_custom_xla_vjp() == False` (expected).
+- Comparison setup:
+  - same value+grad benchmark, `dtype=float32`, `v_block_size=32768`.
+  - compared:
+    - `api_xla` (`linear_softmax_cross_entropy_loss_xla`)
+    - `custom_vjp` (forced private custom-vjp call)
+    - `stream_autodiff` (`linear_softmax_cross_entropy_loss_streaming` with AD)
+- Results:
+  - Shape `B=512,H=512,V=128256`:
+    - `api_xla`: `0.00290897s` (`~176.0k tok/s`)
+    - `custom_vjp`: `0.00208500s` (`~245.6k tok/s`)  **(+39.5% vs api_xla)**
+    - `stream_autodiff`: `0.00315458s` (`~162.3k tok/s`)
+  - Shape `B=8192,H=4096,V=128256`:
+    - `api_xla`: `0.09183749s` (`~89.2k tok/s`)
+    - `custom_vjp`: `0.09866696s` (`~83.0k tok/s`)  **(-6.9% vs api_xla)**
+    - `stream_autodiff`: `0.09211473s` (`~88.9k tok/s`)
+- Interpretation:
+  - For v5p, forced custom VJP is **shape-dependent**: faster at smaller shape, slower at larger `H=4096` shape.
+  - This supports keeping the default v4-only gate for now unless we add shape-based gating/autotune.
+- Correctness spot-check on v5p (small shape `B=512,H=512,V=128256`):
+  - max abs grad diff (api vs forced custom):
+    - `gx_max_abs = 6.103515625e-05` (`gx_rel = 5.78e-03`)
+    - `gw_max_abs = 3.0517578125e-05` (`gw_rel = 3.18e-03`)
+
+### 2026-02-21: v5p question - streaming custom VJP vs pallas
+- Direct value+grad head-to-head on `v5p-8`:
+  - shape `B=512,H=512,V=128256`:
+    - `pallas_tpu` (infer): `0.00337185s` (`~151.8k tok/s`)
+    - `streaming_custom_vjp`: `0.00169963s` (`~301.2k tok/s`)
+    - result: streaming custom VJP is about `1.98x` faster.
+  - shape `B=8192,H=4096,V=128256`:
+    - `pallas_tpu` failed scoped VMEM OOM in JVP path (`39.04M / 16.00M`).
+    - `streaming_custom_vjp` succeeded at `0.09830s` (`~83.3k tok/s`).
+
+### 2026-02-21: XLA default switched to custom VJP
+- Code change:
+  - `linear_softmax_cross_entropy_loss_xla(...)` now unconditionally dispatches to
+    `_linear_softmax_cross_entropy_loss_streaming_custom_vjp(...)`.
+  - Removed the v4-only gate from active dispatch.
+- Tests:
+  - Removed gate-specific test and kept custom-VJP grad parity test.
+  - `pytest -k 'xla or custom_vjp'` in `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`:
+    - `2 passed, 1 skipped`.
+- v5p sanity after change (`B=512,H=512,V=128256`):
+  - `api_xla`: `0.00168887s` (`~303.2k tok/s`)
+  - forced custom-vjp call: `0.00169305s` (`~302.4k tok/s`)
+  - confirms API now uses the same path.
+
+### 2026-02-21: Default backend policy update
+- Changed fused CE API default implementation order to always prefer `xla`, even when `pallas_tpu` is importable.
+  - file: `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
+  - `pallas_tpu` remains available when explicitly requested via `implementation='pallas_tpu'`.
+- Validation:
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+  - result: `14 passed, 3 skipped`.
+
+### 2026-02-21: Follow-up v5p check (where can pallas still win?)
+- Additional large-shape head-to-head (`v5p-8`, value+grad):
+  - shape `B=32768,H=4096,V=128256`, `v_block=32768`
+  - `pallas_tpu`: failed scoped VMEM OOM (`39.04M / 16.00M`)
+  - `streaming_custom_vjp`: succeeded at `0.39032s` (`~83.95k tok/s`)
+- Combined with earlier same-session results:
+  - `B=512,H=512,V=128256`: custom-vjp `~301k tok/s` vs pallas `~152k tok/s`
+  - `B=8192,H=4096,V=128256`: pallas OOM, custom-vjp `~83k tok/s`
+- Practical takeaway on this env:
+  - With current scoped VMEM limits, pallas is not competitive for these tested v5p backward-inclusive workloads.
+
+### 2026-02-21: v5p rerun with higher scoped VMEM limit
+- Reran with:
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+  - same value+grad benchmark, `v_block=32768`.
+- Results:
+  - `B=512,H=512,V=128256`:
+    - `pallas_tpu`: `0.00336478s` (`~152.2k tok/s`)
+    - `streaming_custom_vjp`: `0.00189534s` (`~270.1k tok/s`)
+  - `B=8192,H=4096,V=128256`:
+    - `pallas_tpu`: `0.116103s` (`~70.6k tok/s`)
+    - `streaming_custom_vjp`: `0.0923914s` (`~88.7k tok/s`)
+  - `B=32768,H=4096,V=128256`:
+    - `pallas_tpu`: `0.436443s` (`~75.1k tok/s`)
+    - `streaming_custom_vjp`: `0.365443s` (`~89.7k tok/s`)
+- Conclusion:
+  - Raising scoped VMEM lets pallas run large shapes again, but streaming custom VJP remains faster on all tested v5p backward-inclusive shapes.
+
+### 2026-02-21: Tokamax vs xla(custom-vjp) vs pallas on v5e-8/v6e-8 (eu-west4)
+- Request:
+  - compare Tokamax kernel vs our new default `xla` path (streaming custom VJP) and our `pallas_tpu` kernel.
+  - target TPUs:
+    - `v5e-8` in `europe-west4-b` (`infra/marin-eu-west4.yaml`)
+    - `v6e-8` in `europe-west4-a` (`infra/marin-eu-west4-a.yaml`)
+  - shape used for all runs: `B=8192, H=4096, V=128256`.
+
+#### Infra notes
+- `v5e-8` allocation had intermittent autoscaler/preemption churn:
+  - initial attempts timed out waiting for actor start.
+  - one successful allocation was later terminated (`ActorDiedError`, node SIGTERM) and had to be reacquired.
+- `v6e-8` allocation was stable in this session.
+
+#### Tokamax install/runtime notes
+- A dedicated Tokamax env was used on each TPU VM:
+  - `uv venv .venv_tokamax --python 3.11`
+  - `uv pip install tokamax`
+  - `uv pip install 'jax[tpu]==0.9.0' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html`
+- This produced:
+  - `jax==0.9.0`, `jaxlib==0.9.0`, `libtpu==0.0.34` for Tokamax runs.
+- Levanter xla/pallas runs stayed on project-locked env (`jax==0.8.0`, `jaxlib==0.8.0`, `libtpu==0.0.24`).
+
+#### Dtype compatibility findings (Tokamax `mosaic_tpu`)
+- `bf16` failed on both `v5e` and `v6e` with Pallas verifier error:
+  - `'tpu.matmul' op Expected matmul acc to be 32-bit`
+- `float32` runs were successful for Tokamax on both `v5e` and `v6e`.
+- Per follow-up request, comparison was done in a shared working dtype (`float32`).
+
+#### Float32 comparison (value+grad, `B=8192,H=4096,V=128256`)
+- v5e-8 (`europe-west4-b`):
+  - `xla` (custom-vjp default):
+    - fwd: `128,056 tok/s`
+    - bwd: `36,612 tok/s`
+    - combined (harmonic): `28,472 tok/s`
+  - `pallas_tpu` (`block-sizes=infer`):
+    - fwd: `128,223 tok/s`
+    - bwd: `25,737 tok/s`
+    - combined: `21,435 tok/s`
+  - Tokamax `mosaic_tpu`:
+    - fwd: `11,036 tok/s`
+    - bwd: `22,999 tok/s`
+    - combined: `7,458 tok/s`
+- v6e-8 (`europe-west4-a`):
+  - `xla` (custom-vjp default):
+    - fwd: `259,456 tok/s`
+    - bwd: `86,501 tok/s`
+    - combined: `64,873 tok/s`
+  - `pallas_tpu` (`block-sizes=infer`):
+    - fwd: `243,238 tok/s`
+    - bwd: `53,753 tok/s`
+    - combined: `44,024 tok/s`
+  - Tokamax `mosaic_tpu`:
+    - fwd: `11,451 tok/s`
+    - bwd: `76,094 tok/s`
+    - combined: `9,953 tok/s`
+
+#### Extra bf16 context (our kernels)
+- On both TPUs, our bf16 `xla`/`pallas` runs completed; `xla` remained ahead on combined throughput.
+- Tokamax bf16 remained blocked by the verifier error above.
+
+#### Bottom line
+- In the only shared working dtype (`float32`), our `xla` custom-vjp path is clearly fastest on combined throughput on both `v5e-8` and `v6e-8`.
+- `pallas_tpu` remains competitive on forward but trails on backward, so combined is below `xla`.
+- Tokamax `mosaic_tpu` is not competitive in this setup and cannot currently run bf16 on these TPUs due the matmul-accumulator verification failure.
