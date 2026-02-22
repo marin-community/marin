@@ -1714,3 +1714,69 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact**. This move achieved the intended structural effect (fewer larger train-path custom calls) but did not reduce the dominant hotspot cost; the dominant `shard_map` bucket remained and became slightly slower while end-to-end MFU gain stayed `<3%`.
 - Governance/escalation action: improvement exceeds promotion floor (`>=0.250%`) but escalation rule still applies (`<3%` with unchanged dominant hotspot). Next attempt should be more radical than launch restructuring alone.
 - Next bold hypothesis: escalate to **Macro Move E** (state/output V-tiling with shared K-only precompute in train backward/recurrent) or **Macro Move F** (blockwise stacked-RHS triangular decomposition) to reduce per-call work, not only call count.
+
+### Iteration 34 - Macro Move G / exp-diff centered outer-product (infra-blocked, reverted)
+
+- Date: 2026-02-22T19:28:44Z
+- Commit: none (failed attempt)
+- Loop session/local index: `6/10`
+- Starting commit: `6c194533e2489c22d88bee04bd1596a01f76ac22`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`):
+  - train-path `shard_map`/`custom-call` bucket remained dominant (`~78 ms` on TPU:0 XLA Ops thread).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` to replace Ct x Ct exponentials in prepare/recurrent/backward (`+10-20%`, medium numerical/compile risk).
+  2. **Macro Move H**: stack shared-RHS matmuls (`QK/KKT`, `inter/v_prime`) to reduce dot call count (`+8-18%`, medium integration risk).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) for recurrent/backward state (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: add `_exp_diff_and_mask_from_g` and wire it into train-path chunk prepare/recurrent/backward kernels so fast-path uses O(Ct) vector exponentials.
+
+- Change attempt summary:
+  - Implemented `_exp_diff_and_mask_from_g` and migrated train-path `exp_diff` construction in `lib/levanter/src/levanter/layers/gated_deltanet.py` across prepare, recurrent forward, and backward chunk math.
+  - Attempt was reverted after repeated TPU validation infrastructure failures/timeouts prevented obtaining a completed validation+profile result.
+
+- Correctness checks:
+  - Local smoke (success):
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation attempts (blocked/no terminal result):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Direct fallback attempts also stalled without completion summary:
+      - `ssh dev-tpu-calvinxu-gdn '... uv run pytest tests/test_gdn_kernels.py tests/test_gdn_layer.py -q'`
+      - `ssh dev-tpu-calvinxu-gdn '... uv run pytest tests/test_gdn_kernels.py -q'`
+    - In each dev attempt, remote pytest remained running for extended windows (>10-15 min) with no final pass/fail output; runs were explicitly terminated.
+  - Ray fallback validation (infra-queued, not started):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Submitted jobs:
+      - `ray-run-calvinxu-levanter-20260222-181337`
+      - `ray-run-calvinxu-levanter-20260222-190146`
+    - Both remained `PENDING`; Ray stop/status reported: `Job supervisor actor failed to start within 900.0 seconds` (resource unavailability).
+
+- Profile run:
+  - Not started because TPU correctness gate could not be completed on either dev TPU or Ray path in this window.
+  - Trace artifact: N/A.
+
+- Hotspots observed:
+  - No new before/after hotspot comparison available (no completed profile run).
+  - Carry-in dominant hotspot remains train-path `shard_map/custom-call` bucket from the latest successful baseline.
+
+- MFU/throughput delta:
+  - Unavailable (no completed profile run).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command attempted: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both` (blocked; no terminal result).
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: unavailable (no completed profile run).
+    - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration` deltas: unavailable.
+    - Macro G exp-op reduction note: unavailable (no completed profile/IR capture).
+  - Governance:
+    - Infra-blocked path; speculative kernel edits reverted and attempt marked failed (`Commit: none (failed attempt)`).
+
+- Assessment: **infra-blocked failed attempt**. Required TPU validation + profiling evidence could not be completed due repeated dev-run non-termination and Ray jobs stuck pending.
+- Governance/escalation action:
+  - Reverted speculative kernel changes; working tree returned to baseline.
+  - Stopped queued Ray jobs (`ray-run-calvinxu-levanter-20260222-181337`, `ray-run-calvinxu-levanter-20260222-190146`).
+- Next bold hypothesis:
+  - Re-attempt Macro Move G once TPU validation/profiling lanes are healthy, then immediately compare forward/backward closed-call deltas and exp-op counts; if infra remains unstable, hold queue resources first (dedicated dev TPU or alternate cluster) before further kernel edits.
