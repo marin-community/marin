@@ -22,7 +22,7 @@ This plan maps to `.agents/the_plan.yaml` items:
 
 Focus only on **daily ferry as integration test**:
 - single canonical ferry template (`experiments/ferries/daily.py`)
-- keep daily and canary ferry data-mix assumptions aligned (`experiments/ferries/canary.py`)
+- keep daily and canary ferry data-mix assumptions aligned (`experiments/ferries/canary_ferry.py`)
 - one issue-driven proposal workflow (agent/manual-triggered)
 - one launch flow on TPU infra
 - one monitoring loop using `.agents/docs/job-monitoring-loop.md`
@@ -131,7 +131,7 @@ Maintain and regularly validate known-good envelopes for each ferry lane.
 
 | Lane | Script | Primary Intent | Baseline Envelope | First Fallback |
 |---|---|---|---|---|
-| canary | `experiments/ferries/canary.py` | fast health signal | stable canary defaults on `us-central1` | reduce per-step pressure (batch/seq) before broader infra changes |
+| canary | `experiments/ferries/canary_ferry.py` | fast health signal | stable canary defaults on `us-central1` | reduce per-step pressure (batch/seq) before broader infra changes |
 | daily | `experiments/ferries/daily.py` | higher-scale integration test | Nemo mix, seq 4096, batch 512, ~1e19 FLOPs on `us-central1` | reduce batch size first, then revisit kernel/block-size tuning |
 
 Envelope maintenance rules:

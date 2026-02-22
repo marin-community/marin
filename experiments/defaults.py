@@ -375,7 +375,6 @@ def default_train(
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
         pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
         z_loss_weight=train_config.z_loss_weight,
-        cross_entropy_block_size=train_config.cross_entropy_block_size,
         train_seq_len=train_length,
         model=model_config,
         optimizer=(

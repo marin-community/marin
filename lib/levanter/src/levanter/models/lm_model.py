@@ -263,7 +263,6 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
         reduction_axis: Optional[hax.AxisSelection] = None,
         logsumexp_weight: Optional[float] = None,
-        cross_entropy_block_size: Optional[int] = None,
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
         logit_soft_cap: Optional[float] = None,
     ) -> jnp.ndarray | NamedArray:
@@ -291,7 +290,6 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             reduction=reduction,
             reduction_axis=reduction_axis,
             logsumexp_weight=logsumexp_weight,
-            block_size=cross_entropy_block_size,
             dtype=loss_dtype,
             logit_soft_cap=logit_soft_cap,
         )

@@ -9,7 +9,7 @@ Both ferries should keep core data assumptions aligned and share the same monito
 
 ## Ferry Lanes
 Templates:
-- `experiments/ferries/canary.py`
+- `experiments/ferries/canary_ferry.py`
 - `experiments/ferries/daily.py`
 
 Current intent:
@@ -180,7 +180,7 @@ Launch:
 uv run lib/marin/src/marin/run/ray_run.py \
   --no_wait \
   --cluster us-central1 \
-  -- python experiments/ferries/canary.py
+  -- python experiments/ferries/canary_ferry.py
 ```
 
 If canary fails:
