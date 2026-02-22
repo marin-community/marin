@@ -142,17 +142,14 @@ class JaggedArrayStore:
         path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False
     ) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
-        cache_settings = {"total_bytes_limit": CACHE_BYTES_LIMIT} if mode == "r" else {}
-        offsets = _ts_open_async(offset_path, jnp.int64, [1], mode=mode, cache_settings=cache_settings)
+        offsets = _ts_open_async(offset_path, jnp.int64, [1], mode=mode)
 
         data_path = _extend_path(path, "data")
-        data = _ts_open_async(data_path, dtype, [0], mode=mode, cache_settings=cache_settings)
+        data = _ts_open_async(data_path, dtype, [0], mode=mode)
 
         if item_rank > 1:
             shape_path = _extend_path(path, "shapes")
-            shapes = _ts_open_async(
-                shape_path, jnp.int64, [0, item_rank - 1], mode=mode, cache_settings=cache_settings
-            )
+            shapes = _ts_open_async(shape_path, jnp.int64, [0, item_rank - 1], mode=mode)
         else:
             shapes = None
 
@@ -163,15 +160,14 @@ class JaggedArrayStore:
     @staticmethod
     def open(path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
-        cache_settings = {"total_bytes_limit": CACHE_BYTES_LIMIT} if mode == "r" else {}
-        offsets = _ts_open_sync(offset_path, jnp.int64, [1], mode=mode, cache_settings=cache_settings)
+        offsets = _ts_open_sync(offset_path, jnp.int64, [1], mode=mode)
 
         data_path = _extend_path(path, "data")
-        data = _ts_open_sync(data_path, dtype, [0], mode=mode, cache_settings=cache_settings)
+        data = _ts_open_sync(data_path, dtype, [0], mode=mode)
 
         if item_rank > 1:
             shape_path = _extend_path(path, "shapes")
-            shapes = _ts_open_sync(shape_path, jnp.int64, [0, item_rank - 1], mode=mode, cache_settings=cache_settings)
+            shapes = _ts_open_sync(shape_path, jnp.int64, [0, item_rank - 1], mode=mode)
         else:
             shapes = None
 
@@ -567,19 +563,19 @@ def _unshaped_spec(store: ts.TensorStore) -> ts.Spec:
     return spec
 
 
-def _ts_open_kwargs(mode: str, cache_settings: dict) -> dict:
+def _ts_open_kwargs(mode: str) -> dict:
     if mode == "r":
         return {
             "context": _read_context(),
             "recheck_cached_data": RECHECK_CACHED_DATA,
         }
-    return {"context": ts.Context({"cache_pool": cache_settings})}
+    return {"context": ts.Context({"cache_pool": {}})}
 
 
-def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_settings: dict):
+def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     spec = _get_spec(path, shape)
     mode_config = _mode_to_open_mode(mode)
-    open_kwargs = _ts_open_kwargs(mode, cache_settings)
+    open_kwargs = _ts_open_kwargs(mode)
 
     # Basically, we want to load the existing shape metadata if it exists
     if not mode_config.get("delete_existing", False):
@@ -614,10 +610,10 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_s
             raise e
 
 
-async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_settings: dict):
+async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     spec = _get_spec(path, shape)
     mode_config = _mode_to_open_mode(mode)
-    open_kwargs = _ts_open_kwargs(mode, cache_settings)
+    open_kwargs = _ts_open_kwargs(mode)
 
     # Basically, we want to load the existing shape metadata if it exists
     if not mode_config.get("delete_existing", False):
