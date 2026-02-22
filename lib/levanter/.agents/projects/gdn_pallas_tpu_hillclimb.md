@@ -1585,3 +1585,66 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / regression**. The dominant train-path hotspot class (`shard_map/custom-call`) is unchanged and became significantly slower; lane-packing full-sequence forward for `dk=dv=64` increased the critical path instead of reducing it.
 - Governance/escalation action: regression exceeds the `1.0%` threshold; attempt marked failed and kernel code reverted (`revert-count-failure`).
 - Next bold hypothesis: escalate to **Macro Move E** with shared K-only precompute plus V-tiled recurrent/backward kernels so per-program state is reduced (`KxV -> KxVb`) without introducing 128-lane forward overcompute on the active 64-dim train config.
+
+### Iteration 32 - Macro Move D / lane-major full-sequence forward pipeline for `dk=dv=64` (infra-blocked, reverted)
+
+- Date: 2026-02-22T06:28:57Z
+- Commit: none (failed attempt)
+- Loop session/local index: `16/20`
+- Starting commit: `785edf9f64367c9dee355662150a432204b45045`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` / train-path `custom-call` family: `76.743 ms` (dominant bucket).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: lane-major full-sequence prepare+recurrent forward pipelines (`(..., K/V, Ct)` with `Ct=128` on lane axis) for active `dk=dv=64` path without 128-dim compute overpadding (`+10-25%`, high compile/layout risk).
+  2. **Macro Move E**: V-tiled recurrent+bwd state (`KxV -> KxVb`) with shared K-only precompute (`+15-30%`, very high decomposition risk).
+  3. **Macro Move F**: staged backward decomposition (adjoint-precompute + recurrent apply) (`+15-30%`, very high integration/tape risk).
+
+- Selected macro-move category: **D) Use `pltpu.emit_pipeline` to fuse across chunk/segment loops**.
+- Selected hypothesis: enable full-sequence train forward kernels for `dk=dv=64` with lane-safe feature-major layout to reduce launch overhead without doubling core K/V compute.
+
+- Change attempt summary:
+  - Implemented lane-major full-sequence prepare/recurrent forward Pallas kernels and dispatch path in `lib/levanter/src/levanter/layers/gated_deltanet.py`.
+  - Added column-scaling helper and lane-major wrappers for full-sequence train forward execution.
+  - Reverted speculative kernel code after profile infrastructure could not produce any completed run for this attempt.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation (failed strict parity case):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Result: `1 failed, 86 passed, 2 skipped`; failure at `tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[False]` (tiny max abs diff `3.05e-05`).
+  - Ray fallback validation (success):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260222-055130`
+    - Result: `49 passed, 40 skipped`.
+
+- Profile run:
+  - Dev TPU profile attempt (failed lock contention):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_lanefeat_i16_dev`
+    - Failure: `ABORTED: The TPU is already in use by another process` (`/tmp/libtpu_lockfile`).
+  - Ray profile attempt #1:
+    - Submit: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_lanefeat_i16_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260222-055752`
+    - Behavior: remained `RUNNING` for an extended window with no completed profiler artifact; logs showed repeated `ray.exceptions.RayTaskError(NotImplementedError)` retry paths under `run_on_pod_ray`; job explicitly stopped:
+      - `uv run scripts/ray/cluster.py --cluster us-central1 stop-job ray-run-calvinxu-bash-20260222-055752`
+  - Ray profile attempt #2 (retry):
+    - Submit: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_lanefeat_i16b_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260222-061611`
+    - Behavior: remained `RUNNING` with repeated Ray runtime-env/worker churn (`worker_pool.cc: Delete runtime env failed`) and no completed profile artifact; job explicitly stopped:
+      - `uv run scripts/ray/cluster.py --cluster us-central1 stop-job ray-run-calvinxu-bash-20260222-061611`
+  - Trace location: N/A (no completed profile artifact).
+
+- Hotspots observed:
+  - No valid before/after hotspot comparison for this attempt because no profile run completed.
+  - Carry-in dominant hotspot remains train-path `shard_map/custom-call` bucket from baseline trace.
+
+- MFU/throughput delta:
+  - Unavailable (no completed profile run for this candidate).
+
+- Assessment: **infra-blocked failed attempt**. Validation fallback passed, but required profiling could not be completed after dev lock contention and two stalled Ray profile jobs. Speculative kernel changes were reverted to keep the tree free of unvalidated optimization code.
+- Next bold hypothesis: rerun the same lane-major Macro Move D candidate once profiling infra is healthy (prefer held dev TPU without lock contention), otherwise pivot to Macro Move E with explicit V-tiling + shared K-only precompute and re-attempt with a stable profile lane.
