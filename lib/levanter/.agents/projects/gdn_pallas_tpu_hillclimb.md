@@ -1780,3 +1780,76 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - Stopped queued Ray jobs (`ray-run-calvinxu-levanter-20260222-181337`, `ray-run-calvinxu-levanter-20260222-190146`).
 - Next bold hypothesis:
   - Re-attempt Macro Move G once TPU validation/profiling lanes are healthy, then immediately compare forward/backward closed-call deltas and exp-op counts; if infra remains unstable, hold queue resources first (dedicated dev TPU or alternate cluster) before further kernel edits.
+
+### Iteration 35 - Macro Move G / exp-diff centered outer-product (infra-blocked, reverted)
+
+- Date: 2026-02-22T22:32:10Z
+- Commit: none (failed attempt)
+- Loop session/local index: `7/10`
+- Starting commit: `22e838c3af70cd444a5d63576d1002de35040059`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`):
+  - train-path `shard_map/custom-call` bucket remained dominant (`~78 ms` on TPU:0 XLA Ops thread).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` in prepare/recurrent/backward to remove Ct x Ct exponential-heavy work (`+10-20%`, medium numerical risk).
+  2. **Macro Move H**: stack shared-RHS matmuls (`QK/KKT`, `inter/v_prime`) to reduce dot invocation count (`+8-18%`, medium integration/VMEM risk).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) for recurrent/backward state footprint (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: introduce `_exp_diff_and_mask_from_g` and wire it through train-path chunk prepare/recurrent/backward kernels so fast path uses O(Ct) vector exponentials and avoids Ct x Ct exp calls on target train chunks.
+
+- Change attempt summary:
+  - Implemented `_exp_diff_and_mask_from_g` and replaced train-path `exp_diff` construction in:
+    - segmented/full-sequence prepare kernels,
+    - segmented/full-sequence recurrent forward kernels,
+    - fused segmented forward kernel,
+    - segmented backward chunk helper.
+  - Added gradient-stability adjustment (`stop_gradient` on centering term) and a guard to keep the fast path restricted to MXU-sized chunks (`Ct >= 128`).
+  - Reverted all speculative kernel edits after TPU infra instability prevented obtaining a completed, valid validation+profile cycle on the final code state.
+
+- Correctness checks:
+  - Local smoke (success):
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation attempts (blocked):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both` (multiple attempts).
+    - Direct fallback probes:
+      - `ssh -tt dev-tpu-calvinxu-gdn '... uv run pytest tests/test_gdn_kernels.py tests/test_gdn_layer.py -v'`
+      - `ssh dev-tpu-calvinxu-gdn '... uv run pytest -q tests/test_gdn_kernels.py::test_flash_chunk_backward_chunk_size_invariance_kernel_level[True]'`
+    - Observed blocker: repeated remote non-termination, then dev TPU host dropped (`Connection to 136.112.108.150 closed by remote host`) and later became unavailable (`ssh: connect to host 136.112.108.150 port 22: Connection refused`).
+  - Ray fallback validation attempts (blocked/unstable):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+      - `ray-run-calvinxu-levanter-20260222-210939`: started; failed before full completion (`JOB_SUPERVISOR_ACTOR_DIED`, node terminated / SIGTERM) after showing flash `[True]` regressions.
+      - `ray-run-calvinxu-levanter-20260222-222301`: failed immediately (`JOB_SUPERVISOR_ACTOR_DIED`, node terminated before actor start).
+      - `ray-run-calvinxu-levanter-20260222-222420`: remained `PENDING` waiting for resources; stop attempt timed out:
+        - `uv run scripts/ray/cluster.py --cluster us-central1 stop-job ray-run-calvinxu-levanter-20260222-222420`
+        - error: `subprocess.TimeoutExpired: Command '['ray', 'job', 'stop', ...]' timed out after 60 seconds`.
+
+- Profile run:
+  - Not started. Correctness gate for the final code state could not be completed on either dev TPU or Ray fallback due infra instability.
+  - Trace artifact: N/A.
+
+- Hotspots observed:
+  - No new valid before/after hotspot comparison for this iteration (no completed profile run on validated code).
+  - Carry-in dominant hotspot remains train-path `shard_map/custom-call` bucket from the prior successful trace.
+
+- MFU/throughput delta:
+  - Unavailable (no completed profiled run).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command attempted: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both` (blocked by dev TPU host loss and Ray job-instability fallback).
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: unavailable.
+    - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`: unavailable.
+    - Macro G exp-op reduction note: unavailable (no completed profile/IR capture on final state).
+  - Governance:
+    - Infra-blocked iteration; speculative code reverted and attempt recorded as failed (`Commit: none (failed attempt)`).
+
+- Assessment: **infra-blocked failed attempt**. Could not complete required TPU validation + profiling on the final candidate due dev TPU host outage and repeated Ray job supervisor/resource instability.
+- Governance/escalation action:
+  - Reverted speculative kernel changes; working tree returned to `22e838c3af70cd444a5d63576d1002de35040059`.
+  - Recorded exact blocking commands/job IDs for rerun triage.
+- Next bold hypothesis:
+  - Re-attempt Macro Move G once TPU infra is stable (reserved dev TPU or healthy Ray queue), then immediately capture forward/backward `shard_map/pallas_call` deltas and exp-op reduction evidence.
+  - If infra remains unstable, pivot next validated kernel iteration to **Macro Move H** with stacked shared-RHS matmuls after securing a stable execution lane.
