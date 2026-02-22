@@ -128,8 +128,6 @@ def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatc
     Per-segment aggregation is done in NumPy on the host (outside JIT) to keep
     the JIT function structurally identical to standard eval's accum_for_batch.
     """
-    from jax.experimental.multihost_utils import process_allgather
-
     pad_token = tokenizer.pad_token_id
     if pad_token is None:
         pad_token = tokenizer.eos_token_id
@@ -170,26 +168,26 @@ def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatc
         batch = _shard_identical_batch(batch_orig, axis_resources)
         losses, last_sync = jit_fn(model, batch)
 
-        # Gather full losses on every host. losses is a NamedArray with
-        # loss_weight already applied (prompt tokens zeroed), shape
-        # (EvalBatch, EvalPos). process_allgather replicates the full
-        # array on every host — the array is small (~256KB for batch=16,
-        # seq=4096) so this is fast.
-        full_losses = np.asarray(process_allgather(losses.array, tiled=True))
-
-        # Per-segment aggregation in NumPy.
-        # full_losses[b, t] = cross_entropy * loss_weight at position t of
-        # batch element b. seg_ids_np[b, t] = segment ID (or -1 for padding).
-        # Log-likelihood for a segment = -sum(losses for that segment).
-        flat_losses = full_losses.flatten()
-        flat_seg_ids = seg_ids_np.flatten()
-
-        for seg_id in np.unique(flat_seg_ids):
-            if seg_id < 0:
+        # Extract local losses from sharded array (device → host, NO JIT).
+        # Deduplicate MP replicas by tracking seen index tuples.
+        seen = set()
+        for shard in losses.array.addressable_shards:
+            idx = shard.index
+            idx_key = tuple(
+                (s.start, s.stop, s.step) if isinstance(s, slice) else s
+                for s in idx
+            )
+            if idx_key in seen:
                 continue
-            mask = flat_seg_ids == seg_id
-            result_probs[int(seg_id)] = -float(np.sum(flat_losses[mask]))
-            covered_points[int(seg_id)] = True
+            seen.add(idx_key)
+            local_losses = np.asarray(shard.data)
+            local_seg_ids = seg_ids_np[idx]
+            for seg_id in np.unique(local_seg_ids):
+                if seg_id < 0:
+                    continue
+                mask = local_seg_ids == seg_id
+                result_probs[int(seg_id)] = -float(np.sum(local_losses[mask]))
+                covered_points[int(seg_id)] = True
 
         pbar.update(batch_tokens)
 
@@ -201,6 +199,23 @@ def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatc
     if last_sync is not None:
         last_sync.item()
     logger.info("vlm_eval batch loop complete")
+
+    # Gather per-segment results across hosts. Each host processed a
+    # different subset of batch elements (DP sharding). Use
+    # multihost_broadcast_sync (KV store, no JIT) to merge.
+    if jax.process_count() > 1:
+        local_entries = {
+            str(int(i)): float(result_probs[i])
+            for i in np.where(covered_points)[0]
+        }
+        for host_idx in range(jax.process_count()):
+            received = multihost_broadcast_sync(
+                local_entries if jax.process_index() == host_idx else {},
+                is_source=(jax.process_index() == host_idx),
+            )
+            for idx_str, val in received.items():
+                result_probs[int(idx_str)] = val
+                covered_points[int(idx_str)] = True
 
     missing = np.where(~covered_points)[0]
     if len(missing) > 0:
