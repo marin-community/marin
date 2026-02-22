@@ -86,9 +86,27 @@ Definition of done:
   - next bold hypothesis.
 
 Macro-move forcing function:
-- If your shortlist contains only “small” changes (tweaks to unroll/chunk/segment, removing a reshape, changing a constant), you must discard it and restart step (2).
-- Prioritize TPU-Pallas-specific wins that frequently unlock order-of-magnitude changes:
-  - Fix pathological last-axis singleton layouts (e.g., `(..., Ct, 1)` → `(..., 1, Ct)`).
-  - Remove explicit transpose ops by using `lax.dot_general` dimension numbers.
-  - Switch kernel math to BF16 inputs + FP32 accumulation.
-  - Use `pltpu.emit_pipeline` with dynamic `pl.ds(...)` slicing to fuse over long sequential dims without unrolling.
+- If your shortlist contains only “small” changes (tweaks to unroll/chunk/segment, removing a reshape, changing a constant), discard it and restart step (2).
+- Pick exactly one headline direction and execute it end-to-end.
+
+Priority order for current phase:
+1. **G**: Eliminate Ct^2 exponentials in `exp_diff` using centered outer-product exp.
+2. **H**: Batch matmuls by stacking left operands that share the same right operand.
+3. **I**: Fuse segmented forward prepare+recurrent only after G/H is in place.
+4. **J**: Sweep `Ct`/`Seg` for new kernels (`Ct in {64,96,128}`, `Seg in {8,16,32}`).
+5. **E**: V-tiling with shared-K precompute.
+
+Deprioritized unless new evidence appears:
+- A/B-only micro-edits already explored heavily.
+- D full-sequence lane-sensitive variants that do not change heavy inner-kernel work.
+- F solve-only decompositions that reintroduce expensive backward transpose-solve behavior.
+
+Acceptance gate checklist (must appear in iteration writeup):
+- Correctness:
+  - TPU tests command + result.
+- Perf:
+  - Forward and backward `shard_map/pallas_call` deltas.
+  - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration` deltas.
+  - For Macro G, explicit note on `exp` operation reduction (IR/trace-derived).
+- Governance:
+  - If MFU gain <3% and dominant hotspot is unchanged, revert and escalate to a different macro move.

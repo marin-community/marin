@@ -51,6 +51,8 @@ SESSION_DIRECTIVE_PRESET_FILES = {
     "tpu-layout-and-dtypes": REPO_ROOT / "scripts/gdn/session_directives/tpu-layout-and-dtypes.md",
     "emit-pipeline-fullseq": REPO_ROOT / "scripts/gdn/session_directives/emit-pipeline-fullseq.md",
     "fla-style-decomposition": REPO_ROOT / "scripts/gdn/session_directives/fla-style-decomposition.md",
+    "expdiff-outer-product": REPO_ROOT / "scripts/gdn/session_directives/expdiff-outer-product.md",
+    "matmul-batching": REPO_ROOT / "scripts/gdn/session_directives/matmul-batching.md",
 }
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")
@@ -933,8 +935,7 @@ def _restore_stash_tree(cwd: Path, *, stash_ref: str, stash_message: str) -> boo
         print(f"[gdnctl] {drop_output}", file=sink)
     if drop_proc.returncode != 0:
         print(
-            "[gdnctl] WARNING: stash was applied but could not be dropped automatically "
-            f"({stash_ref}).",
+            "[gdnctl] WARNING: stash was applied but could not be dropped automatically " f"({stash_ref}).",
             file=sys.stderr,
         )
         return False
@@ -1922,9 +1923,7 @@ def _find_iteration_sequence_issues(lines: Sequence[str]) -> list[str]:
                     reason = "sub-iteration suffix is not increasing"
 
             if reason is not None:
-                issues.append(
-                    f"{reason}: line {prev_line} `{prev_heading}` -> line {idx} `{heading}`"
-                )
+                issues.append(f"{reason}: line {prev_line} `{prev_heading}` -> line {idx} `{heading}`")
 
         prev = (idx, num, suffix, heading)
 

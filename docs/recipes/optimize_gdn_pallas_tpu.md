@@ -110,6 +110,77 @@ Typical changes:
 Target: split the fused kernel into 2-4 kernels (A-build, solve/invert, recurrence, output)
 so each kernel has a simple performance profile and lower register pressure.
 
+## New high-leverage macro moves (post-Iteration 32)
+
+### G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp
+Target: replace Ct x Ct elementwise exponential work with O(Ct) vector exponentials plus
+outer-product + clamp.
+
+Why:
+- Current flash prepare/recurrent/backward paths repeatedly build
+  `exp_diff = exp(clip(g_i - g_j, -clip, clip))` as Ct x Ct exponentials.
+- On TPU Pallas, `exp` is expensive. Reducing the count of exponentials can move the dominant
+  custom-call critical path.
+
+Implementation sketch:
+- Add helper `_exp_diff_and_mask_from_g(g, clip=80.0)` returning `(exp_diff, mask)`.
+- Fast path when `range(g) <= 2 * clip`:
+  - `center = 0.5 * (g_max + g_min)`
+  - `er = exp(g - center)`, `ec = exp(center - g)`  (vector exponentials)
+  - `exp_factor = er[:, None] * ec[None, :]`
+  - `exp_diff = clip(exp_factor, exp(-clip), exp(clip))`
+  - `mask = (exp_factor > exp(-clip)) & (exp_factor < exp(clip))`
+- Fallback path: current `diff/clip/exp` implementation for exactness in extreme ranges.
+
+Success signal:
+- Fewer `exponential` ops in the train-path custom call IR and reduced forward/backward
+  `shard_map/pallas_call` wall time in traces.
+
+### H) Batch matmuls by stacking
+Target: reduce the number of separate `dot_general` calls in hot kernels.
+
+Common opportunities:
+- `QK` and `KKT` share `k^T`:
+  - stack `[q; k_beta] @ k^T`, then split.
+- `inter` and `v_prime` share `S`:
+  - stack `[q_scaled; k_cumdecay] @ S`, then split.
+
+Goal:
+- Lower per-step dot launch overhead and improve MXU utilization without changing math.
+
+### I) Fuse segmented forward prepare + recurrent only after G/H
+Target: avoid recomputing expensive chunk-local factors and reduce intermediate traffic.
+
+Why:
+- Prior full-sequence fusion attempts were often low-impact because they fused launch structure
+  without removing duplicated heavy work.
+- After G/H, fusion can become meaningfully additive.
+
+Constraint:
+- Keep forward tape contract stable initially (`v_pseudo`, `k_cumdecay`, `solve_transform`) to
+  avoid full backward rewrites in first attempts.
+
+### J) Sweep `Ct`/`Seg` explicitly
+Target: identify a better operating point once kernel structure changes.
+
+Required sweep:
+- `Ct in {64, 96, 128}`
+- `Seg in {8, 16, 32}`
+
+Record:
+- Forward/backward train-path `shard_map/pallas_call` wall times.
+- End-to-end MFU/tokens-per-second.
+
+### K) Chunk-level affine associative scan (longer-term)
+Target: reduce strict serial dependence across chunks.
+
+Idea:
+- Express chunk update as `S_out = M_chunk * S_in + U_chunk`.
+- Compose chunks associatively and use prefix-scan style state propagation.
+
+Risk:
+- High algorithmic complexity. Attempt only after G/H/I are fully explored.
+
 ## Measurement: avoid “trace-only” optimization
 
 XProf traces are essential for hotspot attribution, but the loop also needs a **stable numeric score**
@@ -258,6 +329,9 @@ Notes:
 - Use `--resilient` for unattended loops to keep running through transient failures (network, connectivity, allocation).
 - `--directive`, `--directive-file`, and `--directive-preset` inject per-session guidance (for example triangular inversion focus) without editing prompt files.
 - Preset directives are stored as markdown docs under `scripts/gdn/session_directives/` (`triangular-inversion` maps to `scripts/gdn/session_directives/triangular-inversion.md`).
+- For the current post-Iteration 32 phase, include:
+  - `--directive-preset expdiff-outer-product`
+  - `--directive-preset matmul-batching`
   Useful presets:
   - `training-chunk-kernel-focus`: prioritize chunked train kernels and de-prioritize decode-only wins.
   - `tpu-layout-and-dtypes`: avoid TPU register-layout cliffs (singleton last-axis, transpose fusion, BF16/F32 policy).
