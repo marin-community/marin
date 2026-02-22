@@ -64,10 +64,12 @@ class WandbTracker(Tracker):
         if step < self.run.step:
             if step - self._last_warning_step > 500:
                 logger.warning(
-                    f"Step {step} is less than the current step {self.run.step}. Cowardly refusing to log metrics."
+                    "Step %s is less than the current step %s. Logging at current step instead of dropping metrics.",
+                    step,
+                    self.run.step,
                 )
                 self._last_warning_step = step
-            return
+            step = self.run.step
 
         step = int(step)
 

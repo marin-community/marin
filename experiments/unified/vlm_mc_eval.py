@@ -1216,8 +1216,8 @@ def vlm_mc_eval_callback(
     from levanter.utils.jax_utils import parameter_count
     from levanter.utils.tree_utils import inference_mode
 
-    # JIT function is created lazily on first eval call (needs EvalPos from model).
-    _cached_jit = [None]
+    # Cache JITs by (EvalPos, EvalBatch) to support VLM-only safe batch-size override.
+    _cached_jit: dict[tuple[int, int], object] = {}
 
     # Pre-resolve parquet paths and detect task types
     bench_parquets: dict[str, list[str]] = {}
@@ -1237,6 +1237,11 @@ def vlm_mc_eval_callback(
         model = inference_mode(step.eval_model, True)
         model = _force_vanilla_attention_backend_for_vlm_eval(model)
         EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
+        safe_eval_batch_size = int(os.environ.get("VLM_EVAL_SAFE_BATCH_SIZE", "32"))
+        if safe_eval_batch_size <= 0:
+            raise ValueError(f"VLM_EVAL_SAFE_BATCH_SIZE must be positive, got {safe_eval_batch_size}")
+        effective_eval_batch_size = min(EvalBatch.size, safe_eval_batch_size)
+        VlmEvalBatch = EvalBatch.resize(effective_eval_batch_size)
 
         try:
             abstract_mesh = jax.sharding.get_abstract_mesh()
@@ -1247,7 +1252,7 @@ def vlm_mc_eval_callback(
         platform = jax.devices()[0].platform if jax.devices() else "unknown"
         logger.info(
             "[%s][host=%d/%d] VLM eval env: local_device_count=%d platform=%s abstract_mesh=%s axis_resources=%s "
-            "EvalBatch=%d EvalPos=%d",
+            "EvalBatch=%d VlmEvalBatch=%d EvalPos=%d",
             eval_run_uuid,
             jax.process_index(),
             jax.process_count(),
@@ -1256,15 +1261,17 @@ def vlm_mc_eval_callback(
             abstract_mesh,
             axis_resources,
             EvalBatch.size,
+            VlmEvalBatch.size,
             EvalPos.size,
         )
 
         logger.info(
-            "[%s] Running VLM eval at step %d (EvalPos=%d, EvalBatch=%d, params=%s)",
+            "[%s] Running VLM eval at step %d (EvalPos=%d, EvalBatch=%d, VlmEvalBatch=%d, params=%s)",
             eval_run_uuid,
             step.step,
             EvalPos.size,
             EvalBatch.size,
+            VlmEvalBatch.size,
             f"{parameter_count(model):,}",
         )
         logger.warning(
@@ -1325,10 +1332,11 @@ def vlm_mc_eval_callback(
 
         max_packed_segments = 64
 
-        # Create JIT function on first call (needs EvalPos from model).
-        if _cached_jit[0] is None:
-            _cached_jit[0] = _make_vlm_eval_jit(axis_resources, mp, EvalPos, EvalBatch, max_packed_segments)
-        jit_fn = _cached_jit[0]
+        # Create JIT function on first call for this (Pos, Batch) shape pair.
+        jit_key = (EvalPos.size, VlmEvalBatch.size)
+        if jit_key not in _cached_jit:
+            _cached_jit[jit_key] = _make_vlm_eval_jit(axis_resources, mp, EvalPos, VlmEvalBatch, max_packed_segments)
+        jit_fn = _cached_jit[jit_key]
 
         # Run ALL benchmarks in a single continuous batch loop to avoid the
         # TPU crash that occurs at benchmark transitions.
@@ -1339,7 +1347,7 @@ def vlm_mc_eval_callback(
                 prepared,
                 tokenizer,
                 EvalPos,
-                EvalBatch,
+                VlmEvalBatch,
                 max_packed_segments,
                 axis_resources,
                 len(tokenizer),
@@ -1359,12 +1367,25 @@ def vlm_mc_eval_callback(
                             result["num_questions"],
                             loss,
                         )
+                        # Use tracker-owned global step to avoid stale callback-local
+                        # step values regressing behind WandB's monotonic run.step.
                         levanter.tracker.log(
                             {
                                 f"eval/{bench_name}/accuracy": accuracy,
                                 f"eval/{bench_name}/loss": loss,
                             },
-                            step=step.step,
+                            step=None,
+                        )
+                        logger.warning(
+                            "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=multiple_choice "
+                            "accuracy=%.6f loss=%.6f num_correct=%d num_questions=%d",
+                            eval_run_uuid,
+                            jax.process_index(),
+                            bench_name,
+                            accuracy,
+                            loss,
+                            result["num_correct"],
+                            result["num_questions"],
                         )
                     elif task_type == "open_ended":
                         mean_ll = result["mean_ll"]
@@ -1374,9 +1395,20 @@ def vlm_mc_eval_callback(
                             mean_ll,
                             result["num_questions"],
                         )
+                        # Use tracker-owned global step to avoid stale callback-local
+                        # step values regressing behind WandB's monotonic run.step.
                         levanter.tracker.log(
                             {f"eval/{bench_name}/mean_ll": mean_ll},
-                            step=step.step,
+                            step=None,
+                        )
+                        logger.warning(
+                            "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=open_ended "
+                            "mean_ll=%.6f num_questions=%d",
+                            eval_run_uuid,
+                            jax.process_index(),
+                            bench_name,
+                            mean_ll,
+                            result["num_questions"],
                         )
         except Exception:
             logger.exception("vlm_mc_eval crashed")
