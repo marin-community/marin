@@ -57,7 +57,7 @@ from levanter.data.loader import stack_batches
 from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completions, per_segment_loss
 from levanter.eval_harness import get_padding_count_from_batch, get_segment_ids_from_batch
 from levanter.models.loss import next_token_loss
-from levanter.utils.jax_utils import multihost_broadcast_sync, sync_global_devices
+from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync, sync_global_devices
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -67,6 +67,29 @@ from experiments.unified.vlm_tokenize_captions import (
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
+
+
+def _to_host_array_for_debug(x):
+    """Best-effort conversion of an array-like object for diagnostics only.
+
+    This helper must never be used for metric computation; it exists to keep
+    logging/inspection from crashing when arrays are globally sharded.
+    """
+    try:
+        return np.asarray(x)
+    except Exception:
+        pass
+
+    shards = getattr(x, "addressable_shards", None)
+    if shards is not None:
+        local_arrays = [np.asarray(s.data) for s in shards]
+        if local_arrays:
+            try:
+                return np.concatenate(local_arrays, axis=0)
+            except Exception:
+                return local_arrays[0]
+
+    raise RuntimeError(f"Could not convert value to host array for debug: {type(x)}")
 
 
 def _make_vlm_eval_jit(axis_resources, mp, EvalPos, EvalBatch, max_packed_segments):
@@ -219,11 +242,12 @@ def _run_batch_loop(
         _padding_count, batch_tokens = get_padding_count_from_batch(batch_orig, pad_token)
 
         try:
-            batch = hax.shard(batch_orig, axis_resources)
+            out_specs = hax.partitioning.infer_resource_partitions(batch_orig, axis_resources)
+            batch = broadcast_shard(batch_orig, out_specs)
         except Exception:
             tokens_array = batch_orig.tokens.array
             logger.exception(
-                "[%s][host=%d] hax.shard failed at batch=%d axis_resources=%s tokens_type=%s shape=%s dtype=%s "
+                "[%s][host=%d] batch sharding failed at batch=%d axis_resources=%s tokens_type=%s shape=%s dtype=%s "
                 "tokens_sharding=%s",
                 eval_run_uuid,
                 jax.process_index(),
@@ -236,13 +260,15 @@ def _run_batch_loop(
             )
             raise
 
-        segments_this_batch = get_segment_ids_from_batch(batch, max_packed_segments * EvalBatch.size)
+        # Extract segment IDs from pre-broadcast local batch to avoid attempting
+        # host reads from a potentially non-addressable global array.
+        segments_this_batch = get_segment_ids_from_batch(batch_orig, max_packed_segments * EvalBatch.size)
         out_ids, out_lls = jit_fn(model, batch)
 
         # out_axis_resources={} means outputs are fully replicated on every
         # host, so we can read them directly without shard iteration.
-        out_ids = np.asarray(out_ids.array)
-        out_lls = np.asarray(out_lls.array)
+        out_ids = _to_host_array_for_debug(out_ids.array)
+        out_lls = _to_host_array_for_debug(out_lls.array)
         valid = out_ids != -1
         out_ids_this_batch = out_ids[valid].astype(int).tolist()
         missing_ids = set(segments_this_batch) - set(out_ids_this_batch)
@@ -250,7 +276,9 @@ def _run_batch_loop(
         if missing_ids or extra_ids:
             raise RuntimeError(
                 f"[{eval_run_uuid}][host={jax.process_index()}] Segment mismatch at batch={batch_idx}: "
-                f"missing={sorted(list(missing_ids))[:10]}, extra={sorted(list(extra_ids))[:10]}"
+                f"segments={len(segments_this_batch)}, out_ids={len(out_ids_this_batch)}, "
+                f"missing={sorted(list(missing_ids))[:10]}, extra={sorted(list(extra_ids))[:10]}, "
+                f"segments_sample={segments_this_batch[:10]}, out_ids_sample={out_ids_this_batch[:10]}"
             )
 
         result_probs[out_ids[valid].astype(int)] = out_lls[valid]
@@ -1062,7 +1090,8 @@ def vlm_mc_eval_callback(
             logger.warning("No parquets found for benchmark %s, skipping", bench_name)
 
     def vlm_eval(step: StepInfo, force=False):
-        eval_run_uuid = uuid.uuid4().hex[:8]
+        local_uuid = uuid.uuid4().hex[:8] if jax.process_index() == 0 else ""
+        eval_run_uuid = multihost_broadcast_sync(local_uuid)
         model = inference_mode(step.eval_model, True)
         EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
 
@@ -1094,6 +1123,20 @@ def vlm_mc_eval_callback(
             EvalPos.size,
             EvalBatch.size,
             f"{parameter_count(model):,}",
+        )
+        run_file = __file__
+        git_commit = os.environ.get("GIT_COMMIT", "unknown")
+        ray_pkg_fragment = "n/a"
+        marker = "_ray_pkg_"
+        if marker in run_file:
+            ray_pkg_fragment = run_file[run_file.find(marker) : run_file.find(marker) + 24]
+        logger.info(
+            "[%s][host=%d] Code provenance: file=%s git_commit=%s ray_pkg=%s",
+            eval_run_uuid,
+            jax.process_index(),
+            run_file,
+            git_commit,
+            ray_pkg_fragment,
         )
 
         # All processes prepare identical data independently, then run eval

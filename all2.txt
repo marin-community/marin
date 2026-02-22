@@ -1,445 +1,406 @@
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[50] = gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[51] = gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-a07891
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[52] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[53] = gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-a07891
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[54] = gs://marin-us-central2/tokenized/paloma/mc4-ea36a2
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[55] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[56] = gs://marin-us-central2/tokenized/paloma/mc4-ea36a2
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[57] = gs://marin-us-central2/tokenized/paloma/ptb-628036
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[58] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[59] = gs://marin-us-central2/tokenized/paloma/ptb-628036
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[60] = gs://marin-us-central2/tokenized/paloma/redpajama-9d4ddd
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[61] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[62] = gs://marin-us-central2/tokenized/paloma/redpajama-9d4ddd
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[63] = gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[64] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[65] = gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[66] = gs://marin-us-central2/tokenized/paloma/wikitext_103-1f5636
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[67] = gs://marin-us-central2/raw/paloma-fc6827
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[68] = gs://marin-us-central2/tokenized/paloma/wikitext_103-1f5636
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[69] = gs://marin-us-central2/tokenized/uncheatable_eval/wikipedia_english-ba27aa
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[70] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[71] = gs://marin-us-central2/tokenized/uncheatable_eval/wikipedia_english-ba27aa
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[72] = gs://marin-us-central2/tokenized/uncheatable_eval/github_python-00e7de
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[73] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[74] = gs://marin-us-central2/tokenized/uncheatable_eval/github_python-00e7de
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[75] = gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-d0da6b
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[76] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[77] = gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-d0da6b
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[78] = gs://marin-us-central2/tokenized/uncheatable_eval/bbc_news-2ff739
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[79] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[80] = gs://marin-us-central2/tokenized/uncheatable_eval/bbc_news-2ff739
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[81] = gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_physics-713363
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[82] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[83] = gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_physics-713363
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[84] = gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[85] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[86] = gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[87] = gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[88] = gs://marin-us-central2/raw/uncheatable-eval/latest-364401
-2026-02-21 20:52:55,055 INFO executor.py:839 --   DEP[89] = gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735
-2026-02-21 20:52:55,092 INFO executor.py:1173 -- [ray-marin-us-central2-head-88259ec3-compute-135915078108992] Status checkpoints/unified-qwen3-0.6b-demo64: <function run_levanter_train_lm at 0x7b9c9fe522a0>: None
-2026-02-21 20:52:55,092 INFO executor.py:1194 -- [ray-marin-us-central2-head-88259ec3-compute-135915078108992] Attempting to acquire lock for checkpoints/unified-qwen3-0.6b-demo64: <function run_levanter_train_lm at 0x7b9c9fe522a0>
-2026-02-21 20:52:55,314 INFO executor.py:1197 -- [ray-marin-us-central2-head-88259ec3-compute-135915078108992] Acquired lock for checkpoints/unified-qwen3-0.6b-demo64: <function run_levanter_train_lm at 0x7b9c9fe522a0>
-2026-02-21 20:52:55,427 - INFO - Submitting job: run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo64
-2026-02-21 20:52:55,427 - INFO - Building environment with [], extras [] for job: run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo64
-2026-02-21 20:52:55,428 INFO worker.py:1680 -- Using address 10.130.0.38:6379 set in the environment variable RAY_ADDRESS
-2026-02-21 20:52:55,431 INFO worker.py:1821 -- Connecting to existing Ray cluster at address: 10.130.0.38:6379...
-2026-02-21 20:52:55,442 INFO worker.py:1998 -- Connected to Ray cluster. View the dashboard at http://10.130.0.38:8265 
-(run_levanter_train_lm pid=16789, ip=10.130.1.2) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_lm pid=16789, ip=10.130.1.2) Resolved 535 packages in 6ms
-(<lambda> pid=102437, ip=10.130.0.47) 2026-02-21T20:53:43 - 5 - levanter.tracker.wandb - wandb.py:285 - INFO :: Setting wandb code_dir to .
-(<lambda> pid=62637, ip=10.130.0.25) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
-(<lambda> pid=62637, ip=10.130.0.25) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-(<lambda> pid=102437, ip=10.130.0.47) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo64-2eb6fd.
-(<lambda> pid=55390, ip=10.130.0.46) wandb: Tracking run with wandb version 0.24.0
-(<lambda> pid=55390, ip=10.130.0.46) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-(<lambda> pid=55390, ip=10.130.0.46) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/wandb/offline-run-20260221_205343-unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=62637, ip=10.130.0.25) wandb: Run `wandb offline` to turn off syncing.
-(<lambda> pid=62637, ip=10.130.0.25) wandb: Syncing run unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=62637, ip=10.130.0.25) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
-(<lambda> pid=62637, ip=10.130.0.25) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:53:44 - 7 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=62637, ip=10.130.0.25) 2026-02-21T20:53:44 - 0 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo64-2eb6fd unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=116781, ip=10.130.0.17) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-(<lambda> pid=62637, ip=10.130.0.25) 2026-02-21T20:53:46 - 0 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo64-2eb6fd unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:53:46 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=55390, ip=10.130.0.46) 2026-02-21T20:53:46 - 6 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo64-2eb6fd/checkpoints
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:53:48 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:53:48 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json
-(<lambda> pid=62637, ip=10.130.0.25) 2026-02-21T20:53:46 - 0 - levanter.tracker.wandb - wandb.py:285 - INFO :: Setting wandb code_dir to . [repeated 15x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:53:48 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}}
-(<lambda> pid=55489, ip=10.130.0.15) I0221 20:53:48.692772   57079 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
-(<lambda> pid=100659, ip=10.130.0.20) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo64-2eb6fd. [repeated 6x across cluster]
-(<lambda> pid=62637, ip=10.130.0.25) wandb: Tracking run with wandb version 0.24.0 [repeated 7x across cluster]
-(<lambda> pid=55489, ip=10.130.0.15) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 6x across cluster]
-(<lambda> pid=62637, ip=10.130.0.25) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/wandb/run-20260221_205343-unified-qwen3-0.6b-demo64-2eb6fd [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:53:46 - 2 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo64-2eb6fd [repeated 13x across cluster]
-(<lambda> pid=62637, ip=10.130.0.25) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 7x across cluster]
-(<lambda> pid=62637, ip=10.130.0.25) 2026-02-21T20:53:46 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
-(<lambda> pid=62637, ip=10.130.0.25) 2026-02-21T20:53:46 - 0 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo64-2eb6fd/checkpoints [repeated 7x across cluster]
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:53:56 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train [repeated 24x across cluster]
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:53:56 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train/shard_ledger.json [repeated 24x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:53:52 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 23x across cluster]
-(<lambda> pid=100659, ip=10.130.0.20) I0221 20:53:48.832707  102274 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 7x across cluster]
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:53:59 - 7 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:53:59 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:53:59 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:53:59 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:54:00 - 4 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:54:00 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:54:00 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:54:00 - 4 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:54:00 - 7 - levanter.data.text - datasets.py:830 - WARNING :: No validation cache found for component multimodal_captions, skipping
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:54:00 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:54:00 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:54:00 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:54:00 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:54:00 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:54:00 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:54:00 - 4 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:54:00 - 4 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json
-(<lambda> pid=102437, ip=10.130.0.47) 2026-02-21T20:54:01 - 5 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/ai2d/validation [repeated 76x across cluster]
-(<lambda> pid=102437, ip=10.130.0.47) 2026-02-21T20:54:01 - 5 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/ai2d/validation/shard_ledger.json [repeated 76x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:54:01 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 35x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:02 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}} [repeated 71x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.data.text - datasets.py:830 - WARNING :: No validation cache found for component multimodal_captions, skipping [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:01 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:02 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:02 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:02 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation [repeated 7x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:54:02 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json [repeated 7x across cluster]
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:54:07 - 4 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1/validation [repeated 68x across cluster]
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:54:07 - 4 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1/validation/shard_ledger.json [repeated 68x across cluster]
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:54:07 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 62x across cluster]
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:54:12 - 7 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch.
-(<lambda> pid=102437, ip=10.130.0.47) 2026-02-21T20:54:11 - 5 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation [repeated 119x across cluster]
-(<lambda> pid=102437, ip=10.130.0.47) 2026-02-21T20:54:11 - 5 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation/shard_ledger.json [repeated 119x across cluster]
-(<lambda> pid=102437, ip=10.130.0.47) 2026-02-21T20:54:11 - 5 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 119x across cluster]
-(<lambda> pid=62637, ip=10.130.0.25) 2026-02-21T20:54:37 - 0 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 4.775.
-(<lambda> pid=100659, ip=10.130.0.20) 2026-02-21T20:54:12 - 3 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch. [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:55:05 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00it/6.18kit rate:78.8s/it remaining:135:12:11 elapsed:01:18 postfix:-
-(<lambda> pid=102437, ip=10.130.0.47) 2026-02-21T20:54:37 - 5 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 5.056. [repeated 7x across cluster]
-(<lambda> pid=55031, ip=10.130.0.13) 2026-02-21T20:55:05 - 7 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/158 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:06 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 131it/158it rate:2.1it/s remaining:00:12 elapsed:01:00 postfix:-
-(<lambda> pid=102437, ip=10.130.0.47) 2026-02-21T20:55:05 - 5 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00it/6.18kit rate:78.8s/it remaining:135:12:32 elapsed:01:18 postfix:- [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:55:07 - 1 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 1.247. [repeated 8x across cluster]
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:55:05 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/158 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:19 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 158it/158it rate:2.1it/s remaining:00:00 elapsed:01:13 postfix:- [repeated 8x across cluster]
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:257 - INFO :: eval loss: 11.755
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 9.905
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: understanding loss: 8.604
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 8.549
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: generation loss: 11.455
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 10.915
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: eval loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: eval_textvqa loss: 11.884
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: eval_chartqa loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: eval_ai2d loss: 11.879
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: eval_mmmu loss: 11.885
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: eval_cifar10_small loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/4chan loss: 11.882
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/c4_100_domains loss: 11.884
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/c4_en loss: 11.884
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/dolma-v1_5 loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_programing_languages loss: 11.882
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_subreddits loss: 11.884
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 11.884
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_s2orc_unsplit loss: 11.884
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_wikipedia_unsplit loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/mc4 loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 11.881
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 11.886
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/wikitext_103 loss: 11.884
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 11.884
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 11.882
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 11.882
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 11.883
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 11.884
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 11.884
-(<lambda> pid=55489, ip=10.130.0.15) 2026-02-21T20:56:27 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/ao3_english loss: 11.884
-(<lambda> pid=100659, ip=10.130.0.20) 2026-02-21T20:56:19 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 158it/158it rate:2.1it/s remaining:00:00 elapsed:01:13 postfix:- [repeated 7x across cluster]
-(<lambda> pid=55390, ip=10.130.0.46) 2026-02-21T20:57:08 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval -/16273408 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=55390, ip=10.130.0.46) 2026-02-21T20:57:08 - 6 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1039 - ERROR :: vlm_mc_eval crashed
-(<lambda> pid=55390, ip=10.130.0.46) Traceback (most recent call last):
-(<lambda> pid=55390, ip=10.130.0.46)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/experiments/unified/vlm_mc_eval.py", line 1002, in vlm_eval
-(<lambda> pid=55390, ip=10.130.0.46)     results = evaluate_all_vlm_benchmarks(
-(<lambda> pid=55390, ip=10.130.0.46)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/experiments/unified/vlm_mc_eval.py", line 333, in evaluate_all_vlm_benchmarks
-(<lambda> pid=55390, ip=10.130.0.46)     result_probs, covered_points = _run_batch_loop(
-(<lambda> pid=55390, ip=10.130.0.46)                                    ^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/experiments/unified/vlm_mc_eval.py", line 158, in _run_batch_loop
-(<lambda> pid=55390, ip=10.130.0.46)     batch = hax.shard(batch_orig, axis_resources)
-(<lambda> pid=55390, ip=10.130.0.46)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/haliax/src/haliax/partitioning.py", line 264, in shard
-(<lambda> pid=55390, ip=10.130.0.46)     return htu.tree_map(_do_device_put, x)
-(<lambda> pid=55390, ip=10.130.0.46)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/haliax/src/haliax/tree_util.py", line 33, in tree_map
-(<lambda> pid=55390, ip=10.130.0.46)     return jax.tree.map(fn, tree, *rest, is_leaf=is_leaf)
-(<lambda> pid=55390, ip=10.130.0.46)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree.py", line 155, in map
-(<lambda> pid=55390, ip=10.130.0.46)     return tree_util.tree_map(f, tree, *rest, is_leaf=is_leaf)
-(<lambda> pid=55390, ip=10.130.0.46)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in tree_map
-(<lambda> pid=55390, ip=10.130.0.46)     return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
-(<lambda> pid=55390, ip=10.130.0.46)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in <genexpr>
-(<lambda> pid=55390, ip=10.130.0.46)     return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
-(<lambda> pid=55390, ip=10.130.0.46)                              ^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/haliax/src/haliax/partitioning.py", line 261, in _do_device_put
-(<lambda> pid=55390, ip=10.130.0.46)     ret = jax.device_put(named, sharding)
-(<lambda> pid=55390, ip=10.130.0.46)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/api.py", line 2787, in device_put
-(<lambda> pid=55390, ip=10.130.0.46)     out_flat = dispatch._batched_device_put_impl(
-(<lambda> pid=55390, ip=10.130.0.46)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 582, in _batched_device_put_impl
-(<lambda> pid=55390, ip=10.130.0.46)     y = _device_put_impl(x, device=device, src=src, copy=cp, aval=aval)
-(<lambda> pid=55390, ip=10.130.0.46)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 569, in _device_put_impl
-(<lambda> pid=55390, ip=10.130.0.46)     return _device_put_sharding_impl(x, aval, device, copy)
-(<lambda> pid=55390, ip=10.130.0.46)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=55390, ip=10.130.0.46)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 502, in _device_put_sharding_impl
-(<lambda> pid=55390, ip=10.130.0.46)     raise ValueError(
-(<lambda> pid=55390, ip=10.130.0.46) ValueError: device_put's second argument must be a Device or a Sharding which represents addressable devices, but got NamedSharding(mesh=Mesh('data': 32, 'replica': 1, 'model': 1, 'replica_dcn': 1, axis_types=(Auto, Auto, Auto, Auto)), spec=PartitionSpec(('replica_dcn', 'replica', 'data'), None), memory_kind=device). Please pass device or Sharding which represents addressable devices.
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: eval loss: 11.883 [repeated 14x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 11.883 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 11.883 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 11.883 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 11.883 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 9.905 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: understanding loss: 8.604 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 8.549 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: generation loss: 11.455 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 10.915 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: eval_textvqa loss: 11.884 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: eval_chartqa loss: 11.883 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/ao3_english loss: 11.884 [repeated 91x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: eval_mmmu loss: 11.885 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 11.883 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 11.883 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 11.884 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 11.883 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 11.881 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 11.883 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 11.886 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 11.884 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 11.882 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 11.882 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 11.883 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 11.884 [repeated 7x across cluster]
-(<lambda> pid=55335, ip=10.130.0.31) 2026-02-21T20:56:27 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 11.884 [repeated 7x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2) Task error ray::<lambda>() (pid=55489, ip=10.130.0.15)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     trainer.train(state, train_loader)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 541, in train
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     for info in self.training_steps(state, train_loader):
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     info = self.train_step(state, example)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 496, in train_step
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     self.run_hooks(info)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     self.hooks.run_hooks(info, force=force)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     hook.fn.on_step(info, force=force)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     self.fn(info)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=16860, ip=10.130.1.2)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     return func(*args, **kwargs)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=16860, ip=10.130.1.2)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=16860, ip=10.130.1.2) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=55489, ip=10.130.0.15)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     trainer.train(state, train_loader)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 541, in train
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     for info in self.training_steps(state, train_loader):
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     info = self.train_step(state, example)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 496, in train_step
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     self.run_hooks(info)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     self.hooks.run_hooks(info, force=force)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     hook.fn.on_step(info, force=force)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     self.fn(info)
-(SliceActor pid=62499, ip=10.130.0.25) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=55489, ip=10.130.0.15)
-(<lambda> pid=55489, ip=10.130.0.15) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f35a00fcb80>
-(<lambda> pid=55489, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=55489, ip=10.130.0.15)     conn.teardown(hooks.exit_code)
-(<lambda> pid=55489, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=55489, ip=10.130.0.15)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=55489, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
-(<lambda> pid=55489, ip=10.130.0.15)     return future.result()
-(<lambda> pid=55489, ip=10.130.0.15)            ^^^^^^^^^^^^^^^
-(<lambda> pid=55489, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=55489, ip=10.130.0.15)     return self.__get_result()
-(<lambda> pid=55489, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=55489, ip=10.130.0.15)     raise self._exception
-(<lambda> pid=55489, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=55489, ip=10.130.0.15)     return await fn()
-(<lambda> pid=55489, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=55489, ip=10.130.0.15)     await self._client.close()
-(<lambda> pid=55489, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=55489, ip=10.130.0.15)     await self._writer.wait_closed()
-(<lambda> pid=55489, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=55489, ip=10.130.0.15)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=55489, ip=10.130.0.15) BrokenPipeError: [Errno 32] Broken pipe
-(<lambda> pid=55489, ip=10.130.0.15) E0221 20:57:10.843577   55642 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=55489, ip=10.130.0.15) F0221 20:57:10.843620   55642 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=55489, ip=10.130.0.15) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
-(<lambda> pid=55489, ip=10.130.0.15) :UNKNOWN:Error received from peer  {grpc_message:"recvmsg:Connection reset by peer", grpc_status:14}
-(run_on_pod_ray pid=16860, ip=10.130.1.2) Failed 1 times. Continuing to retry.
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     return func(*args, **kwargs)
-(run_on_pod_ray pid=16860, ip=10.130.1.2)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=16860, ip=10.130.1.2) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=55489, ip=10.130.0.15)
-(<lambda> pid=55391, ip=10.130.0.46) 2026-02-21T20:57:25 - 6 - levanter.tracker.wandb - wandb.py:285 - INFO :: Setting wandb code_dir to .
-(<lambda> pid=116781, ip=10.130.0.17) 2026-02-21T20:57:08 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval -/16273408 rate:- remaining:? elapsed:00:00 postfix:- [repeated 15x across cluster]
-(<lambda> pid=100659, ip=10.130.0.20) 2026-02-21T20:57:08 - 3 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1039 - ERROR :: vlm_mc_eval crashed [repeated 7x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2) Traceback (most recent call last): [repeated 10x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/experiments/unified/vlm_mc_eval.py", line 1002, in vlm_eval [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     results = evaluate_all_vlm_benchmarks( [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/experiments/unified/vlm_mc_eval.py", line 333, in evaluate_all_vlm_benchmarks [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     result_probs, covered_points = _run_batch_loop( [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)                                    ^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/experiments/unified/vlm_mc_eval.py", line 158, in _run_batch_loop [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     batch = hax.shard(batch_orig, axis_resources) [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/haliax/src/haliax/partitioning.py", line 264, in shard [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     return htu.tree_map(_do_device_put, x) [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 26x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in tree_map [repeated 22x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     return jax.tree.map(fn, tree, *rest, is_leaf=is_leaf) [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree.py", line 155, in map [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     return tree_util.tree_map(f, tree, *rest, is_leaf=is_leaf) [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     return treedef.unflatten(f(*xs) for xs in zip(*all_leaves)) [repeated 22x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/tree_util.py", line 364, in <genexpr> [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)                              ^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/haliax/src/haliax/partitioning.py", line 261, in _do_device_put [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     ret = jax.device_put(named, sharding) [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/api.py", line 2787, in device_put [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     out_flat = dispatch._batched_device_put_impl( [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 582, in _batched_device_put_impl [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     y = _device_put_impl(x, device=device, src=src, copy=cp, aval=aval) [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 569, in _device_put_impl [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     return _device_put_sharding_impl(x, aval, device, copy) [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/dispatch.py", line 502, in _device_put_sharding_impl [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     raise ValueError( [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2) ValueError: device_put's second argument must be a Device or a Sharding which represents addressable devices, but got NamedSharding(mesh=Mesh('data': 32, 'replica': 1, 'model': 1, 'replica_dcn': 1, axis_types=(Auto, Auto, Auto, Auto)), spec=PartitionSpec(('replica_dcn', 'replica', 'data'), None), memory_kind=device). Please pass device or Sharding which represents addressable devices. [repeated 11x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/main/train_lm.py", line 335, in main [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     trainer.train(state, train_loader) [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 541, in train [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     for info in self.training_steps(state, train_loader): [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 519, in training_steps [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     info = self.train_step(state, example) [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 496, in train_step [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     self.run_hooks(info) [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks [repeated 4x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     self.hooks.run_hooks(info, force=force) [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     hook.fn.on_step(info, force=force) [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)     self.fn(info) [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)                                                  ^^^^^^^^^^ [repeated 2x across cluster]
-(run_on_pod_ray pid=16860, ip=10.130.1.2)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=62638, ip=10.130.0.25) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
-(<lambda> pid=62638, ip=10.130.0.25) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-(<lambda> pid=55336, ip=10.130.0.31) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo64-2eb6fd.
-(<lambda> pid=55032, ip=10.130.0.13) wandb: Tracking run with wandb version 0.24.0
-(<lambda> pid=55032, ip=10.130.0.13) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-(<lambda> pid=55032, ip=10.130.0.13) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/wandb/offline-run-20260221_205725-unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=62638, ip=10.130.0.25) wandb: Run `wandb offline` to turn off syncing.
-(<lambda> pid=62638, ip=10.130.0.25) wandb: Resuming run unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=62638, ip=10.130.0.25) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
-(<lambda> pid=62638, ip=10.130.0.25) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=55336, ip=10.130.0.31) 2026-02-21T20:57:26 - 1 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=62638, ip=10.130.0.25) 2026-02-21T20:57:26 - 0 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo64-2eb6fd unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=55336, ip=10.130.0.31) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-(<lambda> pid=62638, ip=10.130.0.25) 2026-02-21T20:57:28 - 0 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo64-2eb6fd unified-qwen3-0.6b-demo64-2eb6fd
-(<lambda> pid=55336, ip=10.130.0.31) 2026-02-21T20:57:28 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=104139, ip=10.130.0.20) 2026-02-21T20:57:28 - 3 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo64-2eb6fd/checkpoints
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:30 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:30 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json
-(<lambda> pid=62638, ip=10.130.0.25) 2026-02-21T20:57:28 - 0 - levanter.tracker.wandb - wandb.py:285 - INFO :: Setting wandb code_dir to . [repeated 15x across cluster]
-(<lambda> pid=55490, ip=10.130.0.15) 2026-02-21T20:57:30 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}}
-(<lambda> pid=55032, ip=10.130.0.13) I0221 20:57:30.826259   59243 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
-(<lambda> pid=120658, ip=10.130.0.17) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo64-2eb6fd. [repeated 6x across cluster]
-(<lambda> pid=62638, ip=10.130.0.25) wandb: Tracking run with wandb version 0.24.0 [repeated 7x across cluster]
-(<lambda> pid=104139, ip=10.130.0.20) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 6x across cluster]
-(<lambda> pid=62638, ip=10.130.0.25) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_ecf17db9abfb3dcc/wandb/run-20260221_205725-unified-qwen3-0.6b-demo64-2eb6fd [repeated 7x across cluster]
-(<lambda> pid=55490, ip=10.130.0.15) 2026-02-21T20:57:28 - 4 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo64-2eb6fd [repeated 13x across cluster]
-(<lambda> pid=62638, ip=10.130.0.25) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 7x across cluster]
-(<lambda> pid=120658, ip=10.130.0.17) 2026-02-21T20:57:28 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
-(<lambda> pid=62638, ip=10.130.0.25) 2026-02-21T20:57:28 - 0 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo64-2eb6fd/checkpoints [repeated 7x across cluster]
-(<lambda> pid=55391, ip=10.130.0.46) 2026-02-21T20:57:39 - 6 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train [repeated 24x across cluster]
-(<lambda> pid=55391, ip=10.130.0.46) 2026-02-21T20:57:39 - 6 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train/shard_ledger.json [repeated 24x across cluster]
-(<lambda> pid=106122, ip=10.130.0.47) 2026-02-21T20:57:34 - 5 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 23x across cluster]
-(<lambda> pid=120658, ip=10.130.0.17) I0221 20:57:30.872052  122242 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 7x across cluster]
-(<lambda> pid=55391, ip=10.130.0.46) 2026-02-21T20:57:42 - 6 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:42 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:42 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping
-(<lambda> pid=55391, ip=10.130.0.46) 2026-02-21T20:57:42 - 6 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping
-(<lambda> pid=55391, ip=10.130.0.46) 2026-02-21T20:57:42 - 6 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:43 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping
-(<lambda> pid=55391, ip=10.130.0.46) 2026-02-21T20:57:43 - 6 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping
-(<lambda> pid=55391, ip=10.130.0.46) 2026-02-21T20:57:43 - 6 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:43 - 7 - levanter.data.text - datasets.py:830 - WARNING :: No validation cache found for component multimodal_captions, skipping
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:43 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:43 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:43 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:43 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:43 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:43 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:43 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation
-(<lambda> pid=55032, ip=10.130.0.13) 2026-02-21T20:57:43 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json
+ray.get(f))
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=17381, ip=10.130.0.179) ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=83531, ip=10.130.0.19)
+(run_on_pod_ray pid=17381, ip=10.130.0.179) learning/45eac/tpu/runtime/hal/internal/tpu_program_termination_validation.cc:180
+(<lambda> pid=83531, ip=10.130.0.19) E0221 21:48:39.185237   86067 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=83531, ip=10.130.0.19) F0221 21:48:39.185287   86067 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=83531, ip=10.130.0.19) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
+(<lambda> pid=83531, ip=10.130.0.19) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"}
+(<lambda> pid=87915, ip=10.130.0.61) 2026-02-21T21:48:54 - 6 - levanter.tracker.wandb - wandb.py:285 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=94173, ip=10.130.0.62) 2026-02-21T21:48:36 - 7 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval 16.8Mtok/16.3Mtok rate:748,538.5tok/s remaining:00:00 elapsed:00:23 postfix:- [repeated 7x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179) *************** [repeated 4x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179) An unexpected peer shows up in the launch group with a different launch id than the current group leader. If using single controller backends, this signals a bug in the runtime scheduling system or above. If using multi-controller backends, non-determinism of 1) model code or 2) XLA compiler may also cause this, enable HLO dump for all workers and check: 1) if before_optimizations.txt are all the same or 2) if after_optimizations.txt are all the same. no HLO mapping [repeated 4x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179) === Source Location Trace: ===  [repeated 4x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179) Traceback (most recent call last): [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)                                                  ^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/main/train_lm.py", line 335, in main [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     trainer.train(state, train_loader) [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/trainer.py", line 541, in train [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     for info in self.training_steps(state, train_loader): [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/trainer.py", line 519, in training_steps [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     info = self.train_step(state, example) [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/trainer.py", line 474, in train_step [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks) [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 298, in __bool__ [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     return bool(self._value) [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)                 ^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/profiler.py", line 359, in wrapper [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     return func(*args, **kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)            ^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 635, in _value [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     npy_value, did_copy = self._single_device_array_to_np_array_did_copy() [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179) jax.errors.JaxRuntimeError: INTERNAL: Core halted unexpectedly: INTERNAL: Accelerator device halted prematurely, perhaps due to an on-device check-failure. Node 0 halted unexpectedly at tag:pc TensorCoreSequencer:1:0x175 (from TensorCoreSequencer:1:0x21f): scheckne:  [repeated 2x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=88387, ip=10.130.0.19) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=99698, ip=10.130.0.62) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo70-c07493.
+(<lambda> pid=88184, ip=10.130.0.48) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=88184, ip=10.130.0.48) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=88184, ip=10.130.0.48) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/wandb/offline-run-20260221_214854-unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=88387, ip=10.130.0.19) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=88387, ip=10.130.0.19) wandb: Resuming run unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=88387, ip=10.130.0.19) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
+(<lambda> pid=88387, ip=10.130.0.19) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=87915, ip=10.130.0.61) 2026-02-21T21:48:55 - 6 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:48:55 - 0 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo70-c07493 unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=88472, ip=10.130.0.43) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:48:57 - 0 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo70-c07493 unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:48:57 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:48:57 - 1 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo70-c07493/checkpoints
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:48:59 - 4 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:48:59 - 4 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:48:59 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}}
+(<lambda> pid=88472, ip=10.130.0.43) I0221 21:48:59.491630   90056 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:48:57 - 0 - levanter.tracker.wandb - wandb.py:285 - INFO :: Setting wandb code_dir to . [repeated 15x across cluster]
+(<lambda> pid=88229, ip=10.130.0.60) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo70-c07493. [repeated 6x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) wandb: Tracking run with wandb version 0.24.0 [repeated 7x across cluster]
+(<lambda> pid=99698, ip=10.130.0.62) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 6x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/wandb/run-20260221_214854-unified-qwen3-0.6b-demo70-c07493 [repeated 7x across cluster]
+(<lambda> pid=99698, ip=10.130.0.62) 2026-02-21T21:48:57 - 7 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo70-c07493 [repeated 13x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:48:57 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
+(<lambda> pid=99698, ip=10.130.0.62) 2026-02-21T21:48:57 - 7 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo70-c07493/checkpoints [repeated 7x across cluster]
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:07 - 4 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train [repeated 24x across cluster]
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:07 - 4 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train/shard_ledger.json [repeated 24x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:03 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 23x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) I0221 21:48:59.842945   90003 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 7x across cluster]
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:10 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:10 - 4 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:10 - 4 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:10 - 4 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:10 - 4 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:10 - 4 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:10 - 4 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:10 - 4 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.data.text - datasets.py:830 - WARNING :: No validation cache found for component multimodal_captions, skipping
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:11 - 4 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json
+(<lambda> pid=88072, ip=10.130.0.57) 2026-02-21T21:49:12 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/hf_85m_levanter_cache_test/val_understanding/validation [repeated 61x across cluster]
+(<lambda> pid=88072, ip=10.130.0.57) 2026-02-21T21:49:12 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/hf_85m_levanter_cache_test/val_understanding/validation/shard_ledger.json [repeated 61x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:12 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 32x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:14 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}} [repeated 66x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.data.text - datasets.py:830 - WARNING :: No validation cache found for component multimodal_captions, skipping [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:13 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:14 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:14 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:14 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:14 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:17 - 4 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23/validation [repeated 81x across cluster]
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:17 - 4 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23/validation/shard_ledger.json [repeated 81x across cluster]
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:17 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 63x across cluster]
+(<lambda> pid=88472, ip=10.130.0.43) 2026-02-21T21:49:19 - 4 - levanter.checkpoint - checkpoint.py:647 - WARNING :: While checkpoint path gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo70-c07493/checkpoints exists, it does not contain a metadata.json file or subdirectories with metadata files. Most likely, this path has other data or incomplete checkpoints. Acting as if it is not a checkpoint path.
+(<lambda> pid=88072, ip=10.130.0.57) 2026-02-21T21:49:23 - 2 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch.
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:22 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation [repeated 121x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:22 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation/shard_ledger.json [repeated 121x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:22 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 121x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:48 - 0 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 4.716.
+(<lambda> pid=88387, ip=10.130.0.19) 2026-02-21T21:49:22 - 0 - levanter.checkpoint - checkpoint.py:647 - WARNING :: While checkpoint path gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo70-c07493/checkpoints exists, it does not contain a metadata.json file or subdirectories with metadata files. Most likely, this path has other data or incomplete checkpoints. Acting as if it is not a checkpoint path. [repeated 7x across cluster]
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:49:23 - 1 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch. [repeated 7x across cluster]
+(<lambda> pid=99698, ip=10.130.0.62) 2026-02-21T21:50:05 - 7 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00it/6.18kit rate:67.4s/it remaining:115:42:50 elapsed:01:07 postfix:-
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:49:48 - 1 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 4.792. [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:50:05 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/158 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=88229, ip=10.130.0.60) 2026-02-21T21:51:05 - 5 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 133it/158it rate:2.1it/s remaining:00:12 elapsed:01:00 postfix:-
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:50:05 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00it/6.18kit rate:67.4s/it remaining:115:42:57 elapsed:01:07 postfix:- [repeated 7x across cluster]
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:50:07 - 1 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 2.164. [repeated 8x across cluster]
+(<lambda> pid=88072, ip=10.130.0.57) 2026-02-21T21:50:05 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/158 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
+(<lambda> pid=87915, ip=10.130.0.61) 2026-02-21T21:51:17 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 158it/158it rate:2.1it/s remaining:00:00 elapsed:01:12 postfix:- [repeated 8x across cluster]
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:257 - INFO :: eval loss: 11.755
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 9.905
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: understanding loss: 8.604
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 8.549
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: generation loss: 11.455
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 10.915
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: eval loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: eval_textvqa loss: 11.884
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: eval_chartqa loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: eval_ai2d loss: 11.879
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: eval_mmmu loss: 11.885
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: eval_cifar10_small loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/4chan loss: 11.882
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/c4_100_domains loss: 11.884
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/c4_en loss: 11.884
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/dolma-v1_5 loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_programing_languages loss: 11.882
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_subreddits loss: 11.884
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 11.884
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_s2orc_unsplit loss: 11.884
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_wikipedia_unsplit loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/mc4 loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 11.881
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 11.886
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: paloma/wikitext_103 loss: 11.884
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 11.884
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 11.882
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 11.882
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 11.883
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 11.884
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 11.884
+(<lambda> pid=88184, ip=10.130.0.48) 2026-02-21T21:51:25 - 1 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/ao3_english loss: 11.884
+(<lambda> pid=88072, ip=10.130.0.57) 2026-02-21T21:51:17 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 158it/158it rate:2.1it/s remaining:00:00 elapsed:01:11 postfix:- [repeated 7x across cluster]
+(<lambda> pid=99698, ip=10.130.0.62) 2026-02-21T21:51:58 - 7 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval -/16273408 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: eval loss: 11.883 [repeated 14x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 9.905 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: understanding loss: 8.604 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 8.549 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: generation loss: 11.455 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 10.915 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: eval_textvqa loss: 11.884 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: eval_chartqa loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/ao3_english loss: 11.884 [repeated 91x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: eval_mmmu loss: 11.885 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 11.884 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 11.881 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 11.886 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 11.884 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 11.882 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 11.882 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 11.884 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:51:25 - 3 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 11.884 [repeated 7x across cluster]
+(<lambda> pid=88270, ip=10.130.0.58) 2026-02-21T21:52:21 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval 16.8Mtok/16.3Mtok rate:751,062.1tok/s remaining:00:00 elapsed:00:23 postfix:-
+(<lambda> pid=87915, ip=10.130.0.61) 2026-02-21T21:51:58 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval -/16273408 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
+(<lambda> pid=88387, ip=10.130.0.19) E0221 21:52:22.204373   89436 real_program_continuator.cc:1537] 0x0x0_TC0: *** Halt is unexpected, all pending programs will fail. 
+(<lambda> pid=88387, ip=10.130.0.19) E0221 21:52:22.204908   89634 real_program_continuator.cc:1504] 0x0x0_TC0: [Physical location: tpu953:pe1:0] generic::internal: Core halted unexpectedly: INTERNAL: Accelerator device halted prematurely, perhaps due to an on-device check-failure. Node 0 halted unexpectedly at tag:pc TensorCoreSequencer:1:0x175 (from TensorCoreSequencer:1:0x21f): scheckne: 
+(<lambda> pid=88387, ip=10.130.0.19) ***************
+(<lambda> pid=88387, ip=10.130.0.19) An unexpected peer shows up in the launch group with a different launch id than the current group leader. If using single controller backends, this signals a bug in the runtime scheduling system or above. If using multi-controller backends, non-determinism of 1) model code or 2) XLA compiler may also cause this, enable HLO dump for all workers and check: 1) if before_optimizations.txt are all the same or 2) if after_optimizations.txt are all the same. no HLO mapping
+(<lambda> pid=88387, ip=10.130.0.19) === Source Location Trace: ===
+(<lambda> pid=88387, ip=10.130.0.19) learning/45eac/tpu/runtime/hal/internal/tpu_program_termination_validation.cc:180
+(<lambda> pid=88387, ip=10.130.0.19) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f1b481dce00>
+(<lambda> pid=88387, ip=10.130.0.19) Traceback (most recent call last):
+(<lambda> pid=88387, ip=10.130.0.19)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=88387, ip=10.130.0.19)     conn.teardown(hooks.exit_code)
+(<lambda> pid=88387, ip=10.130.0.19)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=88387, ip=10.130.0.19)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=88387, ip=10.130.0.19)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
+(<lambda> pid=88387, ip=10.130.0.19)     return future.result()
+(<lambda> pid=88387, ip=10.130.0.19)            ^^^^^^^^^^^^^^^
+(<lambda> pid=88387, ip=10.130.0.19)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=88387, ip=10.130.0.19)     return self.__get_result()
+(<lambda> pid=88387, ip=10.130.0.19)            ^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=88387, ip=10.130.0.19)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=88387, ip=10.130.0.19)     raise self._exception
+(<lambda> pid=88387, ip=10.130.0.19)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=88387, ip=10.130.0.19)     return await fn()
+(<lambda> pid=88387, ip=10.130.0.19)            ^^^^^^^^^^
+(<lambda> pid=88387, ip=10.130.0.19)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=88387, ip=10.130.0.19)     await self._client.close()
+(<lambda> pid=88387, ip=10.130.0.19)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=88387, ip=10.130.0.19)     await self._writer.wait_closed()
+(<lambda> pid=88387, ip=10.130.0.19)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=88387, ip=10.130.0.19)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=88387, ip=10.130.0.19) BrokenPipeError: [Errno 32] Broken pipe
+(SliceActor pid=87825, ip=10.130.0.62) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=88387, ip=10.130.0.19)
+(SliceActor pid=87825, ip=10.130.0.62)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(SliceActor pid=87825, ip=10.130.0.62)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=87825, ip=10.130.0.62)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=87825, ip=10.130.0.62)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+(SliceActor pid=87825, ip=10.130.0.62)     trainer.train(state, train_loader)
+(SliceActor pid=87825, ip=10.130.0.62)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/trainer.py", line 541, in train
+(SliceActor pid=87825, ip=10.130.0.62)     for info in self.training_steps(state, train_loader):
+(SliceActor pid=87825, ip=10.130.0.62)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+(SliceActor pid=87825, ip=10.130.0.62)     info = self.train_step(state, example)
+(SliceActor pid=87825, ip=10.130.0.62)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=87825, ip=10.130.0.62)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/trainer.py", line 474, in train_step
+(SliceActor pid=87825, ip=10.130.0.62)     hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
+(SliceActor pid=87825, ip=10.130.0.62)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=87825, ip=10.130.0.62)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 298, in __bool__
+(SliceActor pid=87825, ip=10.130.0.62)     return bool(self._value)
+(SliceActor pid=87825, ip=10.130.0.62)                 ^^^^^^^^^^^
+(SliceActor pid=87825, ip=10.130.0.62)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/profiler.py", line 359, in wrapper
+(SliceActor pid=87825, ip=10.130.0.62)     return func(*args, **kwargs)
+(SliceActor pid=87825, ip=10.130.0.62)            ^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=87825, ip=10.130.0.62)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 635, in _value
+(SliceActor pid=87825, ip=10.130.0.62)     npy_value, did_copy = self._single_device_array_to_np_array_did_copy()
+(SliceActor pid=87825, ip=10.130.0.62)                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=87825, ip=10.130.0.62) jax.errors.JaxRuntimeError: INTERNAL: Core halted unexpectedly: INTERNAL: Accelerator device halted prematurely, perhaps due to an on-device check-failure. Node 0 halted unexpectedly at tag:pc TensorCoreSequencer:1:0x175 (from TensorCoreSequencer:1:0x21f): scheckne: 
+(SliceActor pid=87825, ip=10.130.0.62) learning/45eac/tpu/runtime/hal/internal/tpu_program_termination_validation.cc:180
+(run_on_pod_ray pid=17381, ip=10.130.0.179) Task error ray::<lambda>() (pid=88387, ip=10.130.0.19)
+(run_on_pod_ray pid=17381, ip=10.130.0.179) learning/45eac/tpu/runtime/hal/internal/tpu_program_termination_validation.cc:180
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=17381, ip=10.130.0.179) ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=88387, ip=10.130.0.19)
+(run_on_pod_ray pid=17381, ip=10.130.0.179) learning/45eac/tpu/runtime/hal/internal/tpu_program_termination_validation.cc:180
+(<lambda> pid=88387, ip=10.130.0.19) E0221 21:52:24.150046   88544 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=88387, ip=10.130.0.19) F0221 21:52:24.150090   88544 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=88387, ip=10.130.0.19) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
+(<lambda> pid=88387, ip=10.130.0.19) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"}
+(run_on_pod_ray pid=17381, ip=10.130.0.179) Failed 5 times. Continuing to retry.
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=17381, ip=10.130.0.179) ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=88387, ip=10.130.0.19)
+(run_on_pod_ray pid=17381, ip=10.130.0.179) learning/45eac/tpu/runtime/hal/internal/tpu_program_termination_validation.cc:180
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:38 - 7 - levanter.tracker.wandb - wandb.py:285 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=87915, ip=10.130.0.61) 2026-02-21T21:52:21 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval 16.8Mtok/16.3Mtok rate:751,049.9tok/s remaining:00:00 elapsed:00:23 postfix:- [repeated 7x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179) *************** [repeated 4x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179) An unexpected peer shows up in the launch group with a different launch id than the current group leader. If using single controller backends, this signals a bug in the runtime scheduling system or above. If using multi-controller backends, non-determinism of 1) model code or 2) XLA compiler may also cause this, enable HLO dump for all workers and check: 1) if before_optimizations.txt are all the same or 2) if after_optimizations.txt are all the same. no HLO mapping [repeated 4x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179) === Source Location Trace: === [repeated 4x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179) Traceback (most recent call last): [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)                                                  ^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/main/train_lm.py", line 335, in main [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     trainer.train(state, train_loader) [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/trainer.py", line 541, in train [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     for info in self.training_steps(state, train_loader): [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/trainer.py", line 519, in training_steps [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     info = self.train_step(state, example) [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/lib/levanter/src/levanter/trainer.py", line 474, in train_step [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks) [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 298, in __bool__ [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     return bool(self._value) [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)                 ^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/profiler.py", line 359, in wrapper [repeated 5x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     return func(*args, **kwargs) [repeated 5x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)            ^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 635, in _value [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)     npy_value, did_copy = self._single_device_array_to_np_array_did_copy() [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179)                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=17381, ip=10.130.0.179) jax.errors.JaxRuntimeError: INTERNAL: Core halted unexpectedly: INTERNAL: Accelerator device halted prematurely, perhaps due to an on-device check-failure. Node 0 halted unexpectedly at tag:pc TensorCoreSequencer:1:0x175 (from TensorCoreSequencer:1:0x21f): scheckne:  [repeated 3x across cluster]
+(<lambda> pid=88388, ip=10.130.0.19) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=88388, ip=10.130.0.19) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=88271, ip=10.130.0.58) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo70-c07493.
+(<lambda> pid=88271, ip=10.130.0.58) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=88271, ip=10.130.0.58) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=88271, ip=10.130.0.58) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/wandb/offline-run-20260221_215238-unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=88388, ip=10.130.0.19) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=88388, ip=10.130.0.19) wandb: Resuming run unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=88388, ip=10.130.0.19) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
+(<lambda> pid=88388, ip=10.130.0.19) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=87916, ip=10.130.0.61) 2026-02-21T21:52:40 - 6 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=88388, ip=10.130.0.19) 2026-02-21T21:52:40 - 0 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo70-c07493 unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=88073, ip=10.130.0.57) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=88388, ip=10.130.0.19) 2026-02-21T21:52:42 - 0 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo70-c07493 unified-qwen3-0.6b-demo70-c07493
+(<lambda> pid=88073, ip=10.130.0.57) 2026-02-21T21:52:42 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:42 - 7 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo70-c07493/checkpoints
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:44 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:44 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json
+(<lambda> pid=88388, ip=10.130.0.19) 2026-02-21T21:52:41 - 0 - levanter.tracker.wandb - wandb.py:285 - INFO :: Setting wandb code_dir to . [repeated 15x across cluster]
+(<lambda> pid=88073, ip=10.130.0.57) 2026-02-21T21:52:44 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}}
+(<lambda> pid=88073, ip=10.130.0.57) I0221 21:52:44.213105   92051 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
+(<lambda> pid=87916, ip=10.130.0.61) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo70-c07493. [repeated 6x across cluster]
+(<lambda> pid=88388, ip=10.130.0.19) wandb: Tracking run with wandb version 0.24.0 [repeated 7x across cluster]
+(<lambda> pid=87916, ip=10.130.0.61) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 6x across cluster]
+(<lambda> pid=88388, ip=10.130.0.19) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_3ad6f6fcde4f84e6/wandb/run-20260221_215238-unified-qwen3-0.6b-demo70-c07493 [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:42 - 1 - levanter.tracker.wandb - wandb.py:259 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo70-c07493 [repeated 13x across cluster]
+(<lambda> pid=88388, ip=10.130.0.19) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 7x across cluster]
+(<lambda> pid=88388, ip=10.130.0.19) 2026-02-21T21:52:42 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
+(<lambda> pid=88388, ip=10.130.0.19) 2026-02-21T21:52:42 - 0 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo70-c07493/checkpoints [repeated 7x across cluster]
+(<lambda> pid=87916, ip=10.130.0.61) 2026-02-21T21:52:53 - 6 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train [repeated 24x across cluster]
+(<lambda> pid=87916, ip=10.130.0.61) 2026-02-21T21:52:53 - 6 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train/shard_ledger.json [repeated 24x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:48 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 23x across cluster]
+(<lambda> pid=88230, ip=10.130.0.60) I0221 21:52:44.285995   92249 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 7x across cluster]
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.data.text - datasets.py:830 - WARNING :: No validation cache found for component multimodal_captions, skipping
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:56 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:57 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:52:57 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/hf_85m_levanter_cache_test/train [repeated 81x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/hf_85m_levanter_cache_test/train/shard_ledger.json [repeated 81x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 39x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:59 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}} [repeated 71x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.data.text - datasets.py:830 - WARNING :: No validation cache found for component multimodal_captions, skipping [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:58 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation [repeated 7x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:52:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=88073, ip=10.130.0.57) 2026-02-21T21:53:03 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1/validation [repeated 67x across cluster]
+(<lambda> pid=88073, ip=10.130.0.57) 2026-02-21T21:53:03 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1/validation/shard_ledger.json [repeated 67x across cluster]
+(<lambda> pid=88073, ip=10.130.0.57) 2026-02-21T21:53:03 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 61x across cluster]
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:53:05 - 7 - levanter.checkpoint - checkpoint.py:647 - WARNING :: While checkpoint path gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo70-c07493/checkpoints exists, it does not contain a metadata.json file or subdirectories with metadata files. Most likely, this path has other data or incomplete checkpoints. Acting as if it is not a checkpoint path.
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:53:08 - 7 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch.
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:53:07 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation [repeated 115x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:53:07 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation/shard_ledger.json [repeated 115x across cluster]
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:53:07 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 116x across cluster]
+(<lambda> pid=99699, ip=10.130.0.62) 2026-02-21T21:53:33 - 7 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 4.707.
+(<lambda> pid=88185, ip=10.130.0.48) 2026-02-21T21:53:07 - 1 - levanter.checkpoint - checkpoint.py:647 - WARNING :: While checkpoint path gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo70-c07493/checkpoints exists, it does not contain a metadata.json file or subdirectories with metadata files. Most likely, this path has other data or incomplete checkpoints. Acting as if it is not a checkpoint path. [repeated 7x across cluster]
+(<lambda> pid=88388, ip=10.130.0.19) 2026-02-21T21:53:08 - 0 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch. [repeated 7x across cluster]
+(<lambda> pid=88271, ip=10.130.0.58) 2026-02-21T21:53:49 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00it/6.18kit rate:67.3s/it remaining:115:28:57 elapsed:01:07 postfix:-
+(<lambda> pid=88388, ip=10.130.0.19) 2026-02-21T21:53:34 - 0 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 5.115. [repeated 7x across cluster]
+(<lambda> pid=88388, ip=10.130.0.19) 2026-02-21T21:53:49 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/158 rate:- remaining:? elapsed:00:00 postfix:-
