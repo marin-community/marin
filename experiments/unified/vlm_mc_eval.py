@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -70,6 +71,60 @@ from experiments.unified.vlm_tokenize_captions import (
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
+
+
+def _hlo_stage_fingerprints(
+    dump_dir: str,
+    stage_marker: str,
+    module_marker: str = "vlm_eval_loglikelihood",
+    max_items: int = 24,
+) -> list[str]:
+    """Return stable fingerprints for dumped HLO files for one stage."""
+    if not os.path.isdir(dump_dir):
+        return []
+
+    candidates: list[str] = []
+    for root, _dirs, files in os.walk(dump_dir):
+        for name in files:
+            lower = name.lower()
+            if stage_marker not in lower:
+                continue
+            if not lower.endswith((".txt", ".hlo", ".mlir", ".pb")):
+                continue
+            candidates.append(os.path.join(root, name))
+
+    if not candidates:
+        return []
+
+    tagged = [p for p in candidates if module_marker in p.lower()]
+    chosen = tagged if tagged else candidates
+    chosen = sorted(chosen)[:max_items]
+
+    out: list[str] = []
+    for path in chosen:
+        try:
+            with open(path, "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()[:16]
+            out.append(f"{os.path.basename(path)}:{digest}")
+        except Exception as e:
+            out.append(f"{os.path.basename(path)}:error={type(e).__name__}")
+    return out
+
+
+def _log_vlm_hlo_fingerprints(eval_run_uuid: str, dump_dir: str = "/tmp/xla_dumps_vlm_once") -> None:
+    """Log host-local HLO dump fingerprints for before/after optimization stages."""
+    host = jax.process_index()
+    for stage, marker in (("before", "before_optimizations"), ("after", "after_optimizations")):
+        digests = _hlo_stage_fingerprints(dump_dir=dump_dir, stage_marker=marker)
+        logger.warning(
+            "VLM_HLO_FINGERPRINT eval_run_uuid=%s host=%d stage=%s count=%d dump_dir=%s digests=%s",
+            eval_run_uuid,
+            host,
+            stage,
+            len(digests),
+            dump_dir,
+            digests,
+        )
 
 
 def _to_host_array_for_debug(x):
@@ -168,6 +223,7 @@ def _make_vlm_eval_jit(axis_resources, mp, EvalPos, EvalBatch, max_packed_segmen
 
         return segments, -losses
 
+    _eval_step.__name__ = "vlm_eval_loglikelihood_step"
     return hax.named_jit(_eval_step, axis_resources=axis_resources, out_axis_resources={})
 
 
@@ -1304,6 +1360,15 @@ def vlm_mc_eval_callback(
             git_commit,
             int(zlib.crc32(json.dumps(str(axis_resources), sort_keys=True).encode())),
         )
+        logger.warning(
+            "VLM_HLO_DUMP_WINDOW_START eval_run_uuid=%s host=%d xla_flags=%s expected_module_regex=%s "
+            "expected_dump_dir=%s",
+            eval_run_uuid,
+            jax.process_index(),
+            os.environ.get("XLA_FLAGS", ""),
+            ".*vlm_eval_loglikelihood.*",
+            "/tmp/xla_dumps_vlm_once",
+        )
 
         # Process 0 prepares data; all hosts consume the same batch stream via
         # broadcast_shard(source=0) in _run_batch_loop.
@@ -1411,6 +1476,13 @@ def vlm_mc_eval_callback(
         except Exception:
             logger.exception("vlm_mc_eval crashed")
             raise
+        finally:
+            _log_vlm_hlo_fingerprints(eval_run_uuid=eval_run_uuid, dump_dir="/tmp/xla_dumps_vlm_once")
+            logger.warning(
+                "VLM_HLO_DUMP_WINDOW_END eval_run_uuid=%s host=%d",
+                eval_run_uuid,
+                jax.process_index(),
+            )
 
         logger.info("VLM eval done.")
 

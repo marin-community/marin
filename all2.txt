@@ -1,404 +1,562 @@
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:08 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=51 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:08 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=52 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:08 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=52 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:08 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=53 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:08 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=53 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:08 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=54 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:09 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=54 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:09 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=55 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:09 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=55 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:09 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=56 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:10 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=56 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:10 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=57 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:10 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=57 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:10 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=58 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:11 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=58 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:11 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=59 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:11 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=59 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:11 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=60 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:11 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=60 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:11 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=61 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:12 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=61 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:12 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=62 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:12 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=62 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:12 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=63 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:13 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=63 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:13 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=64 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:13 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=64 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:13 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=65 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:14 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=65 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:14 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=66 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:14 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=66 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:14 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=67 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:14 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=67 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:14 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=68 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:15 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=68 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:15 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=69 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:15 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=69 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:15 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=70 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=70 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=71 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=71 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=72 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=72 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=73 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:17 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=73 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:17 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=74 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:17 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=74 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:17 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=75 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:18 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=75 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:18 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=76 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:18 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=76 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:18 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=77 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=77 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=78 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=78 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=79 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=79 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=80 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:20 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=80 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:20 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=81 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:20 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=81 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:20 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=82 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:21 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=82 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:21 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=83 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:21 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=83 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:21 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=84 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=84 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=85 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=85 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=86 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=86 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=87 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:23 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=87 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:23 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=88 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:23 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=88 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:23 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=89 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:24 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=89 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:24 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=90 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:24 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=90 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:24 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=91 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=91 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=92 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=92 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=93 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=93 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=94 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:26 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=94 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:26 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=95 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:26 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=95 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:26 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=96 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:27 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=96 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:27 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=97 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:27 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=97 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:27 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=98 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=98 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=99 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=99 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=100 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=100 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=101 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:29 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=101 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:29 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=102 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:29 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=102 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:29 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=103 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:30 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=103 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:30 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=104 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:30 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=104 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:30 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=105 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=105 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=106 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=106 valid_points=95 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=107 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=107 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=108 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:32 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=108 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:32 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=109 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:32 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=109 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:32 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=110 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:33 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=110 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:33 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=111 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:33 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=111 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:33 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=112 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:34 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=112 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:34 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=113 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:34 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=113 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:34 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=114 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:34 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=114 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:34 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=115 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:35 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=115 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:35 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=116 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:35 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=116 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:35 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=117 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:36 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=117 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:36 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=118 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:36 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=118 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:36 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=119 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:37 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=119 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:37 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=120 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:37 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=120 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:37 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=121 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:37 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=121 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:37 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=122 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:38 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=122 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:38 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=123 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:38 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=123 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:38 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=124 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:39 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=124 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:39 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=125 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:39 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=125 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:39 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=126 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:40 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=126 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:40 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=127 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:40 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=127 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:40 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=128 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:40 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=128 valid_points=94 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:40 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=129 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:41 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=129 valid_points=92 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:41 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=130 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:41 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=130 valid_points=93 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:41 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=131 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:42 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=131 valid_points=86 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:42 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=132 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:42 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=132 valid_points=77 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:42 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=133 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:43 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=133 valid_points=95 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:43 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=134 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:43 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=134 valid_points=79 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:43 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=135 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:43 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval 8.91Mtok/16.3Mtok rate:153,982.0tok/s remaining:00:47 elapsed:01:00 postfix:-
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:43 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=135 valid_points=91 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:43 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=136 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:44 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=136 valid_points=94 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:44 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=137 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:44 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=137 valid_points=81 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:44 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=138 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:45 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=138 valid_points=61 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:45 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=139 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:45 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=139 valid_points=48 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:45 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=140 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:46 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=140 valid_points=66 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:46 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=141 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:46 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=141 valid_points=90 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:46 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=142 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:46 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=142 valid_points=77 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:46 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=143 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:47 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=143 valid_points=91 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:47 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=144 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:47 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=144 valid_points=95 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:47 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=145 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:48 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=145 valid_points=90 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:48 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=146 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:48 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=146 valid_points=85 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:48 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=147 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:49 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=147 valid_points=82 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:49 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=148 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:49 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=148 valid_points=85 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:49 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=149 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:49 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=149 valid_points=84 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:49 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=150 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:50 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=150 valid_points=76 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:50 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=151 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:50 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=151 valid_points=91 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:50 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=152 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:51 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=152 valid_points=81 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:51 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=153 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:51 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=153 valid_points=83 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:51 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=154 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:52 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=154 valid_points=90 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:52 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=155 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:52 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=155 valid_points=89 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:52 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=156 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:52 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=156 valid_points=78 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:52 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=157 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:53 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=157 valid_points=76 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:53 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=158 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:53 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=158 valid_points=72 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:53 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=159 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:54 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=159 valid_points=78 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:54 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=160 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:54 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=160 valid_points=77 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:54 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=161 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:55 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=161 valid_points=63 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:55 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=162 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:55 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=162 valid_points=83 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:55 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=163 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:55 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=163 valid_points=82 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:55 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=164 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:56 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=164 valid_points=92 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:56 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=165 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:56 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=165 valid_points=63 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:56 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=166 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:57 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=166 valid_points=50 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:57 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=167 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:57 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=167 valid_points=61 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:57 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=168 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:58 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=168 valid_points=86 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:58 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=169 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:58 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=169 valid_points=95 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:58 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=170 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:58 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=170 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:58 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=171 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:59 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=171 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:59 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=172 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:59 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=172 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:03:59 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=173 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:00 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=173 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:00 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=174 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:00 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=174 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:00 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=175 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:01 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=175 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:01 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=176 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:01 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=176 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:01 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=177 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:01 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=177 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:01 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=178 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:02 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=178 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:02 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=179 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:02 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=179 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:02 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=180 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:03 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=180 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:03 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=181 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:03 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=181 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:03 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=182 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:04 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=182 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:04 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=183 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:04 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=183 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:04 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=184 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:04 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=184 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:04 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=185 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:05 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=185 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:05 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=186 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:05 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=186 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:05 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=187 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:06 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=187 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:06 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=188 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:06 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=188 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:06 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=189 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:07 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=189 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:07 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=190 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:07 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=190 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:07 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=191 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:07 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=191 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:07 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=192 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:08 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=192 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:08 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=193 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:08 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=193 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:08 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=194 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:09 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=194 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:09 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=195 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:09 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=195 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:09 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=196 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:10 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=196 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:10 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=197 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:10 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=197 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:10 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=198 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:10 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=198 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:10 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=199 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:11 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=199 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:11 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=200 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:11 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=200 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:11 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=201 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:12 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=201 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:12 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=202 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:12 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=202 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:12 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=203 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:13 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=203 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:13 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=204 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:13 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=204 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:13 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=205 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:13 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=205 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:13 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=206 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:14 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=206 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:14 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=207 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:14 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=207 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:14 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=208 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:15 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=208 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:15 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=209 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:15 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=209 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:15 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=210 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=210 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=211 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=211 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=212 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=212 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:16 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=213 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:17 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=213 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:17 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=214 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:17 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=214 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:17 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=215 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:18 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=215 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:18 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=216 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:18 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=216 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:18 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=217 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=217 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=218 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=218 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=219 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=219 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:19 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=220 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:20 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=220 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:20 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=221 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:20 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=221 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:20 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=222 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:21 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=222 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:21 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=223 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:21 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=223 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:21 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=224 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=224 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=225 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=225 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=226 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=226 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=227 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:23 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=227 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:23 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=228 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:23 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=228 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:23 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=229 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:24 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=229 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:24 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=230 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:24 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=230 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:24 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=231 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=231 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=232 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=232 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=233 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=233 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:25 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=234 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:26 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=234 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:26 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=235 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:26 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=235 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:26 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=236 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:27 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=236 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:27 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=237 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:27 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=237 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:27 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=238 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=238 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=239 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=239 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=240 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=240 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:28 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=241 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:29 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=241 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:29 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=242 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:29 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=242 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:29 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=243 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:30 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=243 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:30 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=244 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:30 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=244 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:30 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=245 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=245 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=246 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=246 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=247 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=247 valid_points=96 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:31 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=8189dd2e host=0 batch_idx=248 leader_num_batches=249
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:32 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=8189dd2e host=0 batch_idx=248 valid_points=25 batch_tokens=65536
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:32 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval 16.3Mtok/16.3Mtok rate:153,695.1tok/s remaining:00:00 elapsed:01:48 postfix:-
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:32 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1379 - WARNING :: VLM_EVAL_RESULTS eval_run_uuid=8189dd2e host=0 benchmark=ai2d task=multiple_choice accuracy=0.237370 loss=-11.881179 num_correct=733 num_questions=3088
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:32 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1379 - WARNING :: VLM_EVAL_RESULTS eval_run_uuid=8189dd2e host=0 benchmark=mmmu task=multiple_choice accuracy=0.260921 loss=-11.880454 num_correct=221 num_questions=847
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:32 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1404 - WARNING :: VLM_EVAL_RESULTS eval_run_uuid=8189dd2e host=0 benchmark=textvqa task=open_ended mean_ll=-11.882997 num_questions=5000
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:32 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1404 - WARNING :: VLM_EVAL_RESULTS eval_run_uuid=8189dd2e host=0 benchmark=chartqa task=open_ended mean_ll=-11.882199 num_questions=2500
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:04:50 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 2.00it/6.18kit rate:291.7s/it remaining:500:31:33 elapsed:08:47 postfix:loss=11.9
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:06:00 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 7.00it/6.18kit rate:39.9s/it remaining:68:23:14 elapsed:09:57 postfix:loss=11.8
-(<lambda> pid=12057, ip=10.130.1.24) 2026-02-22T04:07:10 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 12.0it/6.18kit rate:18.0s/it remaining:30:52:04 elapsed:11:07 postfix:loss=11.6
+_copy() [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24) jax.errors.JaxRuntimeError: FAILED_PRECONDITION: The program continuator has halted unexpectedly. [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24) Traceback (most recent call last): [repeated 2x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                                                  ^^^^^^^^^^ [repeated 2x across cluster]
+(<lambda> pid=30105, ip=10.130.0.15) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=30105, ip=10.130.0.15) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=28835, ip=10.130.0.17) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo98-c77b9f.
+(<lambda> pid=28699, ip=10.130.0.8) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=28699, ip=10.130.0.8) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=28699, ip=10.130.0.8) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/wandb/offline-run-20260222_050209-unified-qwen3-0.6b-demo98-c77b9f
+(<lambda> pid=30105, ip=10.130.0.15) wandb: setting up run unified-qwen3-0.6b-demo98-c77b9f
+(<lambda> pid=30105, ip=10.130.0.15) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=30105, ip=10.130.0.15) wandb: Resuming run unified-qwen3-0.6b-demo98-c77b9f
+(<lambda> pid=30105, ip=10.130.0.15) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
+(<lambda> pid=30105, ip=10.130.0.15) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-qwen3-0.6b-demo98-c77b9f
+(<lambda> pid=28699, ip=10.130.0.8) 2026-02-22T05:02:10 - 2 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo98-c77b9f
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:02:10 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo98-c77b9f unified-qwen3-0.6b-demo98-c77b9f
+(<lambda> pid=28699, ip=10.130.0.8) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:02:12 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-qwen3-0.6b-demo98-c77b9f unified-qwen3-0.6b-demo98-c77b9f
+(<lambda> pid=28680, ip=10.130.0.5) 2026-02-22T05:02:12 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:02:12 - 5 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo98-c77b9f/checkpoints
+(<lambda> pid=28680, ip=10.130.0.5) 2026-02-22T05:02:14 - 6 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train
+(<lambda> pid=28680, ip=10.130.0.5) 2026-02-22T05:02:14 - 6 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:02:12 - 0 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to . [repeated 15x across cluster]
+(<lambda> pid=28911, ip=10.130.0.16) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-0.6b-demo98-c77b9f. [repeated 6x across cluster]
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:02:14 - 4 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}}
+(<lambda> pid=28911, ip=10.130.0.16) I0222 05:02:14.896504   30499 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
+(<lambda> pid=30105, ip=10.130.0.15) wandb: Tracking run with wandb version 0.24.0 [repeated 7x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 6x across cluster]
+(<lambda> pid=30105, ip=10.130.0.15) wandb: Run data is saved locally in /tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/wandb/run-20260222_050209-unified-qwen3-0.6b-demo98-c77b9f [repeated 7x across cluster]
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:02:12 - 4 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-qwen3-0.6b-demo98-c77b9f [repeated 13x across cluster]
+(<lambda> pid=30105, ip=10.130.0.15) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 7x across cluster]
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:02:12 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/6180 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:02:12 - 4 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo98-c77b9f/checkpoints [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:23 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train [repeated 24x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:23 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/train/shard_ledger.json [repeated 24x across cluster]
+(<lambda> pid=28710, ip=10.130.0.13) 2026-02-22T05:02:18 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 23x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) I0222 05:02:15.028635   30427 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 7x across cluster]
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:02:26 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:26 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:26 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:26 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:26 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:26 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:26 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:26 - 7 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:27 - 7 - levanter.data.text - datasets.py:830 - WARNING :: No validation cache found for component multimodal_captions, skipping
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:27 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:27 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:27 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:27 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:27 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:27 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:02:28 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:02:28 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/cifar10_small/validation [repeated 85x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/cifar10_small/validation/shard_ledger.json [repeated 85x across cluster]
+(<lambda> pid=28680, ip=10.130.0.5) 2026-02-22T05:02:28 - 6 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 38x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}} [repeated 71x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:27 - 3 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:27 - 3 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/hq_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_synth-3525e2/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:27 - 3 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_high in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_high-d21701/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:27 - 3 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium-d86506/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:27 - 3 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/medium_low in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/medium_low-0fdb07/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:27 - 3 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_actual-cb3f2c/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.data.text - datasets.py:839 - WARNING :: No source for nemotron_cc/low_synth in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/low_synth-3c57b3/validation, skipping [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.data.text - datasets.py:830 - WARNING :: No validation cache found for component multimodal_captions, skipping [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:28 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:33 - 7 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1/validation [repeated 59x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:33 - 7 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1/validation/shard_ledger.json [repeated 59x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:32 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 58x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:36 - 7 - levanter.checkpoint - checkpoint.py:647 - WARNING :: While checkpoint path gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo98-c77b9f/checkpoints exists, it does not contain a metadata.json file or subdirectories with metadata files. Most likely, this path has other data or incomplete checkpoints. Acting as if it is not a checkpoint path.
+(<lambda> pid=28710, ip=10.130.0.13) 2026-02-22T05:02:38 - 1 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch.
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:03:03 - 3 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 5.069.
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:37 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation [repeated 119x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:37 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation/shard_ledger.json [repeated 119x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:37 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 120x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:02:37 - 3 - levanter.checkpoint - checkpoint.py:647 - WARNING :: While checkpoint path gs://marin-us-central2/checkpoints/unified-qwen3-0.6b-demo98-c77b9f/checkpoints exists, it does not contain a metadata.json file or subdirectories with metadata files. Most likely, this path has other data or incomplete checkpoints. Acting as if it is not a checkpoint path. [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:02:38 - 7 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch. [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:03:18 - 7 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00it/6.18kit rate:65.3s/it remaining:112:09:26 elapsed:01:05 postfix:-
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:03:03 - 5 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 5.170. [repeated 7x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:03:18 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/158 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:18 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 134it/158it rate:2.1it/s remaining:00:11 elapsed:01:00 postfix:-
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:03:18 - 5 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 1.00it/6.18kit rate:65.3s/it remaining:112:09:36 elapsed:01:05 postfix:- [repeated 7x across cluster]
+(<lambda> pid=28680, ip=10.130.0.5) 2026-02-22T05:03:20 - 6 - levanter.data.loader - loader.py:267 - INFO :: Prefetch wasn't fast enough: 1.685. [repeated 8x across cluster]
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:03:18 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/158 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
+(<lambda> pid=28710, ip=10.130.0.13) 2026-02-22T05:04:30 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 158it/158it rate:2.1it/s remaining:00:00 elapsed:01:11 postfix:- [repeated 8x across cluster]
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:257 - INFO :: eval loss: 11.755
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 9.905
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: understanding loss: 8.604
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 8.549
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: generation loss: 11.455
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 10.915
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: eval loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: eval_textvqa loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: eval_chartqa loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: eval_ai2d loss: 11.879
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: eval_mmmu loss: 11.885
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: eval_cifar10_small loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/4chan loss: 11.882
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/c4_100_domains loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/c4_en loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/dolma-v1_5 loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_programing_languages loss: 11.882
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_subreddits loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_s2orc_unsplit loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_wikipedia_unsplit loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/mc4 loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 11.881
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 11.886
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: paloma/wikitext_103 loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 11.882
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 11.882
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 11.883
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:38 - 4 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/ao3_english loss: 11.884
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:04:30 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 158it/158it rate:2.1it/s remaining:00:00 elapsed:01:11 postfix:- [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:56 - 7 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1277 - WARNING :: VLM_EVAL_ATTN_BACKEND eval_run_uuid=d3c7c57b host=7 backend=vanilla
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:56 - 7 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1296 - WARNING :: VLM_EVAL_PROVENANCE eval_run_uuid=d3c7c57b host=7 process_count=8 file=/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/experiments/unified/vlm_mc_eval.py ray_pkg=_ray_pkg_d5a2549561a545f git_commit=c529a388e2d19d22da83364260df0a1d1e89111e axis_resources_crc32=2284244141
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: eval loss: 11.883 [repeated 14x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 9.905 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: understanding loss: 8.604 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 8.549 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: generation loss: 11.455 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 10.915 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: eval_textvqa loss: 11.884 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: eval_chartqa loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/ao3_english loss: 11.884 [repeated 91x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: eval_mmmu loss: 11.885 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 11.884 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 11.881 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 11.886 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 11.884 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 11.882 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 11.882 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 11.883 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 11.884 [repeated 7x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:04:38 - 7 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 11.884 [repeated 7x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:05:19 - 5 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:266 - WARNING :: VLM_EVAL_BATCH_SYNC eval_run_uuid=d3c7c57b host=5 local_num_batches=0 leader_num_batches=125 padded_or_truncated_count=0
+(<lambda> pid=28680, ip=10.130.0.5) 2026-02-22T05:04:56 - 6 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1277 - WARNING :: VLM_EVAL_ATTN_BACKEND eval_run_uuid=d3c7c57b host=6 backend=vanilla [repeated 7x across cluster]
+(<lambda> pid=28680, ip=10.130.0.5) 2026-02-22T05:04:56 - 6 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1296 - WARNING :: VLM_EVAL_PROVENANCE eval_run_uuid=d3c7c57b host=6 process_count=8 file=/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/experiments/unified/vlm_mc_eval.py ray_pkg=_ray_pkg_d5a2549561a545f git_commit=c529a388e2d19d22da83364260df0a1d1e89111e axis_resources_crc32=2284244141 [repeated 7x across cluster]
+(<lambda> pid=28699, ip=10.130.0.8) 2026-02-22T05:05:19 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval -/16273408 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:05:21 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=d3c7c57b host=0 batch_idx=0 leader_num_batches=125
+(<lambda> pid=28699, ip=10.130.0.8) 2026-02-22T05:05:21 - 2 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:336 - WARNING :: VLM_EVAL_BATCH0 eval_run_uuid=d3c7c57b host=2 tokens_shape=(32, 4096) tokens_dtype=int32 pre_shard_tokens_sharding=NamedSharding(mesh=Mesh('data': 32, 'replica': 1, 'model': 1, 'replica_dcn': 1, axis_types=(Auto, Auto, Auto, Auto)), spec=PartitionSpec(), memory_kind=device) segment_ids_type=tuple
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:05:21 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:336 - WARNING :: VLM_EVAL_BATCH0 eval_run_uuid=d3c7c57b host=0 tokens_shape=(32, 4096) tokens_dtype=int32 pre_shard_tokens_sharding=NamedSharding(mesh=Mesh('replica': 1, 'data': 1, 'model': 1, 'context': 1, axis_types=(Auto, Auto, Auto, Auto)), spec=PartitionSpec(), memory_kind=device) segment_ids_type=tuple
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:05:22 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=d3c7c57b host=0 batch_idx=0 valid_points=192 batch_tokens=131072
+(<lambda> pid=28710, ip=10.130.0.13) 2026-02-22T05:05:19 - 1 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:266 - WARNING :: VLM_EVAL_BATCH_SYNC eval_run_uuid=d3c7c57b host=1 local_num_batches=0 leader_num_batches=125 padded_or_truncated_count=0 [repeated 7x across cluster]
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:05:19 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval -/16273408 rate:- remaining:? elapsed:00:00 postfix:- [repeated 7x across cluster]
+(<lambda> pid=28710, ip=10.130.0.13) 2026-02-22T05:05:26 - 1 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=d3c7c57b host=1 batch_idx=13 leader_num_batches=125 [repeated 104x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:05:21 - 5 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:336 - WARNING :: VLM_EVAL_BATCH0 eval_run_uuid=d3c7c57b host=5 tokens_shape=(32, 4096) tokens_dtype=int32 pre_shard_tokens_sharding=NamedSharding(mesh=Mesh('data': 32, 'replica': 1, 'model': 1, 'replica_dcn': 1, axis_types=(Auto, Auto, Auto, Auto)), spec=PartitionSpec(), memory_kind=device) segment_ids_type=tuple [repeated 6x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:05:27 - 5 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=d3c7c57b host=5 batch_idx=16 valid_points=192 batch_tokens=131072 [repeated 128x across cluster]
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:05:31 - 4 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=d3c7c57b host=4 batch_idx=29 leader_num_batches=125 [repeated 128x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:05:32 - 5 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=d3c7c57b host=5 batch_idx=32 valid_points=192 batch_tokens=131072 [repeated 128x across cluster]
+(<lambda> pid=28710, ip=10.130.0.13) 2026-02-22T05:05:36 - 1 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=d3c7c57b host=1 batch_idx=45 leader_num_batches=125 [repeated 128x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:05:37 - 5 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=d3c7c57b host=5 batch_idx=47 valid_points=192 batch_tokens=131072 [repeated 120x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:05:41 - 5 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=d3c7c57b host=5 batch_idx=59 leader_num_batches=125 [repeated 112x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:05:43 - 5 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=d3c7c57b host=5 batch_idx=60 valid_points=192 batch_tokens=131072 [repeated 104x across cluster]
+(<lambda> pid=32024, ip=10.130.0.14) 2026-02-22T05:05:46 - 7 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=d3c7c57b host=7 batch_idx=71 leader_num_batches=125 [repeated 96x across cluster]
+(<lambda> pid=28699, ip=10.130.0.8) 2026-02-22T05:05:48 - 2 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=d3c7c57b host=2 batch_idx=74 valid_points=169 batch_tokens=131072 [repeated 112x across cluster]
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:05:51 - 4 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=d3c7c57b host=4 batch_idx=86 leader_num_batches=125 [repeated 120x across cluster]
+(<lambda> pid=28612, ip=10.130.0.9) 2026-02-22T05:05:53 - 3 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=d3c7c57b host=3 batch_idx=90 valid_points=192 batch_tokens=131072 [repeated 128x across cluster]
+(<lambda> pid=28699, ip=10.130.0.8) 2026-02-22T05:05:56 - 2 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=d3c7c57b host=2 batch_idx=102 leader_num_batches=125 [repeated 128x across cluster]
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:05:58 - 4 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=d3c7c57b host=4 batch_idx=106 valid_points=192 batch_tokens=131072 [repeated 128x across cluster]
+(<lambda> pid=28699, ip=10.130.0.8) 2026-02-22T05:06:01 - 2 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=d3c7c57b host=2 batch_idx=118 leader_num_batches=125 [repeated 128x across cluster]
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:06:03 - 4 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=d3c7c57b host=4 batch_idx=122 valid_points=192 batch_tokens=131072 [repeated 128x across cluster]
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:06:04 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval 16.4Mtok/16.3Mtok rate:402,973.4tok/s remaining:00:00 elapsed:00:44 postfix:-
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:06:04 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1378 - WARNING :: VLM_EVAL_RESULTS eval_run_uuid=d3c7c57b host=0 benchmark=ai2d task=multiple_choice accuracy=0.237047 loss=-11.881185 num_correct=732 num_questions=3088
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:06:04 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1378 - WARNING :: VLM_EVAL_RESULTS eval_run_uuid=d3c7c57b host=0 benchmark=mmmu task=multiple_choice accuracy=0.268005 loss=-11.880456 num_correct=227 num_questions=847
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:06:04 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1402 - WARNING :: VLM_EVAL_RESULTS eval_run_uuid=d3c7c57b host=0 benchmark=textvqa task=open_ended mean_ll=-11.882995 num_questions=5000
+(<lambda> pid=30105, ip=10.130.0.15) 2026-02-22T05:06:04 - 0 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:1402 - WARNING :: VLM_EVAL_RESULTS eval_run_uuid=d3c7c57b host=0 benchmark=chartqa task=open_ended mean_ll=-11.882160 num_questions=2500
+(<lambda> pid=30105, ip=10.130.0.15) E0222 05:06:04.294592   31142 real_program_continuator.cc:1537] 0x0x0_TC0: *** Halt is unexpected, all pending programs will fail. 
+(<lambda> pid=30105, ip=10.130.0.15) E0222 05:06:04.295070   31349 real_program_continuator.cc:1504] 0x0x0_TC0: [Physical location: tpu369:pe1:0] generic::internal: Core halted unexpectedly: INTERNAL: Accelerator device halted prematurely, perhaps due to an on-device check-failure. Node 0 halted unexpectedly at tag:pc TensorCoreSequencer:1:0x175 (from TensorCoreSequencer:1:0x21f): scheckne: 
+(<lambda> pid=30105, ip=10.130.0.15) ***************
+(<lambda> pid=30105, ip=10.130.0.15) An unexpected peer shows up in the launch group with a different launch id than the current group leader. If using single controller backends, this signals a bug in the runtime scheduling system or above. If using multi-controller backends, non-determinism of 1) model code or 2) XLA compiler may also cause this, enable HLO dump for all workers and check: 1) if before_optimizations.txt are all the same or 2) if after_optimizations.txt are all the same. no HLO mapping
+(<lambda> pid=30105, ip=10.130.0.15) === Source Location Trace: === 
+(<lambda> pid=30105, ip=10.130.0.15) learning/45eac/tpu/runtime/hal/internal/tpu_program_termination_validation.cc:180
+(<lambda> pid=30105, ip=10.130.0.15) E0222 05:06:04.471089   32543 system.cc:2193] Got error from device: FAILED_PRECONDITION: The program continuator has halted unexpectedly.
+(<lambda> pid=30105, ip=10.130.0.15) === Source Location Trace: === 
+(<lambda> pid=30105, ip=10.130.0.15) learning/45eac/tpu/runtime/hal/internal/real_program_continuator.cc:342
+(<lambda> pid=30105, ip=10.130.0.15) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f36a42a4ea0>
+(<lambda> pid=30105, ip=10.130.0.15) Traceback (most recent call last):
+(<lambda> pid=30105, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=30105, ip=10.130.0.15)     conn.teardown(hooks.exit_code)
+(<lambda> pid=30105, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=30105, ip=10.130.0.15)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=30105, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
+(<lambda> pid=30105, ip=10.130.0.15)     return future.result()
+(<lambda> pid=30105, ip=10.130.0.15)            ^^^^^^^^^^^
+(<lambda> pid=30105, ip=10.130.0.15) ^^^^
+(<lambda> pid=30105, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=30105, ip=10.130.0.15)     return self.__get_result()
+(<lambda> pid=30105, ip=10.130.0.15)            ^^^^^^^
+(<lambda> pid=30105, ip=10.130.0.15) ^^^^^^^^^^^^
+(<lambda> pid=30105, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=30105, ip=10.130.0.15)     raise self._exception
+(<lambda> pid=30105, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=30105, ip=10.130.0.15)     return await fn()
+(<lambda> pid=30105, ip=10.130.0.15)            ^^^
+(<lambda> pid=30105, ip=10.130.0.15) ^^^^^^^
+(<lambda> pid=30105, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=30105, ip=10.130.0.15)     
+(run_on_pod_ray pid=16257, ip=10.130.1.24) Task error ray::<lambda>() (pid=30105, ip=10.130.0.15)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     trainer.train(state, train_loader)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 541, in train
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     for info in self.training_steps(state, train_loader):
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     info = self.train_step(state, example)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 474, in train_step
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 298, in __bool__
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     return bool(self._value)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/profiler.py", line 359, in wrapper
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     return func(*args, **kwargs)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 635, in _value
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     npy_value, did_copy = self._single_device_array_to_np_array_did_copy()
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24) jax.errors.JaxRuntimeError: FAILED_PRECONDITION: The program continuator has halted unexpectedly.
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     return func(*args, **kwargs)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=16257, ip=10.130.1.24) ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=30105, ip=10.130.0.15)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     trainer.train(state, train_loader)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 541, in train
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     for info in self.training_steps(state, train_loader):
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     info = self.train_step(state, example)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 474, in train_step
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 298, in __bool__
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     return bool(self._value)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/profiler.py", line 359, in wrapper
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     return func(*args, **kwargs)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 635, in _value
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     npy_value, did_copy = self._single_device_array_to_np_array_did_copy()
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24) jax.errors.JaxRuntimeError: FAILED_PRECONDITION: The program continuator has halted unexpectedly.
+(<lambda> pid=30105, ip=10.130.0.15) await self._client.close()
+(<lambda> pid=30105, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=30105, ip=10.130.0.15)     await self._writer.wait_closed()
+(<lambda> pid=30105, ip=10.130.0.15)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=30105, ip=10.130.0.15)     
+(<lambda> pid=30105, ip=10.130.0.15) await self._protocol._get_close_waiter(self)
+(<lambda> pid=30105, ip=10.130.0.15) BrokenPipeError: [Errno 32] Broken pipe
+(SliceActor pid=2926, ip=10.130.0.14) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=30105, ip=10.130.0.15)
+(<lambda> pid=30105, ip=10.130.0.15) E0222 05:06:06.355489   30262 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=30105, ip=10.130.0.15) F0222 05:06:06.355527   30262 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=30105, ip=10.130.0.15) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
+(<lambda> pid=30105, ip=10.130.0.15) :UNKNOWN:Error received from peer  {grpc_message:"recvmsg:Connection reset by peer", grpc_status:14}
+(run_on_pod_ray pid=16257, ip=10.130.1.24) Failed 11 times. Continuing to retry.
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=16257, ip=10.130.1.24) ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=30105, ip=10.130.0.15)
+(run_on_pod_ray pid=16257, ip=10.130.1.24) Failed too many times
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=16257, ip=10.130.1.24)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=16257, ip=10.130.1.24) ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=30105, ip=10.130.0.15)
+2026-02-22 05:06:07,069 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo98-7f548acc failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::run_levanter_train_lm() (pid=16181, ip=10.130.1.24)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
+    job.wait(raise_on_failure=True)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
+    return self._wait_ref(timeout, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::run_on_pod_ray() (pid=16257, ip=10.130.1.24)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=30105, ip=10.130.0.15)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 541, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+    info = self.train_step(state, example)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 474, in train_step
+    hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 298, in __bool__
+    return bool(self._value)
+                ^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/profiler.py", line 359, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 635, in _value
+    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: FAILED_PRECONDITION: The program continuator has halted unexpectedly.
+2026-02-22 05:06:07,071 INFO executor.py:806 -- Waiting for ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo98-7f548acc to finish for step checkpoints/unified-qwen3-0.6b-demo98
+2026-02-22 05:06:07,071 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo98-7f548acc failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::run_levanter_train_lm() (pid=16181, ip=10.130.1.24)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
+    job.wait(raise_on_failure=True)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
+    return self._wait_ref(timeout, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::run_on_pod_ray() (pid=16257, ip=10.130.1.24)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=30105, ip=10.130.0.15)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 541, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+    info = self.train_step(state, example)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 474, in train_step
+    hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 298, in __bool__
+    return bool(self._value)
+                ^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/profiler.py", line 359, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 635, in _value
+    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: FAILED_PRECONDITION: The program continuator has halted unexpectedly.
+2026-02-22 05:06:07,072 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo98-7f548acc failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::run_levanter_train_lm() (pid=16181, ip=10.130.1.24)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
+    job.wait(raise_on_failure=True)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
+    return self._wait_ref(timeout, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::run_on_pod_ray() (pid=16257, ip=10.130.1.24)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=30105, ip=10.130.0.15)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 541, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+    info = self.train_step(state, example)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 474, in train_step
+    hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 298, in __bool__
+    return bool(self._value)
+                ^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/profiler.py", line 359, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 635, in _value
+    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: FAILED_PRECONDITION: The program continuator has halted unexpectedly.
+2026-02-22 05:06:07,401 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-0.6b-demo98 failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/marin/src/marin/execution/executor.py", line 192, in wait
+    raise RuntimeError(f"Job {self.job_id} failed")
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo98-7f548acc failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/marin/src/marin/execution/executor.py", line 192, in wait
+    raise RuntimeError(f"Job {self.job_id} failed")
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-0.6b-demo98-7f548acc failed
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/experiments/unified/unified_pretrain_demo.py", line 324, in <module>
+    executor_main(
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
+    executor.run(
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/marin/src/marin/execution/executor.py", line 747, in run
+    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed, max_concurrent=max_concurrent)
+  File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
+    raise RuntimeError(message) from failure_exceptions[0]
+RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-0.6b-demo98']
+(<lambda> pid=28911, ip=10.130.0.16) 2026-02-22T05:06:03 - 4 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:285 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=d3c7c57b host=4 batch_idx=124 leader_num_batches=125 [repeated 55x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:06:04 - 5 - experiments.unified.vlm_mc_eval - vlm_mc_eval.py:396 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=d3c7c57b host=5 batch_idx=124 valid_points=25 batch_tokens=131072 [repeated 23x across cluster]
+(<lambda> pid=28835, ip=10.130.0.17) 2026-02-22T05:06:04 - 5 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:vlm_eval 16.4Mtok/16.3Mtok rate:402,948.3tok/s remaining:00:00 elapsed:00:44 postfix:- [repeated 7x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24) Traceback (most recent call last): [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                 ^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     trainer.train(state, train_loader) [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 541, in train [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     for info in self.training_steps(state, train_loader): [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     info = self.train_step(state, example) [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/tmp/ray/session_2026-01-31_21-29-46_101829_658/runtime_resources/working_dir_files/_ray_pkg_d5a2549561a545f4/lib/levanter/src/levanter/trainer.py", line 474, in train_step [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks) [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 298, in __bool__ [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     return bool(self._value) [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/profiler.py", line 359, in wrapper [repeated 5x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     return func(*args, **kwargs) [repeated 5x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)            ^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)   File "/home/ray/anaconda3/lib/python3.11/site-packages/jax/_src/array.py", line 635, in _value [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)     npy_value, did_copy = self._single_device_array_to_np_array_did_copy() [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24)                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=16257, ip=10.130.1.24) jax.errors.JaxRuntimeError: FAILED_PRECONDITION: The program continuator has halted unexpectedly. [repeated 3x across cluster]
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ 
