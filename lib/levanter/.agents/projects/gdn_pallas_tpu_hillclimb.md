@@ -1714,3 +1714,66 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact**. This move achieved the intended structural effect (fewer larger train-path custom calls) but did not reduce the dominant hotspot cost; the dominant `shard_map` bucket remained and became slightly slower while end-to-end MFU gain stayed `<3%`.
 - Governance/escalation action: improvement exceeds promotion floor (`>=0.250%`) but escalation rule still applies (`<3%` with unchanged dominant hotspot). Next attempt should be more radical than launch restructuring alone.
 - Next bold hypothesis: escalate to **Macro Move E** (state/output V-tiling with shared K-only precompute in train backward/recurrent) or **Macro Move F** (blockwise stacked-RHS triangular decomposition) to reduce per-call work, not only call count.
+
+### Iteration 34 - Macro Move G / centered outer-product `exp_diff` (NaN regression, reverted)
+
+- Date: 2026-02-22T14:41:42Z
+- Commit: none (failed attempt)
+- Loop session/local index: `4/10`
+- Starting commit: `a77f2e8af267889fcf6ffc9ecf4a176859a0126c`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` train-path bucket: `76.743 ms` (dominant category).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` in train kernels to remove `Ct x Ct` exponentials (`+10-25%`, medium-high numerical risk).
+  2. **Macro Move H**: stack left operands to batch matmuls sharing right operands (`+10-20%`, medium memory-pressure risk).
+  3. **Macro Move I**: fuse segmented prepare+recurrent after G/H (`+15-30%`, high integration/compile risk).
+
+- Selected macro-move category: **G) Eliminate `Ct^2` exponentials in `exp_diff` using centered outer-product exp**.
+- Selected hypothesis: replace pairwise `exp(clip(g_i - g_j))` construction with vector-exp outer-product construction across train-path prepare/recurrent/backward kernels.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `_exp_diff_and_mask_from_g(g, clip)` and routed train-path chunk kernels to it (`prepare`, recurrent forward, fused forward, and backward recompute path).
+  - Initial dynamic fallback (`lax.cond`) failed Mosaic TPU lowering (`scf.if` legalization failure); switched to static shape-based path.
+  - The resulting train profile repeatedly failed with `RuntimeError("Loss is NaN")`; speculative kernel edits were reverted and the tree was restored to pre-attempt kernel code.
+
+- Correctness checks:
+  - Dev TPU validation attempt (failed infra/auth):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Failure: SSH host-key trust mismatch (`REMOTE HOST IDENTIFICATION HAS CHANGED`) and remote env bootstrap failure.
+  - Ray fallback TPU validation (success):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260222-140726`
+    - Result: `49 passed, 40 skipped`.
+
+- Profile runs:
+  - Dev TPU profile attempt (failed infra/auth):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_expouter_i04_fix2_dev --no-sync`
+    - Failure: SSH host-key trust mismatch (`REMOTE HOST IDENTIFICATION HAS CHANGED`).
+  - Ray profile attempt #1 (`us-central1`, infra stalled):
+    - Submit: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_expouter_i04_fix2_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260222-141301`
+    - Behavior: prolonged runtime-env churn, worker OOM pressure, and no completed profile artifact; stopped with
+      - `uv run scripts/ray/cluster.py --cluster us-central1 stop-job ray-run-calvinxu-bash-20260222-141301`.
+  - Ray profile attempt #2 (`us-east5-a`, terminal failure):
+    - Submit: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_expouter_i04_fix2_east2 --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260222-142513`
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_expouter_i04_fix2_east2_130m_ch128_seg16_20steps-66094f`
+    - Terminal status: `FAILED` with repeated `RuntimeError: Loss is NaN` during train step execution.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU validation command/result recorded above (`ray-test`, `49 passed, 40 skipped`).
+  - Perf:
+    - Forward and backward `shard_map/pallas_call` deltas: **N/A** (no successful profile artifact from this candidate).
+    - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration` deltas: **N/A** (run failed before usable profiling window).
+    - Macro G exp reduction note: intended code-level change reduced `exp_diff` construction from pairwise `Ct x Ct` `exp` to vector-exp outer-product form, but no trace/IR-backed measurement is promotable because the run failed with NaNs.
+  - Governance:
+    - Attempt reverted due instability (`Loss is NaN`) and lack of valid perf evidence; marked failed.
+
+- Assessment: **failed attempt / regression-risk**. The Macro G implementation was not numerically stable under training profile workload; no champion promotion.
+- Governance/escalation action: because no valid MFU gain was obtained and dominant train-path bottleneck evidence could not be improved, this attempt is treated as low-impact failed and reverted.
+- Next bold hypothesis: switch to **Macro Move H** (batched shared-RHS matmuls with exact `exp_diff` semantics retained) to target train-path `shard_map/pallas_call` without introducing unstable exponential reformulation.
