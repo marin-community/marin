@@ -1401,3 +1401,67 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt (compile-blocked + fallback infra failure)**. The attempted full-sequence train-path enablement for `K/V=64` hit a TPU Mosaic lane-tiling compile constraint in full-sequence prepare; Ray fallback did not produce a valid run due cluster/node failure.
 - Governance action: reverted speculative kernel edits and left working tree clean.
 - Next bold hypothesis: keep Macro Move D but make it lane-safe by introducing explicit full-sequence internal feature tiling/padding to 128-lane DMA slices (pack/unpack around pipeline boundaries), or pivot to Macro Move E (V-tiling) that avoids 64-lane pipeline DMA slices entirely.
+
+### Iteration 29 - Macro Move F / QK+KKT forward-tape reuse in backward (low-impact, reverted)
+
+- Date: 2026-02-22T03:49:24Z
+- Commit: none (failed attempt)
+- Loop session/local index: `13/20`
+- Starting commit: `82f7259b57081cd4f40363fe1e258a174328d054`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - Train-path `shard_map/pallas_call` bucket: `76.743 ms` (dominant category).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move F**: persist and reuse chunk-local `QK` + `KKT` in backward (remove bwd recompute matmuls) (`+10-20%`, medium-high tape-memory risk).
+  2. **Macro Move B**: full train-path transpose fusion via unified `dot_general` helper for all remaining matmuls (`+8-15%`, medium integration risk).
+  3. **Macro Move 6**: redesign triangular work with block-recursive stacked-RHS solve to avoid explicit full transform materialization (`+15-35%`, high algorithmic/numerical risk).
+
+- Selected macro-move category: **F) Match FlashLinearAttention’s kernel decomposition**.
+- Selected hypothesis: extend the forward flash chunk path to emit `QK` and `KKT` tapes, then consume those tapes in backward so chunk-bwd avoids recomputing those `Ct x Ct` products and shifts more work to forward-prepared dataflow.
+
+- Change attempt summary:
+  - Added `QK` and `KKT` tape outputs through train-path flash prepare/recurrent kernels (segmented and full-sequence wrappers).
+  - Threaded both tapes through `_chunk_gated_delta_rule_flash_pallas_impl` forward outputs and custom-VJP residuals.
+  - Updated backward flash path and `_gdn_chunk_segment_bwd_kernel_tpu` to read taped `QK`/`KKT` and remove local recompute of those matrices.
+  - After profiling showed unchanged/worse dominant hotspots with <3% MFU gain, reverted speculative kernel edits; tree is intentionally left without this kernel change.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation attempt (failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Failure: `ABORTED: The TPU is already in use by another process` (`/tmp/libtpu_lockfile`).
+  - Ray fallback validation (success):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260222-033430`
+    - Result: `49 passed, 40 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_qkkt_tape_i13_dev --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_qkkt_tape_i13_dev_130m_ch128_seg16_20steps-2b582c`
+  - W&B profiler artifact: `run-gdn_qkkt_tape_i13_dev_130m_ch128_seg16_20steps-2b582c-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/plugins/profile/2026_02_22_03_43_22/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`):
+  - Dominant train-path bucket (`shard_map/pallas_call`): `76.743 ms -> 80.113 ms` (`+4.39%`), still dominant.
+  - Forward closed-call tf_op remained effectively flat:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms -> 40.203 ms` (`+0.05%`).
+  - Backward closed-call tf_op regressed:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms -> 29.592 ms` (`+12.71%`).
+  - Source-level hotspot moved and regressed:
+    - `gated_deltanet.py:3432 -> gated_deltanet.py:3541`: `38.973 ms -> 42.244 ms` (`+8.40%`).
+  - `all-gather`: `20.193 ms -> 20.124 ms` (`-0.34%`) (minor).
+
+- MFU/throughput delta (vs baseline run `gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937`):
+  - `throughput/mfu`: `5.759190 -> 5.797835` (`+0.67%`).
+  - `throughput/tokens_per_second`: `186308.71 -> 187558.86` (`+0.67%`).
+  - `throughput/duration`: `0.175880s -> 0.174708s` (`-0.67%`).
+
+- Assessment: **low-impact / bottleneck regression**. End-to-end MFU moved up slightly, but the dominant train-path hotspot class was unchanged and became slower; the key backward closed-call hotspot regressed materially.
+- Governance/escalation action: marked low-impact per escalation rule (`<3%` MFU gain with unchanged dominant hotspot) and reverted speculative kernel edits; no champion promotion.
+- Next bold hypothesis: make a more radical train-path redesign that removes this backward closed-call pressure, e.g. Macro Move 6 block-recursive stacked-RHS triangular solve/inversion redesign (or Macro Move E V-tiling) so the dominant `shard_map/pallas_call` bucket is structurally reduced instead of shifted.
