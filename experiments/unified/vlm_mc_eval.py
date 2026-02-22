@@ -19,8 +19,8 @@ PromptCompletion → greedy_pack → make_array_from_callback → named_jit(eval
 All benchmarks are merged into a SINGLE continuous batch loop (via
 evaluate_all_vlm_benchmarks) to avoid TPU crashes at benchmark transitions.
 Each host independently builds identical completions from GCS parquet files;
-_shard_identical_batch uses jax.make_array_from_callback so each host only
-provides data for its local devices. Results are split by benchmark afterward.
+hax.shard distributes data across devices via local device_put (no extra JIT).
+Results are split by benchmark afterward.
 
 Usage (standalone):
     uv run experiments/unified/vlm_mc_eval.py \
@@ -42,6 +42,7 @@ import json
 import logging
 import os
 import tempfile
+import uuid
 from collections import defaultdict
 
 import jax
@@ -53,9 +54,10 @@ from tqdm_loggable.auto import tqdm
 import haliax as hax
 
 from levanter.data.loader import stack_batches
-from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completions
-from levanter.eval_harness import get_padding_count_from_batch
-from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync
+from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completions, per_segment_loss
+from levanter.eval_harness import get_padding_count_from_batch, get_segment_ids_from_batch
+from levanter.models.loss import next_token_loss
+from levanter.utils.jax_utils import multihost_broadcast_sync, sync_global_devices
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -67,34 +69,64 @@ from marin.utils import fsspec_glob
 logger = logging.getLogger(__name__)
 
 
-def _make_vlm_eval_jit(axis_resources, mp):
+def _make_vlm_eval_jit(axis_resources, mp, EvalPos, EvalBatch, max_packed_segments):
     """Create a JIT loglikelihood function for VLM evaluation.
 
-    Uses out_axis_resources={} to force all outputs to be fully replicated
-    across hosts, matching eval_harness.py's pattern. Without this, returning
-    the full (EvalBatch, EvalPos) loss tensor lets XLA choose different output
-    shardings per host, causing "unexpected peer" TPU crashes.
+    Structurally identical to eval_harness.py's _eval_loglikelihood:
+    - model(tokens, attn_mask) → logits → next_token_loss(reduction=None)
+    - per_segment_loss inside JIT via hax.vmap → small aggregated output
+    - out_axis_resources={} forces fully replicated outputs
 
-    Returns (per_token_losses, sync_chain) where per_token_losses has loss_weight
-    already applied (prompt tokens are zeroed). sync_chain is a scalar accumulator
-    chained across iterations (input → output) to serialize XLA execution.
+    Returns (segment_ids, neg_losses) flattened across batch and segments.
     """
     from levanter.utils.tree_utils import inference_mode
 
-    def _eval_step(model, packed_example, sync_chain):
+    EvalPos_name = EvalPos.name
+
+    def _eval_step(model, packed_example):
         model = inference_mode(model, True)
         if mp is not None:
             model = mp.cast_to_compute(model)
-        losses = model.compute_next_token_loss(
-            packed_example, reduction=None, reduction_axis=()
+
+        logits = model(packed_example.tokens, attn_mask=packed_example.attn_mask)
+        logits = logits.astype(jnp.float32)
+        Pos = logits.resolve_axis(EvalPos_name)
+
+        loss = next_token_loss(
+            Pos=Pos,
+            Vocab=model.Vocab,
+            logits=logits,
+            true_ids=packed_example.tokens,
+            loss_weight=packed_example.loss_weight,
+            reduction=None,
         )
-        sync_chain = sync_chain + hax.sum(packed_example.loss_weight).array
-        return losses, sync_chain
+
+        # +1 because -1 is used as padding value for segments
+        max_Segments = hax.Axis("Segments", size=max_packed_segments + 1)
+
+        batched_segment_ids, batched_per_segment_losses = hax.vmap(
+            per_segment_loss, EvalBatch
+        )(packed_example, loss, max_Segments)
+
+        segments = hax.flatten(batched_segment_ids, "segment")
+        losses = hax.flatten(batched_per_segment_losses, "segment")
+
+        return segments, -losses
 
     return hax.named_jit(_eval_step, axis_resources=axis_resources, out_axis_resources={})
 
 
-def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources):
+def _run_batch_loop(
+    jit_fn,
+    model,
+    all_completions,
+    tokenizer,
+    EvalPos,
+    EvalBatch,
+    max_packed_segments,
+    axis_resources,
+    eval_run_uuid: str = "n/a",
+):
     """Pack completions, batch, sync across hosts, and run one continuous loop.
 
     Returns (result_probs, covered_points) numpy arrays indexed by completion
@@ -102,8 +134,8 @@ def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatc
     uninterrupted iteration prevents the TPU-crash that occurs when separate
     benchmark loops are run back-to-back.
 
-    Per-segment aggregation is done in NumPy on the host (outside JIT) to keep
-    the JIT function structurally identical to standard eval's accum_for_batch.
+    Per-segment aggregation is done inside JIT (via per_segment_loss + hax.vmap),
+    matching eval_harness.py's pattern exactly.
     """
     pad_token = tokenizer.pad_token_id
     if pad_token is None:
@@ -118,12 +150,39 @@ def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatc
 
     all_batches = list(stack_batches(iter(packed), EvalPos, EvalBatch))
 
-    num_batches = multihost_broadcast_sync(len(all_batches))
+    local_num_batches = len(all_batches)
+    logger.info(
+        "[%s][host=%d] Prepared packed batches: local=%d",
+        eval_run_uuid,
+        jax.process_index(),
+        local_num_batches,
+    )
+    num_batches = multihost_broadcast_sync(local_num_batches)
+    logger.info(
+        "[%s][host=%d] Broadcast batch count: local=%d, leader=%d",
+        eval_run_uuid,
+        jax.process_index(),
+        local_num_batches,
+        num_batches,
+    )
     if len(all_batches) < num_batches:
         dummy = all_batches[-1] if all_batches else None
         all_batches.extend([dummy] * (num_batches - len(all_batches)))
+        logger.info(
+            "[%s][host=%d] Padded batches by %d (dummy_is_none=%s)",
+            eval_run_uuid,
+            jax.process_index(),
+            num_batches - local_num_batches,
+            dummy is None,
+        )
     elif len(all_batches) > num_batches:
         all_batches = all_batches[:num_batches]
+        logger.info(
+            "[%s][host=%d] Truncated batches by %d",
+            eval_run_uuid,
+            jax.process_index(),
+            local_num_batches - num_batches,
+        )
 
     result_probs = np.zeros(len(all_completions))
     covered_points = np.zeros(len(all_completions), dtype=bool)
@@ -131,37 +190,77 @@ def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatc
     total_tokens = len(packed) * EvalPos.size
     pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok")
 
-    # Initialize sync_chain as a scalar accumulator. The first JIT call will
-    # place it on devices; subsequent calls chain through it to serialize
-    # XLA execution. out_axis_resources={} ensures replicated outputs.
-    sync_chain = jnp.zeros(())
-    for batch_orig in all_batches:
+    for batch_idx, batch_orig in enumerate(all_batches):
+        if batch_orig is None:
+            raise RuntimeError(
+                f"[{eval_run_uuid}][host={jax.process_index()}] Encountered None batch at index {batch_idx}. "
+                "This indicates local packing produced zero batches but global sync required padding."
+            )
+
+        if batch_idx < 2:
+            tokens_array = batch_orig.tokens.array
+            segment_ids = batch_orig.attn_mask.segment_ids
+            if isinstance(segment_ids, tuple):
+                segment_ids = segment_ids[0]
+            logger.info(
+                "[%s][host=%d] Batch %d pre-shard: tokens_type=%s shape=%s dtype=%s sharding=%s "
+                "segment_ids_type=%s segment_ids_array_type=%s",
+                eval_run_uuid,
+                jax.process_index(),
+                batch_idx,
+                type(tokens_array).__name__,
+                getattr(tokens_array, "shape", None),
+                getattr(tokens_array, "dtype", None),
+                getattr(tokens_array, "sharding", None),
+                type(batch_orig.attn_mask.segment_ids).__name__,
+                type(getattr(segment_ids, "array", segment_ids)).__name__,
+            )
+
         _padding_count, batch_tokens = get_padding_count_from_batch(batch_orig, pad_token)
 
-        seg_ids = batch_orig.attn_mask.segment_ids
-        if isinstance(seg_ids, tuple):
-            seg_ids = seg_ids[0]
-        seg_ids_np = np.asarray(seg_ids.array)
+        try:
+            batch = hax.shard(batch_orig, axis_resources)
+        except Exception:
+            tokens_array = batch_orig.tokens.array
+            logger.exception(
+                "[%s][host=%d] hax.shard failed at batch=%d axis_resources=%s tokens_type=%s shape=%s dtype=%s "
+                "tokens_sharding=%s",
+                eval_run_uuid,
+                jax.process_index(),
+                batch_idx,
+                axis_resources,
+                type(tokens_array).__name__,
+                getattr(tokens_array, "shape", None),
+                getattr(tokens_array, "dtype", None),
+                getattr(tokens_array, "sharding", None),
+            )
+            raise
 
-        shardings = hax.partitioning.infer_resource_partitions(batch_orig, axis_resources)
-        batch = broadcast_shard(batch_orig, shardings)
-        losses, sync_chain = jit_fn(model, batch, sync_chain)
+        segments_this_batch = get_segment_ids_from_batch(batch, max_packed_segments * EvalBatch.size)
+        out_ids, out_lls = jit_fn(model, batch)
 
         # out_axis_resources={} means outputs are fully replicated on every
         # host, so we can read them directly without shard iteration.
-        local_losses = np.asarray(losses.array)
-        for seg_id in np.unique(seg_ids_np):
-            if seg_id < 0:
-                continue
-            mask = seg_ids_np == seg_id
-            result_probs[int(seg_id)] = -float(np.sum(local_losses[mask]))
-            covered_points[int(seg_id)] = True
+        out_ids = np.asarray(out_ids.array)
+        out_lls = np.asarray(out_lls.array)
+        valid = out_ids != -1
+        out_ids_this_batch = out_ids[valid].astype(int).tolist()
+        missing_ids = set(segments_this_batch) - set(out_ids_this_batch)
+        extra_ids = set(out_ids_this_batch) - set(segments_this_batch)
+        if missing_ids or extra_ids:
+            raise RuntimeError(
+                f"[{eval_run_uuid}][host={jax.process_index()}] Segment mismatch at batch={batch_idx}: "
+                f"missing={sorted(list(missing_ids))[:10]}, extra={sorted(list(extra_ids))[:10]}"
+            )
+
+        result_probs[out_ids[valid].astype(int)] = out_lls[valid]
+        covered_points[out_ids[valid].astype(int)] = True
 
         pbar.update(batch_tokens)
 
     pbar.close()
-    sync_chain.item()
-    logger.info("vlm_eval batch loop complete")
+    sync_global_devices("vlm_eval_batch_loop")
+    logger.info("[%s][host=%d] vlm_eval batch loop complete", eval_run_uuid, jax.process_index())
 
     missing = np.where(~covered_points)[0]
     if len(missing) > 0:
@@ -277,7 +376,17 @@ def _compute_open_ended_metrics(result_probs, covered_points, segment_metadata):
     }
 
 
-def evaluate_all_vlm_benchmarks(jit_fn, model, prepared, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources):
+def evaluate_all_vlm_benchmarks(
+    jit_fn,
+    model,
+    prepared,
+    tokenizer,
+    EvalPos,
+    EvalBatch,
+    max_packed_segments,
+    axis_resources,
+    eval_run_uuid: str = "n/a",
+):
     """Evaluate all VLM benchmarks in a single continuous batch loop.
 
     Merges all completions from all benchmarks into one flat list, runs one
@@ -322,7 +431,15 @@ def evaluate_all_vlm_benchmarks(jit_fn, model, prepared, tokenizer, EvalPos, Eva
         )
 
     result_probs, covered_points = _run_batch_loop(
-        jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources
+        jit_fn,
+        model,
+        all_completions,
+        tokenizer,
+        EvalPos,
+        EvalBatch,
+        max_packed_segments,
+        axis_resources,
+        eval_run_uuid=eval_run_uuid,
     )
 
     results = {}
@@ -929,8 +1046,8 @@ def vlm_mc_eval_callback(
     from levanter.utils.jax_utils import parameter_count
     from levanter.utils.tree_utils import inference_mode
 
-    # Create JIT function once in the factory, not per eval call.
-    jit_fn = _make_vlm_eval_jit(axis_resources, mp)
+    # JIT function is created lazily on first eval call (needs EvalPos from model).
+    _cached_jit = [None]
 
     # Pre-resolve parquet paths and detect task types
     bench_parquets: dict[str, list[str]] = {}
@@ -945,11 +1062,34 @@ def vlm_mc_eval_callback(
             logger.warning("No parquets found for benchmark %s, skipping", bench_name)
 
     def vlm_eval(step: StepInfo, force=False):
+        eval_run_uuid = uuid.uuid4().hex[:8]
         model = inference_mode(step.eval_model, True)
         EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
 
+        try:
+            abstract_mesh = jax.sharding.get_abstract_mesh()
+        except Exception as e:
+            abstract_mesh = f"<unavailable: {type(e).__name__}: {e}>"
+
+        local_device_count = jax.local_device_count()
+        platform = jax.devices()[0].platform if jax.devices() else "unknown"
         logger.info(
-            "Running VLM eval at step %d (EvalPos=%d, EvalBatch=%d, params=%s)",
+            "[%s][host=%d/%d] VLM eval env: local_device_count=%d platform=%s abstract_mesh=%s axis_resources=%s "
+            "EvalBatch=%d EvalPos=%d",
+            eval_run_uuid,
+            jax.process_index(),
+            jax.process_count(),
+            local_device_count,
+            platform,
+            abstract_mesh,
+            axis_resources,
+            EvalBatch.size,
+            EvalPos.size,
+        )
+
+        logger.info(
+            "[%s] Running VLM eval at step %d (EvalPos=%d, EvalBatch=%d, params=%s)",
+            eval_run_uuid,
             step.step,
             EvalPos.size,
             EvalBatch.size,
@@ -982,11 +1122,24 @@ def vlm_mc_eval_callback(
 
         max_packed_segments = 64
 
+        # Create JIT function on first call (needs EvalPos from model).
+        if _cached_jit[0] is None:
+            _cached_jit[0] = _make_vlm_eval_jit(axis_resources, mp, EvalPos, EvalBatch, max_packed_segments)
+        jit_fn = _cached_jit[0]
+
         # Run ALL benchmarks in a single continuous batch loop to avoid the
         # TPU crash that occurs at benchmark transitions.
         try:
             results = evaluate_all_vlm_benchmarks(
-                jit_fn, model, prepared, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources
+                jit_fn,
+                model,
+                prepared,
+                tokenizer,
+                EvalPos,
+                EvalBatch,
+                max_packed_segments,
+                axis_resources,
+                eval_run_uuid=eval_run_uuid,
             )
             if jax.process_index() == 0:
                 for bench_name, result in results.items():
