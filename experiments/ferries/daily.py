@@ -7,9 +7,9 @@ This script is intentionally simple and serves as a living ferry template that
 agents can update on a daily cadence with small, reviewable changes.
 
 Expected workflow:
-1. Propose a PR with bounded config updates.
+1. Propose bounded config updates in the run issue.
 2. Get human approval.
-3. Launch with `ray_run.py` and monitor to completion.
+3. Push the launch commit, then launch with `ray_run.py` and monitor to completion.
 """
 
 import datetime as dt
