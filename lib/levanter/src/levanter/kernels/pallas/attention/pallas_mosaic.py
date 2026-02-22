@@ -454,7 +454,7 @@ def _mha_backward(
     if return_residuals:
         raise NotImplementedError("return_residuals not supported.")
     q, k, v, segment_ids, out, lse = res
-    del num_stages, grid
+    del grid
 
     if segment_ids is None:
         q_segment_ids = None
@@ -559,7 +559,7 @@ def _mha_backward(
             name="mha_backward",
             debug=debug,
             interpret=interpret,
-            compiler_params=plgpu.CompilerParams(num_warps=num_warps_, num_stages=2),
+            compiler_params=plgpu.CompilerParams(num_warps=num_warps_, num_stages=num_stages),
         )(q, k, v, q_segment_ids, kv_segment_ids, out, do, lse, delta)
         return dq.astype(q.dtype), dk, dv, None
 
