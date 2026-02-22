@@ -19,9 +19,8 @@ Sealing policy (for new runs):
 - [Data browser `daily-1f1377`](https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/daily-1f1377.json)
 - Seal tag: `ferry/daily/20260222/20260222-004403-daily-ferry-lr3x`
 - Metrics:
-  - `global_step`: `5153`
-  - `eval/loss`: `3.46797`
-  - `eval/paloma/macro_loss`: `3.71091`
+  - `eval/paloma/c4_en/bpb`: `1.12731`
+  - `eval/bpb`: `1.17592`
   - `eval/uncheatable_eval/bpb`: `1.13664`
 - Notes:
   W&B marked the run `crashed`, but final eval metrics were recorded at the terminal training step. Subsequent retries (`r1-r3`) were intentionally stopped after confirming the primary run had already produced complete final eval output.
