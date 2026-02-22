@@ -1213,3 +1213,64 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / severe regression**. Dominant hotspot class was unchanged and became substantially slower, with the backward closed-call shard-map path now much more expensive.
 - Governance action: regression exceeded threshold; reverted speculative kernel changes and left working tree clean.
 - Next bold hypothesis: keep explicit forward transform reuse for backward, and instead pursue a more radical launch/dataflow move that increases parallelism without reintroducing expensive transpose solves in backward (for example Macro Move E V-tiling with MXU-heavy shared `QK` reuse, or a staged F decomposition that isolates backward adjoint blocks while preserving cheap `T^T` application).
+
+### Iteration 26 - Macro Move D / fused full-sequence forward prep+recurrent kernel (low-impact, reverted)
+
+- Date: 2026-02-22T01:42:37Z
+- Commit: none (failed attempt)
+- Loop session/local index: `10/20`
+- Starting commit: `169f035fa0a7e80158b66e0bcda9821694733090`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` (custom-call equivalent bucket): `76.743 ms` (dominant category).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: fuse full-sequence chunk prepare + recurrent apply into one `emit_pipeline` custom call to remove inter-kernel tape read/write traffic (`+10-18%`, medium-high risk).
+  2. **Macro Move E**: V-tiling recurrent+bwd with shared K-only precompute (`+15-30%`, very high decomposition risk).
+  3. **Macro Move C**: BF16 tape/bandwidth policy tightening across flash prepare/recurrent (`+8-15%`, medium numerical risk).
+
+- Selected macro-move category: **D) Use `pltpu.emit_pipeline` to fuse across chunk/segment loops**.
+- Selected hypothesis: in the full-sequence train path, merge chunk-local triangular prep and recurrent apply into a single pipelined Pallas kernel that keeps per-chunk intermediates in-kernel while still emitting backward tape (`v_pseudo`, `k_cumdecay`, `solve_transform`).
+
+- Change attempt summary:
+  - Implemented `_gdn_chunk_fullseq_fused_fwd_pipeline_kernel_tpu`, `_in_specs_chunk_fullseq_fused_fwd_tpu`, and `_gdn_chunk_fullseq_fused_fwd_pallas` in `lib/levanter/src/levanter/layers/gated_deltanet.py`.
+  - Rewired `_chunk_gated_delta_rule_flash_pallas_impl` full-sequence path to call the new fused forward kernel instead of separate full-sequence prepare and recurrent calls.
+  - Reverted the kernel code after profiling showed <3% MFU gain with unchanged dominant hotspot class.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_fusedfwd_i10_dev --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_fusedfwd_i10_dev_130m_ch128_seg16_20steps-b77ccb`
+  - W&B profiler artifact: `run-gdn_fusedfwd_i10_dev_130m_ch128_seg16_20steps-b77ccb-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_fusedfwd_i10_dev_130m_ch128_seg16_20steps-b77ccb/plugins/profile/2026_02_22_01_38_58/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`):
+  - Dominant train-path bucket (`shard_map`): `76.743 ms -> 76.754 ms` (`+0.01%`), still dominant.
+  - Forward closed-call tf_op remained flat:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms -> 40.183 ms` (`+0.00%`).
+  - Backward closed-call tf_op remained flat:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms -> 26.255 ms` (`+0.00%`).
+  - Secondary shard-map callsite was also flat/slightly worse:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/shard_map/pallas_call:` `10.307 ms -> 10.315 ms` (`+0.08%`).
+  - Source-level hotspot line moved by refactor but did not materially improve:
+    - `gated_deltanet.py:3432 -> gated_deltanet.py:3710`: `38.973 ms -> 38.883 ms` (`-0.23%`).
+  - `all-gather`: `20.193 ms -> 20.120 ms` (`-0.36%`) (minor).
+
+- MFU/throughput delta (vs baseline run `gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937`):
+  - `throughput/mfu`: `5.759190 -> 5.881245` (`+2.12%`).
+  - `throughput/tokens_per_second`: `186308.71 -> 190257.16` (`+2.12%`).
+  - `throughput/duration`: `0.175880s -> 0.172230s` (`-2.08%`).
+
+- Assessment: **low-impact (escalation-triggering)**. End-to-end MFU improved modestly, but the dominant train-path `shard_map/custom-call` hotspot was unchanged and key forward/backward closed-call costs remained flat.
+- Governance note: improvement clears the `>=0.250%` promotion threshold, but per escalation rule (`<3%` MFU gain + unchanged dominant hotspot), this attempt is treated as low-impact and the speculative kernel code was reverted.
+- Next bold hypothesis: pursue a more radical decomposition that changes backward/forward launch structure and work balance (for example Macro Move E with explicit shared K-only precompute or staged Macro F backward decomposition), rather than additional forward fusion variants.
