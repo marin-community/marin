@@ -1155,3 +1155,61 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / regression**. MFU regressed by >1% with the same dominant `shard_map/custom-call` hotspot unchanged.
 - Governance action: regression crossed `revert-count-failure` threshold; reverted speculative kernel code and left tree clean.
 - Next bold hypothesis: pivot to a stronger decomposition that changes compute balance, for example Macro Move F + triangular-solve angle (solve-only stacked RHS / transpose-solve in bwd, avoiding explicit full transform materialization) so forward/backward closed-call hotspots are structurally reduced rather than relabeled.
+
+### Iteration 25 - Macro Move F / solve-only prepare + transpose-solve backward (regressed, reverted)
+
+- Date: 2026-02-22T01:06:22Z
+- Commit: none (failed attempt)
+- Loop session/local index: `9/20`
+- Starting commit: `3e5c79ee7683231686c38a9db296a74adf7e9790`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` (custom-call equivalent bucket): `76.743 ms` (dominant category).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move F**: remove full `solve_transform` tape and switch to solve-only decomposition (`+12-25%`, medium-high risk).
+  2. **Macro Move E**: V-tiling recurrent+bwd state (`KxV -> KxVb`) to improve occupancy (`+15-30%`, high risk).
+  3. **Macro Move B**: broader train-path transpose fusion with unified MXU dot helper (`+8-15%`, medium risk).
+
+- Selected macro-move category: **F) Match FlashLinearAttention’s kernel decomposition**.
+- Selected hypothesis: avoid explicit inverse materialization in prepare by solving only stacked RHS, and in backward replace `T^T @ d_sol_all` with transpose solve on recomputed strict-lower `A`, eliminating the `Ct×Ct` forward tape from train-path dataflow.
+
+- Change attempt summary:
+  - In `lib/levanter/src/levanter/layers/gated_deltanet.py`, rewired chunk prepare path (segmented + full-sequence pipeline) to compute `sol_all` via `_solve_I_minus_strict_lower_blockwise(...)` and stop emitting `solve_transform` outputs.
+  - Updated flash backward wiring to drop `solve_transform` from residuals/specs and use `_solve_I_minus_strict_lower_transpose_blockwise(A, d_sol_all, ...)` after recomputing `A` in the chunk bwd kernel.
+  - Reverted kernel code after profile regression.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation (success):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Dev TPU profile (success):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_solveonly_i9_dev --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_solveonly_i9_dev_130m_ch128_seg16_20steps-8df5c5`
+  - W&B profiler artifact: `run-gdn_solveonly_i9_dev_130m_ch128_seg16_20steps-8df5c5-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_solveonly_i9_dev_130m_ch128_seg16_20steps-8df5c5/plugins/profile/2026_02_22_01_02_41/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`):
+  - Dominant train-path bucket (`shard_map`): `76.743 ms -> 128.010 ms` (`+66.80%`), still dominant.
+  - Forward closed-call tf_op regressed:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms -> 49.360 ms` (`+22.84%`).
+  - Backward closed-call tf_op regressed heavily:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms -> 68.341 ms` (`+160.31%`).
+  - Collectives were effectively flat:
+    - `all-gather`: `20.193 ms -> 20.124 ms` (`-0.34%`).
+
+- MFU/throughput delta (vs baseline run `gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937`):
+  - `throughput/mfu`: `5.759190 -> 5.074198` (`-11.89%`).
+  - `throughput/tokens_per_second`: `186308.71 -> 164149.35` (`-11.89%`).
+  - `throughput/duration`: `0.175880s -> 0.199623s` (`+13.50%`).
+
+- Assessment: **low-impact / severe regression**. Dominant hotspot class was unchanged and became substantially slower, with the backward closed-call shard-map path now much more expensive.
+- Governance action: regression exceeded threshold; reverted speculative kernel changes and left working tree clean.
+- Next bold hypothesis: keep explicit forward transform reuse for backward, and instead pursue a more radical launch/dataflow move that increases parallelism without reintroducing expensive transpose solves in backward (for example Macro Move E V-tiling with MXU-heavy shared `QK` reuse, or a staged F decomposition that isolates backward adjoint blocks while preserving cheap `T^T` application).
