@@ -1714,3 +1714,102 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact**. This move achieved the intended structural effect (fewer larger train-path custom calls) but did not reduce the dominant hotspot cost; the dominant `shard_map` bucket remained and became slightly slower while end-to-end MFU gain stayed `<3%`.
 - Governance/escalation action: improvement exceeds promotion floor (`>=0.250%`) but escalation rule still applies (`<3%` with unchanged dominant hotspot). Next attempt should be more radical than launch restructuring alone.
 - Next bold hypothesis: escalate to **Macro Move E** (state/output V-tiling with shared K-only precompute in train backward/recurrent) or **Macro Move F** (blockwise stacked-RHS triangular decomposition) to reduce per-call work, not only call count.
+
+### Iteration 34 - Macro Move G / centered outer-product `exp_diff` in train chunk kernels (regression, reverted)
+
+- Date: 2026-02-22T10:37:07Z
+- Commit: none (failed attempt)
+- Loop session/local index: `2/10`
+- Starting commit: `ef7a2f6bb52776d1e27804963ba003326a5279ca`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` bucket: `76.743 ms` (dominant train-path custom-call-equivalent bucket).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: replace Ct² `exp(clip(g_i-g_j))` with centered outer-product exp plus clamp/mask in train prepare+recurrent+bwd (`+10-30%`, medium-high kernel-IR risk).
+  2. **Macro Move H**: stack left operands to batch `QK/KKT` and `inter/v_prime` matmuls in the train chunk kernels (`+10-20%`, medium VMEM pressure risk).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) for recurrent/bwd train state path (`+15-30%`, high decomposition/integration risk).
+
+- Selected macro-move category: **G) Eliminate Ct² exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: replace repeated pairwise `diff -> clip -> exp` work with `_exp_diff_and_mask_from_g` fast path across train chunk prepare/recurrent/backward kernels, preserving exact fallback for out-of-range chunks.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `_exp_diff_and_mask_from_g(g, clip)` with:
+    - fast path: centered vector exponentials + outer product + clamp + in-range mask,
+    - fallback path: legacy exact `diff -> clip -> exp` path.
+  - Wired helper into train-path chunk kernels:
+    - segmented/full-sequence prepare,
+    - segmented/full-sequence recurrent forward,
+    - segmented fused train forward,
+    - segmented backward chunk math.
+  - Initial TPU compile failed due boolean mask vector values in `lax.cond` result (`MosaicError`); adjusted helper to return float32 masks.
+  - After profiling regression, reverted all speculative kernel code so no optimization code remains in tree.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation attempts (failed infra):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both --no-sync`
+    - Result: TPU device busy / lock contention (`/dev/vfio/*` busy) plus persistent SSH host-key mismatch warning.
+  - Ray fallback validation:
+    - First run (pre-fix) failed with TPU compile error:
+      - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+      - Job: `ray-run-calvinxu-levanter-20260222-101350`
+      - Result: `4 failed, 45 passed, 40 skipped` (`MosaicError` from bool mask vector IR).
+    - Final validation run (post-fix) succeeded:
+      - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+      - Job: `ray-run-calvinxu-levanter-20260222-102009`
+      - Result: `49 passed, 40 skipped`.
+
+- Profile run:
+  - Dev TPU profile attempt (failed infra):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_expouter_i2_dev --no-sync`
+    - Result: runtime segfault during distributed startup (`Failed to add port ...` then `Segmentation fault`).
+  - Ray fallback profile (success):
+    - Submit:
+      - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_expouter_i2_ray --no-wait`
+      - Job: `ray-run-calvinxu-bash-20260222-102542`
+    - Wait:
+      - `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-bash-20260222-102542`
+      - Result: `SUCCEEDED`.
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_expouter_i2_ray_130m_ch128_seg16_20steps-a2ce65`
+    - W&B profiler artifact: `run-gdn_expouter_i2_ray_130m_ch128_seg16_20steps-a2ce65-profiler:v0`
+    - Downloaded trace: `.profiles/wandb/gdn_expouter_i2_ray_130m_ch128_seg16_20steps-a2ce65/plugins/profile/2026_02_22_02_32_52/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`):
+  - Dominant train-path bucket regressed and remained dominant:
+    - `shard_map`: `76.743 ms -> 93.025 ms` (`+21.22%`).
+  - Secondary buckets remained mostly flat:
+    - `fusion`: `45.498 ms -> 45.656 ms` (`+0.35%`).
+    - `all-gather`: `20.193 ms -> 20.092 ms` (`-0.50%`).
+  - Forward closed-call train hotspot regressed:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:`
+      `40.182 ms -> 48.864 ms` (`+21.61%`).
+  - Backward closed-call train hotspot regressed:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:`
+      `26.254 ms -> 33.661 ms` (`+28.21%`).
+  - Train-path custom-call category (from XLA-op args `hlo_category=custom-call`) regressed:
+    - `79.796 ms -> 96.084 ms` (`+20.41%`).
+
+- MFU/throughput delta:
+  - Vs baseline run `gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937`:
+    - `throughput/mfu`: `5.759190 -> 5.494581` (`-4.59%`).
+    - `throughput/tokens_per_second`: `186308.71 -> 177748.65` (`-4.59%`).
+    - `throughput/duration`: `0.175880s -> 0.184350s` (`+4.82%`).
+  - Vs active governance champion (`gdn_loopgate_iter015_130m_ch128_seg16_20steps-da7e49`):
+    - `throughput/mfu`: `5.748507 -> 5.494581` (`-4.42%`).
+
+- Macro-G exp operation accounting (IR/trace-derived):
+  - Trace-derived exponential proxy on TPU:0 XLA Ops thread (events whose op name or long_name include `exponential`):
+    - `0.008425 ms -> 0.007888 ms` (`-6.37%`, tiny absolute effect).
+  - `train_step.hlo.txt` token count for `exponential` remained unchanged:
+    - `20 -> 20`.
+  - Conclusion: no evidence of meaningful exponential-work reduction at end-to-end graph level; any intended Ct² exp reduction inside custom calls did not translate into dominant-hotspot wins.
+
+- Assessment: **low-impact / regression**. Dominant train-path hotspot class (`shard_map` / closed-call `pallas_call`) remained unchanged and became significantly slower.
+- Governance/escalation action: MFU gain is `<3%` (regressed) and dominant hotspot is unchanged; per policy this attempt is marked failed and reverted.
+- Next bold hypothesis: escalate to **Macro Move H** (stacked-matmul batching in train chunk kernels) to reduce dot invocation count without adding Ct² elementwise control-flow overhead.
