@@ -1714,3 +1714,74 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact**. This move achieved the intended structural effect (fewer larger train-path custom calls) but did not reduce the dominant hotspot cost; the dominant `shard_map` bucket remained and became slightly slower while end-to-end MFU gain stayed `<3%`.
 - Governance/escalation action: improvement exceeds promotion floor (`>=0.250%`) but escalation rule still applies (`<3%` with unchanged dominant hotspot). Next attempt should be more radical than launch restructuring alone.
 - Next bold hypothesis: escalate to **Macro Move E** (state/output V-tiling with shared K-only precompute in train backward/recurrent) or **Macro Move F** (blockwise stacked-RHS triangular decomposition) to reduce per-call work, not only call count.
+
+### Iteration 34 - Macro Move H / stacked shared-RHS matmuls in train-path chunk kernels (regression, reverted)
+
+- Date: 2026-02-22T12:32:30Z
+- Commit: none (failed attempt)
+- Loop session/local index: `3/10`
+- Starting commit: `af17b780058d671d16edbce17f5a90daae972d5a`
+- Dominant bottleneck carried in (latest successful trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `41.324 ms` (dominant forward train-path callsite).
+  - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.266 ms` (dominant backward train-path callsite).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` construction to cut Ct^2 exponentials in prepare/recurrent/backward (`+10-25%`, high numerical/correctness risk).
+  2. **Macro Move H**: stack left operands that share RHS (`QK+KKT`, `inter+v_prime`) to reduce dot invocations in train kernels (`+10-20%`, medium compile/layout risk).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) in recurrent/backward with shared K-precompute (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **H) Batch matmuls by stacking**.
+- Selected hypothesis: reduce train-path dot count and custom-call wall time by replacing paired shared-RHS matmuls with one stacked dot and split.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `_stacked_lhs_matmul_f32` helper (rank-3 stacked left operands + one `lax.dot_general`).
+  - Applied batched shared-RHS matmuls in flash/segmented train forward and backward hotspots (`QK+KKT`, `inter+v_prime` opportunities).
+  - Reverted all speculative kernel changes after profiling showed meaningful regression and unchanged dominant hotspot.
+
+- Correctness checks:
+  - Dev TPU validation attempt (failed due TPU lock contention):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Failure: `/dev/vfio` device lock contention (`/tmp/libtpu_lockfile` path in logs).
+  - Ray fallback validation (success):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260222-120711`
+    - Result: `49 passed, 40 skipped`.
+
+- Profile run:
+  - Successful measurement run (Ray fallback):
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_tinyprof_iter3_h3ray4 --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260222-122057`
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_tinyprof_iter3_h3ray4_130m_ch128_seg16_20steps-6641ec`
+    - W&B profiler artifact: `run-gdn_tinyprof_iter3_h3ray4_130m_ch128_seg16_20steps-6641ec-profiler:v0`
+    - Downloaded trace: `.profiles/wandb/gdn_tinyprof_iter3_h3ray4_130m_ch128_seg16_20steps-6641ec/plugins/profile/2026_02_22_04_27_40/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, tf-op label aggregation vs carry-in baseline trace above):
+  - Forward closed-call train hotspot worsened:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `41.324 ms -> 45.311 ms` (`+9.65%`).
+  - Backward closed-call hotspot unchanged:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.266 ms -> 26.279 ms` (`+0.05%`).
+  - Additional forward train callsite flat:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/shard_map/pallas_call:` `10.508 ms -> 10.508 ms` (`-0.00%`).
+  - Dominant hotspot class remained train-path closed-call `shard_map/pallas_call`.
+
+- MFU/throughput delta:
+  - Vs carry-in baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`:
+    - `throughput/mfu`: `5.787594 -> 5.639716` (`-2.56%`).
+    - `throughput/tokens_per_second`: `187227.57 -> 182443.74` (`-2.56%`).
+    - `throughput/duration`: `0.175017s -> 0.179606s` (`+2.62%`).
+  - Vs active governance champion (`gdn_loopgate_iter015_130m_ch128_seg16_20steps-da7e49`):
+    - `throughput/mfu`: `5.748507 -> 5.639716` (`-1.89%`).
+
+- Acceptance gate checklist:
+  - Correctness: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both` -> `49 passed, 40 skipped`.
+  - Perf:
+    - Forward `closed_call/shard_map/pallas_call`: `41.324 ms -> 45.311 ms` (`+9.65%`).
+    - Backward `closed_call/shard_map/pallas_call`: `26.266 ms -> 26.279 ms` (`+0.05%`).
+    - `throughput/mfu`: `5.787594 -> 5.639716` (`-2.56%`).
+    - `throughput/tokens_per_second`: `187227.57 -> 182443.74` (`-2.56%`).
+    - `throughput/duration`: `0.175017s -> 0.179606s` (`+2.62%`).
+    - Macro G exp-op reduction note: N/A (this iteration executed Macro H, not Macro G).
+  - Governance: MFU gain `<3%`, dominant hotspot unchanged, and metric regressed beyond the `1.0%` threshold vs champion; attempt marked failed and reverted (`revert-count-failure` policy).
+
+- Assessment: **low-impact regression**. Stacked shared-RHS matmuls changed launch structure but did not improve the dominant train-path closed-call hotspot and reduced end-to-end throughput.
+- Next bold hypothesis: escalate to **Macro Move E** with explicit V-tiling (`KxV -> KxVb`) plus shared K-only precompute so train-path custom calls reduce per-program state/work rather than only matmul count.
