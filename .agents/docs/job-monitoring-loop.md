@@ -10,7 +10,7 @@ When the user asks you to start a monitoring loop, gather the required informati
 2. **cluster** - Which cluster is it running on? (e.g., `us-east5-a`, `us-central2`)
 3. **experiment** - What is the experiment script path? (e.g., `experiments/isoflop_sweep.py`)
 
-Cluster-level actions are out of scope for this loop. Do not restart, recreate, or otherwise mutate the cluster (including head-node restart) unless the user gives explicit consent in the current thread.
+Cluster-level actions are out of scope for this loop. Do not restart, recreate, or otherwise mutate the cluster (including head-node restart) unless the user gives explicit consent in the current thread, except for the TPU bad-node recovery flow documented below.
 
 Ask the user for any missing information before proceeding. Example:
 
@@ -101,7 +101,7 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
    - If no output (job dead) → go to step 7
 
 7. RESTART
-   - This step restarts only the Ray job. Never restart/recreate/mutate the cluster here without explicit human consent in this thread.
+   - This step restarts only the Ray job. Never restart/recreate/mutate the cluster here without explicit human consent in this thread, except for TPU bad-node recovery below.
    uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster <CLUSTER> -- python <EXPERIMENT_PATH>
 
    - Capture new job_id from output
@@ -109,17 +109,9 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
    - Go to step 1
 ```
 
-## Cluster Mutation Guardrail and TPU Exception Path
+## Cluster Mutation Guardrail
 
 - Default rule: never restart, recreate, or otherwise mutate the cluster without explicit human consent in this thread.
-- TPU bad-node exception path (with explicit human consent):
-  - For TPU runtime signatures such as:
-    - `RuntimeError: No accelerator found. Please run on a TPU or GPU.`
-    - `Failed to cleanup driver after error: INTERNAL: FAILED_PRECONDITION`
-    - `Device or resource busy`
-  - identify the bad TPU VM by IP address from logs
-  - delete that TPU VM (`gcloud compute tpus tpu-vm delete ...`)
-  - then restart the job
 
 ## Fixing Small Bugs
 
@@ -151,6 +143,20 @@ Examples of complex issues (do not auto-fix):
 - Data loading issues
 - Unclear stack traces spanning multiple files
 
+## TPU Bad-Node Recovery
+
+Special note: for TPU-related errors such as:
+- `RuntimeError: No accelerator found. Please run on a TPU or GPU.`
+- `Failed to cleanup driver after error: INTERNAL: FAILED_PRECONDITION`
+- `Device or resource busy`
+
+Treat this as a bad TPU node:
+1. Identify the bad TPU worker IP from logs.
+2. Find the TPU VM name for that IP.
+3. Delete the bad TPU VM and let the cluster replace it.
+   - `gcloud compute tpus tpu-vm delete <TPU_VM_NAME> --zone <ZONE> --quiet`
+4. Restart the job.
+
 ## Notes
 
 - Sleep must be foreground (max ~10 min due to tool timeout)
@@ -159,7 +165,7 @@ Examples of complex issues (do not auto-fix):
 - State file allows resuming if context resets
 - The loop is expected to run for the full job duration (often 4-5 hours for ferries, but potentially days for longer jobs)
 - If the same error occurs after a fix attempt, do not retry - report to user
-- Never restart/recreate/mutate the cluster (including restarting the head node) without explicit human consent in this thread
+- Never restart/recreate/mutate the cluster (including restarting the head node) without explicit human consent in this thread, except for the TPU bad-node recovery flow above
 
 ## Optional Todo Pattern
 
