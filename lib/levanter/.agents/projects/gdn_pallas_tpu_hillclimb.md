@@ -1465,3 +1465,58 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / bottleneck regression**. End-to-end MFU moved up slightly, but the dominant train-path hotspot class was unchanged and became slower; the key backward closed-call hotspot regressed materially.
 - Governance/escalation action: marked low-impact per escalation rule (`<3%` MFU gain with unchanged dominant hotspot) and reverted speculative kernel edits; no champion promotion.
 - Next bold hypothesis: make a more radical train-path redesign that removes this backward closed-call pressure, e.g. Macro Move 6 block-recursive stacked-RHS triangular solve/inversion redesign (or Macro Move E V-tiling) so the dominant `shard_map/pallas_call` bucket is structurally reduced instead of shifted.
+
+### Iteration 30 - Macro Move F / solve-only triangular decomposition (regression, reverted)
+
+- Date: 2026-02-22T04:35:12Z
+- Commit: none (failed attempt)
+- Loop session/local index: `14/20`
+- Starting commit: `86727a2e6a16dfa40b3fdb0d79fc5fb73b092174`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` bucket: `76.743 ms` (dominant train-path hotspot family).
+  - `all-gather`: `20.193 ms` (secondary communication hotspot).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move F**: replace explicit inverse tape with solve-only stacked-RHS forward prep + transpose-solve backward (`+10-25%`, medium-high algorithmic risk).
+  2. **Macro Move E**: tile recurrent/bwd state along V (`KxV -> KxVb`) with shared `QK` precompute (`+15-30%`, high decomposition risk).
+  3. **Macro Move D**: lane-safe full-sequence `emit_pipeline` with explicit feature tiling/padding to avoid 64-lane DMA cliffs (`+10-20%`, high compile/integration risk).
+
+- Selected macro-move category: **F) Match FlashLinearAttention’s kernel decomposition**.
+- Selected hypothesis: remove the `Ct x Ct` forward tape (`solve_transform`) by solving `(I - A)X = rhs_all` directly in prepare kernels and using transpose-solve in backward, reducing tape bandwidth and custom-call payload.
+
+- Change attempt summary:
+  - Implemented a solve-only train-path decomposition in `lib/levanter/src/levanter/layers/gated_deltanet.py`:
+    - switched segmented/fullseq prepare kernels from explicit inverse materialization to stacked-RHS solve,
+    - removed `solve_transform` from forward tape/residual plumbing,
+    - changed backward chunk kernel to recompute `A` and use transpose-solve instead of multiplying by taped inverse.
+  - Profile showed a large end-to-end regression with worse dominant hotspot; reverted speculative kernel edits and left tree clean.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation (success):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_solveonly_i14_dev --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_solveonly_i14_dev_130m_ch128_seg16_20steps-91b6ec`
+  - W&B profiler artifact: `run-gdn_solveonly_i14_dev_130m_ch128_seg16_20steps-91b6ec-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/plugins/profile/2026_02_22_04_31_08/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`):
+  - Dominant train-path bucket (`shard_map`): `76.743 ms -> 128.016 ms` (`+66.81%`), still dominant and significantly worse.
+  - `fusion` family remained effectively flat: `45.498 ms -> 45.629 ms` (`+0.29%`).
+  - `all-gather`: `20.193 ms -> 20.074 ms` (`-0.59%`) (minor).
+  - Trace export did not expose stable source-level tf-op labels for this run; comparison used XLA-op family totals on the same TPU thread.
+
+- MFU/throughput delta (vs baseline run `gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937`):
+  - `throughput/mfu`: `5.759190 -> 5.125364` (`-11.01%`).
+  - `throughput/tokens_per_second`: `186308.71 -> 165804.54` (`-11.01%`).
+  - `throughput/duration`: `0.175880s -> 0.197630s` (`+12.37%`).
+
+- Assessment: **high-impact regression**. The dominant train-path hotspot class was unchanged and worsened substantially; this move did not unlock useful parallelism in practice for current shapes.
+- Governance/escalation action: regression exceeds the `1.0%` threshold, so this attempt is marked failed and reverted (`revert-count-failure`).
+- Next bold hypothesis: escalate to **Macro Move E (V-tiling)** so backward and recurrent kernels operate on `KxVb` state tiles with a shared `QK` precompute path; target reducing the `shard_map` critical path by shrinking per-program state and increasing concurrent MXU residency.
