@@ -25,6 +25,7 @@ Sealing policy (for new runs):
 - Notes:
   W&B marked the run `crashed`, but final eval metrics were recorded at the terminal training step. Subsequent retries (`r1-r3`) were intentionally stopped after confirming the primary run had already produced complete final eval output.
   Compared to the 2026-02-20 baseline run, all three canonical eval BPB metrics were slightly worse (`c4_en` `+0.20%`, `eval/bpb` `+0.46%`, `uncheatable_eval/bpb` `+0.57%`), while final `train/loss` improved (`-0.87%`) and `throughput/tokens_per_second` increased (`+25.0%`).
+  Learning dynamics: LR3x descended faster early (reaching `train/loss <= 5.0/4.5/4.0` at steps `228/376/721` vs `359/569/905`), but had slightly higher late-stage loss variance (last-500 std `0.0627` vs `0.0582`) and did not translate that speedup into better eval quality.
 
 ## 2026-02-20 (completed 2026-02-21)
 
