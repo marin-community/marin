@@ -1367,14 +1367,13 @@ def vlm_mc_eval_callback(
                             result["num_questions"],
                             loss,
                         )
-                        # Use tracker-owned global step to avoid stale callback-local
-                        # step values regressing behind WandB's monotonic run.step.
                         levanter.tracker.log(
                             {
                                 f"eval/{bench_name}/accuracy": accuracy,
                                 f"eval/{bench_name}/loss": loss,
                             },
-                            step=None,
+                            step=step.step,
+                            commit=True,
                         )
                         logger.warning(
                             "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=multiple_choice "
@@ -1395,11 +1394,10 @@ def vlm_mc_eval_callback(
                             mean_ll,
                             result["num_questions"],
                         )
-                        # Use tracker-owned global step to avoid stale callback-local
-                        # step values regressing behind WandB's monotonic run.step.
                         levanter.tracker.log(
                             {f"eval/{bench_name}/mean_ll": mean_ll},
-                            step=None,
+                            step=step.step,
+                            commit=True,
                         )
                         logger.warning(
                             "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=open_ended "
