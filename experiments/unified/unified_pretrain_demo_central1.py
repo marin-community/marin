@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # --- Constants ---
 
-LLAMA3_GCS_TOKENIZER = "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+LLAMA3_GCS_TOKENIZER = "gs://marin-us-central1/tokenizers/llama-3.1-8b"
 LLAMA3_VOCAB_SIZE = 128_256
 TOKLIP_CODEBOOK_SIZE = 16_384
 UNIFIED_VOCAB_SIZE = LLAMA3_VOCAB_SIZE + TOKLIP_CODEBOOK_SIZE  # 144,640
@@ -58,7 +58,7 @@ UNIFIED_VOCAB_SIZE = LLAMA3_VOCAB_SIZE + TOKLIP_CODEBOOK_SIZE  # 144,640
 VISION_START_ID = 128_004  # <|reserved_special_token_2|> → <|vision_start|>
 VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 
-UNIFIED_TOKENIZER_PATH = "gs://marin-us-central2/tokenizers/llama3-unified-144k"
+UNIFIED_TOKENIZER_PATH = "gs://marin-us-central1/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm/hf_85m_levanter_cache_test"
 UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
 
