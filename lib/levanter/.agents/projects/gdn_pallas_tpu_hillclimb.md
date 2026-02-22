@@ -1520,3 +1520,68 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **high-impact regression**. The dominant train-path hotspot class was unchanged and worsened substantially; this move did not unlock useful parallelism in practice for current shapes.
 - Governance/escalation action: regression exceeds the `1.0%` threshold, so this attempt is marked failed and reverted (`revert-count-failure`).
 - Next bold hypothesis: escalate to **Macro Move E (V-tiling)** so backward and recurrent kernels operate on `KxVb` state tiles with a shared `QK` precompute path; target reducing the `shard_map` critical path by shrinking per-program state and increasing concurrent MXU residency.
+
+### Iteration 31 - Macro Move D / lane-packed full-sequence train forward pipeline on `dk=dv=64` (regression, reverted)
+
+- Date: 2026-02-22T05:15:37Z
+- Commit: none (failed attempt)
+- Loop session/local index: `15/20`
+- Starting commit: `35b0ffd0f2dd60346c9ddf32b9f34f8d578f757b`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` bucket: `76.743 ms` (dominant train-path category).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: enable full-sequence `emit_pipeline` train forward path for active `dk=dv=64` by internal 128-lane feature packing (`+10-25%`, medium-high compile/regression risk).
+  2. **Macro Move E**: V-tile recurrent/backward kernels with shared K-only precompute so `KxV -> KxVb` without duplicating chunk-local K work (`+12-30%`, high decomposition risk).
+  3. **Macro Move F**: triangular-transform decomposition that avoids carrying full `Ct x Ct` tape and rebalances backward compute via staged solves (`+10-20%`, high numerical/perf risk).
+
+- Selected macro-move category: **D) Use `pltpu.emit_pipeline` to fuse across chunk/segment loops**.
+- Selected hypothesis: remove the active `dk=dv=64` fallback to segmented forward by running full-sequence prepare+recurrent pipelines with internal feature-lane padding (`64 -> 128`) and trimming tapes/outputs back to model dimensions.
+
+- Change attempt summary:
+  - Modified `_chunk_gated_delta_rule_flash_pallas_impl` in `lib/levanter/src/levanter/layers/gated_deltanet.py` to route `Ct>=128` and `K/V>=64` through full-sequence prepare/recurrent kernels.
+  - Added internal lane packing to `_MXU_TILE` (`K_full`, `V_full`) before `_gdn_chunk_fullseq_prepare_pallas` and `_gdn_chunk_fullseq_recurrent_fwd_pallas`, then trimmed outputs (`out`, `chunk_starts`, `v_pseudo`, `k_cumdecay`) back to `K_pad`/`V_pad` for backward compatibility.
+  - Reverted speculative kernel edits after profiling due meaningful end-to-end regression; tree intentionally left without this kernel change.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation attempt (failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Failure: `ABORTED: The TPU is already in use by another process` (`/tmp/libtpu_lockfile`).
+  - Ray fallback validation (success):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260222-045739`
+    - Result: `49 passed, 40 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_fullseq_lane64_i15_dev --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_fullseq_lane64_i15_dev_130m_ch128_seg16_20steps-0286eb`
+  - W&B profiler artifact: `run-gdn_fullseq_lane64_i15_dev_130m_ch128_seg16_20steps-0286eb-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_fullseq_lane64_i15_dev_130m_ch128_seg16_20steps-0286eb/plugins/profile/2026_02_22_05_11_47/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`):
+  - Dominant train-path bucket (`shard_map`): `76.743 ms -> 89.936 ms` (`+17.20%`), still dominant and worse.
+  - Dominant train-path `custom-call` category: `79.796 ms -> 92.977 ms` (`+16.52%`).
+  - Backward closed-call hotspot remained flat:
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms -> 26.251 ms` (`-0.01%`).
+  - Forward hotspot shifted and regressed materially:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms -> 0.000 ms` (removed).
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/shard_map/pallas_call:` `10.307 ms -> 63.685 ms` (`+517.90%`).
+
+- MFU/throughput delta:
+  - Vs baseline run `gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937`:
+    - `throughput/mfu`: `5.759190 -> 5.536093` (`-3.87%`).
+    - `throughput/tokens_per_second`: `186308.71 -> 179091.54` (`-3.87%`).
+    - `throughput/duration`: `0.175880s -> 0.182968s` (`+4.03%`).
+  - Vs active governance champion (`gdn_loopgate_iter014_130m_ch128_seg16_20steps-e0fd62`):
+    - `throughput/mfu`: `5.729122 -> 5.536093` (`-3.37%`).
+
+- Assessment: **low-impact / regression**. The dominant train-path hotspot class (`shard_map/custom-call`) is unchanged and became significantly slower; lane-packing full-sequence forward for `dk=dv=64` increased the critical path instead of reducing it.
+- Governance/escalation action: regression exceeds the `1.0%` threshold; attempt marked failed and kernel code reverted (`revert-count-failure`).
+- Next bold hypothesis: escalate to **Macro Move E** with shared K-only precompute plus V-tiled recurrent/backward kernels so per-program state is reduced (`KxV -> KxVb`) without introducing 128-lane forward overcompute on the active 64-dim train config.
