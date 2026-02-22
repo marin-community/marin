@@ -727,6 +727,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-neither-has-boxed",
         max_parallelism=32,
     ),
+    "teetone/qwen3_4b_openthoughts3_math53K_instill_n4_valredundancy1_round1": InstructionDatasetConfig(
+        hf_dataset_id="teetone/qwen3_4b_openthoughts3_math53K_instill_n4_valredundancy1_round1",
+        revision="a9f0a6e",
+        adapter=multi_turn_adapter(),
+        metadata_columns=[],
+        name="teetone/qwen3_4b_openthoughts3_math53K_instill_n4_valredundancy1_round1",
+        subsets=[],
+        splits=["train"],
+    ),
 }
 
 for split_name in SMOLTALK2_SPLITS:
