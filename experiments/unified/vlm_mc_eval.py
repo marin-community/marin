@@ -188,8 +188,10 @@ def _run_batch_loop(
         local_num_batches,
         num_batches,
     )
+    padded_or_truncated_count = 0
     if len(all_batches) < num_batches:
         dummy = all_batches[-1] if all_batches else None
+        padded_or_truncated_count = num_batches - len(all_batches)
         all_batches.extend([dummy] * (num_batches - len(all_batches)))
         logger.info(
             "[%s][host=%d] Padded batches by %d (dummy_is_none=%s)",
@@ -199,6 +201,7 @@ def _run_batch_loop(
             dummy is None,
         )
     elif len(all_batches) > num_batches:
+        padded_or_truncated_count = len(all_batches) - num_batches
         all_batches = all_batches[:num_batches]
         logger.info(
             "[%s][host=%d] Truncated batches by %d",
@@ -206,6 +209,15 @@ def _run_batch_loop(
             jax.process_index(),
             local_num_batches - num_batches,
         )
+    logger.warning(
+        "VLM_EVAL_BATCH_SYNC eval_run_uuid=%s host=%d local_num_batches=%d leader_num_batches=%d "
+        "padded_or_truncated_count=%d",
+        eval_run_uuid,
+        jax.process_index(),
+        local_num_batches,
+        num_batches,
+        padded_or_truncated_count,
+    )
 
     result_probs = np.zeros(len(all_completions))
     covered_points = np.zeros(len(all_completions), dtype=bool)
@@ -238,6 +250,17 @@ def _run_batch_loop(
                 type(batch_orig.attn_mask.segment_ids).__name__,
                 type(getattr(segment_ids, "array", segment_ids)).__name__,
             )
+            if batch_idx == 0:
+                logger.warning(
+                    "VLM_EVAL_BATCH0 eval_run_uuid=%s host=%d tokens_shape=%s tokens_dtype=%s "
+                    "pre_shard_tokens_sharding=%s segment_ids_type=%s",
+                    eval_run_uuid,
+                    jax.process_index(),
+                    getattr(tokens_array, "shape", None),
+                    getattr(tokens_array, "dtype", None),
+                    getattr(tokens_array, "sharding", None),
+                    type(batch_orig.attn_mask.segment_ids).__name__,
+                )
 
         _padding_count, batch_tokens = get_padding_count_from_batch(batch_orig, pad_token)
 
@@ -1137,6 +1160,17 @@ def vlm_mc_eval_callback(
             run_file,
             git_commit,
             ray_pkg_fragment,
+        )
+        logger.warning(
+            "VLM_EVAL_PROVENANCE eval_run_uuid=%s host=%d process_count=%d file=%s ray_pkg=%s git_commit=%s "
+            "axis_resources_hash=%s",
+            eval_run_uuid,
+            jax.process_index(),
+            jax.process_count(),
+            run_file,
+            ray_pkg_fragment,
+            git_commit,
+            hash(str(axis_resources)),
         )
 
         # All processes prepare identical data independently, then run eval
