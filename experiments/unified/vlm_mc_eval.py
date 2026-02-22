@@ -59,6 +59,7 @@ from levanter.data.loader import stack_batches
 from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completions, per_segment_loss
 from levanter.eval_harness import get_padding_count_from_batch, get_segment_ids_from_batch
 from levanter.models.loss import next_token_loss
+from levanter.models.lm_model import LmExample
 from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync, sync_global_devices
 
 from experiments.unified.vlm_tokenize_captions import (
@@ -97,6 +98,7 @@ def _to_host_array_for_debug(x):
 def _compute_batch_fingerprint(batch_orig, batch_idx: int) -> dict[str, object]:
     """Compute a deterministic host-side fingerprint for a pre-shard batch."""
     tokens_host = np.asarray(_to_host_array_for_debug(batch_orig.tokens.array))
+    loss_weight_host = np.asarray(_to_host_array_for_debug(batch_orig.loss_weight.array))
     seg = batch_orig.attn_mask.segment_ids
     if isinstance(seg, tuple):
         seg = seg[0]
@@ -108,6 +110,9 @@ def _compute_batch_fingerprint(batch_orig, batch_idx: int) -> dict[str, object]:
         "tokens_shape": tuple(tokens_host.shape),
         "tokens_dtype": str(tokens_host.dtype),
         "tokens_crc32": int(zlib.crc32(tokens_host.tobytes())),
+        "loss_weight_shape": tuple(loss_weight_host.shape),
+        "loss_weight_dtype": str(loss_weight_host.dtype),
+        "loss_weight_crc32": int(zlib.crc32(loss_weight_host.tobytes())),
         "segment_shape": tuple(seg_host.shape),
         "segment_dtype": str(seg_host.dtype),
         "segment_crc32": int(zlib.crc32(seg_host.tobytes())),
@@ -181,6 +186,15 @@ def _force_vanilla_attention_backend_for_vlm_eval(model):
     return jax.tree.map(_rewrite, model, is_leaf=lambda x: isinstance(x, Attention))
 
 
+def _make_dummy_eval_batch(EvalBatch, EvalPos):
+    """Build a fixed-shape dummy batch used by non-source hosts in broadcast_shard."""
+    return hax.vmap(LmExample.causal, EvalBatch)(
+        hax.zeros(EvalPos, dtype=jnp.int32),
+        loss_weight=hax.zeros(EvalPos, dtype=jnp.float32),
+        segment_ids=hax.zeros(EvalPos, dtype=jnp.int32),
+    )
+
+
 def _run_batch_loop(
     jit_fn,
     model,
@@ -207,15 +221,28 @@ def _run_batch_loop(
     if pad_token is None:
         pad_token = tokenizer.eos_token_id
 
-    packed = greedy_pack_prompt_completions(
-        EvalPos,
-        all_completions,
-        pad_token=pad_token,
-        max_segments_per_example=max_packed_segments,
-    )
+    is_source = jax.process_index() == 0
+    if is_source:
+        packed = greedy_pack_prompt_completions(
+            EvalPos,
+            all_completions,
+            pad_token=pad_token,
+            max_segments_per_example=max_packed_segments,
+        )
+        all_batches = list(stack_batches(iter(packed), EvalPos, EvalBatch))
+        local_num_points = len(all_completions)
+        local_total_tokens = len(packed) * EvalPos.size
+    else:
+        all_batches = []
+        local_num_points = 0
+        local_total_tokens = 0
 
-    all_batches = list(stack_batches(iter(packed), EvalPos, EvalBatch))
+    has_work = multihost_broadcast_sync(local_num_points > 0)
+    if not has_work:
+        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=bool)
 
+    total_points = int(multihost_broadcast_sync(local_num_points))
+    total_tokens = int(multihost_broadcast_sync(local_total_tokens))
     local_num_batches = len(all_batches)
     logger.info(
         "[%s][host=%d] Prepared packed batches: local=%d",
@@ -231,27 +258,11 @@ def _run_batch_loop(
         local_num_batches,
         num_batches,
     )
+    if is_source and len(all_batches) != num_batches:
+        raise RuntimeError(
+            f"[{eval_run_uuid}] Source host has inconsistent batch count: local={len(all_batches)} leader={num_batches}"
+        )
     padded_or_truncated_count = 0
-    if len(all_batches) < num_batches:
-        dummy = all_batches[-1] if all_batches else None
-        padded_or_truncated_count = num_batches - len(all_batches)
-        all_batches.extend([dummy] * (num_batches - len(all_batches)))
-        logger.info(
-            "[%s][host=%d] Padded batches by %d (dummy_is_none=%s)",
-            eval_run_uuid,
-            jax.process_index(),
-            num_batches - local_num_batches,
-            dummy is None,
-        )
-    elif len(all_batches) > num_batches:
-        padded_or_truncated_count = len(all_batches) - num_batches
-        all_batches = all_batches[:num_batches]
-        logger.info(
-            "[%s][host=%d] Truncated batches by %d",
-            eval_run_uuid,
-            jax.process_index(),
-            local_num_batches - num_batches,
-        )
     logger.warning(
         "VLM_EVAL_BATCH_SYNC eval_run_uuid=%s host=%d local_num_batches=%d leader_num_batches=%d "
         "padded_or_truncated_count=%d",
@@ -263,41 +274,45 @@ def _run_batch_loop(
     )
     sync_global_devices(f"vlm_eval_batch_loop_enter_{eval_run_uuid}")
 
-    result_probs = np.zeros(len(all_completions))
-    covered_points = np.zeros(len(all_completions), dtype=bool)
+    result_probs = np.zeros(total_points)
+    covered_points = np.zeros(total_points, dtype=bool)
 
-    total_tokens = len(packed) * EvalPos.size
     pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok")
+    dummy_batch = _make_dummy_eval_batch(EvalBatch, EvalPos)
+    out_specs = hax.partitioning.infer_resource_partitions(dummy_batch, axis_resources)
 
-    for batch_idx, batch_orig in enumerate(all_batches):
-        sync_global_devices(f"vlm_eval_batch_start_{eval_run_uuid}_{batch_idx}")
-        if batch_orig is None:
-            raise RuntimeError(
-                f"[{eval_run_uuid}][host={jax.process_index()}] Encountered None batch at index {batch_idx}. "
-                "This indicates local packing produced zero batches but global sync required padding."
-            )
+    for batch_idx in range(num_batches):
+        logger.warning(
+            "VLM_EVAL_BATCH_ENTER eval_run_uuid=%s host=%d batch_idx=%d leader_num_batches=%d",
+            eval_run_uuid,
+            jax.process_index(),
+            batch_idx,
+            num_batches,
+        )
+        batch_orig = all_batches[batch_idx] if is_source else dummy_batch
 
-        local_fp = _compute_batch_fingerprint(batch_orig, batch_idx)
+        local_fp = _compute_batch_fingerprint(batch_orig, batch_idx) if is_source else {}
         leader_fp = multihost_broadcast_sync(local_fp)
-        local_fp_canon = _canonicalize_fingerprint(local_fp)
-        leader_fp_canon = _canonicalize_fingerprint(leader_fp)
-        if local_fp_canon != leader_fp_canon:
-            raise RuntimeError(
-                f"[{eval_run_uuid}][host={jax.process_index()}] Batch fingerprint mismatch at batch={batch_idx}: "
-                f"local={local_fp}, leader={leader_fp}, local_canon={local_fp_canon}, leader_canon={leader_fp_canon}"
-            )
-
-        # Hard host-side guardrail: catch out-of-vocab ids before launching
-        # TPU kernels so failures surface as actionable Python exceptions.
-        tokens_host = np.asarray(_to_host_array_for_debug(batch_orig.tokens.array))
-        if tokens_host.size > 0:
-            tok_min = int(tokens_host.min())
-            tok_max = int(tokens_host.max())
-            if tok_min < 0 or tok_max >= vocab_size:
+        if is_source:
+            local_fp_canon = _canonicalize_fingerprint(local_fp)
+            leader_fp_canon = _canonicalize_fingerprint(leader_fp)
+            if local_fp_canon != leader_fp_canon:
                 raise RuntimeError(
-                    f"[{eval_run_uuid}][host={jax.process_index()}] token id out of range at batch={batch_idx}: "
-                    f"min={tok_min}, max={tok_max}, vocab_size={vocab_size}, shape={tokens_host.shape}"
+                    f"[{eval_run_uuid}][host={jax.process_index()}] Batch fingerprint mismatch at batch={batch_idx}: "
+                    f"local={local_fp}, leader={leader_fp}, local_canon={local_fp_canon}, leader_canon={leader_fp_canon}"
                 )
+
+            # Hard host-side guardrail: catch out-of-vocab ids before launching
+            # TPU kernels so failures surface as actionable Python exceptions.
+            tokens_host = np.asarray(_to_host_array_for_debug(batch_orig.tokens.array))
+            if tokens_host.size > 0:
+                tok_min = int(tokens_host.min())
+                tok_max = int(tokens_host.max())
+                if tok_min < 0 or tok_max >= vocab_size:
+                    raise RuntimeError(
+                        f"[{eval_run_uuid}][host={jax.process_index()}] token id out of range at batch={batch_idx}: "
+                        f"min={tok_min}, max={tok_max}, vocab_size={vocab_size}, shape={tokens_host.shape}"
+                    )
 
         if batch_idx < 2:
             tokens_array = batch_orig.tokens.array
@@ -329,11 +344,17 @@ def _run_batch_loop(
                     type(batch_orig.attn_mask.segment_ids).__name__,
                 )
 
-        _padding_count, batch_tokens = get_padding_count_from_batch(batch_orig, pad_token)
+        if is_source:
+            _padding_count, local_batch_tokens = get_padding_count_from_batch(batch_orig, pad_token)
+            local_segments = get_segment_ids_from_batch(batch_orig, max_packed_segments * EvalBatch.size)
+        else:
+            local_batch_tokens = 0
+            local_segments = []
+        batch_tokens = int(multihost_broadcast_sync(local_batch_tokens))
+        segments_this_batch = multihost_broadcast_sync(local_segments)
 
         try:
-            out_specs = hax.partitioning.infer_resource_partitions(batch_orig, axis_resources)
-            batch = broadcast_shard(batch_orig, out_specs)
+            batch = broadcast_shard(batch_orig, out_specs, source=0)
         except Exception:
             tokens_array = batch_orig.tokens.array
             logger.exception(
@@ -350,9 +371,6 @@ def _run_batch_loop(
             )
             raise
 
-        # Extract segment IDs from pre-broadcast local batch to avoid attempting
-        # host reads from a potentially non-addressable global array.
-        segments_this_batch = get_segment_ids_from_batch(batch_orig, max_packed_segments * EvalBatch.size)
         out_ids, out_lls = jit_fn(model, batch)
 
         # out_axis_resources={} means outputs are fully replicated on every
@@ -375,7 +393,14 @@ def _run_batch_loop(
         covered_points[out_ids[valid].astype(int)] = True
 
         pbar.update(batch_tokens)
-        sync_global_devices(f"vlm_eval_batch_end_{eval_run_uuid}_{batch_idx}")
+        logger.warning(
+            "VLM_EVAL_BATCH_EXIT eval_run_uuid=%s host=%d batch_idx=%d valid_points=%d batch_tokens=%d",
+            eval_run_uuid,
+            jax.process_index(),
+            batch_idx,
+            int(np.sum(valid)),
+            batch_tokens,
+        )
 
     pbar.close()
     sync_global_devices(f"vlm_eval_batch_loop_exit_{eval_run_uuid}")
@@ -518,37 +543,37 @@ def evaluate_all_vlm_benchmarks(
     all_completions = []
     bench_slices = {}
     offset = 0
-    for bench_name, (task_type, completions, metadata) in prepared.items():
-        if not completions:
-            continue
-        bench_slices[bench_name] = (offset, len(completions), task_type, metadata)
-        # Each prepare_* function assigns 0-based segment IDs.  When merging
-        # multiple benchmarks we must offset them so they don't collide in the
-        # packer (which uses segment_id for attention masking and result mapping).
-        if offset == 0:
-            all_completions.extend(completions)
-        else:
-            all_completions.extend(
-                PromptCompletion(
-                    ids=pc.ids,
-                    prompt_length=pc.prompt_length,
-                    segment_id=(pc.segment_id if pc.segment_id is not None else 0) + offset,
+    if jax.process_index() == 0:
+        for bench_name, (task_type, completions, metadata) in prepared.items():
+            if not completions:
+                continue
+            bench_slices[bench_name] = (offset, len(completions), task_type, metadata)
+            # Each prepare_* function assigns 0-based segment IDs.  When merging
+            # multiple benchmarks we must offset them so they don't collide in the
+            # packer (which uses segment_id for attention masking and result mapping).
+            if offset == 0:
+                all_completions.extend(completions)
+            else:
+                all_completions.extend(
+                    PromptCompletion(
+                        ids=pc.ids,
+                        prompt_length=pc.prompt_length,
+                        segment_id=(pc.segment_id if pc.segment_id is not None else 0) + offset,
+                    )
+                    for pc in completions
                 )
-                for pc in completions
-            )
-        offset += len(completions)
-
-    if not all_completions:
-        return {}
+            offset += len(completions)
 
     # One sync for the combined completion count
     local_n = len(all_completions)
     expected_n = multihost_broadcast_sync(local_n)
-    if local_n != expected_n:
+    if jax.process_index() == 0 and local_n != expected_n:
         raise RuntimeError(
             f"Host {jax.process_index()} has {local_n} completions but leader has {expected_n}. "
             "Likely a GCS download inconsistency — all hosts must see identical data."
         )
+    if expected_n == 0:
+        return {}
 
     result_probs, covered_points = _run_batch_loop(
         jit_fn,
@@ -840,7 +865,15 @@ def evaluate_vlm_mc_benchmark(
         return {"accuracy": 0.0, "loss": 0.0, "num_questions": 0, "num_correct": 0}
 
     result_probs, covered_points = _run_batch_loop(
-        jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources
+        jit_fn,
+        model,
+        all_completions,
+        tokenizer,
+        EvalPos,
+        EvalBatch,
+        max_packed_segments,
+        axis_resources,
+        len(tokenizer),
     )
     return _compute_mc_metrics(result_probs, covered_points, segment_metadata)
 
@@ -950,7 +983,15 @@ def evaluate_vlm_open_ended_benchmark(
         return {"mean_ll": 0.0, "num_questions": 0, "num_covered": 0}
 
     result_probs, covered_points = _run_batch_loop(
-        jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources
+        jit_fn,
+        model,
+        all_completions,
+        tokenizer,
+        EvalPos,
+        EvalBatch,
+        max_packed_segments,
+        axis_resources,
+        len(tokenizer),
     )
     return _compute_open_ended_metrics(result_probs, covered_points, segment_metadata)
 
@@ -1247,39 +1288,40 @@ def vlm_mc_eval_callback(
         )
         logger.warning(
             "VLM_EVAL_PROVENANCE eval_run_uuid=%s host=%d process_count=%d file=%s ray_pkg=%s git_commit=%s "
-            "axis_resources_hash=%s",
+            "axis_resources_crc32=%s",
             eval_run_uuid,
             jax.process_index(),
             jax.process_count(),
             run_file,
             ray_pkg_fragment,
             git_commit,
-            hash(str(axis_resources)),
+            int(zlib.crc32(json.dumps(str(axis_resources), sort_keys=True).encode())),
         )
 
-        # All processes prepare identical data independently, then run eval
-        # in lockstep. hax.shard places each host's data onto its devices.
+        # Process 0 prepares data; all hosts consume the same batch stream via
+        # broadcast_shard(source=0) in _run_batch_loop.
         prepared: dict[str, tuple] = {}
-        for bench_name, parquet_paths in bench_parquets.items():
-            task_type = bench_task_types[bench_name]
-            logger.info("Preparing %s [%s] (%d shards)", bench_name, task_type, len(parquet_paths))
+        if jax.process_index() == 0:
+            for bench_name, parquet_paths in bench_parquets.items():
+                task_type = bench_task_types[bench_name]
+                logger.info("Preparing %s [%s] (%d shards)", bench_name, task_type, len(parquet_paths))
 
-            if task_type == "multiple_choice":
-                completions, metadata = prepare_vlm_mc_data(
-                    parquet_paths,
-                    tokenizer,
-                    EvalPos.size,
-                )
-                prepared[bench_name] = ("multiple_choice", completions, metadata)
-            elif task_type == "open_ended":
-                completions, metadata = prepare_vlm_open_ended_data(
-                    parquet_paths,
-                    tokenizer,
-                    EvalPos.size,
-                )
-                prepared[bench_name] = ("open_ended", completions, metadata)
-            else:
-                logger.warning("Unknown task_type=%s for %s, skipping", task_type, bench_name)
+                if task_type == "multiple_choice":
+                    completions, metadata = prepare_vlm_mc_data(
+                        parquet_paths,
+                        tokenizer,
+                        EvalPos.size,
+                    )
+                    prepared[bench_name] = ("multiple_choice", completions, metadata)
+                elif task_type == "open_ended":
+                    completions, metadata = prepare_vlm_open_ended_data(
+                        parquet_paths,
+                        tokenizer,
+                        EvalPos.size,
+                    )
+                    prepared[bench_name] = ("open_ended", completions, metadata)
+                else:
+                    logger.warning("Unknown task_type=%s for %s, skipping", task_type, bench_name)
 
         max_packed_segments = 64
 
