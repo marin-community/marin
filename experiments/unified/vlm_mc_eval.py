@@ -38,11 +38,13 @@ Usage (standalone):
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import logging
 import os
 import tempfile
 import uuid
+import zlib
 from collections import defaultdict
 
 import jax
@@ -92,6 +94,31 @@ def _to_host_array_for_debug(x):
     raise RuntimeError(f"Could not convert value to host array for debug: {type(x)}")
 
 
+def _compute_batch_fingerprint(batch_orig, batch_idx: int) -> dict[str, object]:
+    """Compute a deterministic host-side fingerprint for a pre-shard batch."""
+    tokens_host = np.asarray(_to_host_array_for_debug(batch_orig.tokens.array))
+    seg = batch_orig.attn_mask.segment_ids
+    if isinstance(seg, tuple):
+        seg = seg[0]
+    seg_arr = getattr(seg, "array", seg)
+    seg_host = np.asarray(_to_host_array_for_debug(seg_arr))
+
+    return {
+        "batch_idx": batch_idx,
+        "tokens_shape": tuple(tokens_host.shape),
+        "tokens_dtype": str(tokens_host.dtype),
+        "tokens_crc32": int(zlib.crc32(tokens_host.tobytes())),
+        "segment_shape": tuple(seg_host.shape),
+        "segment_dtype": str(seg_host.dtype),
+        "segment_crc32": int(zlib.crc32(seg_host.tobytes())),
+    }
+
+
+def _canonicalize_fingerprint(fp: dict[str, object]) -> str:
+    """Return a stable JSON string for cross-host fingerprint comparison."""
+    return json.dumps(fp, sort_keys=True, separators=(",", ":"))
+
+
 def _make_vlm_eval_jit(axis_resources, mp, EvalPos, EvalBatch, max_packed_segments):
     """Create a JIT loglikelihood function for VLM evaluation.
 
@@ -139,6 +166,21 @@ def _make_vlm_eval_jit(axis_resources, mp, EvalPos, EvalBatch, max_packed_segmen
     return hax.named_jit(_eval_step, axis_resources=axis_resources, out_axis_resources={})
 
 
+def _force_vanilla_attention_backend_for_vlm_eval(model):
+    """Return a model copy with TPU splash/flash attention disabled for eval stability."""
+    from levanter.layers.attention import Attention, AttentionBackend
+
+    def _rewrite(node):
+        if isinstance(node, Attention):
+            cfg = node.config
+            if cfg.attn_backend == AttentionBackend.VANILLA:
+                return node
+            return dataclasses.replace(node, config=dataclasses.replace(cfg, attn_backend=AttentionBackend.VANILLA))
+        return node
+
+    return jax.tree.map(_rewrite, model, is_leaf=lambda x: isinstance(x, Attention))
+
+
 def _run_batch_loop(
     jit_fn,
     model,
@@ -148,6 +190,7 @@ def _run_batch_loop(
     EvalBatch,
     max_packed_segments,
     axis_resources,
+    vocab_size: int,
     eval_run_uuid: str = "n/a",
 ):
     """Pack completions, batch, sync across hosts, and run one continuous loop.
@@ -218,6 +261,7 @@ def _run_batch_loop(
         num_batches,
         padded_or_truncated_count,
     )
+    sync_global_devices(f"vlm_eval_batch_loop_enter_{eval_run_uuid}")
 
     result_probs = np.zeros(len(all_completions))
     covered_points = np.zeros(len(all_completions), dtype=bool)
@@ -226,11 +270,34 @@ def _run_batch_loop(
     pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok")
 
     for batch_idx, batch_orig in enumerate(all_batches):
+        sync_global_devices(f"vlm_eval_batch_start_{eval_run_uuid}_{batch_idx}")
         if batch_orig is None:
             raise RuntimeError(
                 f"[{eval_run_uuid}][host={jax.process_index()}] Encountered None batch at index {batch_idx}. "
                 "This indicates local packing produced zero batches but global sync required padding."
             )
+
+        local_fp = _compute_batch_fingerprint(batch_orig, batch_idx)
+        leader_fp = multihost_broadcast_sync(local_fp)
+        local_fp_canon = _canonicalize_fingerprint(local_fp)
+        leader_fp_canon = _canonicalize_fingerprint(leader_fp)
+        if local_fp_canon != leader_fp_canon:
+            raise RuntimeError(
+                f"[{eval_run_uuid}][host={jax.process_index()}] Batch fingerprint mismatch at batch={batch_idx}: "
+                f"local={local_fp}, leader={leader_fp}, local_canon={local_fp_canon}, leader_canon={leader_fp_canon}"
+            )
+
+        # Hard host-side guardrail: catch out-of-vocab ids before launching
+        # TPU kernels so failures surface as actionable Python exceptions.
+        tokens_host = np.asarray(_to_host_array_for_debug(batch_orig.tokens.array))
+        if tokens_host.size > 0:
+            tok_min = int(tokens_host.min())
+            tok_max = int(tokens_host.max())
+            if tok_min < 0 or tok_max >= vocab_size:
+                raise RuntimeError(
+                    f"[{eval_run_uuid}][host={jax.process_index()}] token id out of range at batch={batch_idx}: "
+                    f"min={tok_min}, max={tok_max}, vocab_size={vocab_size}, shape={tokens_host.shape}"
+                )
 
         if batch_idx < 2:
             tokens_array = batch_orig.tokens.array
@@ -308,9 +375,10 @@ def _run_batch_loop(
         covered_points[out_ids[valid].astype(int)] = True
 
         pbar.update(batch_tokens)
+        sync_global_devices(f"vlm_eval_batch_end_{eval_run_uuid}_{batch_idx}")
 
     pbar.close()
-    sync_global_devices("vlm_eval_batch_loop")
+    sync_global_devices(f"vlm_eval_batch_loop_exit_{eval_run_uuid}")
     logger.info("[%s][host=%d] vlm_eval batch loop complete", eval_run_uuid, jax.process_index())
 
     missing = np.where(~covered_points)[0]
@@ -436,6 +504,7 @@ def evaluate_all_vlm_benchmarks(
     EvalBatch,
     max_packed_segments,
     axis_resources,
+    vocab_size: int,
     eval_run_uuid: str = "n/a",
 ):
     """Evaluate all VLM benchmarks in a single continuous batch loop.
@@ -490,6 +559,7 @@ def evaluate_all_vlm_benchmarks(
         EvalBatch,
         max_packed_segments,
         axis_resources,
+        vocab_size,
         eval_run_uuid=eval_run_uuid,
     )
 
@@ -1021,7 +1091,15 @@ def main():
         jit_fn = _make_vlm_eval_jit(compute_axis_mapping, trainer_config.mp)
 
         results = evaluate_all_vlm_benchmarks(
-            jit_fn, model, prepared, tokenizer, EvalPos, EvalBatch, max_packed_segments, compute_axis_mapping
+            jit_fn,
+            model,
+            prepared,
+            tokenizer,
+            EvalPos,
+            EvalBatch,
+            max_packed_segments,
+            compute_axis_mapping,
+            len(tokenizer),
         )
 
         if jax.process_index() == 0:
@@ -1116,6 +1194,7 @@ def vlm_mc_eval_callback(
         local_uuid = uuid.uuid4().hex[:8] if jax.process_index() == 0 else ""
         eval_run_uuid = multihost_broadcast_sync(local_uuid)
         model = inference_mode(step.eval_model, True)
+        model = _force_vanilla_attention_backend_for_vlm_eval(model)
         EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
 
         try:
@@ -1146,6 +1225,11 @@ def vlm_mc_eval_callback(
             EvalPos.size,
             EvalBatch.size,
             f"{parameter_count(model):,}",
+        )
+        logger.warning(
+            "VLM_EVAL_ATTN_BACKEND eval_run_uuid=%s host=%d backend=vanilla",
+            eval_run_uuid,
+            jax.process_index(),
         )
         run_file = __file__
         git_commit = os.environ.get("GIT_COMMIT", "unknown")
@@ -1216,6 +1300,7 @@ def vlm_mc_eval_callback(
                 EvalBatch,
                 max_packed_segments,
                 axis_resources,
+                len(tokenizer),
                 eval_run_uuid=eval_run_uuid,
             )
             if jax.process_index() == 0:
