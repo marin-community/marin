@@ -10,6 +10,17 @@ Sealing policy (for new runs):
 
 ## Runs
 
-| Date (UTC) | Run | Issue | W&B | Experiment File | Experiment Record | Seal Tag | Summary |
-|---|---|---|---|---|---|---|---|
-| 2026-02-20 (completed 2026-02-21) | `ferry_daily_125m_20260220-202930-daily-ferry-vmem50m-fusedargmax-5bbb39` | [#2940](https://github.com/marin-community/marin/issues/2940) | [run](https://wandb.ai/marin-community/marin/runs/ferry_daily_125m_20260220-202930-daily-ferry-vmem50m-fusedargmax-5bbb39) | [`experiments/ferries/daily.py`](https://github.com/marin-community/marin/blob/main/experiments/ferries/daily.py) | [daily-da79b9](https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/daily-da79b9.json) | `N/A` (pre-sealing policy) | Inaugural daily 125M ferry. Initial TPU vmem failures were mitigated; final run reached `SUCCEEDED` with eval harness completion and stable end-of-run metrics. |
+## 2026-02-20 (completed 2026-02-21)
+
+- [Issue #2940](https://github.com/marin-community/marin/issues/2940)
+- Summary: Inaugural daily 125M ferry run.
+- [Run `ferry_daily_125m_20260220-202930-daily-ferry-vmem50m-fusedargmax-5bbb39`](https://wandb.ai/marin-community/marin/runs/ferry_daily_125m_20260220-202930-daily-ferry-vmem50m-fusedargmax-5bbb39)
+- [Experiment Script `experiments/ferries/daily.py`](https://github.com/marin-community/marin/blob/main/experiments/ferries/daily.py)
+- [Data browser `daily-da79b9`](https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/daily-da79b9.json)
+- Seal tag: `N/A` (pre-sealing policy)
+- Metrics:
+  - `eval/paloma/c4_en/bpb`: `1.12509`
+  - `eval/bpb`: `1.17049`
+  - `eval/uncheatable_eval/bpb`: `1.13019`
+- Notes:
+  Initial TPU vmem failures were mitigated; the final run reached `SUCCEEDED` with eval harness completion.
