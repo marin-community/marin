@@ -1344,3 +1344,60 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact / regression**. Dominant train-path `shard_map/custom-call` hotspot remained unchanged, with only sub-1% callsite movement and negative end-to-end MFU.
 - Governance note: regression did not cross the 1.0% hard regression threshold, but escalation rule still applies (`<3%` gain + unchanged dominant hotspot), so this attempt is treated as low-impact and reverted.
 - Next bold hypothesis: move to a stronger structural decomposition (Macro Move E or staged Macro Move F) that changes backward train-path work balance, e.g. V-tiling with shared `QK` precompute to increase MXU utilization without duplicating the dominant closed-call path.
+
+### Iteration 28 - Macro Move D / full-sequence train pipeline on dk/dv>=64 + fullseq backward pipeline (compile-blocked, reverted)
+
+- Date: 2026-02-22T02:56:15Z
+- Commit: none (failed attempt)
+- Loop session/local index: `12/20`
+- Starting commit: `3f542c023dec607aa4ec34917af17d78195fce4e`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` (custom-call equivalent bucket): `76.743 ms` (dominant category).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: enable full-sequence `emit_pipeline` train path for active 130m head dims (`dk=dv=64`) and add full-sequence backward pipeline (`+10-25%`, medium-high risk).
+  2. **Macro Move E**: V-tiling recurrent+bwd state/output (`KxV -> KxVb`) with shared `QK` reuse (`+12-30%`, high risk).
+  3. **Macro Move F**: staged decomposition of backward adjoint path around triangular work (`+10-20%`, high risk).
+
+- Selected macro-move category: **D) Use `pltpu.emit_pipeline` to fuse across chunk/segment loops**.
+- Selected hypothesis: move the active 130m training path off segmented scan/calls by routing `dk/dv >= 64` to full-sequence prepare/recurrent pipelines and adding a full-sequence backward pipeline that carries `dS` in scratch.
+
+- Change attempt summary:
+  - Implemented shared chunk backward math helper, full-sequence backward pipeline kernel (`emit_pipeline` over reverse chunk order), and full-sequence backward Pallas wrapper in `lib/levanter/src/levanter/layers/gated_deltanet.py`.
+  - Changed flash-path dispatch to attempt full-sequence train kernels for `dk,dv >= 64`.
+  - Reverted speculative kernel code after profile compilation failure on TPU lane-tiling constraints.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation (success):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Dev TPU profile (failed at compile):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_fullseq64_i12_dev --no-sync`
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_fullseq64_i12_dev_130m_ch128_seg16_20steps-0f9cdf`
+    - Failure: `MosaicError` / `JaxRuntimeError`:
+      - `Slice shape along dimension 4 must be aligned to tiling (128), but is 64`
+      - callsite in `_gdn_chunk_fullseq_prepare_pipeline_kernel_tpu` (`gated_deltanet.py`).
+  - Ray fallback profile submit:
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_fullseq64_i12_ray --no-wait`
+    - Job: `ray-run-calvinxu-bash-20260222-024715`
+  - Ray fallback wait:
+    - `uv run scripts/ray/cluster.py --cluster us-central1 wait-job ray-run-calvinxu-bash-20260222-024715 --poll 5`
+    - Result: `status=FAILED` (job supervisor actor died; node heartbeat loss / cluster instability).
+
+- Hotspots observed:
+  - No before/after hotspot comparison available for this attempt because no successful profile trace completed.
+
+- MFU/throughput delta:
+  - Unavailable (no completed profile run for this candidate).
+
+- Assessment: **failed attempt (compile-blocked + fallback infra failure)**. The attempted full-sequence train-path enablement for `K/V=64` hit a TPU Mosaic lane-tiling compile constraint in full-sequence prepare; Ray fallback did not produce a valid run due cluster/node failure.
+- Governance action: reverted speculative kernel edits and left working tree clean.
+- Next bold hypothesis: keep Macro Move D but make it lane-safe by introducing explicit full-sequence internal feature tiling/padding to 128-lane DMA slices (pack/unpack around pipeline boundaries), or pivot to Macro Move E (V-tiling) that avoids 64-lane pipeline DMA slices entirely.
