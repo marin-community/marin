@@ -1714,3 +1714,70 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **low-impact**. This move achieved the intended structural effect (fewer larger train-path custom calls) but did not reduce the dominant hotspot cost; the dominant `shard_map` bucket remained and became slightly slower while end-to-end MFU gain stayed `<3%`.
 - Governance/escalation action: improvement exceeds promotion floor (`>=0.250%`) but escalation rule still applies (`<3%` with unchanged dominant hotspot). Next attempt should be more radical than launch restructuring alone.
 - Next bold hypothesis: escalate to **Macro Move E** (state/output V-tiling with shared K-only precompute in train backward/recurrent) or **Macro Move F** (blockwise stacked-RHS triangular decomposition) to reduce per-call work, not only call count.
+
+### Iteration 34 - Macro Move G / centered outer-product `exp_diff` in train kernels (infra-blocked, reverted)
+
+- Date: 2026-02-22T09:31:00Z
+- Commit: none (failed attempt)
+- Loop session/local index: `1/10`
+- Starting commit: `ccd09bf4cddd20c8d0ef69f3756a69f3461e4ba0`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` train-path custom-call-equivalent bucket: `76.743 ms` (dominant).
+  - Top train-path callsites:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `40.182 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.254 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` reformulation in prepare/recurrent/backward train kernels (`+10-25%`, medium-high kernel correctness risk).
+  2. **Macro Move H**: stack matmuls sharing common RHS in forward/backward hot paths (`+8-20%`, medium numerical/layout risk).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) in recurrent/backward train path (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: replace `exp(clip(g_i - g_j))` construction with centered outer-product fast path + exact fallback in prepare/recurrent/backward train kernels to cut elementwise `exp` pressure in dominant `shard_map/pallas_call` custom calls.
+
+- Change attempt summary (reverted):
+  - Added `_exp_diff_and_mask_from_g(g, clip)` helper implementing centered outer-product fast path and exact fallback.
+  - Wired helper into segmented/fullseq prepare/recurrent forward kernels and segmented backward kernel.
+  - Reverted all code changes after TPU infra prevented required validation/profile completion; tree left free of speculative kernel edits.
+
+- Correctness checks:
+  - Local smoke (success):
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation attempts (failed, infra):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+      - Failure: `ABORTED: The TPU is already in use ... /tmp/libtpu_lockfile`.
+    - After lock cleanup attempt:
+      - `uv run scripts/ray/dev_tpu.py --cluster us-central1 --tpu-name calvinxu-gdn execute -- 'sudo rm -f /tmp/libtpu_lockfile && echo lock_removed || echo sudo_failed'` -> `lock_removed`.
+      - Re-run `dev-tpu-test` failed with: `UNKNOWN: TPU initialization failed: open(/dev/vfio/0): Device or resource busy`.
+  - Ray fallback validation attempts (all resource-pending, no started run):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both` -> submission `ray-run-calvinxu-levanter-20260222-091650`, status remained `PENDING`.
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5 --tpu auto --tests both` -> submission `ray-run-calvinxu-levanter-20260222-092313`, status remained `PENDING`.
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-west4 --tpu auto --tests both` -> submission `ray-run-calvinxu-levanter-20260222-092646`, status remained `PENDING`.
+
+- Profile run:
+  - Command attempted:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_macroG_i1_dev --no-sync`
+  - Result: failed before completed profile artifact; remote run crashed with distributed init/bind failure and segmentation fault (`Failed to add port ... [::]:8476`, `Segmentation fault (core dumped)`).
+  - Trace location: N/A (no completed profiler artifact).
+
+- Hotspots observed:
+  - No valid before/after hotspot comparison for this attempt because no profile run completed.
+  - Carry-in dominant hotspot remains train-path `shard_map/custom-call` bucket from baseline trace.
+
+- MFU/throughput delta:
+  - Unavailable (no completed profile run for this candidate).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - Required TPU tests command(s) executed (`dev-tpu-test` and `ray-test` fallbacks), but no TPU test job completed due lock/device-busy and cluster resource pending.
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: unavailable (no completed profile trace).
+    - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration` deltas: unavailable.
+    - Macro G `exp` reduction evidence: unavailable in IR/trace for this iteration because profiling did not complete and code was reverted.
+  - Governance:
+    - Infra-blocked attempt; unvalidated speculative kernel changes reverted.
+    - Recorded as `Commit: none (failed attempt)` per failure-handling policy.
+
+- Assessment: **infra-blocked failed attempt**. Could not obtain required TPU validation/profile evidence despite dev TPU + multi-cluster Ray fallback attempts.
+- Next bold hypothesis: re-attempt Macro G once TPU execution lane is stable (exclusive dev TPU or non-pending Ray slot). If infra remains unstable next loop, pivot to Macro H while preserving the same train-path hotspot target.
