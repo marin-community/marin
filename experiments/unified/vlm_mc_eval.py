@@ -106,14 +106,13 @@ def _make_vlm_eval_jit(axis_resources, mp):
         model = inference_mode(model, True)
         if mp is not None:
             model = mp.cast_to_compute(model)
-        with hax.axis_mapping(axis_resources):
-            losses = model.compute_next_token_loss(
-                packed_example, reduction=None, reduction_axis=()
-            )
-            sync_chain = sync_chain + hax.sum(packed_example.loss_weight).array
+        losses = model.compute_next_token_loss(
+            packed_example, reduction=None, reduction_axis=()
+        )
+        sync_chain = sync_chain + hax.sum(packed_example.loss_weight).array
         return losses, sync_chain
 
-    return hax.named_jit(_eval_step, out_axis_resources={})
+    return hax.named_jit(_eval_step, axis_resources=axis_resources, out_axis_resources={})
 
 
 def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatch, max_packed_segments, axis_resources):
