@@ -684,3 +684,109 @@ Notes:
 - In the only shared working dtype (`float32`), our `xla` custom-vjp path is clearly fastest on combined throughput on both `v5e-8` and `v6e-8`.
 - `pallas_tpu` remains competitive on forward but trails on backward, so combined is below `xla`.
 - Tokamax `mosaic_tpu` is not competitive in this setup and cannot currently run bf16 on these TPUs due the matmul-accumulator verification failure.
+
+### 2026-02-21: Tokamax config-sensitivity follow-up on v5p (extra fairness sweep)
+- Motivation:
+  - The earlier Tokamax comparison used `linear_softmax_cross_entropy_loss(..., implementation="mosaic_tpu")`.
+  - On v5p, that API path appeared to pick a very poor forward configuration for some shapes.
+- Environment:
+  - TPU: `v5p-8` (`us-central1`)
+  - dtype: `float32`
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+  - shape family: `B=8192, H=4096, V in {32768, 65536, 128256}`
+- Tokamax implementation variants:
+  - API default: `linear_softmax_cross_entropy_loss(..., implementation="mosaic_tpu")`
+  - Explicit config: `PallasMosaicTpuLinearSoftmaxCrossEntropyLoss(config=Config(b=1024,h=512,v=<sweep>))`
+
+#### Key finding
+- Tokamax is **highly configuration-sensitive** on v5p:
+  - API default (`implementation="mosaic_tpu"`) produced very low forward throughput (~12-13k tok/s) at `V=32768` and `V=65536`.
+  - Explicit config recovered expected performance and materially improved combined throughput.
+
+#### v5p results (float32, value+grad, harmonic combined)
+- `V=32768`:
+  - xla(custom-vjp): fwd `580,870`, bwd `290,403`, combined `193,609`
+  - pallas(infer): fwd `1,160,735`, bwd `284,931`, combined `228,773`
+  - tokamax API default: fwd `12,956`, bwd `304,287`, combined `12,427`
+  - tokamax explicit config sweep:
+    - `v=512`: fwd `500,845`, bwd `303,124`, combined `188,836`
+    - `v=1024`: fwd `515,722`, bwd `324,284`, combined `199,094` (best)
+    - `v=1536`: combined `143,380`
+    - `v=2048`: combined `147,772`
+- `V=65536`:
+  - xla(custom-vjp): fwd `295,078`, bwd `145,586`, combined `97,487`
+  - pallas(infer): fwd `585,506`, bwd `143,561`, combined `115,292`
+  - tokamax API default: fwd `12,152`, bwd `156,608`, combined `11,277`
+- `V=128256` (llama3-ish vocab), tokamax explicit config sweep:
+  - `v=512`: fwd `137,489`, bwd `80,900`, combined `50,931`
+  - `v=1024`: fwd `141,494`, bwd `86,604`, combined `53,722` (best)
+  - `v=1536`: combined `38,753`
+  - `v=2048`: combined `39,217`
+  - reference from earlier same-shape runs:
+    - xla(custom-vjp): combined `48,606`
+    - pallas(infer): combined `58,095`
+
+#### Interpretation
+- The previous "Tokamax is far slower than xla" result was true for the API-default path tested there, but not universally true once Tokamax block config is set explicitly on v5p.
+- On v5p:
+  - tuned Tokamax can beat xla(custom-vjp) on combined throughput for `V=32768` and `V=128256`,
+  - but still trails tuned pallas(infer) on the same tested shapes.
+
+#### Infra limitation encountered while extending this retune to v5e/v6e
+- Attempts to re-run the same explicit-config Tokamax sweeps on `v5e-8` and `v6e-8` (eu-west4) were blocked by repeated `dev_tpu.py allocate` failures:
+  - `ConnectionError: ray client connection timeout` after tunnel setup.
+- So, only v5p got the extra config-retune follow-up in this session.
+
+### 2026-02-21: Backport attempt from Tokamax v5p path (why it is still fast without megacore)
+- Prompted question:
+  - If Tokamax is still fairly fast on v5p without explicit megacore core-grid parallelism, are we missing an intra-kernel scheduling trick?
+- Side-by-side inspection of Tokamax vs our backward kernel found one meaningful ordering difference:
+  - Tokamax issues `x_grad` and `w_grad` async writes and waits once at the end of stage 1.
+  - Our kernel was waiting on `x_grad` write completion **before** starting `w_grad` init/accumulation.
+  - That ordering can serialize part of stage-1 work and reduce overlap.
+
+#### Code change
+- File:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+- Change:
+  - removed early stage-1 `x_write_future.wait()`.
+  - final stage-1 wait now waits on both `x_write_future` and `w_write_future`.
+  - this matches Tokamax's ordering pattern more closely and restores write/compute overlap.
+- Also added one-hot path switch:
+  - native `jax.nn.one_hot` on non-v4 TPUs,
+  - emulated compare-based one-hot on v4 (required for v4 sublane/dynamic_gather issue),
+  - debug override via `LEVANTER_FUSED_CE_FORCE_EMULATED_ONE_HOT`.
+
+#### v5p-8 A/B measurements (same node, float32, `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`)
+- Node used:
+  - `ray-marin-us-central1-worker-ed0b8cf7-tpu` (us-central1-a), with `~/marin` + `.venv` + `.venv_tokamax`.
+
+1) One-hot path A/B (before overlap fix, same code except force emulated/native)
+- Shape `B=8192,H=4096,V=128256`:
+  - emulated: fwd `299,395`, bwd `71,728`, combined `57,865`
+  - native: fwd `299,676`, bwd `71,761`, combined `57,897`
+- Shape `B=8192,H=4096,V=32768`:
+  - emulated: fwd `1,142,884`, bwd `284,591`, combined `228,614`
+  - native: fwd `1,159,544`, bwd `284,756`, combined `228,614`
+- Takeaway:
+  - native one-hot is at most a small forward win (~1-1.5%) and not the main source of the Tokamax behavior.
+
+2) Overlap-order fix impact (native one-hot, before vs after)
+- Shape `B=8192,H=4096,V=128256`:
+  - before: fwd `299,676`, bwd `71,761`, combined `57,897`
+  - after:  fwd `299,565`, bwd `76,505`, combined `60,941`
+  - combined gain: `+5.26%`
+- Shape `B=8192,H=4096,V=32768`:
+  - before: fwd `1,159,544`, bwd `284,756`, combined `228,614`
+  - after:  fwd `1,157,776`, bwd `302,702`, combined `239,963`
+  - combined gain: `+4.96%`
+
+#### Same-node comparison after the fix (`B=8192,H=4096,V=128256`, float32)
+- pallas (ours, after fix): fwd `299,565`, bwd `76,505`, combined `60,941`
+- xla custom-vjp: fwd `145,267`, bwd `72,959`, combined `48,567`
+- tokamax tuned (`b=1024,h=512,v=1024`): fwd `141,327`, bwd `86,531`, combined `53,670`
+
+#### Interpretation
+- The key thing Tokamax had that helped was **stage ordering / overlap discipline**, not one-hot choice.
+- Our megacore-aware forward remains the major advantage on v5p.
+- Backward is where Tokamax remains strong; matching its overlap pattern recovered ~5% combined throughput without changing math.
