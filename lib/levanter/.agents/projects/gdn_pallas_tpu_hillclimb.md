@@ -1648,3 +1648,69 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 
 - Assessment: **infra-blocked failed attempt**. Validation fallback passed, but required profiling could not be completed after dev lock contention and two stalled Ray profile jobs. Speculative kernel changes were reverted to keep the tree free of unvalidated optimization code.
 - Next bold hypothesis: rerun the same lane-major Macro Move D candidate once profiling infra is healthy (prefer held dev TPU without lock contention), otherwise pivot to Macro Move E with explicit V-tiling + shared K-only precompute and re-attempt with a stable profile lane.
+
+### Iteration 33 - Macro Move D / segmented train emit_pipeline with lane-aligned fallback (low-impact)
+
+- Date: 2026-02-22T08:34:44Z
+- Commit: 9f2559dca9ef2517f797dbacf8b91061d3b5f10a
+- Loop session/local index: `17/20`
+- Starting commit: `9f2559dca9ef2517f797dbacf8b91061d3b5f10a`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map` train-path custom-call-equivalent bucket: `76.743 ms` (dominant).
+  - `fusion` bucket: `45.498 ms` (secondary compute bucket).
+  - `all-gather`: `20.193 ms` (communication secondary).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move D**: convert segmented train kernels to `pltpu.emit_pipeline` stage loops with scratch-carried recurrent state to reduce launch/unroll overhead (`+10-20%`, medium-high compile/layout risk).
+  2. **Macro Move E**: V-tiling (`KxV -> KxVb`) in recurrent/backward train path (`+15-30%`, high decomposition risk).
+  3. **Macro Move F**: solve/invert decomposition redesign for triangular path to rebalance backward critical path (`+10-25%`, high numerical/integration risk).
+
+- Selected macro-move category: **D) Use `pltpu.emit_pipeline` to fuse across chunk/segment loops**.
+- Selected hypothesis: replace segmented per-chunk Python-loop kernels with staged `emit_pipeline` kernels (forward fused + backward), then keep a lane-safe fallback for `dk/dv=64` where staged DMA slicing violates TPU lane tiling constraints.
+
+- Change summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added staged `emit_pipeline` execution in segmented fused train forward kernel with VMEM scratch state carry across chunk stages.
+  - Added staged reverse-order `emit_pipeline` execution in segmented train backward kernel with VMEM scratch carry for `dS`.
+  - Added explicit lane-aligned guardrails:
+    - use staged pipeline only when `K_pad >= 128` and `V_pad >= 128`,
+    - keep original in-kernel loop implementation for `dk/dv=64` to avoid Mosaic DMA slice alignment failures.
+  - Preserved train-path dispatch semantics and backward tape contract.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation (final required run):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_segpipe_i17_dev --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`
+  - W&B profiler artifact: `run-gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937/plugins/profile/2026_02_21_13_13_09/perfetto_trace.json.gz`):
+  - Dominant train-path bucket unchanged and slightly slower:
+    - `shard_map`: `76.743 ms -> 78.098 ms` (`+1.77%`).
+  - Other top buckets remained effectively flat:
+    - `fusion`: `45.498 ms -> 45.618 ms` (`+0.26%`).
+    - `all-gather`: `20.193 ms -> 20.158 ms` (`-0.17%`).
+  - Launch-structure effect was visible but insufficient:
+    - `shard_map` event count on TPU:0 XLA Ops thread dropped `130 -> 90` (`-30.8%`),
+    - average per-event time increased `0.590 ms -> 0.868 ms` (`+47.0%`),
+    - net shard-map time still increased (`+1.77%`).
+  - This trace export did not provide stable source-level `tf_op` labels for direct `gated_deltanet.py:<line>` comparison; analysis used XLA-op bucket totals on the same thread.
+
+- MFU/throughput delta:
+  - Vs baseline run `gdn_rowsafe_i6_ray_130m_ch128_seg16_20steps-38f937`:
+    - `throughput/mfu`: `5.759190 -> 5.787594` (`+0.49%`).
+    - `throughput/tokens_per_second`: `186308.71 -> 187227.57` (`+0.49%`).
+    - `throughput/duration`: `0.175880s -> 0.175017s` (`-0.49%`).
+  - Vs active governance champion (`gdn_loopgate_iter015_130m_ch128_seg16_20steps-da7e49`):
+    - `throughput/mfu`: `5.748507 -> 5.787594` (`+0.68%`).
+
+- Assessment: **low-impact**. This move achieved the intended structural effect (fewer larger train-path custom calls) but did not reduce the dominant hotspot cost; the dominant `shard_map` bucket remained and became slightly slower while end-to-end MFU gain stayed `<3%`.
+- Governance/escalation action: improvement exceeds promotion floor (`>=0.250%`) but escalation rule still applies (`<3%` with unchanged dominant hotspot). Next attempt should be more radical than launch restructuring alone.
+- Next bold hypothesis: escalate to **Macro Move E** (state/output V-tiling with shared K-only precompute in train backward/recurrent) or **Macro Move F** (blockwise stacked-RHS triangular decomposition) to reduce per-call work, not only call count.
