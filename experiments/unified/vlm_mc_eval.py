@@ -55,7 +55,7 @@ import haliax as hax
 from levanter.data.loader import stack_batches
 from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completions
 from levanter.eval_harness import get_padding_count_from_batch
-from levanter.utils.jax_utils import multihost_broadcast_sync
+from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -65,27 +65,6 @@ from experiments.unified.vlm_tokenize_captions import (
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
-
-
-def _shard_identical_batch(batch, axis_resources):
-    """Create global arrays from identical local data present on every host.
-
-    Uses jax.make_array_from_callback so each host only provides data for its
-    own local devices — the same pattern as Levanter's DataLoader (loader.py:408).
-    """
-    shardings = hax.partitioning.infer_resource_partitions(batch, axis_resources)
-
-    def _make_global(leaf, sharding):
-        if sharding is None:
-            return leaf
-        if isinstance(leaf, hax.NamedArray):
-            raw = np.asarray(leaf.array)
-            global_arr = jax.make_array_from_callback(raw.shape, sharding, lambda idx: raw[idx])
-            return hax.NamedArray(global_arr, leaf.axes)
-        raw = np.asarray(leaf)
-        return jax.make_array_from_callback(raw.shape, sharding, lambda idx: raw[idx])
-
-    return jax.tree.map(_make_global, batch, shardings, is_leaf=lambda x: isinstance(x, hax.NamedArray))
 
 
 def _make_vlm_eval_jit(axis_resources, mp):
@@ -164,7 +143,8 @@ def _run_batch_loop(jit_fn, model, all_completions, tokenizer, EvalPos, EvalBatc
             seg_ids = seg_ids[0]
         seg_ids_np = np.asarray(seg_ids.array)
 
-        batch = _shard_identical_batch(batch_orig, axis_resources)
+        shardings = hax.partitioning.infer_resource_partitions(batch_orig, axis_resources)
+        batch = broadcast_shard(batch_orig, shardings)
         losses, sync_chain = jit_fn(model, batch, sync_chain)
 
         # out_axis_resources={} means outputs are fully replicated on every
