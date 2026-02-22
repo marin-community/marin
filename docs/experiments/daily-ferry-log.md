@@ -10,6 +10,23 @@ Sealing policy (for new runs):
 
 ## Runs
 
+## 2026-02-22 (completed 2026-02-22)
+
+- [Issue #2954](https://github.com/marin-community/marin/issues/2954)
+- Summary: Daily 125M ferry with LR delta (`learning_rate` `3e-3 -> 9e-3`). Primary run reached end-of-train eval (`global_step=5153`) and logged final metrics; Ray terminal status was `STOPPED`.
+- [Run `ferry_daily_125m_20260222-004403-daily-ferry-lr3x-a0df25`](https://wandb.ai/marin-community/marin/runs/ferry_daily_125m_20260222-004403-daily-ferry-lr3x-a0df25)
+- [Experiment Script `experiments/ferries/daily.py` @ launch commit](https://github.com/marin-community/marin/blob/1b03fc1b3df7316b151d4bbfd98dce64a036751a/experiments/ferries/daily.py)
+- [Data browser `daily-1f1377`](https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/daily-1f1377.json)
+- Seal tag: `ferry/daily/20260222/20260222-004403-daily-ferry-lr3x`
+- Metrics:
+  - `eval/paloma/c4_en/bpb`: `1.12731`
+  - `eval/bpb`: `1.17592`
+  - `eval/uncheatable_eval/bpb`: `1.13664`
+- Notes:
+  W&B marked the run `crashed`, but final eval metrics were recorded at the terminal training step. Subsequent retries (`r1-r3`) were intentionally stopped after confirming the primary run had already produced complete final eval output.
+  Compared to the 2026-02-20 baseline run, all three canonical eval BPB metrics were slightly worse (`c4_en` `+0.20%`, `eval/bpb` `+0.46%`, `uncheatable_eval/bpb` `+0.57%`), while final `train/loss` improved (`-0.87%`) and `throughput/tokens_per_second` increased (`+25.0%`).
+  Learning dynamics: LR3x descended faster early (reaching `train/loss <= 5.0/4.5/4.0` at steps `228/376/721` vs `359/569/905`), but had slightly higher late-stage loss variance (last-500 std `0.0627` vs `0.0582`) and did not translate that speedup into better eval quality.
+
 ## 2026-02-20 (completed 2026-02-21)
 
 - [Issue #2940](https://github.com/marin-community/marin/issues/2940)
