@@ -121,7 +121,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
-    return linear_softmax_cross_entropy_loss_streaming(
+    loss, lse, *_ = linear_softmax_cross_entropy_loss_streaming(
         x,
         labels,
         w,
@@ -130,6 +130,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
         logit_soft_cap=logit_soft_cap,
         precision=precision,
     )
+    return loss, lse
 
 
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
@@ -141,7 +142,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
 ) -> tuple[tuple[Float[Array, "B"], Float[Array, "B"]], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
-    loss, lse = linear_softmax_cross_entropy_loss_streaming(
+    loss, lse, *_ = linear_softmax_cross_entropy_loss_streaming(
         x,
         labels,
         w,
