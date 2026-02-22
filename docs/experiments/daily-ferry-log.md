@@ -7,6 +7,8 @@ Sealing policy (for new runs):
 - use canonical daily seal tags in the format `ferry/daily/YYYYMMDD/<run_slug>`
 - keep detailed launch/debug narrative in the run issue
 - open a PR that updates only this file (`docs/experiments/daily-ferry-log.md`)
+- extract canonical metric keys with:
+  - `uv run python scripts/ferries/daily_analysis.py --run <wandb_run_url_or_path> --format markdown`
 
 ## Runs
 

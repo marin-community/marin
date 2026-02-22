@@ -7,9 +7,11 @@ This script is intentionally simple and serves as a living ferry template that
 agents can update on a daily cadence with small, reviewable changes.
 
 Expected workflow:
-1. Propose bounded config updates in the run issue.
-2. Get human approval.
-3. Push the launch commit, then launch with `ray_run.py` and monitor to completion.
+1. Propose at least one bounded config update in the run issue.
+2. If no obvious change emerges from recent commits/ferries, use judgment to pick a low-risk tweak
+   (for example data-mix or hyperparameter) that could improve loss at the same FLOPs budget.
+3. Get human approval.
+4. Push the launch commit, then launch with `ray_run.py` and monitor to completion.
 """
 
 import datetime as dt

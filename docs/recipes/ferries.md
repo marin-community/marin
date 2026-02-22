@@ -98,6 +98,9 @@ Notes:
 
 #### 2) Edit `experiments/ferries/daily.py`
 - Keep edits bounded (typically 1-2 knobs).
+- Propose at least one intentional modification each interval.
+- If there is no obvious change from recent commits/issues/ferry history, use judgment to pick a low-risk tweak
+  (for example data-mix adjustment or hyperparameter change) that may improve loss at the same FLOPs budget.
 - Pattern-match from the previous daily ferry; avoid high-churn rewrites.
 - Update run naming for this interval (for example via `FERRY_DATE` in launch env: `daily-125m-YYYY-MM-DD` style).
 
@@ -153,6 +156,14 @@ Post in the ferry issue:
 - Ray job ID and W&B link(s),
 - recommendation for next ferry.
 - Optional: post a manual Discord update for major run state changes.
+
+For daily-log metric fields, extract canonical final keys with:
+
+```bash
+uv run python scripts/ferries/daily_analysis.py \
+  --run <wandb_run_url_or_path> \
+  --format markdown
+```
 
 Required terminal issue comment template:
 

@@ -73,6 +73,7 @@ Out of scope for this phase:
 5. Launch + monitor helpers:
 - `scripts/pm/ferries/launch_daily_ferry.py` (or equivalent command wrapper)
 - recipe-driven monitoring using `.agents/docs/job-monitoring-loop.md`
+- `scripts/ferries/daily_analysis.py` to extract canonical final W&B keys for run-log entries
 - optional high-value helper: `scripts/pm/ferries/monitor_job.py` to standardize 570s cadence, exact progress parsing, and terminal summary output
 
 6. Notification bridge (minimum viable):
@@ -93,11 +94,13 @@ Out of scope for this phase:
 
 2. Generate next ferry proposal:
 - pattern-match from previous `experiments/ferries/daily.py`
-- apply bounded changes (see "Change Budget")
+- apply bounded changes (see "Change Budget"), with at least one intentional modification
+- if no obvious candidate emerges from recent commits/issues/ferry history, use judgment to pick a low-risk tweak
+  (for example data-mix or hyperparameter) expected to improve loss at fixed FLOPs budget
 - update run name with date (`daily-125m-YYYY-MM-DD`)
 
 3. Record proposal in issue + push launch commit:
-- include rationale, risk estimate, and rollback plan
+- include rationale, risk estimate, and relaunch fallback note
 - include "why this is not identical to prior run"
 - push the launch commit and record its SHA in the issue
 
