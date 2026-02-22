@@ -49,19 +49,19 @@ Out of scope for this phase:
 
 3. Ferry metadata source of truth:
 - GitHub tagged ferry PRs/issues are the canonical source of truth.
-  - each run-closure ferry PR should carry a ferry tag/label and link to the run issue
+  - each daily run-closure PR should carry a ferry tag/label and link to the run issue
   - ferry issue should contain launch metadata (job id, cluster, links, outcome)
   - each completed daily run should be sealed with a pushed git tag for the exact launch commit
   - `docs/experiments/daily-ferry-log.md` is the canonical compact run index
+  - canary runs are tracked in issue + W&B updates by default (no seal tag/run-closure PR requirement)
   - local metadata files are optional and non-canonical
 - Canonical PR labels for run closure:
   - `ferry`
-  - lane label: `ferry-daily` or `ferry-canary`
+  - `ferry-daily`
   - `ferry-log-only`
   - `ferry-sealed`
 - Canonical seal tag format:
   - daily: `ferry/daily/YYYYMMDD/<run_slug>`
-  - canary: `ferry/canary/YYYYMMDD/<run_slug>`
 
 4. Proposal workflow (markdown-first):
 - Start with recipe-driven agent workflow (no required script initially).
@@ -86,6 +86,7 @@ Out of scope for this phase:
 ### Daily loop (human-assisted, agent-executed)
 
 1. Build context window:
+- check the latest entries in `docs/experiments/daily-ferry-log.md`
 - find last ferry tagged PR/issue/commit in GitHub (canonical record)
 - gather since-last-ferry commits relevant to experiments/infra
 - gather issues updated since last ferry with experiment-related labels
@@ -287,7 +288,7 @@ Run-closure PRs (post-terminal):
 - PR should update only `docs/experiments/daily-ferry-log.md`
 - all detailed run narrative/debug notes remain in the issue
 - include or reference the pushed seal tag for the launch commit
-- apply canonical labels: `ferry`, lane label, `ferry-log-only`, `ferry-sealed`
+- apply canonical labels: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`
 
 ## Failure and Escalation Policy
 
