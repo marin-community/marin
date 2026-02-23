@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from pathlib import Path
 
 import pytest
@@ -39,14 +36,12 @@ async def fake_llm_server_with_reasoning():
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": (
-                                """{
+                            "content": """{
   "analysis": "Creating hello.txt file",
   "plan": "Use printf command",
   "commands": [{"keystrokes": "printf 'Hello, world!\\\\n' > hello.txt\\n", "duration": 0.1}],
   "task_complete": false
-}"""
-                            ),
+}""",
                             "reasoning_content": "First reasoning step",
                         },
                         "finish_reason": "stop",
@@ -69,14 +64,12 @@ async def fake_llm_server_with_reasoning():
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": (
-                                """{
+                            "content": """{
   "analysis": "File created",
   "plan": "Mark complete",
   "commands": [],
   "task_complete": true
-}"""
-                            ),
+}""",
                             "reasoning_content": "Second reasoning step",
                         },
                         "finish_reason": "stop",
@@ -138,7 +131,9 @@ async def test_terminus_2_interleaved_thinking(
                 "interleaved_thinking": interleaved_thinking_enabled,
             },
         ),
-        environment=EnvironmentConfig(type=EnvironmentType.DOCKER, force_build=True, delete=True),
+        environment=EnvironmentConfig(
+            type=EnvironmentType.DOCKER, force_build=True, delete=True
+        ),
         trials_dir=tmp_path / "trials",
     )
 
@@ -151,7 +146,9 @@ async def test_terminus_2_interleaved_thinking(
     messages = second_request["messages"]
 
     if should_have_reasoning:
-        assistant_msg = next((msg for msg in messages if msg.get("role") == "assistant"), None)
+        assistant_msg = next(
+            (msg for msg in messages if msg.get("role") == "assistant"), None
+        )
         assert assistant_msg is not None
         assert "reasoning_content" in assistant_msg
         assert assistant_msg["reasoning_content"] == "First reasoning step"

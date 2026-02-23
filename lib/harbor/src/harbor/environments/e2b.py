@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from pathlib import Path
 
 from dirhash import dirhash
@@ -40,14 +37,20 @@ class E2BEnvironment(BaseEnvironment):
         self._workdir = next(
             (
                 instruction["value"]
-                for instruction in reversed(DockerfileParser(path=str(self._environment_definition_path)).structure)
+                for instruction in reversed(
+                    DockerfileParser(
+                        path=str(self._environment_definition_path)
+                    ).structure
+                )
                 if instruction.get("instruction") == "WORKDIR"
             ),
             None,
         )
 
         self._sandbox: AsyncSandbox | None = None
-        self._template_name = f"{environment_name}__{dirhash(self.environment_dir, 'sha256')[:8]}".replace(".", "-")
+        self._template_name = f"{environment_name}__{dirhash(self.environment_dir, 'sha256')[:8]}".replace(
+            ".", "-"
+        )
 
     @staticmethod
     def type() -> EnvironmentType:
@@ -71,7 +74,10 @@ class E2BEnvironment(BaseEnvironment):
 
     def _validate_definition(self):
         if not self._environment_definition_path.exists():
-            raise FileNotFoundError(f"{self._environment_definition_path} not found. Please ensure the " "file exists.")
+            raise FileNotFoundError(
+                f"{self._environment_definition_path} not found. Please ensure the "
+                "file exists."
+            )
 
     @retry(
         stop=stop_after_attempt(2),
@@ -125,7 +131,9 @@ class E2BEnvironment(BaseEnvironment):
         await self._create_sandbox()
 
         if not self._sandbox:
-            raise RuntimeError("Sandbox not found but was just created. This should never happen.")
+            raise RuntimeError(
+                "Sandbox not found but was just created. This should never happen."
+            )
 
         await self._sandbox.files.make_dir(str(EnvironmentPaths.agent_dir))
         await self._sandbox.files.make_dir(str(EnvironmentPaths.verifier_dir))
@@ -142,7 +150,10 @@ class E2BEnvironment(BaseEnvironment):
     async def stop(self, delete: bool):
         """Stops the environment and optionally deletes it."""
         if not delete:
-            self.logger.info("E2B harbor are ephemeral and will be deleted after use, " "regardless of delete=False.")
+            self.logger.info(
+                "E2B harbor are ephemeral and will be deleted after use, "
+                "regardless of delete=False."
+            )
 
         if self._sandbox:
             try:
@@ -193,7 +204,9 @@ class E2BEnvironment(BaseEnvironment):
             if file_path.is_file():
                 files.append(
                     WriteEntry(
-                        path=str(Path(target_dir) / file_path.relative_to(Path(source_dir))),
+                        path=str(
+                            Path(target_dir) / file_path.relative_to(Path(source_dir))
+                        ),
                         data=file_path.read_bytes(),
                     )
                 )
@@ -244,7 +257,9 @@ class E2BEnvironment(BaseEnvironment):
 
         for result in results:
             if result.type == FileType.DIR:
-                sub_target_dir = Path(target_dir) / Path(result.path).relative_to(Path(source_dir))
+                sub_target_dir = Path(target_dir) / Path(result.path).relative_to(
+                    Path(source_dir)
+                )
                 sub_target_dir.mkdir(parents=True, exist_ok=True)
 
                 await self.download_dir(
@@ -253,7 +268,9 @@ class E2BEnvironment(BaseEnvironment):
                 )
 
             if result.type == FileType.FILE:
-                target_path = Path(target_dir) / Path(result.path).relative_to(Path(source_dir))
+                target_path = Path(target_dir) / Path(result.path).relative_to(
+                    Path(source_dir)
+                )
 
                 target_path.parent.mkdir(parents=True, exist_ok=True)
 

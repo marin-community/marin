@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -38,6 +35,7 @@ class EnvironmentConfig(BaseModel):
     override_memory_mb: int | None = None
     override_storage_mb: int | None = None
     override_gpus: int | None = None
+    suppress_override_warnings: bool = False
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -69,9 +67,13 @@ class TaskConfig(BaseModel):
         """Get the appropriate TaskId based on configuration."""
         if self.is_git_task():
             if self.git_url is None:
-                raise ValueError("git_url is None on a git task. This should never happen.")
+                raise ValueError(
+                    "git_url is None on a git task. This should never happen."
+                )
 
-            return GitTaskId(git_url=self.git_url, git_commit_id=self.git_commit_id, path=self.path)
+            return GitTaskId(
+                git_url=self.git_url, git_commit_id=self.git_commit_id, path=self.path
+            )
         return LocalTaskId(path=self.path)
 
 

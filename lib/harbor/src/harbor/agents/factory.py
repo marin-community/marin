@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import importlib
 from pathlib import Path
 
@@ -42,7 +39,9 @@ class AgentFactory:
         OpenHands,
         QwenCode,
     ]
-    _AGENT_MAP: dict[AgentName, type[BaseAgent]] = {AgentName(agent.name()): agent for agent in _AGENTS}
+    _AGENT_MAP: dict[AgentName, type[BaseAgent]] = {
+        AgentName(agent.name()): agent for agent in _AGENTS
+    }
 
     @classmethod
     def create_agent_from_name(
@@ -108,7 +107,9 @@ class AgentFactory:
         try:
             Agent = getattr(module, class_name)
         except AttributeError as e:
-            raise ValueError(f"Module '{module_path}' has no class '{class_name}'") from e
+            raise ValueError(
+                f"Module '{module_path}' has no class '{class_name}'"
+            ) from e
 
         return Agent(logs_dir=logs_dir, model_name=model_name, **kwargs)
 

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from typing_extensions import TypedDict
 
 
@@ -19,5 +16,9 @@ class RolloutDetail(TypedDict, total=False):
     prompt_token_ids: list[
         list[int]
     ]  # Each element contains full prompt token IDs for that turn, including previous chat history (if applicable)
-    completion_token_ids: list[list[int]]  # Each element contains response token IDs for that turn
-    logprobs: list[list[float]]  # Each element contains logprobs corresponding to completion_token_ids for that turn
+    completion_token_ids: list[
+        list[int]
+    ]  # Each element contains response token IDs for that turn
+    logprobs: list[
+        list[float]
+    ]  # Each element contains logprobs corresponding to completion_token_ids for that turn

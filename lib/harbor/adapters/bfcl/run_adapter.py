@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import argparse
@@ -130,7 +127,9 @@ def _process_benchmark(
     logger.info(f"Loading BFCL data from {benchmark_root}")
 
     # Create adapter instance with benchmark root and categories
-    adapter = BfclAdapter(task_dir=output_dir, benchmark_root=benchmark_root, categories=categories)
+    adapter = BfclAdapter(
+        task_dir=output_dir, benchmark_root=benchmark_root, categories=categories
+    )
 
     # Collect and filter task IDs
     if ids_cli:
@@ -169,7 +168,8 @@ def main() -> None:
     # Validate arguments
     if clone_flag and benchmark_root:
         logger.error(
-            "Cannot specify both --clone-bfcl and --bfcl-root. " "Choose one method to access the BFCL repository."
+            "Cannot specify both --clone-bfcl and --bfcl-root. "
+            "Choose one method to access the BFCL repository."
         )
         sys.exit(1)
 
@@ -201,7 +201,9 @@ def main() -> None:
                     args.categories,
                 )
             except Exception as e:
-                logger.error(f"Error during processing with cloned repo: {e}", exc_info=True)
+                logger.error(
+                    f"Error during processing with cloned repo: {e}", exc_info=True
+                )
                 sys.exit(1)
             finally:
                 logger.info("Cleaning up temporary directory...")
@@ -221,7 +223,9 @@ def main() -> None:
                 args.categories,
             )
         except Exception as e:
-            logger.error(f"Error during processing with existing repo: {e}", exc_info=True)
+            logger.error(
+                f"Error during processing with existing repo: {e}", exc_info=True
+            )
             sys.exit(1)
 
 

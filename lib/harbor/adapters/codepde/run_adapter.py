@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Script to run CodePDE adapter for the new harbor format
 """
@@ -97,7 +94,9 @@ def main():
         except Exception as e:
             logger.error(f"✗ Failed to process PDE type {pde_type}: {e}", exc_info=True)
 
-    logger.info(f"Task generation complete. Generated {success_count}/{len(pde_types)} tasks")
+    logger.info(
+        f"Task generation complete. Generated {success_count}/{len(pde_types)} tasks"
+    )
     logger.info(f"Output directory: {output_dir}")
 
     return 0 if success_count == len(pde_types) else 1

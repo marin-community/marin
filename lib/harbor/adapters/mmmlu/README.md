@@ -44,11 +44,11 @@ datasets/mmmlu/
 ├── mmmlu-{language}-{id}/
 │   ├── task.toml                 # Task metadata (subject, category, language)
 │   ├── instruction.md            # Question and multiple-choice options
-│   ├── environment/
+│   ├── environment/              
 │   │   └── Dockerfile            # Environment definition
-│   ├── solution/
+│   ├── solution/                 
 │   │   └── solve.sh              # Oracle solution (outputs correct answer)
-│   └── tests/
+│   └── tests/                    
 │       ├── test.sh               # Verification script
 │       └── question_data.json    # Metadata and correct answer
 ```
@@ -72,11 +72,11 @@ adapters/mmmlu/
 └── template/                     # Task templates
     ├── task.toml                 # Task config template
     ├── instruction.md            # Instruction template
-    ├── environment/
+    ├── environment/              
     │   └── Dockerfile            # Docker environment template
-    ├── solution/
+    ├── solution/                 
     │   └── solve.sh              # Oracle solution template
-    └── tests/
+    └── tests/                    
         └── test.sh               # Verification script template
 ```
 
@@ -175,7 +175,7 @@ Tasks are written to `datasets/mmmlu/` with one directory per task. Each task fo
 
 ## Comparison with Original Benchmark (Parity)
 
-The Harbor adapter was validated against the original MMMLU benchmark (evaluated via [simple-evals](https://github.com/openai/simple-evals)) using 150 tasks (10 per language × 15 languages) with identical sampling (seed=0).
+The Harbor adapter was validated against the original MMMLU benchmark (evaluated via [simple-evals](https://github.com/openai/simple-evals)) using 150 tasks (10 per language × 15 languages) with identical sampling (seed=0). 
 Note: The original framework was modified to support agent evaluation to enable fair comparison with Harbor's agent-based approach. Modified version: [Rebabit/simple-evals](https://github.com/Rebabit/simple-evals/tree/harbor-adapter).
 
 | Agent | Model              | Metric   | Number of Trials | Dataset Size                   | Original Benchmark Performance | Harbor Adapter Performance |

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
@@ -52,7 +49,9 @@ PROVIDER_KEYS = {
 
 PROVIDER_MODEL_NAMES = [
     (
-        litellm.open_ai_chat_completion_models.union(litellm.open_ai_text_completion_models),
+        litellm.open_ai_chat_completion_models.union(
+            litellm.open_ai_text_completion_models
+        ),
         "OPENAI_API_KEY",
     ),
     (litellm.anthropic_models, "ANTHROPIC_API_KEY"),
@@ -61,7 +60,9 @@ PROVIDER_MODEL_NAMES = [
     (litellm.vercel_ai_gateway_models, "VERCEL_AI_GATEWAY_API_KEY"),
     (litellm.datarobot_models, "DATAROBOT_API_TOKEN"),
     (
-        litellm.vertex_chat_models.union(litellm.vertex_text_models).union(litellm.models_by_provider["vertex_ai"]),
+        litellm.vertex_chat_models.union(litellm.vertex_text_models).union(
+            litellm.models_by_provider["vertex_ai"]
+        ),
         "VERTEXAI_PROJECT",
     ),
     (litellm.ai21_models, "AI21_API_KEY"),
@@ -76,7 +77,9 @@ PROVIDER_MODEL_NAMES = [
 
 
 def get_api_key_var_names_from_model_name(model_name: str) -> list[str]:
-    variable_names: str | list[str] | None = None  # Variable names to set for API access
+    variable_names: str | list[str] | None = (
+        None  # Variable names to set for API access
+    )
 
     try:
         _, llm_provider, _, _ = get_llm_provider(model=model_name)

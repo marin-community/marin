@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import os
 import shlex
 from pathlib import Path
@@ -54,7 +51,8 @@ class Aider(BaseInstalledAgent):
         return [
             ExecInput(
                 command=(
-                    f"aider --message {escaped_instruction} --yes --model {model} " f"2>&1 | tee /logs/agent/aider.txt"
+                    f"aider --message {escaped_instruction} --yes --model {model} "
+                    f"2>&1 | tee /logs/agent/aider.txt"
                 ),
                 env=env,
             )

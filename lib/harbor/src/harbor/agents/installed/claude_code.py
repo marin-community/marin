@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import json
 import os
 import shlex
@@ -81,7 +78,10 @@ class ClaudeCode(BaseInstalledAgent):
         if len(project_dirs) == 1:
             return project_dirs[0]
 
-        print("Multiple Claude Code session directories found; " "could not identify the correct one")
+        print(
+            "Multiple Claude Code session directories found; "
+            "could not identify the correct one"
+        )
         return None
 
     def _convert_event_to_step(self, event: dict[str, Any], step_id: int) -> Step:
@@ -155,7 +155,11 @@ class ClaudeCode(BaseInstalledAgent):
                 subagent_trajectory_ref=None,
             )
 
-            observation = Observation(results=[observation_result]) if output is not None else None
+            observation = (
+                Observation(results=[observation_result])
+                if output is not None
+                else None
+            )
 
             extra = extra or {}
             updates = {
@@ -204,7 +208,9 @@ class ClaudeCode(BaseInstalledAgent):
             return str(value)
 
     @classmethod
-    def _extract_text_reasoning_tool_uses(cls, content: Any) -> tuple[str, str | None, list[dict[str, Any]]]:
+    def _extract_text_reasoning_tool_uses(
+        cls, content: Any
+    ) -> tuple[str, str | None, list[dict[str, Any]]]:
         if isinstance(content, str):
             text = content.strip()
             return text, None, []
@@ -244,8 +250,12 @@ class ClaudeCode(BaseInstalledAgent):
         elif content is not None:
             text_parts.append(cls._stringify(content))
 
-        text = "\n\n".join(part.strip() for part in text_parts if part and str(part).strip())
-        reasoning = "\n\n".join(part.strip() for part in reasoning_parts if part and str(part).strip())
+        text = "\n\n".join(
+            part.strip() for part in text_parts if part and str(part).strip()
+        )
+        reasoning = "\n\n".join(
+            part.strip() for part in reasoning_parts if part and str(part).strip()
+        )
 
         return text, (reasoning or None), tool_blocks
 
@@ -264,7 +274,12 @@ class ClaudeCode(BaseInstalledAgent):
                 continue
             extra[key] = value
 
-        if prompt_tokens is None and completion_tokens is None and cached_tokens is None and not extra:
+        if (
+            prompt_tokens is None
+            and completion_tokens is None
+            and cached_tokens is None
+            and not extra
+        ):
             return None
 
         return Metrics(
@@ -298,7 +313,9 @@ class ClaudeCode(BaseInstalledAgent):
             metadata = {"tool_use_result": tool_use_result}
             stdout = tool_use_result.get("stdout")
             stderr = tool_use_result.get("stderr")
-            exit_code = tool_use_result.get("exitCode") or tool_use_result.get("exit_code")
+            exit_code = tool_use_result.get("exitCode") or tool_use_result.get(
+                "exit_code"
+            )
             interrupted = tool_use_result.get("interrupted")
             is_image = tool_use_result.get("isImage")
 
@@ -328,7 +345,9 @@ class ClaudeCode(BaseInstalledAgent):
                 }
             }
             if remaining_meta:
-                formatted_chunks.append(f"[metadata] {json.dumps(remaining_meta, ensure_ascii=False)}")
+                formatted_chunks.append(
+                    f"[metadata] {json.dumps(remaining_meta, ensure_ascii=False)}"
+                )
 
             if formatted_chunks:
                 parts.append("\n".join(chunk for chunk in formatted_chunks if chunk))
@@ -375,23 +394,37 @@ class ClaudeCode(BaseInstalledAgent):
             return None
 
         session_id = next(
-            (event.get("sessionId") for event in events if isinstance(event.get("sessionId"), str)),
+            (
+                event.get("sessionId")
+                for event in events
+                if isinstance(event.get("sessionId"), str)
+            ),
             session_dir.name,
         )
 
         agent_version = next(
-            (event.get("version") for event in events if isinstance(event.get("version"), str) and event.get("version")),
+            (
+                event.get("version")
+                for event in events
+                if isinstance(event.get("version"), str) and event.get("version")
+            ),
             "unknown",
         )
 
-        cwds = {event.get("cwd") for event in events if isinstance(event.get("cwd"), str) and event.get("cwd")}
+        cwds = {
+            event.get("cwd")
+            for event in events
+            if isinstance(event.get("cwd"), str) and event.get("cwd")
+        }
         git_branches = {
             event.get("gitBranch")
             for event in events
             if isinstance(event.get("gitBranch"), str) and event.get("gitBranch")
         }
         agent_ids = {
-            event.get("agentId") for event in events if isinstance(event.get("agentId"), str) and event.get("agentId")
+            event.get("agentId")
+            for event in events
+            if isinstance(event.get("agentId"), str) and event.get("agentId")
         }
 
         agent_extra: dict[str, Any] | None = {}
@@ -426,7 +459,9 @@ class ClaudeCode(BaseInstalledAgent):
             timestamp = event.get("timestamp")
 
             if event_type == "assistant":
-                text, reasoning, tool_blocks = self._extract_text_reasoning_tool_uses(message.get("content"))
+                text, reasoning, tool_blocks = self._extract_text_reasoning_tool_uses(
+                    message.get("content")
+                )
                 metrics = self._build_metrics(message.get("usage"))
                 extra: dict[str, Any] = {}
                 for key in ("stop_reason", "stop_sequence", "requestId"):
@@ -452,7 +487,9 @@ class ClaudeCode(BaseInstalledAgent):
                             "timestamp": timestamp,
                             "role": message.get("role", "assistant"),
                             "text": text or "",
-                            "reasoning": reasoning if message.get("role") == "assistant" else None,
+                            "reasoning": reasoning
+                            if message.get("role") == "assistant"
+                            else None,
                             "metrics": metrics,
                             "extra": extra or None,
                             "model_name": model_name,
@@ -488,7 +525,9 @@ class ClaudeCode(BaseInstalledAgent):
                         "status": tool_block.get("status"),
                         "message": None,
                         "extra": call_extra or None,
-                        "metrics": metrics if idx == 0 and metrics is not None else None,
+                        "metrics": metrics
+                        if idx == 0 and metrics is not None
+                        else None,
                         "model_name": model_name,
                     }
                     if idx == 0 and metrics is not None:
@@ -516,16 +555,25 @@ class ClaudeCode(BaseInstalledAgent):
                 if isinstance(content, list):
                     text_parts: list[str] = []
                     for block in content:
-                        if isinstance(block, dict) and block.get("type") == "tool_result":
+                        if (
+                            isinstance(block, dict)
+                            and block.get("type") == "tool_result"
+                        ):
                             call_id = block.get("tool_use_id")
-                            formatted_output, metadata = self._format_tool_result(block, event.get("toolUseResult"))
-                            call_info = pending_calls.pop(call_id, None) if call_id else None
+                            formatted_output, metadata = self._format_tool_result(
+                                block, event.get("toolUseResult")
+                            )
+                            call_info = (
+                                pending_calls.pop(call_id, None) if call_id else None
+                            )
                             if call_info is None:
                                 call_info = {
                                     "kind": "tool_call",
                                     "timestamp": timestamp,
                                     "call_id": call_id or "",
-                                    "tool_name": block.get("name") or block.get("tool_name") or "",
+                                    "tool_name": block.get("name")
+                                    or block.get("tool_name")
+                                    or "",
                                     "is_sidechain": event.get("isSidechain", False),
                                     "arguments": {},
                                     "raw_arguments": None,
@@ -538,16 +586,22 @@ class ClaudeCode(BaseInstalledAgent):
                                 }
 
                             extra_val = call_info.get("extra")
-                            extra: dict[str, Any] = extra_val if isinstance(extra_val, dict) else {}
+                            extra: dict[str, Any] = (
+                                extra_val if isinstance(extra_val, dict) else {}
+                            )
                             if metadata:
                                 extra.setdefault("tool_result_metadata", metadata)
                             if block.get("is_error") is not None:
-                                extra.setdefault("tool_result_is_error", block.get("is_error"))
+                                extra.setdefault(
+                                    "tool_result_is_error", block.get("is_error")
+                                )
 
                             call_info["extra"] = extra or None
                             call_info["output"] = formatted_output
                             call_info["metadata"] = metadata
-                            call_info["timestamp"] = call_info.get("timestamp") or timestamp
+                            call_info["timestamp"] = (
+                                call_info.get("timestamp") or timestamp
+                            )
                             call_info.setdefault("model_name", default_model_name)
 
                             normalized_events.append(call_info)
@@ -555,7 +609,11 @@ class ClaudeCode(BaseInstalledAgent):
 
                         text_parts.append(self._stringify(block))
 
-                    text_message = "\n\n".join(part.strip() for part in text_parts if part and str(part).strip())
+                    text_message = "\n\n".join(
+                        part.strip()
+                        for part in text_parts
+                        if part and str(part).strip()
+                    )
                     if text_message:
                         normalized_events.append(
                             {
@@ -600,7 +658,9 @@ class ClaudeCode(BaseInstalledAgent):
             return None
 
         prompt_values = [
-            step.metrics.prompt_tokens for step in steps if step.metrics and step.metrics.prompt_tokens is not None
+            step.metrics.prompt_tokens
+            for step in steps
+            if step.metrics and step.metrics.prompt_tokens is not None
         ]
         completion_values = [
             step.metrics.completion_tokens
@@ -608,7 +668,9 @@ class ClaudeCode(BaseInstalledAgent):
             if step.metrics and step.metrics.completion_tokens is not None
         ]
         cached_values = [
-            step.metrics.cached_tokens for step in steps if step.metrics and step.metrics.cached_tokens is not None
+            step.metrics.cached_tokens
+            for step in steps
+            if step.metrics and step.metrics.cached_tokens is not None
         ]
 
         total_prompt_tokens = sum(prompt_values) if prompt_values else None
@@ -686,7 +748,9 @@ class ClaudeCode(BaseInstalledAgent):
         trajectory_path = self.logs_dir / "trajectory.json"
         try:
             with open(trajectory_path, "w", encoding="utf-8") as handle:
-                json.dump(trajectory.to_json_dict(), handle, indent=2, ensure_ascii=False)
+                json.dump(
+                    trajectory.to_json_dict(), handle, indent=2, ensure_ascii=False
+                )
             print(f"Wrote Claude Code trajectory to {trajectory_path}")
         except OSError as exc:
             print(f"Failed to write trajectory file {trajectory_path}: {exc}")
@@ -702,10 +766,14 @@ class ClaudeCode(BaseInstalledAgent):
         escaped_instruction = shlex.quote(instruction)
 
         env = {
-            "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN") or "",
+            "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY")
+            or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+            or "",
             "ANTHROPIC_BASE_URL": os.environ.get("ANTHROPIC_BASE_URL", None),
             "CLAUDE_CODE_OAUTH_TOKEN": os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""),
-            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.environ.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS", None),
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.environ.get(
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS", None
+            ),
             "FORCE_AUTO_BACKGROUND_TASKS": "1",
             "ENABLE_BACKGROUND_TASKS": "1",
         }

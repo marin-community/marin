@@ -183,6 +183,6 @@ To reproduce the parity comparison results:
 
 ## Authors & Contributions
 
-**Adapter Maintainer**: Xuandong Zhao (csxuandongzhao@gmail.com)
+**Adapter Maintainer**: Xuandong Zhao (csxuandongzhao@gmail.com)  
 **Original GPQA**: David Rein et al. (NYU)
-**Issues**: [GitHub Issues](https://github.com/laude-institute/harbor/issues)
+**Issues**: [GitHub Issues](https://github.com/laude-institute/harbor/issues)  

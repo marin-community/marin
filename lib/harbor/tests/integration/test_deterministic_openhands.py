@@ -1,7 +1,4 @@
 #!/usr/bin/env python
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Runtime test with a fake LLM server that returns deterministic responses.
 
 This test creates a real HTTP server that mimics an LLM API, runs an OpenHands agent
@@ -120,7 +117,9 @@ async def fake_llm_server(request):
                                         "function": {
                                             "name": "finish",
                                             "arguments": json.dumps(
-                                                {"message": "Task complete. Created /app/hello.txt with 'Hello, world!'"}
+                                                {
+                                                    "message": "Task complete. Created /app/hello.txt with 'Hello, world!'"
+                                                }
                                             ),
                                         },
                                     }
@@ -172,9 +171,7 @@ async def fake_llm_server(request):
                             "index": 0,
                             "message": {
                                 "role": "assistant",
-                                "content": (
-                                    "<function=execute_bash>\n<parameter=command>cat > /app/hello.txt << 'EOF'\nHello, world!\nEOF\n</parameter>\n<parameter=security_risk>LOW</parameter>\n</function>"
-                                ),
+                                "content": "<function=execute_bash>\n<parameter=command>cat > /app/hello.txt << 'EOF'\nHello, world!\nEOF\n</parameter>\n<parameter=security_risk>LOW</parameter>\n</function>",
                             },
                             "finish_reason": "stop",
                         }
@@ -197,9 +194,7 @@ async def fake_llm_server(request):
                             "index": 0,
                             "message": {
                                 "role": "assistant",
-                                "content": (
-                                    "<function=finish>\n<parameter=message>Task complete. Created /app/hello.txt with 'Hello, world!'</parameter>\n</function>"
-                                ),
+                                "content": "<function=finish>\n<parameter=message>Task complete. Created /app/hello.txt with 'Hello, world!'</parameter>\n</function>",
                             },
                             "finish_reason": "stop",
                         }
@@ -349,11 +344,15 @@ async def test_openhands_with_deterministic_llm(fake_llm_server, tmp_path, monke
     print(f"   Finished: {result.finished_at}")
 
     # Check trajectory file
-    agent_trajectory_path = result.trial_uri.replace("file://", "") + "/agent/trajectory.json"
+    agent_trajectory_path = (
+        result.trial_uri.replace("file://", "") + "/agent/trajectory.json"
+    )
     print(f"\nChecking agent trajectory at: {agent_trajectory_path}")
 
     # Load trajectory file (assert it exists)
-    assert Path(agent_trajectory_path).exists(), f"Trajectory file should exist at {agent_trajectory_path}"
+    assert Path(agent_trajectory_path).exists(), (
+        f"Trajectory file should exist at {agent_trajectory_path}"
+    )
 
     with open(agent_trajectory_path, "r") as f:
         trajectory = json.load(f)
@@ -369,10 +368,14 @@ async def test_openhands_with_deterministic_llm(fake_llm_server, tmp_path, monke
     if use_tool_calls:
         golden_path = Path("tests/golden/openhands/hello-world.trajectory.json")
     else:
-        golden_path = Path("tests/golden/openhands/hello-world.trajectory.no_function_calling.json")
+        golden_path = Path(
+            "tests/golden/openhands/hello-world.trajectory.no_function_calling.json"
+        )
 
     if should_update_golden_trajectories():
-        print(f"\nUPDATE_GOLDEN_TRAJECTORIES is set - updating golden trajectory at: {golden_path}")
+        print(
+            f"\nUPDATE_GOLDEN_TRAJECTORIES is set - updating golden trajectory at: {golden_path}"
+        )
         save_golden_trajectory(trajectory, golden_path, print_output=True)
     else:
         print(f"\nComparing with golden trajectory at: {golden_path}")
@@ -417,14 +420,16 @@ async def test_openhands_with_deterministic_llm(fake_llm_server, tmp_path, monke
     # Note: With disable_tool_calls=True and fake LLM server, the commands may not execute properly
     # in the container, so we only check trajectory format, not task completion
     if use_tool_calls:
-        assert (
-            result.verifier_result.rewards.get("reward") == 1.0
-        ), f"Task should be completed successfully with reward=1.0, but got reward={result.verifier_result.rewards.get('reward')}"
+        assert result.verifier_result.rewards.get("reward") == 1.0, (
+            f"Task should be completed successfully with reward=1.0, but got reward={result.verifier_result.rewards.get('reward')}"
+        )
         print("\nVerifier Result:")
         print(f"   Reward: {result.verifier_result.rewards.get('reward')}")
     else:
         # For text-based tool calling with fake server, just verify the trajectory was generated
-        print("\nVerifier Result (text mode - trajectory generated but task may not complete):")
+        print(
+            "\nVerifier Result (text mode - trajectory generated but task may not complete):"
+        )
         print(f"   Reward: {result.verifier_result.rewards.get('reward')}")
 
     print(f"\n{'=' * 80}")
@@ -438,9 +443,13 @@ async def test_openhands_with_deterministic_llm(fake_llm_server, tmp_path, monke
     print("   - First call: create hello.txt file")
     print("   - Second call: finish task")
     if use_tool_calls:
-        print(f"   - Task completed successfully with reward={result.verifier_result.rewards.get('reward')}!")
+        print(
+            f"   - Task completed successfully with reward={result.verifier_result.rewards.get('reward')}!"
+        )
     else:
-        print(f"   - Trajectory generated (reward={result.verifier_result.rewards.get('reward')})")
+        print(
+            f"   - Trajectory generated (reward={result.verifier_result.rewards.get('reward')})"
+        )
     print("   - Trajectory validated against ATIF schema!")
     print(f"   - Trial results saved to: {result.trial_uri}")
     print(f"   - Trajectory saved to: {agent_trajectory_path}\n")

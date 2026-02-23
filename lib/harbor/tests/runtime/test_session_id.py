@@ -1,7 +1,4 @@
 #!/usr/bin/env python
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Runtime test to verify that session_id is passed to litellm's completion method.
 
 This test creates a fake HTTP server that mimics an LLM provider, then verifies
@@ -128,16 +125,16 @@ async def test_session_id_passed_to_litellm(fake_llm_server):
     print(f"\nRequest body keys: {list(last_request_body.keys())}")
 
     # LiteLLM flattens extra_body fields to the root level
-    assert (
-        "session_id" in last_request_body
-    ), f"session_id not found in request. Full body: {json.dumps(last_request_body, indent=2)}"
+    assert "session_id" in last_request_body, (
+        f"session_id not found in request. Full body: {json.dumps(last_request_body, indent=2)}"
+    )
 
     actual_session_id = last_request_body["session_id"]
     print(f"✓ session_id found in request: {actual_session_id}")
 
-    assert (
-        actual_session_id == test_session_id
-    ), f"session_id mismatch: expected '{test_session_id}', got '{actual_session_id}'"
+    assert actual_session_id == test_session_id, (
+        f"session_id mismatch: expected '{test_session_id}', got '{actual_session_id}'"
+    )
 
     print(f"✓ session_id value matches expected: {test_session_id}")
 
@@ -194,7 +191,9 @@ async def test_session_id_not_passed_when_not_configured(fake_llm_server):
     print(f"{'=' * 80}")
 
     # Verify session_id is NOT in the request
-    assert "session_id" not in last_request_body, "session_id should not be present when not configured"
+    assert "session_id" not in last_request_body, (
+        "session_id should not be present when not configured"
+    )
 
     print("✓ Confirmed: session_id is not present in request when not configured")
 

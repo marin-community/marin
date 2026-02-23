@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
@@ -62,7 +59,10 @@ class RegistryDataset(BaseModel):
     metrics: list[RegistryMetric] = Field(default_factory=list)
 
     def task_keys(self) -> set[tuple[str, str | None, str, str]]:
-        return {(t.name or t.path, t.git_url, t.git_commit_id or "HEAD", t.path) for t in self.tasks}
+        return {
+            (t.name or t.path, t.git_url, t.git_commit_id or "HEAD", t.path)
+            for t in self.tasks
+        }
 
     def metric_keys(self) -> set[tuple[str, str]]:
         return {(m.type, json.dumps(m.kwargs, sort_keys=True)) for m in self.metrics}
@@ -134,7 +134,9 @@ class SyncStats(BaseModel):
 # =============================================================================
 
 
-def diff_dataset(registry: RegistryDataset, existing: SupabaseDataset | None) -> DatasetDiff:
+def diff_dataset(
+    registry: RegistryDataset, existing: SupabaseDataset | None
+) -> DatasetDiff:
     name = registry.name
     version = registry.version
 
@@ -148,7 +150,9 @@ def diff_dataset(registry: RegistryDataset, existing: SupabaseDataset | None) ->
     new_metrics = registry_metrics - existing_metrics
     removed_metrics = existing_metrics - registry_metrics
 
-    description_changed = existing is not None and existing.description != registry.description
+    description_changed = (
+        existing is not None and existing.description != registry.description
+    )
 
     if existing is None:
         status = DiffStatus.CREATED
@@ -157,10 +161,18 @@ def diff_dataset(registry: RegistryDataset, existing: SupabaseDataset | None) ->
             "version": version,
             "description": registry.description,
         }
-    elif new_tasks or removed_tasks or new_metrics or removed_metrics or description_changed:
+    elif (
+        new_tasks
+        or removed_tasks
+        or new_metrics
+        or removed_metrics
+        or description_changed
+    ):
         status = DiffStatus.UPDATED
         dataset_to_upsert = (
-            {"name": name, "version": version, "description": registry.description} if description_changed else None
+            {"name": name, "version": version, "description": registry.description}
+            if description_changed
+            else None
         )
     else:
         return DatasetDiff(status=DiffStatus.UNCHANGED)
@@ -179,7 +191,9 @@ def diff_dataset(registry: RegistryDataset, existing: SupabaseDataset | None) ->
             )
             for task_name, git_url, git_commit_id, path in new_tasks
         ],
-        task_ids_to_delete=[existing.tasks[key] for key in removed_tasks] if existing else [],
+        task_ids_to_delete=[existing.tasks[key] for key in removed_tasks]
+        if existing
+        else [],
         metrics_to_insert=[
             SupabaseMetric(
                 dataset_name=name,
@@ -189,7 +203,9 @@ def diff_dataset(registry: RegistryDataset, existing: SupabaseDataset | None) ->
             )
             for metric_name, kwargs_json in new_metrics
         ],
-        metric_ids_to_delete=[existing.metrics[key] for key in removed_metrics] if existing else [],
+        metric_ids_to_delete=[existing.metrics[key] for key in removed_metrics]
+        if existing
+        else [],
     )
 
 
@@ -208,7 +224,10 @@ db_retry = retry(
 @db_retry
 def db_upsert_batch(supabase, table: str, rows: list):
     if rows:
-        data = [r.model_dump(exclude_none=True) if isinstance(r, BaseModel) else r for r in rows]
+        data = [
+            r.model_dump(exclude_none=True) if isinstance(r, BaseModel) else r
+            for r in rows
+        ]
         supabase.table(table).upsert(data).execute()
 
 
@@ -251,7 +270,11 @@ def load_registry(registry_path: Path) -> list[RegistryDataset]:
 
 
 def fetch_supabase_datasets(supabase) -> dict[tuple[str, str], SupabaseDataset]:
-    resp = supabase.table("dataset").select("*, dataset_task(*), dataset_metric(*)").execute()
+    resp = (
+        supabase.table("dataset")
+        .select("*, dataset_task(*), dataset_metric(*)")
+        .execute()
+    )
 
     datasets: dict[tuple[str, str], SupabaseDataset] = {}
     for d in resp.data or []:
@@ -260,7 +283,10 @@ def fetch_supabase_datasets(supabase) -> dict[tuple[str, str], SupabaseDataset]:
             name=d["name"],
             version=d["version"],
             description=d.get("description") or "",
-            tasks={(t["name"], t["git_url"], t["git_commit_id"], t["path"]): t["id"] for t in d.get("dataset_task", [])},
+            tasks={
+                (t["name"], t["git_url"], t["git_commit_id"], t["path"]): t["id"]
+                for t in d.get("dataset_task", [])
+            },
             metrics={
                 (
                     m["metric_name"],
@@ -388,7 +414,9 @@ def main():
 
     stats = sync_datasets(supabase, registry_datasets, existing, dry_run=args.dry_run)
 
-    deleted = delete_removed_datasets(supabase, registry_datasets, set(existing.keys()), dry_run=args.dry_run)
+    deleted = delete_removed_datasets(
+        supabase, registry_datasets, set(existing.keys()), dry_run=args.dry_run
+    )
     for name in deleted:
         print(f"  [DELETED] {name}")
 

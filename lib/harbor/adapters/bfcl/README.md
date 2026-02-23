@@ -245,7 +245,7 @@ Harbor's agent writes to `/app/result.json`, which is most comparable to `CodexW
 
 **Primary Comparison (CodexWriteFileHandler vs Harbor):**
 - **gpt-5-mini:** Harbor 81.57% vs BFCL 82.11% (difference: -0.54%, excellent parity)
-- **gpt-4o-mini:** Harbor 22.49% vs BFCL 32.79% (difference: -10.30%)
+- **gpt-4o-mini:** Harbor 22.49% vs BFCL 32.79% (difference: -10.30%) 
 
 The gpt-5-mini results demonstrate strong equivalence between Harbor and the original BFCL evaluation. The gpt-4o-mini gap is likely due to model-specific output format sensitivity.
 
@@ -298,7 +298,7 @@ uv run harbor jobs start -c adapters/bfcl/bfcl_parity.yaml -a codex -m <model>
 
 ```bibtex
 @inproceedings{patil2025bfcl,
-  title={The Berkeley Function Calling Leaderboard (BFCL): From Tool Use to Agentic Evaluation of Large Language Models},
+  title={The Berkeley Function Calling Leaderboard (BFCL): From Tool Use to Agentic Evaluation of Large Language Models}, 
   author={Patil, Shishir G. and Mao, Huanzhi and Cheng-Jie Ji, Charlie and Yan, Fanjia and Suresh, Vishnu and Stoica, Ion and E. Gonzalez, Joseph},
   booktitle={Forty-second International Conference on Machine Learning},
   year={2025},
@@ -321,6 +321,6 @@ This adapter is contributed by Zixuan Zhu (GitHub: [@Ternura143](https://github.
 
 ---
 
-**Last Updated:** 2026-01-04
-**Adapter Version:** 1.0
+**Last Updated:** 2026-01-04  
+**Adapter Version:** 1.0  
 **BFCL Version:** v4 (single-turn + live categories)

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import tempfile
 from pathlib import Path
 
@@ -234,7 +231,9 @@ class TestDockerComposeProcessor:
         """Test that existing platform in FROM line is replaced, not duplicated."""
         with tempfile.TemporaryDirectory() as tmpdir:
             dockerfile_path = Path(tmpdir) / "Dockerfile"
-            dockerfile_path.write_text("FROM --platform=linux/arm64 ubuntu:22.04\nRUN apt-get update\n")
+            dockerfile_path.write_text(
+                "FROM --platform=linux/arm64 ubuntu:22.04\nRUN apt-get update\n"
+            )
 
             service = {"platform": "linux/amd64"}
             processor.append_to_dockerfile(dockerfile_path, service)
@@ -276,13 +275,17 @@ class TestTerminalBenchMapper:
             target_dir = Path(tmpdir) / "target_task"
             source_dir.mkdir()
 
-            (source_dir / "task.yaml").write_text(yaml.dump({"instruction": "Test", "difficulty": "easy"}))
+            (source_dir / "task.yaml").write_text(
+                yaml.dump({"instruction": "Test", "difficulty": "easy"})
+            )
             (source_dir / "docker-compose.yaml").write_text(
                 yaml.dump({"services": {"client": {"build": {"context": "."}}}})
             )
             (source_dir / "Dockerfile").write_text("FROM python:3.13\n")
             (source_dir / "run-tests.sh").write_text("#!/bin/bash\nexit 0\n")
-            (source_dir / "solution.yaml").write_text(yaml.dump([{"command": "echo hello"}]))
+            (source_dir / "solution.yaml").write_text(
+                yaml.dump([{"command": "echo hello"}])
+            )
 
             with pytest.raises(ValueError) as exc_info:
                 mapper._map_task(source_dir, target_dir)
@@ -297,7 +300,9 @@ class TestTerminalBenchMapper:
             target_dir = Path(tmpdir) / "target_task"
             source_dir.mkdir()
 
-            (source_dir / "task.yaml").write_text(yaml.dump({"instruction": "Test", "difficulty": "easy"}))
+            (source_dir / "task.yaml").write_text(
+                yaml.dump({"instruction": "Test", "difficulty": "easy"})
+            )
             docker_compose = {
                 "services": {
                     "client": {
@@ -349,13 +354,17 @@ class TestTerminalBenchMapper:
                 }
             }
             (source_dir / "docker-compose.yaml").write_text(yaml.dump(docker_compose))
-            (source_dir / "Dockerfile").write_text("FROM python:3.13-slim\nRUN pip install pytest\n")
+            (source_dir / "Dockerfile").write_text(
+                "FROM python:3.13-slim\nRUN pip install pytest\n"
+            )
             (source_dir / "run-tests.sh").write_text("#!/bin/bash\npytest\n")
-            (source_dir / "solution.sh").write_text("#!/bin/bash\necho 'print(\"hello\")' > hello.py\n")
+            (source_dir / "solution.sh").write_text(
+                "#!/bin/bash\necho 'print(\"hello\")' > hello.py\n"
+            )
 
             result = mapper._map_task(source_dir, target_dir)
 
-            assert result == target_dir
+            assert result.resolve() == target_dir.resolve()
             assert target_dir.exists()
 
             # Check instruction.md
@@ -387,7 +396,9 @@ class TestTerminalBenchMapper:
             target_dir = Path(tmpdir) / "target_task"
             source_dir.mkdir()
 
-            (source_dir / "task.yaml").write_text(yaml.dump({"instruction": "Test", "difficulty": "easy"}))
+            (source_dir / "task.yaml").write_text(
+                yaml.dump({"instruction": "Test", "difficulty": "easy"})
+            )
             (source_dir / "docker-compose.yaml").write_text(
                 yaml.dump({"services": {"client": {"build": {"context": "."}}}})
             )

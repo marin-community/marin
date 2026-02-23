@@ -142,12 +142,12 @@ async def main():
         print(f"Error running agent: {e}")
         import traceback
         traceback.print_exc()
-
+        
         # Still write error to answer.txt so verifier can process it
         os.makedirs("/app", exist_ok=True)
         with open("/app/answer.txt", "w") as f:
             f.write(f"Error: {e}")
-
+        
         sys.exit(1)
 
 

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import numpy as np
 
 # --- Task Schema ---
@@ -8,7 +5,9 @@ FEATURE_NAMES = ["lr", "bsz", "data_size", "non_embedding_param_size"]
 TARGET_NAMES = ["lm_loss"]
 
 # --- Pre-fitted Parameters (from best_eval.log) ---
-FITTED_PARAMS = {"all_data": [0.01, 9.8183, 0.0862, 9.756, 0.1107, 0.0127, -7.4206, 0.0108, 5.8358]}
+FITTED_PARAMS = {
+    "all_data": [0.01, 9.8183, 0.0862, 9.756, 0.1107, 0.0127, -7.4206, 0.0108, 5.8358]
+}
 
 
 def law(input_data: list[dict[str, float]], group: str) -> list[dict[str, float]]:

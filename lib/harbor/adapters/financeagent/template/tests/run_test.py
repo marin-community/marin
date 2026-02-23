@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 LLM-as-a-Judge evaluator for FinanceAgent tasks.
 """
@@ -51,7 +48,9 @@ def call_llm_judge(question: str, reference: str, model_answer: str) -> dict:
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable is not set")
 
-    prompt = JUDGE_PROMPT.format(question=question, reference_answer=reference, model_answer=model_answer)
+    prompt = JUDGE_PROMPT.format(
+        question=question, reference_answer=reference, model_answer=model_answer
+    )
 
     print(f"Using judge model: {judge_model}")
     print(f"OPENAI_API_KEY is {'set' if api_key else 'NOT set'}")

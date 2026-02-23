@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Split n_attempts into 3 trials (by task start time) and compute per-trial resolved rate.
 Usage:
@@ -46,7 +43,11 @@ df_grouped = (
     .group_by("task")
     .map_groups(lambda df: df.with_columns(pl.arange(0, 3).alias("replica")))
 )
-df_replica = df_grouped.group_by("replica").agg(pl.col("reward").mean(), pl.col("task").count()).sort("replica")
+df_replica = (
+    df_grouped.group_by("replica")
+    .agg(pl.col("reward").mean(), pl.col("task").count())
+    .sort("replica")
+)
 
 print(df_replica)
 

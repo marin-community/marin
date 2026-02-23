@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Utility functions for template rendering with Jinja2 support.
 """
@@ -52,7 +49,10 @@ def render_prompt_template(template_path: Path, instruction: str) -> str:
             )
     except TemplateSyntaxError:
         # Fallback to simple string check if parsing fails
-        if "{{ instruction }}" not in template_content and "{{instruction}}" not in template_content:
+        if (
+            "{{ instruction }}" not in template_content
+            and "{{instruction}}" not in template_content
+        ):
             raise ValueError(
                 f"Prompt template {template_path} must include an 'instruction' "
                 f"variable. Use {{{{ instruction }}}} (jinja2 syntax) in your template."
@@ -65,7 +65,9 @@ def render_prompt_template(template_path: Path, instruction: str) -> str:
         return template.render(instruction=instruction)
     except UndefinedError as e:
         # Missing variable error
-        raise ValueError(f"Prompt template {template_path} has undefined variables. Error: {e}") from e
+        raise ValueError(
+            f"Prompt template {template_path} has undefined variables. Error: {e}"
+        ) from e
     except Exception as e:
         raise ValueError(f"Error rendering prompt template {template_path}: {e}") from e
 

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Command-line entrypoint for generating sandbox tasks from the AlgoTune benchmark.
 """
@@ -78,7 +75,9 @@ def clone_repo(repo_url: str, temp_dir: Path) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=("Convert AlgoTune tasks into the sandbox task format using the adapter."),
+        description=(
+            "Convert AlgoTune tasks into the sandbox task format using the adapter."
+        ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
@@ -169,16 +168,23 @@ def main() -> None:
     # Check calibration environment if --generate-size is enabled
     if args.generate_size:
         if not is_docker_calibration_ready():
-            logger.error("Docker calibration environment not found. " "Run with --setup-docker-env first.")
+            logger.error(
+                "Docker calibration environment not found. "
+                "Run with --setup-docker-env first."
+            )
             sys.exit(1)
-        logger.info("Using Docker calibration for accurate timing (matches verification environment).")
+        logger.info(
+            "Using Docker calibration for accurate timing (matches verification environment)."
+        )
 
     output_task_dir = Path(args.output_path)
     output_task_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Adapter will output tasks to: %s", output_task_dir.resolve())
 
     if args.generate_size:
-        logger.info("Size calibration enabled: target runtime = %.0fms", args.target_runtime_ms)
+        logger.info(
+            "Size calibration enabled: target runtime = %.0fms", args.target_runtime_ms
+        )
 
     with tempfile.TemporaryDirectory() as temp_dir_str:
         temp_path = Path(temp_dir_str)
@@ -187,7 +193,9 @@ def main() -> None:
 
             source_tasks_dir = cloned_repo_root / ALGOTUNE_TASK_SUBDIR
             if not source_tasks_dir.is_dir():
-                logger.error("Task subdirectory '%s' not found in repo.", ALGOTUNE_TASK_SUBDIR)
+                logger.error(
+                    "Task subdirectory '%s' not found in repo.", ALGOTUNE_TASK_SUBDIR
+                )
                 sys.exit(1)
 
             adapter = AlgoTuneAdapter(
@@ -204,7 +212,8 @@ def main() -> None:
                     logger.error(
                         "Problem ID '%s' not found in task list. Available tasks: %s",
                         args.problem_id,
-                        ", ".join(sorted(all_tasks)[:10]) + ("..." if len(all_tasks) > 10 else ""),
+                        ", ".join(sorted(all_tasks)[:10])
+                        + ("..." if len(all_tasks) > 10 else ""),
                     )
                     sys.exit(1)
                 task_list = [args.problem_id]
@@ -240,7 +249,9 @@ def main() -> None:
             if num_workers == 1:
                 # Sequential processing (original behavior)
                 for task_name, task_py_path in valid_tasks:
-                    adapter.generate_task(task_name=task_name, task_py_path=task_py_path)
+                    adapter.generate_task(
+                        task_name=task_name, task_py_path=task_py_path
+                    )
             else:
                 # Parallel processing
                 logger.info(

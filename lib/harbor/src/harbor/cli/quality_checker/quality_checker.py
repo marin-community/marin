@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from pathlib import Path
 
 from harbor.cli.quality_checker.models import QualityCheckResult
@@ -15,7 +12,9 @@ class QualityChecker:
         self._llm = LiteLLM(model_name)
         td = Path(task_dir)
         if not td.exists() or not td.is_dir():
-            raise FileNotFoundError(f"Task directory '{task_dir}' not found or is not a directory")
+            raise FileNotFoundError(
+                f"Task directory '{task_dir}' not found or is not a directory"
+            )
 
         self._task_paths = TaskPaths(td)
         if not self._task_paths.is_valid():
@@ -53,13 +52,19 @@ class QualityChecker:
         # Read environment files
         environment_files = []
         if self._task_paths.environment_dir.exists():
-            print("Warning: tasks check currently only supports Dockerfile environments.")
+            print(
+                "Warning: tasks check currently only supports Dockerfile environments."
+            )
             dockerfile = self._task_paths.environment_dir / "Dockerfile"
             if dockerfile.exists():
                 content = dockerfile.read_text()
                 environment_files.append(f"=== Dockerfile ===\n{content}")
 
-        environment_files_str = "\n\n".join(environment_files) if environment_files else "No environment files"
+        environment_files_str = (
+            "\n\n".join(environment_files)
+            if environment_files
+            else "No environment files"
+        )
 
         # Format prompt
         prompt = template.format(

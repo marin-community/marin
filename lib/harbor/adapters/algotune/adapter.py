@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Algotune Adapter for the new Harbor task format.
 """
@@ -85,7 +82,9 @@ class AlgoTuneAdapter(BaseAdapter):
                 self.target_runtime_ms,
             )
         if not self.template_dir.exists():
-            raise FileNotFoundError(f"Template directory not found at {self.template_dir}")
+            raise FileNotFoundError(
+                f"Template directory not found at {self.template_dir}"
+            )
 
     def _write_instruction(self, task_paths: TaskPaths, instruction: str) -> None:
         instruction_text = instruction.strip()
@@ -109,14 +108,18 @@ class AlgoTuneAdapter(BaseAdapter):
         sh_commands = f"cat > /app/solver.py << 'EOF'\n{solver_content}\nEOF"
         return sh_commands
 
-    def _populate_script_with_commands(self, script_path: Path, sh_commands: str) -> None:
+    def _populate_script_with_commands(
+        self, script_path: Path, sh_commands: str
+    ) -> None:
         content = script_path.read_text(encoding="utf-8")
         if not sh_commands.endswith("\n"):
             sh_commands += "\n"
         content = content.replace("{{solution_code_command}}", sh_commands)
         script_path.write_text(content, encoding="utf-8")
 
-    def _prepare_task_from_template(self, output_dir: Path, task_name: str, task_py_path: Path) -> bool:
+    def _prepare_task_from_template(
+        self, output_dir: Path, task_name: str, task_py_path: Path
+    ) -> bool:
         if output_dir.exists():
             shutil.rmtree(output_dir)
         shutil.copytree(self.template_dir, output_dir)
@@ -139,7 +142,9 @@ class AlgoTuneAdapter(BaseAdapter):
             )
             return False
 
-        instruction = get_instruction(description_content, ref_solver_content, is_solution_content)
+        instruction = get_instruction(
+            description_content, ref_solver_content, is_solution_content
+        )
         self._write_instruction(task_paths, instruction)
 
         # Determine problem size: either from calibration or from generation.json
@@ -165,15 +170,21 @@ class AlgoTuneAdapter(BaseAdapter):
         # Update tests/evaluator.py
         evaluator_dest_path = task_paths.tests_dir / "evaluator.py"
         try:
-            replace_class_name_and_save(task_py_path, evaluator_dest_path, new_name="Task")
+            replace_class_name_and_save(
+                task_py_path, evaluator_dest_path, new_name="Task"
+            )
         except Exception as exc:
-            logger.error("Failed to generate evaluator for task '%s': %s", task_name, exc)
+            logger.error(
+                "Failed to generate evaluator for task '%s': %s", task_name, exc
+            )
             return False
 
         # Update tests/test_outputs.py
         test_outputs_path = task_paths.tests_dir / "test_outputs.py"
         test_outputs_content = test_outputs_path.read_text(encoding="utf-8")
-        test_outputs_content = test_outputs_content.replace("PROBLEM_SIZE = 100", f"PROBLEM_SIZE = {problem_size}")
+        test_outputs_content = test_outputs_content.replace(
+            "PROBLEM_SIZE = 100", f"PROBLEM_SIZE = {problem_size}"
+        )
         test_outputs_path.write_text(test_outputs_content, encoding="utf-8")
 
         # Ensure scripts remain executable

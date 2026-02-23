@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import os
 import re
 
@@ -30,7 +27,9 @@ def resolve_env_vars(env_dict: dict[str, str]) -> dict[str, str]:
             # Template substitution
             var_name = match.group(1)
             if var_name not in os.environ:
-                raise ValueError(f"Environment variable '{var_name}' not found in host environment")
+                raise ValueError(
+                    f"Environment variable '{var_name}' not found in host environment"
+                )
             resolved[key] = os.environ[var_name]
         else:
             # Literal value

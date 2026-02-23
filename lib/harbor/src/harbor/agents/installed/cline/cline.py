@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import os
 import shlex
 from pathlib import Path
@@ -87,7 +84,9 @@ class ClineCli(BaseInstalledAgent):
             "nousresearch",
         ]
         if provider not in valid_providers:
-            raise ValueError(f"Invalid provider: '{provider}'. Valid values: {', '.join(valid_providers)}")
+            raise ValueError(
+                f"Invalid provider: '{provider}'. Valid values: {', '.join(valid_providers)}"
+            )
 
         # Build environment variables for agent execution
         env = {
@@ -100,7 +99,9 @@ class ClineCli(BaseInstalledAgent):
         base_url = ""
         if provider == "openai":
             if "BASE_URL" not in os.environ:
-                raise ValueError("BASE_URL environment variable is required for openai provider")
+                raise ValueError(
+                    "BASE_URL environment variable is required for openai provider"
+                )
             env["BASE_URL"] = os.environ["BASE_URL"]
             base_url = os.environ["BASE_URL"]
 

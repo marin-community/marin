@@ -4,12 +4,12 @@
 
 This adapter converts [SWE-bench Pro](https://github.com/scaleapi/SWE-bench_Pro-os) benchmark instances into **Harbor-compatible tasks**, enabling evaluation of reasoning agents on enterprise-level software engineering problems across multiple programming languages.
 
-- **Benchmark type:** Multi-language software engineering and bug-fixing
-- **Languages:** Python, JavaScript/TypeScript, Go
-- **Dataset size:** 731 instances from the SWE-bench Pro test split
-- **Source:** [SWE-bench Pro repository](https://github.com/scaleapi/SWE-bench_Pro-os) and [ScaleAI/SWE-bench_Pro](https://huggingface.co/datasets/ScaleAI/SWE-bench_Pro) on HuggingFace
-- **Licensing:** Apache 2.0 (benchmark and dataset)
-- **Adapter scope:** Multiple real-world repositories including NodeBB, Ansible, qutebrowser, OpenLibrary, Teleport, and more
+- **Benchmark type:** Multi-language software engineering and bug-fixing  
+- **Languages:** Python, JavaScript/TypeScript, Go  
+- **Dataset size:** 731 instances from the SWE-bench Pro test split  
+- **Source:** [SWE-bench Pro repository](https://github.com/scaleapi/SWE-bench_Pro-os) and [ScaleAI/SWE-bench_Pro](https://huggingface.co/datasets/ScaleAI/SWE-bench_Pro) on HuggingFace  
+- **Licensing:** Apache 2.0 (benchmark and dataset)  
+- **Adapter scope:** Multiple real-world repositories including NodeBB, Ansible, qutebrowser, OpenLibrary, Teleport, and more  
 
 **Key modifications for Harbor adaptation:**
 - Wraps official SWE-bench Pro test scripts (`run_script.sh` and `parser.py`) within Harbor's test harness
@@ -67,7 +67,7 @@ datasets/swebenchpro/
 │       └── config.json           # Full SWE-bench Pro instance record
 ```
 
-Each task corresponds to a single SWE-bench Pro instance with official test infrastructure.
+Each task corresponds to a single SWE-bench Pro instance with official test infrastructure.  
 The adapter template directory mirrors this layout under `adapters/swebenchpro/template/`.
 
 **Test Execution Flow:**
@@ -113,7 +113,7 @@ uv run harbor jobs start -p datasets/swebenchpro -a <agent_name> -m <model_name>
 
 # Resume a previously started job
 uv run harbor jobs resume -p /path/to/jobs/directory
-```
+``` 
 
 Results are saved in the `jobs/` directory by default (configurable via `jobs_dir` in the YAML config).
 
@@ -187,7 +187,7 @@ We validated parity against the original SWE-bench Pro benchmark using a randoml
 
 **Reproduction requirements:**
 - **Original benchmark:** Clone [SWE-bench_Pro-os](https://github.com/robertzhidealx/SWE-bench_Pro-os/tree/harbor-adapter) forked repository and follow the [evaluation instructions](https://github.com/robertzhidealx/SWE-bench_Pro-os/blob/harbor-adapter/PARITY_README.md).
-- **Harbor adapter:**
+- **Harbor adapter:** 
   ```bash
   cd adapters/swebenchpro
   # Generate all 731 Harbor-adapted tasks
@@ -266,13 +266,13 @@ These changes are transparent to agents and maintain compatibility with original
 ## Citation
 ```bibtex
 @misc{deng2025swebenchproaiagents,
-      title={SWE-Bench Pro: Can AI Agents Solve Long-Horizon Software Engineering Tasks?},
+      title={SWE-Bench Pro: Can AI Agents Solve Long-Horizon Software Engineering Tasks?}, 
       author={Xiang Deng and Jeff Da and Edwin Pan and Yannis Yiming He and Charles Ide and Kanak Garg and Niklas Lauffer and Andrew Park and Nitin Pasari and Chetan Rane and Karmini Sampath and Maya Krishnan and Srivatsa Kundurthy and Sean Hendryx and Zifan Wang and Vijay Bharadwaj and Jeff Holm and Raja Aluri and Chen Bo Calvin Zhang and Noah Jacobson and Bing Liu and Brad Kenstler},
       year={2025},
       eprint={2509.16941},
       archivePrefix={arXiv},
       primaryClass={cs.SE},
-      url={https://arxiv.org/abs/2509.16941},
+      url={https://arxiv.org/abs/2509.16941}, 
 }
 ```
 

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """EvoEval adapter implementation for Harbor."""
 
 import importlib.util
@@ -86,8 +83,12 @@ class EvoEvalAdapter(BaseAdapter):
             placeholder_with_spaces = f"{{{{ {key} }}}}"
             placeholder_without_spaces = f"{{{{{key}}}}}"
             replacement = str(value)
-            template_content = template_content.replace(placeholder_with_spaces, replacement)
-            template_content = template_content.replace(placeholder_without_spaces, replacement)
+            template_content = template_content.replace(
+                placeholder_with_spaces, replacement
+            )
+            template_content = template_content.replace(
+                placeholder_without_spaces, replacement
+            )
         return template_content
 
     def prepare_tasks(
@@ -119,7 +120,9 @@ class EvoEvalAdapter(BaseAdapter):
 
             # Generate task data from EvoEval
             logger.info(f"Generating {dataset_name} data...")
-            self.questions, self.answers, self.solutions = generate_evoeval_data(dataset_name, evoeval_root)
+            self.questions, self.answers, self.solutions = generate_evoeval_data(
+                dataset_name, evoeval_root
+            )
 
             # Get task IDs
             task_ids = list(self.questions.keys())
@@ -140,7 +143,9 @@ class EvoEvalAdapter(BaseAdapter):
                     generated_paths.append(task_dir)
                     logger.info(f"Generated task: {task_id} -> {local_id}")
                 except Exception as e:
-                    logger.error(f"Failed to generate task {task_id}: {e}", exc_info=True)
+                    logger.error(
+                        f"Failed to generate task {task_id}: {e}", exc_info=True
+                    )
 
             return generated_paths
 
@@ -213,7 +218,9 @@ class EvoEvalAdapter(BaseAdapter):
         task_paths.test_path.chmod(0o755)
 
         # 6. Generate tests/test_outputs.py
-        test_outputs_py, external_data = self._build_test_outputs_py(task_id, question, test_cases)
+        test_outputs_py, external_data = self._build_test_outputs_py(
+            task_id, question, test_cases
+        )
         (task_paths.tests_dir / "test_outputs.py").write_text(test_outputs_py)
 
         # 7. Save external test data if needed
@@ -252,7 +259,9 @@ class EvoEvalAdapter(BaseAdapter):
         template_path = self.templates_dir / "solution" / "solve.sh"
         return self._render_template(template_path, {"solution_code": solution_code})
 
-    def _build_test_outputs_py(self, task_id: str, question: dict, test_cases: list) -> tuple[str, list | None]:
+    def _build_test_outputs_py(
+        self, task_id: str, question: dict, test_cases: list
+    ) -> tuple[str, list | None]:
         """
         Build tests/test_outputs.py content.
 
@@ -272,7 +281,10 @@ class EvoEvalAdapter(BaseAdapter):
         use_external_file = test_cases_size_mb > 1.0  # 1 MB threshold
 
         if use_external_file:
-            logger.warning(f"Task {task_id}: Test cases are {test_cases_size_mb:.2f} MB, " "saving to external file")
+            logger.warning(
+                f"Task {task_id}: Test cases are {test_cases_size_mb:.2f} MB, "
+                "saving to external file"
+            )
 
         task_data_str = json.dumps(question)
 

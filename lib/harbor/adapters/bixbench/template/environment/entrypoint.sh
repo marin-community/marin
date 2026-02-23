@@ -24,7 +24,7 @@ while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
     echo "nbcli server is ready (health check passed)" >&2
     break
   fi
-
+  
   sleep 0.5
   WAIT_COUNT=$((WAIT_COUNT + 1))
 done

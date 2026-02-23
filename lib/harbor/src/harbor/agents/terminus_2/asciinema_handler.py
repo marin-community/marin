@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import json
 from pathlib import Path
 from typing import TextIO
@@ -55,7 +52,9 @@ class AsciinemaHandler:
             output_file.write(input_file.readline())
 
             for line in input_file:
-                marker_index = self._process_recording_line(line, output_file, marker_index)
+                marker_index = self._process_recording_line(
+                    line, output_file, marker_index
+                )
 
             # Add any remaining markers at the end
             self._write_remaining_markers(output_file, self._markers[marker_index:])
@@ -76,7 +75,10 @@ class AsciinemaHandler:
             timestamp = float(data[0])
 
             # Insert any markers that should appear before this timestamp
-            while marker_index < len(self._markers) and self._markers[marker_index][0] <= timestamp:
+            while (
+                marker_index < len(self._markers)
+                and self._markers[marker_index][0] <= timestamp
+            ):
                 self._write_marker(output_file, self._markers[marker_index])
                 marker_index += 1
 
@@ -93,7 +95,9 @@ class AsciinemaHandler:
         marker_data = [marker_time, "m", marker_label]
         output_file.write(json.dumps(marker_data) + "\n")
 
-    def _write_remaining_markers(self, output_file: TextIO, markers: list[tuple[float, str]]) -> None:
+    def _write_remaining_markers(
+        self, output_file: TextIO, markers: list[tuple[float, str]]
+    ) -> None:
         """Write any remaining markers that come after all recorded events."""
         for marker in markers:
             self._write_marker(output_file, marker)

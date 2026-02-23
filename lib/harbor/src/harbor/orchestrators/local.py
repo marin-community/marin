@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import asyncio
 import shutil
 
@@ -59,7 +56,9 @@ class LocalOrchestrator(BaseOrchestrator):
         self._logger = logger.getChild(__name__)
 
     def _cache_tasks(self):
-        git_configs = [config for config in self._trial_configs if config.task.is_git_task()]
+        git_configs = [
+            config for config in self._trial_configs if config.task.is_git_task()
+        ]
 
         if not git_configs:
             return
@@ -69,7 +68,8 @@ class LocalOrchestrator(BaseOrchestrator):
 
         if len(overwrites) > 1 or len(output_dirs) > 1:
             raise ValueError(
-                "overwrite and output_dir cannot be different for different trials. " "This should never happen."
+                "overwrite and output_dir cannot be different for different trials. "
+                "This should never happen."
             )
 
         client = TaskClient()
@@ -82,18 +82,30 @@ class LocalOrchestrator(BaseOrchestrator):
         )
 
     def _should_retry_exception(self, exception_type: str) -> bool:
-        if self._retry_config.exclude_exceptions and exception_type in self._retry_config.exclude_exceptions:
-            self._logger.debug(f"Exception {exception_type} is in exclude_exceptions, not retrying")
+        if (
+            self._retry_config.exclude_exceptions
+            and exception_type in self._retry_config.exclude_exceptions
+        ):
+            self._logger.debug(
+                f"Exception {exception_type} is in exclude_exceptions, not retrying"
+            )
             return False
 
-        if self._retry_config.include_exceptions and exception_type not in self._retry_config.include_exceptions:
-            self._logger.debug(f"Exception {exception_type} is not in include_exceptions, not retrying")
+        if (
+            self._retry_config.include_exceptions
+            and exception_type not in self._retry_config.include_exceptions
+        ):
+            self._logger.debug(
+                f"Exception {exception_type} is not in include_exceptions, not retrying"
+            )
             return False
 
         return True
 
     def _calculate_backoff_delay(self, attempt: int) -> float:
-        delay = self._retry_config.min_wait_sec * (self._retry_config.wait_multiplier**attempt)
+        delay = self._retry_config.min_wait_sec * (
+            self._retry_config.wait_multiplier**attempt
+        )
         return min(delay, self._retry_config.max_wait_sec)
 
     def _setup_orchestrator_hooks(self, trial: Trial) -> None:
@@ -131,7 +143,10 @@ class LocalOrchestrator(BaseOrchestrator):
                 )
                 return result
             if attempt == self._retry_config.max_retries:
-                self._logger.debug("Not retrying trial because the maximum number of retries has been " "reached")
+                self._logger.debug(
+                    "Not retrying trial because the maximum number of retries has been "
+                    "reached"
+                )
                 return result
 
             shutil.rmtree(trial.trial_dir, ignore_errors=True)
@@ -146,7 +161,10 @@ class LocalOrchestrator(BaseOrchestrator):
 
             await asyncio.sleep(delay)
 
-        raise RuntimeError(f"Trial {trial_config.trial_name} produced no result. This should never " "happen.")
+        raise RuntimeError(
+            f"Trial {trial_config.trial_name} produced no result. This should never "
+            "happen."
+        )
 
     async def _run_trial(
         self,
@@ -157,7 +175,9 @@ class LocalOrchestrator(BaseOrchestrator):
         running_progress: Progress,
     ) -> TrialResult:
         async with semaphore:
-            trial_progress_task = running_progress.add_task(f"{trial_config.trial_name}: running trial...", total=None)
+            trial_progress_task = running_progress.add_task(
+                f"{trial_config.trial_name}: running trial...", total=None
+            )
 
             def update_progress(description: str):
                 running_progress.update(trial_progress_task, description=description)
@@ -166,7 +186,9 @@ class LocalOrchestrator(BaseOrchestrator):
                 """Add progress update hooks for the UI."""
 
                 async def on_environment_start(_event):
-                    update_progress(f"{trial.config.trial_name}: starting environment...")
+                    update_progress(
+                        f"{trial.config.trial_name}: starting environment..."
+                    )
 
                 async def on_agent_start(_event):
                     update_progress(f"{trial.config.trial_name}: running agent...")
@@ -175,7 +197,10 @@ class LocalOrchestrator(BaseOrchestrator):
                     update_progress(f"{trial.config.trial_name}: running verifier...")
 
                 async def on_cancel(_event):
-                    update_progress(f"{trial.config.trial_name}: canceling trial; " "this may take up to a minute...")
+                    update_progress(
+                        f"{trial.config.trial_name}: canceling trial; "
+                        "this may take up to a minute..."
+                    )
 
                 trial.add_hook(TrialEvent.ENVIRONMENT_START, on_environment_start)
                 trial.add_hook(TrialEvent.AGENT_START, on_agent_start)
@@ -183,7 +208,9 @@ class LocalOrchestrator(BaseOrchestrator):
                 trial.add_hook(TrialEvent.CANCEL, on_cancel)
 
             def on_retry(attempt: int):
-                update_progress(f"{trial_config.trial_name}: retrying (attempt {attempt})...")
+                update_progress(
+                    f"{trial_config.trial_name}: retrying (attempt {attempt})..."
+                )
 
             result = await self._execute_trial_with_retries(
                 trial_config,
@@ -198,16 +225,24 @@ class LocalOrchestrator(BaseOrchestrator):
 
             if self._metrics:
                 rewards = [
-                    trial_result.verifier_result.rewards if trial_result.verifier_result is not None else None
+                    trial_result.verifier_result.rewards
+                    if trial_result.verifier_result is not None
+                    else None
                     for trial_result in self._trial_results
                 ]
 
-                metric_result = self._metrics[trial_config.task.source or "adhoc"][0].compute(rewards)
-                first_metric_name, first_metric_value = next(iter(metric_result.items()))
+                metric_result = self._metrics[trial_config.task.source or "adhoc"][
+                    0
+                ].compute(rewards)
+                first_metric_name, first_metric_value = next(
+                    iter(metric_result.items())
+                )
 
                 loading_progress.update(
                     loading_progress_task,
-                    description=(f"{first_metric_name.title()}: {first_metric_value:.3f}"),
+                    description=(
+                        f"{first_metric_name.title()}: {first_metric_value:.3f}"
+                    ),
                 )
 
             return result
@@ -227,16 +262,24 @@ class LocalOrchestrator(BaseOrchestrator):
 
             if self._metrics:
                 rewards = [
-                    trial_result.verifier_result.rewards if trial_result.verifier_result is not None else None
+                    trial_result.verifier_result.rewards
+                    if trial_result.verifier_result is not None
+                    else None
                     for trial_result in self._trial_results
                 ]
 
-                metric_result = self._metrics[trial_config.task.source or "adhoc"][0].compute(rewards)
-                first_metric_name, first_metric_value = next(iter(metric_result.items()))
+                metric_result = self._metrics[trial_config.task.source or "adhoc"][
+                    0
+                ].compute(rewards)
+                first_metric_name, first_metric_value = next(
+                    iter(metric_result.items())
+                )
 
                 loading_progress.update(
                     loading_progress_task,
-                    description=(f"{first_metric_name.title()}: {first_metric_value:.3f}"),
+                    description=(
+                        f"{first_metric_name.title()}: {first_metric_value:.3f}"
+                    ),
                 )
 
             return result
@@ -255,7 +298,9 @@ class LocalOrchestrator(BaseOrchestrator):
 
         if self._quiet:
             with loading_progress:
-                progress_task = loading_progress.add_task("Running trials...", total=len(self._trial_configs))
+                progress_task = loading_progress.add_task(
+                    "Running trials...", total=len(self._trial_configs)
+                )
 
                 async with asyncio.TaskGroup() as tg:
                     tasks = [
@@ -278,7 +323,9 @@ class LocalOrchestrator(BaseOrchestrator):
             )
 
             with Live(Group(loading_progress, running_progress), refresh_per_second=10):
-                progress_task = loading_progress.add_task("Running trials...", total=len(self._trial_configs))
+                progress_task = loading_progress.add_task(
+                    "Running trials...", total=len(self._trial_configs)
+                )
 
                 async with asyncio.TaskGroup() as tg:
                     tasks = [

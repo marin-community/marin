@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import asyncio
 import os
 import tomllib
@@ -165,13 +162,17 @@ async def _upload_images_async(
                 task = Task(task_dir)
                 tasks_with_dockerfiles.append((task, dockerfile_path))
             except Exception as e:
-                console.print(f"[yellow]Warning: Could not load task from {task_dir}: {e}[/yellow]")
+                console.print(
+                    f"[yellow]Warning: Could not load task from {task_dir}: {e}[/yellow]"
+                )
 
     if not tasks_with_dockerfiles:
         console.print("[yellow]No tasks with Dockerfiles found.[/yellow]")
         return
 
-    console.print(f"[blue]Found {len(tasks_with_dockerfiles)} task(s) with Dockerfiles.[/blue]\n")
+    console.print(
+        f"[blue]Found {len(tasks_with_dockerfiles)} task(s) with Dockerfiles.[/blue]\n"
+    )
 
     # Process tasks with parallelism limit
     semaphore = asyncio.Semaphore(parallel)
@@ -215,7 +216,9 @@ async def _upload_images_async(
                 config_dict = tomllib.load(f)
 
             # Check if docker_image already exists
-            current_docker_image = config_dict.get("environment", {}).get("docker_image")
+            current_docker_image = config_dict.get("environment", {}).get(
+                "docker_image"
+            )
 
             if current_docker_image and not override_config:
                 console.print(
@@ -264,7 +267,9 @@ async def _upload_images_async(
         console.print(f"  Config Skipped: {config_skipped_count}")
 
     if dry_run:
-        console.print("\n[yellow]Dry run complete - no images were built or pushed.[/yellow]")
+        console.print(
+            "\n[yellow]Dry run complete - no images were built or pushed.[/yellow]"
+        )
 
 
 async def _build_and_push_task(

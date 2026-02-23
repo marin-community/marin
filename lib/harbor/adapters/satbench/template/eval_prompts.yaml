@@ -22,7 +22,7 @@ sat_prediction:
             - If the puzzle is unsatisfiable, explain why some of the conditions cannot all be true at once.
 
             Think step by step. At the end of your answer, output exactly one of the following labels on a new line of the solution.txt file:
-            [SAT] — if a valid assignment exists
-            [UNSAT] — if the constraints cannot be satisfied
+            [SAT] — if a valid assignment exists  
+            [UNSAT] — if the constraints cannot be satisfied  
 
             Do not add any text or formatting after the final label.

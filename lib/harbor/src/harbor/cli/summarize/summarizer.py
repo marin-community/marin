@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,7 +64,9 @@ class Summarizer:
         self.overwrite = overwrite
 
         # Get all trial directories with results
-        all_trial_dirs = [d for d in job_dir.iterdir() if d.is_dir() and (d / "result.json").exists()]
+        all_trial_dirs = [
+            d for d in job_dir.iterdir() if d.is_dir() and (d / "result.json").exists()
+        ]
 
         # Filter trials based on criteria
         self.trial_dirs = self._filter_trials(all_trial_dirs)
@@ -97,13 +96,21 @@ class Summarizer:
                 continue
 
             try:
-                trial_result = TrialResult.model_validate_json(trial_paths.result_path.read_text())
+                trial_result = TrialResult.model_validate_json(
+                    trial_paths.result_path.read_text()
+                )
 
                 # Check if trial has reward = 1 (successful)
                 has_reward_one = False
-                if trial_result.verifier_result and trial_result.verifier_result.rewards:
+                if (
+                    trial_result.verifier_result
+                    and trial_result.verifier_result.rewards
+                ):
                     # Check if any reward is 1
-                    has_reward_one = any(reward == 1 for reward in trial_result.verifier_result.rewards.values())
+                    has_reward_one = any(
+                        reward == 1
+                        for reward in trial_result.verifier_result.rewards.values()
+                    )
 
                 # Skip trials with reward = 1 even if they have exceptions
                 if has_reward_one:
@@ -113,9 +120,15 @@ class Summarizer:
                 has_exception = trial_result.exception_info is not None
                 has_reward_zero = False
 
-                if trial_result.verifier_result and trial_result.verifier_result.rewards:
+                if (
+                    trial_result.verifier_result
+                    and trial_result.verifier_result.rewards
+                ):
                     # Check if any reward is 0
-                    has_reward_zero = any(reward == 0 for reward in trial_result.verifier_result.rewards.values())
+                    has_reward_zero = any(
+                        reward == 0
+                        for reward in trial_result.verifier_result.rewards.values()
+                    )
 
                 if has_exception or has_reward_zero:
                     filtered_dirs.append(trial_dir)
@@ -144,7 +157,9 @@ class Summarizer:
         task_dir = None
 
         if trial_paths.config_path.exists():
-            trial_config = TrialConfig.model_validate_json(trial_paths.config_path.read_text())
+            trial_config = TrialConfig.model_validate_json(
+                trial_paths.config_path.read_text()
+            )
             task_dir = trial_config.task.get_task_id().get_local_path()
 
         prompt = self.SUMMARIZE_TRIAL_PROMPT.format(
@@ -200,7 +215,9 @@ class Summarizer:
         """
         async with semaphore:
             trial_name = trial_dir.name
-            trial_progress_task = running_progress.add_task(f"{trial_name}: summarizing...", total=None)
+            trial_progress_task = running_progress.add_task(
+                f"{trial_name}: summarizing...", total=None
+            )
 
             try:
                 trial_name, summary = await self.summarize_trial(trial_dir)
@@ -236,7 +253,9 @@ class Summarizer:
         )
 
         with Live(Group(loading_progress, running_progress), refresh_per_second=10):
-            progress_task = loading_progress.add_task("Summarizing trials...", total=len(self.trial_dirs))
+            progress_task = loading_progress.add_task(
+                "Summarizing trials...", total=len(self.trial_dirs)
+            )
 
             async with asyncio.TaskGroup() as tg:
                 tasks = [
@@ -265,7 +284,11 @@ class Summarizer:
 
         Returns only failed trials if only_failed=True, otherwise all with results.
         """
-        all_trial_dirs = [d for d in self.job_dir.iterdir() if d.is_dir() and (d / "result.json").exists()]
+        all_trial_dirs = [
+            d
+            for d in self.job_dir.iterdir()
+            if d.is_dir() and (d / "result.json").exists()
+        ]
 
         if not self.only_failed:
             return all_trial_dirs
@@ -278,12 +301,20 @@ class Summarizer:
                 continue
 
             try:
-                trial_result = TrialResult.model_validate_json(trial_paths.result_path.read_text())
+                trial_result = TrialResult.model_validate_json(
+                    trial_paths.result_path.read_text()
+                )
 
                 # Check if trial has reward = 1 (successful)
                 has_reward_one = False
-                if trial_result.verifier_result and trial_result.verifier_result.rewards:
-                    has_reward_one = any(reward == 1 for reward in trial_result.verifier_result.rewards.values())
+                if (
+                    trial_result.verifier_result
+                    and trial_result.verifier_result.rewards
+                ):
+                    has_reward_one = any(
+                        reward == 1
+                        for reward in trial_result.verifier_result.rewards.values()
+                    )
 
                 # Skip trials with reward = 1
                 if has_reward_one:
@@ -293,8 +324,14 @@ class Summarizer:
                 has_exception = trial_result.exception_info is not None
                 has_reward_zero = False
 
-                if trial_result.verifier_result and trial_result.verifier_result.rewards:
-                    has_reward_zero = any(reward == 0 for reward in trial_result.verifier_result.rewards.values())
+                if (
+                    trial_result.verifier_result
+                    and trial_result.verifier_result.rewards
+                ):
+                    has_reward_zero = any(
+                        reward == 0
+                        for reward in trial_result.verifier_result.rewards.values()
+                    )
 
                 if has_exception or has_reward_zero:
                     failed_dirs.append(trial_dir)
@@ -374,21 +411,30 @@ class Summarizer:
             SummarizeResult with summary path and counts
         """
         # Print filtering information
-        all_trial_dirs = [d for d in self.job_dir.iterdir() if d.is_dir() and (d / "result.json").exists()]
+        all_trial_dirs = [
+            d
+            for d in self.job_dir.iterdir()
+            if d.is_dir() and (d / "result.json").exists()
+        ]
         total_trials = len(all_trial_dirs)
         filtered_count = len(self.trial_dirs)
 
         if filtered_count < total_trials:
             filter_parts = []
             if not self.overwrite:
-                existing_summaries = sum(1 for d in all_trial_dirs if (d / "summary.md").exists())
+                existing_summaries = sum(
+                    1 for d in all_trial_dirs if (d / "summary.md").exists()
+                )
                 if existing_summaries > 0:
                     filter_parts.append(f"{existing_summaries} with existing summaries")
             if self.only_failed:
                 filter_parts.append("only failed trials")
 
             filter_desc = ", ".join(filter_parts) if filter_parts else ""
-            print(f"\nFiltering: {filtered_count}/{total_trials} trials" + (f" ({filter_desc})" if filter_desc else ""))
+            print(
+                f"\nFiltering: {filtered_count}/{total_trials} trials"
+                + (f" ({filter_desc})" if filter_desc else "")
+            )
 
         n_trials_summarized = 0
         job_summary_created = False
@@ -401,7 +447,9 @@ class Summarizer:
 
         # Check if there are any relevant trial summaries on disk
         relevant_trial_dirs = self._get_relevant_trial_dirs()
-        has_any_summaries = any((d / "summary.md").exists() for d in relevant_trial_dirs)
+        has_any_summaries = any(
+            (d / "summary.md").exists() for d in relevant_trial_dirs
+        )
 
         if has_any_summaries:
             # Create job-level summary with progress display
@@ -412,7 +460,9 @@ class Summarizer:
             )
 
             with job_progress:
-                job_task = job_progress.add_task("Creating job-level summary...", total=None)
+                job_task = job_progress.add_task(
+                    "Creating job-level summary...", total=None
+                )
                 result = await self._create_job_summary()
                 job_progress.remove_task(job_task)
 

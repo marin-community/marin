@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 CRUSTBenchAdapter - Adapter for CRUST-bench benchmark.
 
@@ -338,13 +335,19 @@ class CRUSTBenchAdapter:
         env_dir.mkdir(parents=True, exist_ok=True)
 
         # Save C source files and create markdown references
-        c_sources_md = self._save_and_reference_sources(record.get("c_sources", []), env_dir, "C Source Files")
+        c_sources_md = self._save_and_reference_sources(
+            record.get("c_sources", []), env_dir, "C Source Files"
+        )
 
         # Save H header files and create markdown references
-        h_sources_md = self._save_and_reference_sources(record.get("h_sources", []), env_dir, "C Header Files")
+        h_sources_md = self._save_and_reference_sources(
+            record.get("h_sources", []), env_dir, "C Header Files"
+        )
 
         # For Rust interfaces and tests, create file path references
-        interfaces_md = self._create_rbench_references(record.get("interfaces", []), "interfaces")
+        interfaces_md = self._create_rbench_references(
+            record.get("interfaces", []), "interfaces"
+        )
         tests_md = self._create_rbench_references(record.get("tests", []), "bin")
 
         # Update instruction.md (always use template)
@@ -410,7 +413,9 @@ class CRUSTBenchAdapter:
             if cargo_toml.exists():
                 cargo_content = cargo_toml.read_text(encoding="utf-8", errors="replace")
                 if 'edition = "2024"' in cargo_content:
-                    cargo_content = cargo_content.replace('edition = "2024"', 'edition = "2021"')
+                    cargo_content = cargo_content.replace(
+                        'edition = "2024"', 'edition = "2021"'
+                    )
                     cargo_toml.write_text(cargo_content, encoding="utf-8")
 
             # Fix lib.rs to correctly reference interfaces subdirectory
@@ -418,7 +423,9 @@ class CRUSTBenchAdapter:
             if lib_rs.exists():
                 content = lib_rs.read_text(encoding="utf-8", errors="replace")
                 # Check if interfaces/ directory exists and lib.rs doesn't already use it
-                if (rbench_dest / "src" / "interfaces").exists() and "pub mod interfaces;" not in content:
+                if (
+                    rbench_dest / "src" / "interfaces"
+                ).exists() and "pub mod interfaces;" not in content:
                     # Replace direct module declarations with interfaces module
                     # e.g., "pub mod circular_buffer;" -> use interfaces subdirectory
                     lines = content.strip().split("\n")
@@ -426,10 +433,19 @@ class CRUSTBenchAdapter:
                     for line in lines:
                         # If it's a simple "pub mod xxx;" where xxx.rs doesn't exist in src/
                         # but interfaces/xxx.rs does, we need to restructure
-                        if line.strip().startswith("pub mod ") and line.strip().endswith(";"):
-                            mod_name = line.strip().replace("pub mod ", "").replace(";", "").strip()
+                        if line.strip().startswith(
+                            "pub mod "
+                        ) and line.strip().endswith(";"):
+                            mod_name = (
+                                line.strip()
+                                .replace("pub mod ", "")
+                                .replace(";", "")
+                                .strip()
+                            )
                             # Check if the module file exists in interfaces/
-                            if (rbench_dest / "src" / "interfaces" / f"{mod_name}.rs").exists():
+                            if (
+                                rbench_dest / "src" / "interfaces" / f"{mod_name}.rs"
+                            ).exists():
                                 # Skip this line, we'll add proper structure below
                                 continue
                         new_lines.append(line)
@@ -458,7 +474,9 @@ class CRUSTBenchAdapter:
                             if rs_file.stem != "mod":
                                 modules.append(f"pub mod {rs_file.stem};")
                         if modules:
-                            mod_rs.write_text("\n".join(modules) + "\n", encoding="utf-8")
+                            mod_rs.write_text(
+                                "\n".join(modules) + "\n", encoding="utf-8"
+                            )
 
             logger.info(f"Copied RBench project to {rbench_dest}")
 
@@ -483,7 +501,9 @@ class CRUSTBenchAdapter:
 
         return "\n".join(result)
 
-    def _save_and_reference_sources(self, sources: list[dict], env_dir: Path, section_name: str) -> str:
+    def _save_and_reference_sources(
+        self, sources: list[dict], env_dir: Path, section_name: str
+    ) -> str:
         """Save source files to environment directory and create markdown references.
 
         Args:

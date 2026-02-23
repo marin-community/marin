@@ -1,7 +1,4 @@
 #!/usr/bin/env python
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Runtime test with a fake LLM server that tests timeout behavior for terminus_2.
 
 This test creates a real HTTP server that mimics an LLM API, runs terminus_2
@@ -59,11 +56,19 @@ async def fake_llm_server_with_timeout():
         model = request_data.get("model", "gpt-4")
         messages = request_data.get("messages", [])
 
-        print(f"[FAKE SERVER] Call #{call_count['count']} for model: {model}, messages count: {len(messages)}")
+        print(
+            f"[FAKE SERVER] Call #{call_count['count']} for model: {model}, messages count: {len(messages)}"
+        )
 
         # Check for completion confirmation
-        if any("Are you sure you want to mark the task as complete" in msg.get("content", "") for msg in messages):
-            print("[FAKE SERVER] Handling task completion confirmation (should not reach here)")
+        if any(
+            "Are you sure you want to mark the task as complete"
+            in msg.get("content", "")
+            for msg in messages
+        ):
+            print(
+                "[FAKE SERVER] Handling task completion confirmation (should not reach here)"
+            )
             response_content = """{
   "analysis": "Yes, confirming task completion.",
   "plan": "Final confirmation.",
@@ -164,7 +169,9 @@ async def fake_llm_server_with_timeout():
         # - Call 3 at t≈50s: sleep 50 (completes at t≈100s)
         # - Call 4 at t≈100s: sleep 50 (interrupted by 120s timeout at t≈120s)
         else:
-            print(f"[FAKE SERVER] Handling call #{call_count['count']} - sleep 50 seconds")
+            print(
+                f"[FAKE SERVER] Handling call #{call_count['count']} - sleep 50 seconds"
+            )
             response_content = """{
   "analysis": "Continue working on the task.",
   "plan": "Sleep for 50 seconds.",
@@ -307,7 +314,9 @@ async def test_terminus_2_timeout(fake_llm_server_with_timeout, tmp_path, monkey
     print(f"   Finished: {result.finished_at}")
 
     # Check trajectory file
-    agent_trajectory_path = result.trial_uri.replace("file://", "") + "/agent/trajectory.json"
+    agent_trajectory_path = (
+        result.trial_uri.replace("file://", "") + "/agent/trajectory.json"
+    )
     print(f"\nChecking agent trajectory at: {agent_trajectory_path}")
 
     with open(agent_trajectory_path, "r") as f:
@@ -318,8 +327,12 @@ async def test_terminus_2_timeout(fake_llm_server_with_timeout, tmp_path, monkey
         print(
             f"   Total episodes (metadata): {result.agent_result.metadata.get('n_episodes') if result.agent_result else 'N/A'}"
         )
-        print(f"   Total prompt tokens: {trajectory.get('final_metrics', {}).get('total_prompt_tokens')}")
-        print(f"   Total completion tokens: {trajectory.get('final_metrics', {}).get('total_completion_tokens')}")
+        print(
+            f"   Total prompt tokens: {trajectory.get('final_metrics', {}).get('total_prompt_tokens')}"
+        )
+        print(
+            f"   Total completion tokens: {trajectory.get('final_metrics', {}).get('total_completion_tokens')}"
+        )
 
         # Print all steps to understand the timeout behavior
         steps = trajectory.get("steps", [])
@@ -333,7 +346,9 @@ async def test_terminus_2_timeout(fake_llm_server_with_timeout, tmp_path, monkey
     golden_path = Path("tests/golden/terminus_2/hello-world-timeout.trajectory.json")
 
     if should_update_golden_trajectories():
-        print(f"\nUPDATE_GOLDEN_TRAJECTORIES is set - updating golden trajectory at: {golden_path}")
+        print(
+            f"\nUPDATE_GOLDEN_TRAJECTORIES is set - updating golden trajectory at: {golden_path}"
+        )
         save_golden_trajectory(trajectory, golden_path, print_output=True)
     else:
         print(f"\nComparing with golden trajectory at: {golden_path}")
@@ -345,9 +360,9 @@ async def test_terminus_2_timeout(fake_llm_server_with_timeout, tmp_path, monkey
         normalized_golden = normalize_trajectory(golden_trajectory)
 
         # Compare the two dictionaries directly
-        assert (
-            normalized_trajectory == normalized_golden
-        ), f"Trajectory mismatch.\nGot:\n{json.dumps(normalized_trajectory, indent=2)}\n\nExpected:\n{json.dumps(normalized_golden, indent=2)}"
+        assert normalized_trajectory == normalized_golden, (
+            f"Trajectory mismatch.\nGot:\n{json.dumps(normalized_trajectory, indent=2)}\n\nExpected:\n{json.dumps(normalized_golden, indent=2)}"
+        )
 
         print("   Trajectory matches golden file!")
 
@@ -355,7 +370,9 @@ async def test_terminus_2_timeout(fake_llm_server_with_timeout, tmp_path, monkey
     # The 4th LLM call is made but the agent is killed by timeout before
     # it can write the step to the trajectory, so final_metrics includes
     # the 4th call's tokens but the trajectory steps don't
-    print("\nSkipping strict metrics verification (expected mismatch due to timeout interruption)")
+    print(
+        "\nSkipping strict metrics verification (expected mismatch due to timeout interruption)"
+    )
 
     # Print LLM call statistics
     call_count = get_call_count()
@@ -381,11 +398,17 @@ async def test_terminus_2_timeout(fake_llm_server_with_timeout, tmp_path, monkey
     assert result.verifier_result.rewards is not None, "Rewards should not be None"
     reward = result.verifier_result.rewards.get("reward", 0.0)
     print(f"   ✓ Reward: {reward}")
-    assert reward == 0.0, f"Task should fail due to timeout with reward=0.0, but got reward={reward}"
+    assert reward == 0.0, (
+        f"Task should fail due to timeout with reward=0.0, but got reward={reward}"
+    )
 
     # CRITICAL CHECK 2: Verify we got token counts in trajectory
-    total_prompt_tokens = trajectory.get("final_metrics", {}).get("total_prompt_tokens", 0)
-    total_completion_tokens = trajectory.get("final_metrics", {}).get("total_completion_tokens", 0)
+    total_prompt_tokens = trajectory.get("final_metrics", {}).get(
+        "total_prompt_tokens", 0
+    )
+    total_completion_tokens = trajectory.get("final_metrics", {}).get(
+        "total_completion_tokens", 0
+    )
     print(f"\n   ✓ Total prompt tokens: {total_prompt_tokens}")
     print(f"   ✓ Total completion tokens: {total_completion_tokens}")
     assert total_prompt_tokens > 0, "Should have non-zero prompt tokens"
@@ -414,25 +437,31 @@ async def test_terminus_2_timeout(fake_llm_server_with_timeout, tmp_path, monkey
         print(f"   Rollout detail {i + 1}:")
 
         # Check prompt_token_ids
-        assert "prompt_token_ids" in detail, f"Rollout detail {i + 1} missing prompt_token_ids"
+        assert "prompt_token_ids" in detail, (
+            f"Rollout detail {i + 1} missing prompt_token_ids"
+        )
         prompt_token_ids = detail["prompt_token_ids"]
-        assert (
-            len(prompt_token_ids) > 0 and len(prompt_token_ids[0]) > 0
-        ), f"Rollout detail {i + 1} has empty prompt_token_ids"
+        assert len(prompt_token_ids) > 0 and len(prompt_token_ids[0]) > 0, (
+            f"Rollout detail {i + 1} has empty prompt_token_ids"
+        )
         print(f"      prompt_token_ids: {len(prompt_token_ids[0])} tokens")
 
         # Check completion_token_ids
-        assert "completion_token_ids" in detail, f"Rollout detail {i + 1} missing completion_token_ids"
+        assert "completion_token_ids" in detail, (
+            f"Rollout detail {i + 1} missing completion_token_ids"
+        )
         completion_token_ids = detail["completion_token_ids"]
-        assert (
-            len(completion_token_ids) > 0 and len(completion_token_ids[0]) > 0
-        ), f"Rollout detail {i + 1} has empty completion_token_ids"
+        assert len(completion_token_ids) > 0 and len(completion_token_ids[0]) > 0, (
+            f"Rollout detail {i + 1} has empty completion_token_ids"
+        )
         print(f"      completion_token_ids: {len(completion_token_ids[0])} tokens")
 
         # Check logprobs
         assert "logprobs" in detail, f"Rollout detail {i + 1} missing logprobs"
         logprobs = detail["logprobs"]
-        assert len(logprobs) > 0 and len(logprobs[0]) > 0, f"Rollout detail {i + 1} has empty logprobs"
+        assert len(logprobs) > 0 and len(logprobs[0]) > 0, (
+            f"Rollout detail {i + 1} has empty logprobs"
+        )
         print(f"      logprobs: {len(logprobs[0])} entries")
 
     print(f"\n{'=' * 80}")

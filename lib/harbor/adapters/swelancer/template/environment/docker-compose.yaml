@@ -4,7 +4,7 @@ services:
       dockerfile: Dockerfile
     command:
     - /app/tests/run.sh
-    environment:
+    environment: 
     {environment}
     working_dir: /app
     volumes:

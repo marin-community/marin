@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import importlib
 import logging
 from pathlib import Path
@@ -100,7 +97,9 @@ class EnvironmentFactory:
         try:
             Environment = getattr(module, class_name)
         except AttributeError as e:
-            raise ValueError(f"Module '{module_path}' has no class '{class_name}'") from e
+            raise ValueError(
+                f"Module '{module_path}' has no class '{class_name}'"
+            ) from e
 
         return Environment(
             environment_dir=environment_dir,
@@ -149,6 +148,7 @@ class EnvironmentFactory:
             "override_memory_mb": config.override_memory_mb,
             "override_storage_mb": config.override_storage_mb,
             "override_gpus": config.override_gpus,
+            "suppress_override_warnings": config.suppress_override_warnings,
             **config.kwargs,
             **kwargs,
         }
@@ -166,4 +166,6 @@ class EnvironmentFactory:
                 **env_constructor_kwargs,
             )
         else:
-            raise ValueError("At least one of environment type or import_path must be set.")
+            raise ValueError(
+                "At least one of environment type or import_path must be set."
+            )

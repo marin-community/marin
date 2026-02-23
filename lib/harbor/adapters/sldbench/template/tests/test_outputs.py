@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # -*- coding: utf-8 -*-
 import importlib.util
 from pathlib import Path
@@ -51,7 +48,9 @@ def calculate_final_metrics(
         pred = np.asarray(predictions, dtype=float)
         true = np.asarray(true_values, dtype=float)
     except (ValueError, TypeError):
-        return get_failure_result("Could not convert predictions or true values to float arrays.")
+        return get_failure_result(
+            "Could not convert predictions or true values to float arrays."
+        )
 
     # 2. Check for invalid values in predictions
     if np.isnan(pred).any() or np.isinf(pred).any():
@@ -65,7 +64,9 @@ def calculate_final_metrics(
 
     # 4. Final shape validation
     if true.shape != pred.shape:
-        return get_failure_result(f"Shape mismatch: true values {true.shape} vs. predictions {pred.shape}.")
+        return get_failure_result(
+            f"Shape mismatch: true values {true.shape} vs. predictions {pred.shape}."
+        )
     if true.size == 0:
         return get_failure_result("Cannot evaluate on empty data.")
 
@@ -76,7 +77,9 @@ def calculate_final_metrics(
     combined_true_values = true
 
     variance_per_dim = np.var(combined_true_values, axis=0)
-    mean_abs_dev_per_dim = np.mean(np.abs(combined_true_values - np.mean(combined_true_values, axis=0)), axis=0)
+    mean_abs_dev_per_dim = np.mean(
+        np.abs(combined_true_values - np.mean(combined_true_values, axis=0)), axis=0
+    )
 
     # 7. Calculate normalized metrics, avoiding division by zero
     nmse_per_dim = np.divide(
@@ -114,7 +117,9 @@ def load_law_function():
     spec.loader.exec_module(law_module)
 
     if not hasattr(law_module, "law"):
-        raise ImportError("law.py exists but does not contain a required 'law' function.")
+        raise ImportError(
+            "law.py exists but does not contain a required 'law' function."
+        )
 
     return law_module.law
 

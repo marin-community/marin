@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import argparse
@@ -10,7 +7,9 @@ from adapter import SWEBenchToHarbor
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Convert SWEBench instance(s) to Harbor task directories")
+    ap = argparse.ArgumentParser(
+        description="Convert SWEBench instance(s) to Harbor task directories"
+    )
 
     # mode flags
     ap.add_argument(

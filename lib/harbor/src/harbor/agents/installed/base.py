@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -35,7 +32,9 @@ class BaseInstalledAgent(BaseAgent, ABC):
     ):
         super().__init__(logs_dir, *args, **kwargs)
 
-        self._prompt_template_path = Path(prompt_template_path) if prompt_template_path else None
+        self._prompt_template_path = (
+            Path(prompt_template_path) if prompt_template_path else None
+        )
         self._version = version
 
     @property
@@ -76,6 +75,12 @@ class BaseInstalledAgent(BaseAgent, ABC):
         return self._version
 
     async def setup(self, environment: BaseEnvironment) -> None:
+        # Ensure .bash_profile sources .bashrc so that PATH exports from install scripts
+        # are available in login shells (bash -lc). PS1=1 bypasses the interactive guard.
+        await environment.exec(
+            command="echo 'PS1=1 . ~/.bashrc 2>/dev/null; unset PS1' >> ~/.bash_profile"
+        )
+
         await environment.exec(command="mkdir -p /installed-agent")
 
         if not self._install_agent_template_path.exists():
@@ -94,7 +99,10 @@ class BaseInstalledAgent(BaseAgent, ABC):
             target_path="/installed-agent/install.sh",
         )
 
-        result = await environment.exec(command="bash /installed-agent/install.sh")
+        result = await environment.exec(
+            command="bash /installed-agent/install.sh",
+            env={"DEBIAN_FRONTEND": "noninteractive"},
+        )
 
         setup_dir = self.logs_dir / "setup"
         setup_dir.mkdir(parents=True, exist_ok=True)
@@ -108,7 +116,10 @@ class BaseInstalledAgent(BaseAgent, ABC):
             (setup_dir / "stderr.txt").write_text(result.stderr)
 
         if result.return_code != 0:
-            raise RuntimeError(f"Agent setup failed with exit code {result.return_code}. " f"See logs in {setup_dir}")
+            raise RuntimeError(
+                f"Agent setup failed with exit code {result.return_code}. "
+                f"See logs in {setup_dir}"
+            )
 
     async def run(
         self,
@@ -125,7 +136,9 @@ class BaseInstalledAgent(BaseAgent, ABC):
             else instruction
         )
 
-        for i, exec_input in enumerate(self.create_run_agent_commands(rendered_instruction)):
+        for i, exec_input in enumerate(
+            self.create_run_agent_commands(rendered_instruction)
+        ):
             command_dir = self.logs_dir / f"command-{i}"
             command_dir.mkdir(parents=True, exist_ok=True)
             (command_dir / "command.txt").write_text(exec_input.command)

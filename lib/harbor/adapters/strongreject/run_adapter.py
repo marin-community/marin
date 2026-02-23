@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Entry point for generating StrongREJECT benchmark tasks in Harbor format.
 
 Usage:
@@ -48,9 +45,7 @@ DEFAULT_OUTPUT_DIR = HARBOR_ROOT / "datasets" / "strongreject"
 
 # --- CONFIGURATION ---
 CSV_URL_SMALL = "https://raw.githubusercontent.com/alexandrasouly/strongreject/main/strongreject_dataset/strongreject_small_dataset.csv"
-CSV_URL_FULL = (
-    "https://raw.githubusercontent.com/alexandrasouly/strongreject/main/strongreject_dataset/strongreject_dataset.csv"
-)
+CSV_URL_FULL = "https://raw.githubusercontent.com/alexandrasouly/strongreject/main/strongreject_dataset/strongreject_dataset.csv"
 
 # --- LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -199,7 +194,9 @@ def main() -> None:
 
     # Filter by category if specified (BEFORE sampling)
     if args.category:
-        dataset = dataset.filter(lambda row: args.category.lower() in row["category"].lower())
+        dataset = dataset.filter(
+            lambda row: args.category.lower() in row["category"].lower()
+        )
         logger.info(f"Filtered to {len(dataset)} tasks in category '{args.category}'")
 
     # Random sampling (if specified) using HuggingFace's shuffle for parity
@@ -211,7 +208,10 @@ def main() -> None:
             dataset = dataset.shuffle(seed=seed).select(range(args.sample))
             logger.info(f"Randomly sampled {args.sample} tasks with seed {seed}")
         else:
-            logger.warning(f"Sample size ({args.sample}) >= total tasks ({len(dataset)}), " "using all tasks")
+            logger.warning(
+                f"Sample size ({args.sample}) >= total tasks ({len(dataset)}), "
+                "using all tasks"
+            )
 
     # Limit number of tasks if specified (takes first N after filtering/sampling)
     if args.limit:
@@ -230,7 +230,9 @@ def main() -> None:
     logger.info(f"Jailbreaks to apply: {adapter.jailbreaks}")
 
     # NOW apply jailbreaks (after filtering/sampling to minimize API calls)
-    logger.info(f"Applying {len(adapter.jailbreaks)} jailbreak(s) to {len(adapter.tasks)} prompts...")
+    logger.info(
+        f"Applying {len(adapter.jailbreaks)} jailbreak(s) to {len(adapter.tasks)} prompts..."
+    )
     adapter.apply_jailbreaks_to_tasks()
     logger.info(f"Total tasks after jailbreaks: {len(adapter.tasks)}")
 
@@ -243,7 +245,9 @@ def main() -> None:
         if (i + 1) % 50 == 0:
             logger.info(f"Generated {i + 1}/{total_tasks} tasks")
 
-    logger.info(f"All {total_tasks} StrongREJECT tasks successfully generated in: {output_dir}")
+    logger.info(
+        f"All {total_tasks} StrongREJECT tasks successfully generated in: {output_dir}"
+    )
 
 
 if __name__ == "__main__":

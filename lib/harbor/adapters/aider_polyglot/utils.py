@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,7 +11,9 @@ def load_template(template_name: str, templates_dir: Path) -> str:
     """Load a text template from templates dir."""
     template_path = templates_dir / template_name
     if not template_path.exists():
-        raise FileNotFoundError(f"Template {template_name} not found at {template_path}")
+        raise FileNotFoundError(
+            f"Template {template_name} not found at {template_path}"
+        )
     return template_path.read_text(encoding="utf-8")
 
 

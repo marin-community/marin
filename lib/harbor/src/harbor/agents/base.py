@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -42,7 +39,9 @@ class BaseAgent(ABC):
             return
 
         if "/" in self.model_name:
-            self._parsed_model_provider, self._parsed_model_name = self.model_name.split("/", maxsplit=1)
+            self._parsed_model_provider, self._parsed_model_name = (
+                self.model_name.split("/", maxsplit=1)
+            )
             return
 
         self._parsed_model_name = self.model_name
@@ -52,7 +51,9 @@ class BaseAgent(ABC):
             name=self.name(),
             version=self.version() or "unknown",
             model_info=(
-                ModelInfo(name=self._parsed_model_name, provider=self._parsed_model_provider)
+                ModelInfo(
+                    name=self._parsed_model_name, provider=self._parsed_model_provider
+                )
                 if self._parsed_model_name and self._parsed_model_provider
                 else None
             ),

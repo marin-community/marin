@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Utilities for the Algotune Adapter
 """
@@ -24,7 +21,9 @@ TARGET_RUNTIME_MS = 100  # Target runtime in milliseconds
 CALIBRATION_TOLERANCE = 0.2  # 20% tolerance for runtime matching
 MIN_PROBLEM_SIZE = 1
 MAX_PROBLEM_SIZE = 10000000
-CALIBRATION_TIMEOUT_SEC = 200  # Maximum time for a single calibration run (increased for full eval)
+CALIBRATION_TIMEOUT_SEC = (
+    200  # Maximum time for a single calibration run (increased for full eval)
+)
 # Match evaluation settings exactly for accurate calibration
 CALIBRATION_NUM_PROBLEMS = 100  # Same as NUM_TEST_INSTANCES in test_outputs.py
 CALIBRATION_NUM_REPEATS = 10  # Same as NUM_REPEATS in test_outputs.py
@@ -129,32 +128,32 @@ def load_task_class(task_path):
     """Dynamically load the Task class from the task file."""
     spec = importlib.util.spec_from_file_location("task_module", task_path)
     module = importlib.util.module_from_spec(spec)
-
+    
     # Mock the AlgoTune base import
     class MockTask:
         def __init__(self, **kwargs):
             pass
-
+    
     sys.modules["AlgoTuneTasks"] = type(sys)("AlgoTuneTasks")
     sys.modules["AlgoTuneTasks.base"] = type(sys)("AlgoTuneTasks.base")
     sys.modules["AlgoTuneTasks.base"].Task = MockTask
-
+    
     # Also need to handle register_task decorator
     def mock_register_task(*args, **kwargs):
         def decorator(cls):
             return cls
         return decorator
     sys.modules["AlgoTuneTasks.base"].register_task = mock_register_task
-
+    
     spec.loader.exec_module(module)
-
+    
     # Find the class that would inherit from Task
     for name, obj in module.__dict__.items():
         if isinstance(obj, type) and name != "MockTask":
             # Check if it has the required methods
             if hasattr(obj, "generate_problem") and hasattr(obj, "solve"):
                 return obj
-
+    
     raise ValueError("No Task class found in the module")
 
 
@@ -162,12 +161,12 @@ def measure_runtime(task_class, problem_size):
     """
     Measure the reference solver runtime using multiple problems and repeats.
     Matches test_outputs.py evaluation exactly.
-
+    
     Returns: average of min times across all problems (in ms)
     """
     try:
         task = task_class()
-
+        
         # Generate problems sequentially
         print(f"Generating {{NUM_PROBLEMS}} problems...", file=sys.stderr)
         problems = []
@@ -175,10 +174,10 @@ def measure_runtime(task_class, problem_size):
             problem = task.generate_problem(n=problem_size, random_seed=i)
             problems.append(problem)
         print(f"Problems generated. Starting timing...", file=sys.stderr)
-
+        
         # Warmup run with first problem
         _ = task.solve(problems[0])
-
+        
         # Measure each problem with multiple repeats, take min time
         min_times = []
         for i, problem in enumerate(problems):
@@ -189,18 +188,18 @@ def measure_runtime(task_class, problem_size):
                 end = time.perf_counter()
                 timings.append((end - start) * 1000)  # Convert to ms
             min_times.append(min(timings))
-
+            
             # Progress indicator every 10 problems
             if (i + 1) % 10 == 0:
                 avg_so_far = sum(min_times) / len(min_times)
                 print(f"  Progress: {{i + 1}}/{{NUM_PROBLEMS}}, avg so far: {{avg_so_far:.2f}}ms", file=sys.stderr)
-
+        
         # Return average of min times across all problems
         return sum(min_times) / len(min_times)
-
+        
     except MemoryError:
         # Explicitly catch OOM
-        print(f"RUNTIME_MS:-1.0")
+        print(f"RUNTIME_MS:-1.0") 
         sys.exit(0)
     except Exception as e:
         traceback.print_exc()
@@ -209,7 +208,7 @@ def measure_runtime(task_class, problem_size):
 if __name__ == "__main__":
     task_path = "{task_py_path}"
     problem_size = {problem_size}
-
+    
     try:
         task_class = load_task_class(task_path)
         runtime_ms = measure_runtime(task_class, problem_size)
@@ -248,7 +247,9 @@ def _build_docker_calibration_image() -> bool:
         return False
 
     try:
-        logger.info("Building Docker calibration image (this may take a while on first run)...")
+        logger.info(
+            "Building Docker calibration image (this may take a while on first run)..."
+        )
         result = subprocess.run(
             [
                 "docker",
@@ -335,7 +336,9 @@ def _run_docker_calibration_subprocess(
         shutil.copy2(task_py_path, task_copy_path)
 
         # Update the script to use the container path
-        container_script = script.replace(str(task_py_path), f"/calibration/{task_py_path.name}")
+        container_script = script.replace(
+            str(task_py_path), f"/calibration/{task_py_path.name}"
+        )
         script_path.write_text(container_script)
 
         try:
@@ -376,12 +379,20 @@ def _run_docker_calibration_subprocess(
                 # Exit code 139 = 128 + 11 (SIGSEGV) - typically from C extensions hitting memory limits
                 # Exit code 137 = 128 + 9 (SIGKILL) - typically from Docker OOM killer
                 if result.returncode == 139:
-                    logger.warning(f"Docker calibration crashed with SIGSEGV (exit 139) for size {problem_size}")
-                    logger.warning("This often means a C extension hit memory limits. Consider reducing problem size.")
+                    logger.warning(
+                        f"Docker calibration crashed with SIGSEGV (exit 139) for size {problem_size}"
+                    )
+                    logger.warning(
+                        "This often means a C extension hit memory limits. Consider reducing problem size."
+                    )
                 elif result.returncode == 137:
-                    logger.warning(f"Docker calibration was OOM-killed (exit 137) for size {problem_size}")
+                    logger.warning(
+                        f"Docker calibration was OOM-killed (exit 137) for size {problem_size}"
+                    )
                 else:
-                    logger.warning(f"Docker calibration failed with return code {result.returncode}")
+                    logger.warning(
+                        f"Docker calibration failed with return code {result.returncode}"
+                    )
                 if result.stderr:
                     logger.debug(f"Stderr: {result.stderr[:500]}")
                 return -1.0
@@ -392,7 +403,9 @@ def _run_docker_calibration_subprocess(
                     runtime = float(line.split(":")[1])
                     return runtime
 
-            logger.warning(f"Could not parse runtime from Docker output: {result.stdout}")
+            logger.warning(
+                f"Could not parse runtime from Docker output: {result.stdout}"
+            )
             return -1.0
 
         except subprocess.TimeoutExpired:
@@ -456,7 +469,9 @@ def calibrate_problem_size(
         Tuple of (calibrated_size, actual_runtime_ms)
     """
     logger.info(f"Calibrating problem size for {task_py_path.stem}...")
-    logger.info(f"Target runtime: {target_runtime_ms}ms (tolerance: ±{tolerance * 100}%)")
+    logger.info(
+        f"Target runtime: {target_runtime_ms}ms (tolerance: ±{tolerance * 100}%)"
+    )
 
     if not is_docker_calibration_ready():
         logger.error(
@@ -537,7 +552,9 @@ def calibrate_problem_size(
 
         # Check if within tolerance
         if abs(runtime - target_runtime_ms) / target_runtime_ms <= tolerance:
-            logger.info(f"  Found size {mid} with runtime {runtime:.2f}ms (within tolerance)")
+            logger.info(
+                f"  Found size {mid} with runtime {runtime:.2f}ms (within tolerance)"
+            )
             return mid, runtime
 
         if runtime < target_runtime_ms:
@@ -584,7 +601,9 @@ def _rename_conflicting_imports(source_code: str, new_class_name: str) -> str:
                     imported_name = alias.asname if alias.asname else alias.name
                     if imported_name == new_class_name:
                         module = node.module or ""
-                        conflicts.append((alias.name, module, node.lineno, alias.asname))
+                        conflicts.append(
+                            (alias.name, module, node.lineno, alias.asname)
+                        )
         elif isinstance(node, ast.Import):
             # Handle: import module.Name (less common but possible)
             for alias in node.names:
@@ -607,7 +626,9 @@ def _rename_conflicting_imports(source_code: str, new_class_name: str) -> str:
         else:
             new_alias = f"_{original_name}Imported"
 
-        logger.info(f"Renaming conflicting import '{original_name}' to '{new_alias}' (from {module})")
+        logger.info(
+            f"Renaming conflicting import '{original_name}' to '{new_alias}' (from {module})"
+        )
 
         # Replace the import statement
         if existing_alias:
@@ -673,7 +694,9 @@ def extract_function_source(file_path: Path, func_name: str) -> Optional[str]:
         logger.error(f"Failed to read or parse file {file_path}: {e}")
         return None
     except Exception as e:
-        logger.error(f"An unexpected error occurred while extracting '{func_name}' from {file_path}: {e}")
+        logger.error(
+            f"An unexpected error occurred while extracting '{func_name}' from {file_path}: {e}"
+        )
         return None
 
 
@@ -690,7 +713,11 @@ def get_solver_content(source_path: Path, new_name: str = "Solver") -> str:
         # Filter out unwanted lines
         lines = source_code.splitlines()
         filtered_lines = [
-            line for line in lines if not line.strip().startswith(("from AlgoTuneTasks.base import", "@register_task("))
+            line
+            for line in lines
+            if not line.strip().startswith(
+                ("from AlgoTuneTasks.base import", "@register_task(")
+            )
         ]
 
         modified_code = "\n".join(filtered_lines)
@@ -709,13 +736,17 @@ def get_solver_content(source_path: Path, new_name: str = "Solver") -> str:
                     break  # Found the target class
 
         if not original_class_name:
-            raise ValueError(f"No class inheriting from 'Task' found in the filtered code from '{source_path}'.")
+            raise ValueError(
+                f"No class inheriting from 'Task' found in the filtered code from '{source_path}'."
+            )
 
         # Rename conflicting imports before renaming the class
         modified_code = _rename_conflicting_imports(modified_code, new_name)
 
         # Perform the final replacement, removing the inheritance
-        final_code = modified_code.replace(f"class {original_class_name}(Task)", f"class {new_name}", 1)
+        final_code = modified_code.replace(
+            f"class {original_class_name}(Task)", f"class {new_name}", 1
+        )
 
         logger.info(f"Processed '{source_path}', renamed class to '{new_name}'.")
         return final_code
@@ -724,11 +755,15 @@ def get_solver_content(source_path: Path, new_name: str = "Solver") -> str:
         logger.error(f"Failed to process {source_path}: {e}")
         raise
     except Exception as e:
-        logger.error(f"An unexpected error occurred while processing {source_path}: {e}")
+        logger.error(
+            f"An unexpected error occurred while processing {source_path}: {e}"
+        )
         raise
 
 
-def replace_class_name_and_save(source_path: Path, dest_path: Path, new_name: str = TASK_CLASS_NAME) -> None:
+def replace_class_name_and_save(
+    source_path: Path, dest_path: Path, new_name: str = TASK_CLASS_NAME
+) -> None:
     """
     Reads a Python file, renames the class inheriting from 'Task',
     removes specific lines, and saves the result to a new path.
@@ -739,7 +774,11 @@ def replace_class_name_and_save(source_path: Path, dest_path: Path, new_name: st
         # Filter out unwanted lines
         lines = source_code.splitlines()
         filtered_lines = [
-            line for line in lines if not line.strip().startswith(("from AlgoTuneTasks.base import", "@register_task("))
+            line
+            for line in lines
+            if not line.strip().startswith(
+                ("from AlgoTuneTasks.base import", "@register_task(")
+            )
         ]
 
         modified_code = "\n".join(filtered_lines)
@@ -758,28 +797,38 @@ def replace_class_name_and_save(source_path: Path, dest_path: Path, new_name: st
                     break  # Found the target class
 
         if not original_class_name:
-            raise ValueError(f"No class inheriting from 'Task' found in the filtered code from '{source_path}'.")
+            raise ValueError(
+                f"No class inheriting from 'Task' found in the filtered code from '{source_path}'."
+            )
 
         # Rename conflicting imports before renaming the class
         modified_code = _rename_conflicting_imports(modified_code, new_name)
 
         # Perform the final replacement, removing the inheritance
-        final_code = modified_code.replace(f"class {original_class_name}(Task)", f"class {new_name}", 1)
+        final_code = modified_code.replace(
+            f"class {original_class_name}(Task)", f"class {new_name}", 1
+        )
 
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_text(final_code, encoding="utf-8")
-        logger.info(f"Processed '{source_path}', renamed class to '{new_name}', and saved to '{dest_path}'.")
+        logger.info(
+            f"Processed '{source_path}', renamed class to '{new_name}', and saved to '{dest_path}'."
+        )
 
     except (FileNotFoundError, ValueError, SyntaxError) as e:
         logger.error(f"Failed to process {source_path}: {e}")
         raise
     except Exception as e:
-        logger.error(f"An unexpected error occurred while processing {source_path}: {e}")
+        logger.error(
+            f"An unexpected error occurred while processing {source_path}: {e}"
+        )
         raise
 
 
 # --- Instruction Generation ---
-def get_instruction(description: str, reference_solver_code: str, is_solution_code: str) -> str:
+def get_instruction(
+    description: str, reference_solver_code: str, is_solution_code: str
+) -> str:
     """
     Generates the instruction prompt for the AI model.
     """

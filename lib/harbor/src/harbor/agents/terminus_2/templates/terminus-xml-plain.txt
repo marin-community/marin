@@ -20,7 +20,7 @@ Describe your plan for the next steps. What commands will you run and why? Be sp
 
 Required sections:
 - <analysis>: Your analysis of the current situation
-- <plan>: Your plan for the next steps
+- <plan>: Your plan for the next steps  
 - <commands>: XML structure containing commands to execute
 
 The `duration` attribute of <keystrokes> specifies the number of seconds to wait for the command to complete (default: 1.0) before the next command will be executed. On immediate tasks (e.g., cd, ls, echo, cat) set a duration of 0.1 seconds. On commands (e.g., gcc, find, rustc) set a duration of 1.0 seconds. On slow commands (e.g., make, python3 [long running script], wget [file]) set an apprpriate duration as you determine necessary.
@@ -39,7 +39,7 @@ IMPORTANT: The text inside each <keystrokes></keystrokes> tag will be used compl
 - Use < and > directly, NOT &lt; and &gt;
 - Use & directly, NOT &amp;
 - Use quotes directly, NOT &quot;
-Even though this is XML, the content inside keystrokes tags is treated as raw text and sent exactly as written. Ensure there is no extra leading or trailing whitespace unless intended. You must end every command with a newline (\n) or it will not execute.
+Even though this is XML, the content inside keystrokes tags is treated as raw text and sent exactly as written. Ensure there is no extra leading or trailing whitespace unless intended. You must end every command with a newline (\n) or it will not execute. 
 
 
 Special key sequences (use tmux-style escape sequences):

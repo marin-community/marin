@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 SATBenchAdapter - Adapter for SATBench benchmark.
 
@@ -113,13 +110,17 @@ class SATBenchAdapter:
         question = entry.get("question", "")
 
         # Build the instruction prompt
-        problem_statement = self._build_problem_statement(scenario, conditions, question)
+        problem_statement = self._build_problem_statement(
+            scenario, conditions, question
+        )
 
         # Update instruction.md by replacing {{prompt}} placeholder
         instruction_path = output_dir / "instruction.md"
         if instruction_path.exists():
             instruction_content = instruction_path.read_text()
-            instruction_content = instruction_content.replace("{{prompt}}", problem_statement)
+            instruction_content = instruction_content.replace(
+                "{{prompt}}", problem_statement
+            )
             instruction_path.write_text(instruction_content)
 
         # Update task.toml metadata
@@ -196,7 +197,9 @@ class SATBenchAdapter:
 
         return prompt
 
-    def _update_task_config(self, output_dir: Path, entry: dict, source_id: str) -> None:
+    def _update_task_config(
+        self, output_dir: Path, entry: dict, source_id: str
+    ) -> None:
         """Update task.toml with metadata from the entry.
 
         Args:

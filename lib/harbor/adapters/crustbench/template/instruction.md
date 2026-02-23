@@ -38,12 +38,12 @@ You are given the C source code and corresponding Rust Interface files that defi
 
 ### Requirements
 
-1. **Produce safe Rust code**:
+1. **Produce safe Rust code**: 
    - Avoid `unsafe` blocks unless absolutely necessary
    - Take into account the safety features provided by the Rust programming language and use the safety features in Rust
    - Prefer idiomatic Rust patterns
 
-2. **Implement the interface**:
+2. **Implement the interface**: 
    - You must follow the definitions of the Rust Interface file
    - All methods in the provided interface must be correctly implemented (replace all `unimplemented!()`)
    - **You must give the complete code and not just partial changes**
@@ -56,7 +56,7 @@ You are given the C source code and corresponding Rust Interface files that defi
    - **Always outline each step of the transpilation process by reasoning about the input C code and output Rust code**
    - Think carefully about memory management, ownership, and borrowing
 
-6. **No FFI calls**:
+6. **No FFI calls**: 
    - **Ensure the code does not use Foreign Function Interface (FFI) calls (like libc)**
    - All functionality must be implemented in pure Rust
 
@@ -120,7 +120,7 @@ cargo test --release
 
 Success is determined by:
 1. ✅ Code compiles without errors (`cargo build --release`)
-2. ✅ All test cases pass (`cargo test --release`)
+2. ✅ All test cases pass (`cargo test --release`)  
 3. ✅ Implementation uses safe Rust (minimal or no `unsafe` blocks)
 
 The verifier will automatically run `cargo test --release` in `/workspace/rbench_reference/`.

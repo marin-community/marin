@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import tomllib
 import warnings
 from typing import Any
@@ -62,7 +59,10 @@ class EnvironmentConfig(BaseModel):
         elif size_str.endswith("K"):
             return int(float(size_str[:-1]) / 1024)
         else:
-            raise ValueError(f"Invalid size format: {size_str}. Expected format like '1G', " "'512M', etc.")
+            raise ValueError(
+                f"Invalid size format: {size_str}. Expected format like '1G', "
+                "'512M', etc."
+            )
 
     @model_validator(mode="after")
     def handle_deprecated_fields(self) -> "EnvironmentConfig":

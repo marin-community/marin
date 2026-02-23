@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import gzip
@@ -50,9 +47,13 @@ class DS1000Record:
 class DS1000Loader:
     """Load DS-1000 records from local jsonl.gz (preferred) or HF fallback."""
 
-    def __init__(self, dataset_path: Optional[Path] = None, split: str = "test") -> None:
+    def __init__(
+        self, dataset_path: Optional[Path] = None, split: str = "test"
+    ) -> None:
         self.dataset_path = (
-            Path(dataset_path) if dataset_path is not None else Path(__file__).parent / "data" / "ds1000.jsonl.gz"
+            Path(dataset_path)
+            if dataset_path is not None
+            else Path(__file__).parent / "data" / "ds1000.jsonl.gz"
         )
         self.split = split
         records = self._load_local() if self.dataset_path.exists() else self._load_hf()
@@ -72,7 +73,9 @@ class DS1000Loader:
     def _load_hf(self) -> List[dict]:
         if load_dataset is None:
             raise FileNotFoundError(
-                "Dataset file not found at {} and huggingface datasets not available".format(self.dataset_path)
+                "Dataset file not found at {} and huggingface datasets not available".format(
+                    self.dataset_path
+                )
             )
         ds = load_dataset("xlangai/DS-1000")[self.split]
         return list(ds)
@@ -170,7 +173,9 @@ class Adapter:
     def get_all_ids(self) -> List[str]:
         return sorted(self.loader.all_ids())
 
-    def generate_task(self, instance_id: str, local_task_id: str, *, overwrite: bool = False) -> Path:
+    def generate_task(
+        self, instance_id: str, local_task_id: str, *, overwrite: bool = False
+    ) -> Path:
         rec = self.loader.load(instance_id)
         task_dir = self.out_root / local_task_id
         if task_dir.exists():
@@ -229,7 +234,9 @@ class Adapter:
 
         # optional placeholder solution.py to guide agents
         if not paths.solution_file_path.exists():
-            paths.solution_file_path.write_text("# Write your solution here\n", encoding="utf-8")
+            paths.solution_file_path.write_text(
+                "# Write your solution here\n", encoding="utf-8"
+            )
 
         return paths.task_dir
 

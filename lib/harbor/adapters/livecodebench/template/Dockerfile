@@ -23,4 +23,4 @@ RUN apt-get update && apt-get install -y \
 # RUN pip3 install pytest numpy
 
 # Make sure we can run Python scripts
-RUN ln -s /usr/bin/python3 /usr/bin/python
+RUN ln -s /usr/bin/python3 /usr/bin/python 

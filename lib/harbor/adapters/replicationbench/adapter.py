@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 ReplicationBench adapter for Harbor.
 
@@ -36,7 +33,9 @@ class ReplicationBenchAdapter:
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _prepare_task_from_template(self, task_record: Dict[str, Any], task_dir: Path) -> None:
+    def _prepare_task_from_template(
+        self, task_record: Dict[str, Any], task_dir: Path
+    ) -> None:
         """Prepare a ReplicationBench task directory from template."""
         # Create task directory structure
         task_dir.mkdir(parents=True, exist_ok=True)
@@ -54,7 +53,9 @@ class ReplicationBenchAdapter:
         kind = task_record.get("kind", "numeric")
 
         # Instructions should be a string (not array) in replicationbench-release format
-        instructions_text = instructions if isinstance(instructions, str) else "\n".join(instructions)
+        instructions_text = (
+            instructions if isinstance(instructions, str) else "\n".join(instructions)
+        )
 
         # Get other instructions and dataset access info from paper data
         other_instructions_text = ""
@@ -64,7 +65,9 @@ class ReplicationBenchAdapter:
             # Extract other_instructions from paper JSON (top-level field)
             other_instructions = paper_data.get("other_instructions", "")
             if other_instructions:
-                other_instructions_text = f"\n\n## Additional Instructions\n\n{other_instructions}"
+                other_instructions_text = (
+                    f"\n\n## Additional Instructions\n\n{other_instructions}"
+                )
 
             # Extract data_instructions from dataset field (for Dataset Information section)
             dataset = paper_data.get("dataset")
@@ -74,12 +77,16 @@ class ReplicationBenchAdapter:
                 if isinstance(dataset, dict):
                     data_instructions = dataset.get("data_instructions", {})
                     if isinstance(data_instructions, dict):
-                        access = data_instructions.get("access", "") or data_instructions.get("access_instructions", "")
+                        access = data_instructions.get(
+                            "access", ""
+                        ) or data_instructions.get("access_instructions", "")
                 elif isinstance(dataset, list) and dataset:
                     # Handle list of datasets - use first dataset's instructions
                     data_instructions = dataset[0].get("data_instructions", {})
                     if isinstance(data_instructions, dict):
-                        access = data_instructions.get("access", "") or data_instructions.get("access_instructions", "")
+                        access = data_instructions.get(
+                            "access", ""
+                        ) or data_instructions.get("access_instructions", "")
 
                 if access:
                     # Store for Dataset Information section
@@ -126,7 +133,7 @@ class ReplicationBenchAdapter:
         paper_id = task_record.get("paper_id", "unknown")
         task_id = task_record.get("task_id", "unknown")
 
-        task_toml_content = f"""version = "1.0"
+        task_toml_content = f'''version = "1.0"
 
 [metadata]
 benchmark = "ReplicationBench"
@@ -144,7 +151,7 @@ timeout_sec = 3600.0
 
 [environment]
 build_timeout_sec = 1800.0
-"""
+'''
         (task_dir / "task.toml").write_text(task_toml_content)
 
         # Copy and configure Dockerfile
@@ -164,7 +171,9 @@ build_timeout_sec = 1800.0
             "difficulty": difficulty_num,
             "description": description,
         }
-        (resources_dir / "dataset_info.json").write_text(json.dumps(dataset_info, indent=2))
+        (resources_dir / "dataset_info.json").write_text(
+            json.dumps(dataset_info, indent=2)
+        )
 
         # Try to add masked paper reference and extract paper-level data
         # Note: paper_data will be loaded in generate_task() and passed via a class variable
@@ -183,7 +192,13 @@ build_timeout_sec = 1800.0
                 ]
 
                 for replicationbench_root in possible_roots:
-                    paper_json = replicationbench_root / "src" / "dataset" / "papers" / f"{paper_id}.json"
+                    paper_json = (
+                        replicationbench_root
+                        / "src"
+                        / "dataset"
+                        / "papers"
+                        / f"{paper_id}.json"
+                    )
                     if paper_json.exists():
                         paper_data = json.loads(paper_json.read_text())
                         break
@@ -192,7 +207,9 @@ build_timeout_sec = 1800.0
 
         if paper_data:
             masked = {k: paper_data.get(k) for k in ("paper_id", "title", "abstract")}
-            (resources_dir / "paper_masked.json").write_text(json.dumps(masked, indent=2))
+            (resources_dir / "paper_masked.json").write_text(
+                json.dumps(masked, indent=2)
+            )
 
         # Extract dataset and dependencies from paper JSON (tasks from same paper share these)
         # Create download_datasets.py from paper dataset field
@@ -245,7 +262,9 @@ cat /app/result.json
         # Store full task specification (hidden from agent)
         (tests_dir / "refined_spec.json").write_text(json.dumps(task_record, indent=2))
 
-    def generate_task(self, task_json_path: Path, replicationbench_root: Path | None = None) -> str:
+    def generate_task(
+        self, task_json_path: Path, replicationbench_root: Path | None = None
+    ) -> str:
         """
         Generate a Harbor task from a ReplicationBench JSON file.
 
@@ -261,7 +280,9 @@ cat /app/result.json
 
         # Only support numeric tasks for now
         if task_record.get("kind") != "numeric":
-            raise ValueError(f"Only numeric tasks are supported; got kind={task_record.get('kind')}")
+            raise ValueError(
+                f"Only numeric tasks are supported; got kind={task_record.get('kind')}"
+            )
 
         # Infer replicationbench_root from task_json_path if not provided
         if not replicationbench_root:
@@ -276,7 +297,13 @@ cat /app/result.json
         paper_id = task_record.get("paper_id", "unknown")
         paper_data = None
         if replicationbench_root:
-            paper_json = replicationbench_root / "src" / "dataset" / "papers" / f"{paper_id}.json"
+            paper_json = (
+                replicationbench_root
+                / "src"
+                / "dataset"
+                / "papers"
+                / f"{paper_id}.json"
+            )
             if paper_json.exists():
                 try:
                     paper_data = json.loads(paper_json.read_text())

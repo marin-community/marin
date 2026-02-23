@@ -8,7 +8,7 @@ __FUNCTION_DEFINITIONS__
 
 ## Output
 
-Analyze the request and determine the appropriate function call(s).
+Analyze the request and determine the appropriate function call(s). 
 Write ONLY a JSON array to `/app/result.json`.
 
 Format:

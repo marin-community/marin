@@ -1,7 +1,4 @@
 #!/usr/bin/env python
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Integration tests for trajectory validation.
 
 This test suite validates all golden trajectory files against the ATIF schema
@@ -45,4 +42,7 @@ class TestTrajectoryValidation:
         """
         returncode, stdout, stderr = run_validator_cli(trajectory_path)
 
-        assert returncode == 0, f"\n\nTrajectory validation failed for: {trajectory_path}\n" f"\nCLI output:\n{stderr}\n"
+        assert returncode == 0, (
+            f"\n\nTrajectory validation failed for: {trajectory_path}\n"
+            f"\nCLI output:\n{stderr}\n"
+        )

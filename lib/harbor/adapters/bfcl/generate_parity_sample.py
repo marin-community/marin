@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Generate stratified random sample for BFCL parity validation.
 
@@ -109,7 +106,9 @@ def load_task_ids_from_bfcl(bfcl_root: Path) -> dict[str, list[str]]:
         data_file = data_dir / f"BFCL_v4_{category}.json"
 
         if not data_file.exists():
-            print(f"Warning: Data file not found for category '{category}': {data_file}")
+            print(
+                f"Warning: Data file not found for category '{category}': {data_file}"
+            )
             continue
 
         print(f"Loading category: {category}")
@@ -129,7 +128,9 @@ def load_task_ids_from_bfcl(bfcl_root: Path) -> dict[str, list[str]]:
     return category_ids
 
 
-def stratified_sample(category_ids: dict[str, list[str]], sample_size: int, seed: int = RANDOM_SEED) -> list[str]:
+def stratified_sample(
+    category_ids: dict[str, list[str]], sample_size: int, seed: int = RANDOM_SEED
+) -> list[str]:
     """
     Perform stratified random sampling across all categories.
 
@@ -166,7 +167,9 @@ def stratified_sample(category_ids: dict[str, list[str]], sample_size: int, seed
     return sampled_ids
 
 
-def write_sample_file(filepath: Path, task_ids: list[str], category_counts: dict[str, int]) -> None:
+def write_sample_file(
+    filepath: Path, task_ids: list[str], category_counts: dict[str, int]
+) -> None:
     """Write task IDs to a file with header comments."""
 
     # Calculate distribution using proper category extraction
@@ -193,15 +196,21 @@ def write_sample_file(filepath: Path, task_ids: list[str], category_counts: dict
             count = distribution.get(category, 0)
             total_in_cat = category_counts.get(category, 0)
             percentage = (count / total_in_cat * 100) if total_in_cat > 0 else 0
-            f.write(f"#   {category:<30} {count:3d}/{total_in_cat:4d} ({percentage:5.1f}%)\n")
+            f.write(
+                f"#   {category:<30} {count:3d}/{total_in_cat:4d} ({percentage:5.1f}%)\n"
+            )
 
         f.write("#\n")
         f.write("# To reproduce this sample:\n")
         f.write("#   python generate_parity_sample.py --clone-bfcl\n")
         f.write("#\n")
         f.write("# Usage:\n")
-        f.write("#   1. Generate tasks: python run_adapter.py --clone-bfcl --ids-file parity_sample_source_ids.txt\n")
-        f.write("#   2. Run parity: uv run harbor jobs start -c adapters/bfcl/bfcl_parity.yaml\n")
+        f.write(
+            "#   1. Generate tasks: python run_adapter.py --clone-bfcl --ids-file parity_sample_source_ids.txt\n"
+        )
+        f.write(
+            "#   2. Run parity: uv run harbor jobs start -c adapters/bfcl/bfcl_parity.yaml\n"
+        )
         f.write("#\n")
 
         for task_id in task_ids:
@@ -210,7 +219,9 @@ def write_sample_file(filepath: Path, task_ids: list[str], category_counts: dict
     print(f"✓ Written {len(task_ids)} task IDs to: {filepath}")
 
 
-def print_sample_distribution(task_ids: list[str], category_counts: dict[str, int]) -> None:
+def print_sample_distribution(
+    task_ids: list[str], category_counts: dict[str, int]
+) -> None:
     """Print distribution statistics."""
 
     # Calculate distribution using proper category extraction
@@ -234,7 +245,9 @@ def print_sample_distribution(task_ids: list[str], category_counts: dict[str, in
         print(f"{category:<30} {count:>10} {total:>10} {percentage:>11.1f}%")
 
     print("-" * 70)
-    print(f"{'TOTAL':<30} {len(task_ids):>10} {total_tasks:>10} {len(task_ids) / total_tasks * 100:>11.2f}%")
+    print(
+        f"{'TOTAL':<30} {len(task_ids):>10} {total_tasks:>10} {len(task_ids) / total_tasks * 100:>11.2f}%"
+    )
     print("=" * 70)
 
 
@@ -324,12 +337,16 @@ def run_with_bfcl_root(bfcl_root: Path, sample_size: int, seed: int) -> None:
     print("\n" + "=" * 70)
     print("Next steps:")
     print("  1. Generate tasks from sample:")
-    print("     python run_adapter.py --clone-bfcl --ids-file parity_sample_source_ids.txt")
+    print(
+        "     python run_adapter.py --clone-bfcl --ids-file parity_sample_source_ids.txt"
+    )
     print()
     print("  2. Run parity experiment:")
     print("     uv run harbor jobs start -c adapters/bfcl/bfcl_parity.yaml")
     print()
-    print("  3. Compare with BFCL original and record results in parity_experiment.json")
+    print(
+        "  3. Compare with BFCL original and record results in parity_experiment.json"
+    )
     print("=" * 70)
 
 
@@ -343,7 +360,9 @@ def main():
         sys.exit(1)
 
     if not args.clone_bfcl and not args.bfcl_root:
-        print("Error: Must specify either --clone-bfcl or --bfcl-root to access BFCL data.")
+        print(
+            "Error: Must specify either --clone-bfcl or --bfcl-root to access BFCL data."
+        )
         print("Use --clone-bfcl to download the repository, or")
         print("Use --bfcl-root to point to an existing local copy.")
         sys.exit(1)

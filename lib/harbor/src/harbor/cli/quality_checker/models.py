@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -19,10 +16,16 @@ class QualityCheckModel(BaseModel):
 
 class QualityCheckResult(BaseModel):
     behavior_in_task_description: QualityCheckModel = Field(
-        description=("Whether all behavior checked in the test script is described in the task " "instruction")
+        description=(
+            "Whether all behavior checked in the test script is described in the task "
+            "instruction"
+        )
     )
     behavior_in_tests: QualityCheckModel = Field(
-        description=("Whether all behavior described in the task instruction is checked in the " "test script")
+        description=(
+            "Whether all behavior described in the task instruction is checked in the "
+            "test script"
+        )
     )
     informative_test_structure: QualityCheckModel = Field(
         description=(

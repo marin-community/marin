@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import argparse
 import logging
 import subprocess
@@ -81,7 +78,8 @@ def main():
         "--deveval-root",
         type=str,
         default=None,
-        help="Path to existing DevEval repository root " "(only used with --no-clone-deveval)",
+        help="Path to existing DevEval repository root "
+        "(only used with --no-clone-deveval)",
     )
     parser.add_argument(
         "--language",
@@ -128,8 +126,13 @@ def main():
     def process_deveval(deveval_root_path: Path):
         """Process DevEval repository with the adapter."""
         # Validate DevEval repository
-        if not deveval_root_path.exists() or not (deveval_root_path / "benchmark_data").exists():
-            logger.error(f"DevEval repository not found or invalid at {deveval_root_path}")
+        if (
+            not deveval_root_path.exists()
+            or not (deveval_root_path / "benchmark_data").exists()
+        ):
+            logger.error(
+                f"DevEval repository not found or invalid at {deveval_root_path}"
+            )
             raise FileNotFoundError(f"Invalid DevEval repository: {deveval_root_path}")
 
         # Get list of repositories to process
@@ -158,7 +161,9 @@ def main():
             except Exception as e:
                 # Adapter's internal logging should catch this,
                 # but good to have a top-level catch.
-                logger.error(f"High-level failure for task {task_id}: {e}", exc_info=True)
+                logger.error(
+                    f"High-level failure for task {task_id}: {e}", exc_info=True
+                )
 
         logger.info(f" DevEval tasks generation complete. Output under: {task_dir}")
 
@@ -171,7 +176,9 @@ def main():
                 cloned_deveval_root = clone_deveval_repo(temp_path)
                 process_deveval(cloned_deveval_root)
             except Exception as e:
-                logger.error(f"Error during processing with cloned repo: {e}", exc_info=True)
+                logger.error(
+                    f"Error during processing with cloned repo: {e}", exc_info=True
+                )
                 sys.exit(1)
             finally:
                 logger.info("Cleaning up temporary directory...")
@@ -182,7 +189,9 @@ def main():
         try:
             process_deveval(deveval_root_path_arg)
         except Exception as e:
-            logger.error(f"Error during processing with existing repo: {e}", exc_info=True)
+            logger.error(
+                f"Error during processing with existing repo: {e}", exc_info=True
+            )
             sys.exit(1)
 
 

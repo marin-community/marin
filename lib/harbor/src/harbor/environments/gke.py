@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import asyncio
 import atexit
 import io
@@ -110,14 +107,20 @@ class KubernetesClientManager:
         async with self._client_lock:
             if not self._initialized:
                 self._logger.debug("Creating new Kubernetes client")
-                await asyncio.to_thread(self._init_client, cluster_name, region, project_id)
+                await asyncio.to_thread(
+                    self._init_client, cluster_name, region, project_id
+                )
 
                 if not self._cleanup_registered:
                     atexit.register(self._cleanup_sync)
                     self._cleanup_registered = True
             else:
                 # Validate cluster config matches
-                if self._cluster_name != cluster_name or self._region != region or self._project_id != project_id:
+                if (
+                    self._cluster_name != cluster_name
+                    or self._region != region
+                    or self._project_id != project_id
+                ):
                     raise ValueError(
                         f"KubernetesClientManager already initialized for cluster "
                         f"'{self._cluster_name}' in {self._region} (project: {self._project_id}). "
@@ -126,7 +129,9 @@ class KubernetesClientManager:
                     )
 
             self._reference_count += 1
-            self._logger.debug(f"Kubernetes client reference count incremented to {self._reference_count}")
+            self._logger.debug(
+                f"Kubernetes client reference count incremented to {self._reference_count}"
+            )
             return self._core_api
 
     async def release_client(self):
@@ -137,7 +142,9 @@ class KubernetesClientManager:
         async with self._client_lock:
             if self._reference_count > 0:
                 self._reference_count -= 1
-                self._logger.debug(f"Kubernetes client reference count decremented to {self._reference_count}")
+                self._logger.debug(
+                    f"Kubernetes client reference count decremented to {self._reference_count}"
+                )
 
     def _cleanup_sync(self):
         """Synchronous cleanup wrapper for atexit."""
@@ -252,7 +259,9 @@ class GKEEnvironment(BaseEnvironment):
     def _get_default_project(self) -> str:
         """Get default GCP project from environment or gcloud config."""
         # Check environment variable first
-        project = os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        project = os.environ.get("GCP_PROJECT") or os.environ.get(
+            "GOOGLE_CLOUD_PROJECT"
+        )
         if project:
             return project
 
@@ -276,7 +285,9 @@ class GKEEnvironment(BaseEnvironment):
         if self._client_manager is None:
             self._client_manager = await KubernetesClientManager.get_instance()
         if self._core_api is None:
-            self._core_api = await self._client_manager.get_client(self.cluster_name, self.region, self.project_id)
+            self._core_api = await self._client_manager.get_client(
+                self.cluster_name, self.region, self.project_id
+            )
 
     @staticmethod
     def type() -> EnvironmentType:
@@ -301,7 +312,10 @@ class GKEEnvironment(BaseEnvironment):
 
     def _validate_definition(self):
         if not self._environment_definition_path.exists():
-            raise FileNotFoundError(f"{self._environment_definition_path} not found. Please ensure the " "file exists.")
+            raise FileNotFoundError(
+                f"{self._environment_definition_path} not found. Please ensure the "
+                "file exists."
+            )
 
     def _get_image_url(self) -> str:
         """Get the container image URL in Artifact Registry."""
@@ -331,7 +345,9 @@ class GKEEnvironment(BaseEnvironment):
             await result.wait()
             return result.returncode == 0
         except Exception as e:
-            self.logger.warning(f"Failed to check for existing image, will attempt to build. Error: {e}")
+            self.logger.warning(
+                f"Failed to check for existing image, will attempt to build. Error: {e}"
+            )
             return False
 
     @retry(
@@ -374,7 +390,9 @@ class GKEEnvironment(BaseEnvironment):
 
         if result.returncode != 0:
             error_msg = stderr.decode()
-            raise RuntimeError(f"Image build failed: {error_msg}\nStdout: {stdout.decode()}")
+            raise RuntimeError(
+                f"Image build failed: {error_msg}\nStdout: {stdout.decode()}"
+            )
 
         self.logger.debug(f"Successfully built and pushed: {image_url}")
 
@@ -388,7 +406,9 @@ class GKEEnvironment(BaseEnvironment):
             await self._build_and_push_image()
         else:
             if not await self._image_exists():
-                self.logger.debug(f"Image {self._get_image_url()} not found, building...")
+                self.logger.debug(
+                    f"Image {self._get_image_url()} not found, building..."
+                )
                 await self._build_and_push_image()
             else:
                 self.logger.debug(f"Using existing image: {self._get_image_url()}")
@@ -452,7 +472,9 @@ class GKEEnvironment(BaseEnvironment):
                         self._core_api.delete_namespaced_pod,
                         name=self.pod_name,
                         namespace=self.namespace,
-                        body=k8s_client.V1DeleteOptions(grace_period_seconds=0, propagation_policy="Foreground"),
+                        body=k8s_client.V1DeleteOptions(
+                            grace_period_seconds=0, propagation_policy="Foreground"
+                        ),
                     )
                     # Wait for deletion
                     for _ in range(60):
@@ -467,7 +489,9 @@ class GKEEnvironment(BaseEnvironment):
                             if del_e.status == 404:
                                 break
                     else:
-                        raise RuntimeError(f"Pod {self.pod_name} was not deleted in time.")
+                        raise RuntimeError(
+                            f"Pod {self.pod_name} was not deleted in time."
+                        )
                 except ApiException as del_e:
                     if del_e.status != 404:
                         raise RuntimeError(f"Failed to delete existing pod: {del_e}")
@@ -484,7 +508,9 @@ class GKEEnvironment(BaseEnvironment):
         await self._wait_for_pod_ready()
 
         # Create required directories
-        mkdir_result = await self.exec(f"mkdir -p {EnvironmentPaths.agent_dir} {EnvironmentPaths.verifier_dir}")
+        mkdir_result = await self.exec(
+            f"mkdir -p {EnvironmentPaths.agent_dir} {EnvironmentPaths.verifier_dir}"
+        )
         if mkdir_result.return_code != 0:
             raise RuntimeError(
                 f"Failed to create log directories in pod {self.pod_name}: "
@@ -521,7 +547,9 @@ class GKEEnvironment(BaseEnvironment):
                             if e.status == 404:
                                 break
                     else:
-                        self.logger.warning(f"Pod {self.pod_name} did not terminate within 60 seconds.")
+                        self.logger.warning(
+                            f"Pod {self.pod_name} did not terminate within 60 seconds."
+                        )
                 except ApiException as e:
                     if e.status != 404:
                         raise
@@ -546,8 +574,7 @@ class GKEEnvironment(BaseEnvironment):
         """Execute command in pod using kubectl exec equivalent."""
         await self._ensure_client()
 
-        # Build command string
-        full_command = f"bash -ic {shlex.quote(command)}"
+        full_command = f"bash -lc {shlex.quote(command)}"
 
         if env:
             for key, value in env.items():
@@ -671,7 +698,9 @@ class GKEEnvironment(BaseEnvironment):
             except ApiException as e:
                 if "container not found" in str(e) or e.status == 500:
                     if attempt % 10 == 0:
-                        self.logger.debug(f"Container not ready, attempt {attempt + 1}/{max_attempts}")
+                        self.logger.debug(
+                            f"Container not ready, attempt {attempt + 1}/{max_attempts}"
+                        )
                     await asyncio.sleep(3)
                     continue
                 else:
@@ -685,7 +714,9 @@ class GKEEnvironment(BaseEnvironment):
                 else:
                     raise
 
-        raise RuntimeError(f"Container not ready for exec after {max_attempts} attempts")
+        raise RuntimeError(
+            f"Container not ready for exec after {max_attempts} attempts"
+        )
 
     @retry(
         stop=stop_after_attempt(3),
@@ -761,7 +792,9 @@ class GKEEnvironment(BaseEnvironment):
 
         mkdir_result = await self.exec(f"mkdir -p {target_dir}")
         if mkdir_result.return_code != 0:
-            raise RuntimeError(f"Failed to create target directory {target_dir}: {mkdir_result.stderr}")
+            raise RuntimeError(
+                f"Failed to create target directory {target_dir}: {mkdir_result.stderr}"
+            )
 
         exec_command = ["tar", "xf", "-", "-C", target_dir]
 
@@ -780,7 +813,9 @@ class GKEEnvironment(BaseEnvironment):
             )
         except ApiException as e:
             if e.status == 500:
-                raise RuntimeError(f"Pod {self.pod_name} returned 500 error during upload.")
+                raise RuntimeError(
+                    f"Pod {self.pod_name} returned 500 error during upload."
+                )
             raise
 
         try:
@@ -790,7 +825,9 @@ class GKEEnvironment(BaseEnvironment):
 
         resp.run_forever(timeout=1)
         resp.close()
-        self.logger.debug(f"Successfully uploaded {len(files_to_upload)} files ({tar_size} bytes) to {target_dir}")
+        self.logger.debug(
+            f"Successfully uploaded {len(files_to_upload)} files ({tar_size} bytes) to {target_dir}"
+        )
 
     @retry(
         stop=stop_after_attempt(3),
@@ -831,7 +868,9 @@ class GKEEnvironment(BaseEnvironment):
         tar_buffer = io.BytesIO(tar_data)
         with tarfile.open(fileobj=tar_buffer, mode="r") as tar:
             for member in tar.getmembers():
-                if member.name == source_path or member.name.startswith(source_path.lstrip("/")):
+                if member.name == source_path or member.name.startswith(
+                    source_path.lstrip("/")
+                ):
                     member.name = target_path.name
                     tar.extract(member, path=str(target_path.parent))
                     break
@@ -882,18 +921,26 @@ class GKEEnvironment(BaseEnvironment):
             if resp.peek_stderr():
                 stderr_data += resp.read_stderr()
 
-        if stderr_data and ("No such file or directory" in stderr_data or "cannot cd" in stderr_data):
-            raise RuntimeError(f"Failed to access directory {source_dir} in pod {self.pod_name}: {stderr_data.strip()}")
+        if stderr_data and (
+            "No such file or directory" in stderr_data or "cannot cd" in stderr_data
+        ):
+            raise RuntimeError(
+                f"Failed to access directory {source_dir} in pod {self.pod_name}: {stderr_data.strip()}"
+            )
 
         if not tar_data:
-            raise RuntimeError(f"No data received when downloading {source_dir} from pod {self.pod_name}.")
+            raise RuntimeError(
+                f"No data received when downloading {source_dir} from pod {self.pod_name}."
+            )
 
         tar_buffer = io.BytesIO(tar_data)
         try:
             with tarfile.open(fileobj=tar_buffer, mode="r") as tar:
                 tar.extractall(path=str(target_dir))
         except tarfile.TarError as e:
-            raise RuntimeError(f"Failed to extract directory {source_dir} from pod {self.pod_name}: {e}")
+            raise RuntimeError(
+                f"Failed to extract directory {source_dir} from pod {self.pod_name}: {e}"
+            )
 
     async def _wait_for_pod_ready(self, timeout_sec: int = 300):
         """Wait for pod to be ready."""
@@ -931,7 +978,9 @@ class GKEEnvironment(BaseEnvironment):
                                     )
 
                 if attempt % 10 == 0:
-                    self.logger.debug(f"Pod status: {pod.status.phase} ({attempt}s elapsed)")
+                    self.logger.debug(
+                        f"Pod status: {pod.status.phase} ({attempt}s elapsed)"
+                    )
 
             except ApiException as e:
                 if e.status != 404:
@@ -953,7 +1002,9 @@ class GKEEnvironment(BaseEnvironment):
         if pod.status.container_statuses:
             for c in pod.status.container_statuses:
                 if c.state.waiting:
-                    reasons.append(f"Container {c.name} waiting: {c.state.waiting.reason}")
+                    reasons.append(
+                        f"Container {c.name} waiting: {c.state.waiting.reason}"
+                    )
                 elif c.state.terminated:
                     reasons.append(
                         f"Container {c.name} terminated: {c.state.terminated.reason} "

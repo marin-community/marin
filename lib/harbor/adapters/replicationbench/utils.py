@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Utility functions for ReplicationBench adapter."""
 
 
@@ -89,13 +86,13 @@ try:'''
             if isinstance(hf_type, list):
                 hf_type = hf_type[0]
 
-            script += f"""
+            script += f'''
     from huggingface_hub import snapshot_download
-
+    
     # HuggingFace dataset
     REPO_ID = "{repo_id}"
     print(f"Downloading from HuggingFace: {{{{REPO_ID}}}}...")
-
+    
     snapshot_download(
         repo_id=REPO_ID,
         repo_type="dataset",
@@ -103,7 +100,7 @@ try:'''
         local_dir_use_symlinks=False
     )
     print("✓ Dataset download complete")
-"""
+'''
         elif dataset_kind == "wget":
             # Handle both single dict and list of datasets
             all_urls = []
@@ -123,27 +120,27 @@ try:'''
                 script += """
     import wget
     import tarfile
-
+    
     # Download from URLs
     urls = ["""
                 for url in all_urls:
                     script += f'        "{url}",\n'
                 script += """    ]
-
+    
     for url in urls:
         print(f"Downloading {{url}}...")
         filename = url.split("/")[-1]
         filepath = ASSETS_DIR / filename
         wget.download(url, str(filepath))
         print()  # New line after wget progress
-
+        
         # Extract if tar file
         if filename.endswith(".tar") or filename.endswith(".tar.gz"):
             print(f"Extracting {{filename}}...")
             with tarfile.open(filepath, "r:*") as tar:
                 tar.extractall(ASSETS_DIR)
             filepath.unlink()  # Remove tar file after extraction
-
+    
     print("✓ Dataset download complete")
 """
         elif dataset_kind == "local":

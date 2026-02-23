@@ -8,12 +8,12 @@
     "original_parity_repo": "https://github.com/hanxu12/LawBench/tree/harbor-adapter",
     "adapter_pr": "https://github.com/laude-institute/harbor/pull/380",
     "dataset_pr": [
-      "https://github.com/laude-institute/harbor-datasets/pull/78",
+      "https://github.com/laude-institute/harbor-datasets/pull/78", 
       "https://github.com/laude-institute/harbor-datasets/pull/88"
     ],
     "parity_pr": [
-      "https://huggingface.co/datasets/harborframework/parity-experiments/discussions/62",
-      "https://huggingface.co/datasets/harborframework/parity-experiments/discussions/64",
+      "https://huggingface.co/datasets/harborframework/parity-experiments/discussions/62", 
+      "https://huggingface.co/datasets/harborframework/parity-experiments/discussions/64", 
       "https://huggingface.co/datasets/harborframework/parity-experiments/discussions/65",
       "https://huggingface.co/datasets/harborframework/parity-experiments/discussions/68"
     ],

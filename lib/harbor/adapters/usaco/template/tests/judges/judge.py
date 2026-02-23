@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import random
 import time
 from abc import ABC
@@ -60,12 +57,14 @@ class Judge(ABC):
                     time.sleep(self.sleep_length + random.random())
         assert len(solution_sets) > 0, "solution_sets is empty"
         attempts = len(solution_sets[0])
-        assert all(
-            [len(solution_set) == attempts for solution_set in solution_sets]
-        ), "We do not support different numbers of attempts per problem"
+        assert all([len(solution_set) == attempts for solution_set in solution_sets]), (
+            "We do not support different numbers of attempts per problem"
+        )
         return self._collate_results(result_list, len(solution_sets), attempts)
 
-    def _collate_results(self, result_list: List[Result], num_solution_sets: int, attempts: int) -> List[ResultSet]:
+    def _collate_results(
+        self, result_list: List[Result], num_solution_sets: int, attempts: int
+    ) -> List[ResultSet]:
         """
         Collates attempts into lists per problem
         """

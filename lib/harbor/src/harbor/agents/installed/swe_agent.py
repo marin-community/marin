@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import json
 import os
 import uuid
@@ -116,7 +113,9 @@ def convert_swe_agent_to_atif(
 
     final_metrics = FinalMetrics(
         total_prompt_tokens=total_prompt_tokens if total_prompt_tokens > 0 else None,
-        total_completion_tokens=total_completion_tokens if total_completion_tokens > 0 else None,
+        total_completion_tokens=total_completion_tokens
+        if total_completion_tokens > 0
+        else None,
         total_cost_usd=total_cost_usd if total_cost_usd > 0 else None,
     )
 
@@ -155,9 +154,13 @@ def convert_and_save_trajectory(
             session_id,
         )
 
-        atif_trajectory_path.write_text(json.dumps(atif_trajectory.to_json_dict(), indent=2) + "\n")
+        atif_trajectory_path.write_text(
+            json.dumps(atif_trajectory.to_json_dict(), indent=2) + "\n"
+        )
 
-        _logger.info("Successfully converted trajectory to ATIF format: %s", atif_trajectory_path)
+        _logger.info(
+            "Successfully converted trajectory to ATIF format: %s", atif_trajectory_path
+        )
 
     except Exception as e:
         _logger.error("Failed to convert trajectory: %s", e)
@@ -193,7 +196,9 @@ class SweAgent(BaseInstalledAgent):
             return None
 
         traj_files = list(output_dir.glob("**/*.traj"))
-        assert len(traj_files) <= 1, f"Expected at most 1 trajectory file, found {len(traj_files)}"
+        assert len(traj_files) <= 1, (
+            f"Expected at most 1 trajectory file, found {len(traj_files)}"
+        )
         return traj_files[0] if traj_files else None
 
     def populate_context_post_run(self, context: AgentContext) -> None:
@@ -244,7 +249,10 @@ class SweAgent(BaseInstalledAgent):
             if key in os.environ:
                 env[key] = os.environ[key]
 
-        if not any(k in env for k in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TOGETHER_API_KEY"]):
+        if not any(
+            k in env
+            for k in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TOGETHER_API_KEY"]
+        ):
             try:
                 api_key_var = get_api_key_var_names_from_model_name(self.model_name)
                 if api_key_var in os.environ:
@@ -259,7 +267,10 @@ class SweAgent(BaseInstalledAgent):
         heredoc = f"HARBOR_INSTRUCTION_{uuid.uuid4().hex}"
 
         write_instruction_cmd = (
-            "mkdir -p /logs/agent\n" f"cat > '{instruction_path}' << '{heredoc}'\n" f"{instruction}\n" f"{heredoc}\n"
+            "mkdir -p /logs/agent\n"
+            f"cat > '{instruction_path}' << '{heredoc}'\n"
+            f"{instruction}\n"
+            f"{heredoc}\n"
         )
 
         cmd_parts = [
@@ -276,9 +287,13 @@ class SweAgent(BaseInstalledAgent):
         config_path = "/opt/sweagent-configs/default.yaml"
         if "SWEAGENT_CONFIG" in env:
             config_source = env["SWEAGENT_CONFIG"]
-            if config_source.startswith("http://") or config_source.startswith("https://"):
+            if config_source.startswith("http://") or config_source.startswith(
+                "https://"
+            ):
                 config_path = "/opt/sweagent-configs/swesmith_infer.yaml"
-                download_config_cmd = f"curl -sSL '{config_source}' -o '{config_path}'\n"
+                download_config_cmd = (
+                    f"curl -sSL '{config_source}' -o '{config_path}'\n"
+                )
             else:
                 config_path = env["SWEAGENT_CONFIG"]
 

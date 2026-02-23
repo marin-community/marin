@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Interactive CLI helper to create a new adapter skeleton for Harbor.
 """
@@ -130,7 +127,9 @@ class AdapterWizard:
         config_path = Path.home() / ".cache/harbor/wizard.json"
         if config_path.exists():
             try:
-                self._wizard_config = WizardConfig.model_validate_json(config_path.read_text())
+                self._wizard_config = WizardConfig.model_validate_json(
+                    config_path.read_text()
+                )
             except Exception as e:
                 print(f"Warning: Could not load wizard config: {e}")
                 # Ignore config errors and use defaults
@@ -281,14 +280,17 @@ class AdapterWizard:
             if ask_again_response.startswith("y"):
                 self._wizard_config.skip_harbor_overview = True
                 self._WIZARD_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-                self._WIZARD_CONFIG.write_text(self._wizard_config.model_dump_json(indent=4))
+                self._WIZARD_CONFIG.write_text(
+                    self._wizard_config.model_dump_json(indent=4)
+                )
 
             return
 
         # Introduction
         print()
         self._print_with_color(
-            "Harbor is a framework for evaluating and optimizing agents and models " "in container environments.",
+            "Harbor is a framework for evaluating and optimizing agents and models "
+            "in container environments.",
             color=color,
             end="\n\n",
         )
@@ -362,8 +364,12 @@ class AdapterWizard:
             ).strip()
             self._adapter_id = derived if not use_default else use_default
 
-        while self._adapter_id is None or not re.match(_ADAPTER_ID_PATTERN, self._adapter_id):
-            if self._adapter_id is not None and not re.match(_ADAPTER_ID_PATTERN, self._adapter_id):
+        while self._adapter_id is None or not re.match(
+            _ADAPTER_ID_PATTERN, self._adapter_id
+        ):
+            if self._adapter_id is not None and not re.match(
+                _ADAPTER_ID_PATTERN, self._adapter_id
+            ):
                 self._print_with_color(
                     (
                         "Adapter ID must be lowercase letters/digits with optional dashes "
@@ -371,7 +377,11 @@ class AdapterWizard:
                     ),
                     color=Colors.RED,
                 )
-            entered = self._input_with_color("Adapter ID (lowercase, no spaces): ", color).strip().lower()
+            entered = (
+                self._input_with_color("Adapter ID (lowercase, no spaces): ", color)
+                .strip()
+                .lower()
+            )
             if not entered:
                 continue
             self._adapter_id = entered
@@ -391,11 +401,15 @@ class AdapterWizard:
 
     def _get_description(self, color: str) -> None:
         if self._description is None:
-            self._description = self._input_with_color("One-line adapter description (optional): ", color).strip()
+            self._description = self._input_with_color(
+                "One-line adapter description (optional): ", color
+            ).strip()
 
     def _get_source_url(self, color: str) -> None:
         if self._source_url is None:
-            self._source_url = self._input_with_color("Source repository or paper URL (optional): ", color).strip()
+            self._source_url = self._input_with_color(
+                "Source repository or paper URL (optional): ", color
+            ).strip()
 
     def _get_license(self, color: str) -> None:
         if self._license_name is None:
@@ -410,7 +424,9 @@ class AdapterWizard:
         cli_dir = Path(__file__).parent
         template_adapter_dir = cli_dir / "template-adapter"
         if not template_adapter_dir.exists():
-            raise FileNotFoundError(f"Missing template-adapter at {template_adapter_dir}")
+            raise FileNotFoundError(
+                f"Missing template-adapter at {template_adapter_dir}"
+            )
 
         target_dir = self._adapters_dir / self._adapter_id
         if target_dir.exists():
@@ -418,7 +434,11 @@ class AdapterWizard:
                 f"Adapter directory already exists: {target_dir.resolve()}",
                 color=Colors.YELLOW,
             )
-            resp = self._input_with_color("Delete it and re-create? [y/N]: ", color).strip().lower()
+            resp = (
+                self._input_with_color("Delete it and re-create? [y/N]: ", color)
+                .strip()
+                .lower()
+            )
             if resp.startswith("y"):
                 shutil.rmtree(target_dir)
             else:

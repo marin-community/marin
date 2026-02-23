@@ -114,7 +114,7 @@ uv run run_adapter.py \
 
 ## Comparison with Original Benchmark (Parity)
 
-To validate this harbor adapter, we compare its performance against the terminal bench adapter version. This parity experiment is conducted on all the 5 PDEs using the Terminus-2 agent. The results are presented below:
+To validate this harbor adapter, we compare its performance against the terminal bench adapter version. This parity experiment is conducted on all the 5 PDEs using the Terminus-2 agent. The results are presented below: 
 
 | Benchmark              | Agent      | Model                        | Metric    | Value         | Notes    |
 | ---------------------- | ---------- | ---------------------------- | --------- | ------------- | -------- |

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # /// script
 # dependencies = [
 #   "numpy==2.3.4",
@@ -23,7 +20,9 @@ def main(input_path: Path, output_path: Path):
             rewards.append(0)
 
         elif len(reward) != 1:
-            raise ValueError(f"Expected exactly one key in reward dictionary, got {len(reward)}")
+            raise ValueError(
+                f"Expected exactly one key in reward dictionary, got {len(reward)}"
+            )
 
         else:
             rewards.extend(reward.values())

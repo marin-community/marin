@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 DevEval Adapter for T-Bench
 
@@ -99,10 +96,16 @@ class DevEvalConfigLoader:
                 "pytest --cov=hone --cov-report=term-missing "
                 "--json-report --json-report-file=unit_test_report.json unit_tests"
             )
-            self.repo_config["acceptance_test_script"] = "python -m unittest acceptance_tests/test_acceptance.py"
+            self.repo_config["acceptance_test_script"] = (
+                "python -m unittest acceptance_tests/test_acceptance.py"
+            )
         elif repo_name == "lice" and language == "python":
-            self.repo_config["unit_test_script"] = "pytest --cov=lice --cov-report=term-missing unit_tests"
-            self.repo_config["acceptance_test_script"] = "pytest --cov=lice --cov-report=term-missing acceptance_tests"
+            self.repo_config["unit_test_script"] = (
+                "pytest --cov=lice --cov-report=term-missing unit_tests"
+            )
+            self.repo_config["acceptance_test_script"] = (
+                "pytest --cov=lice --cov-report=term-missing acceptance_tests"
+            )
 
         if repo_name == "people_management" and language == "cpp":
             if self.repo_config.get("unit_tests") == "tests":
@@ -113,7 +116,10 @@ class DevEvalConfigLoader:
 
     def get_source_code_for_prompt(self) -> str:
         """Get source code formatted for prompts, using repo_config."""
-        if "code_file_DAG" not in self.repo_config or not self.repo_config["code_file_DAG"]:
+        if (
+            "code_file_DAG" not in self.repo_config
+            or not self.repo_config["code_file_DAG"]
+        ):
             return ""
 
         code_content = []
@@ -123,22 +129,33 @@ class DevEvalConfigLoader:
                 try:
                     file_content = file_path.read_text()
                     lang = filename.split(".")[-1] if "." in filename else "text"
-                    code_content.append(f"The content of file {filename} is:\n" f"```{lang}\n{file_content}\n```\n\n")
+                    code_content.append(
+                        f"The content of file {filename} is:\n"
+                        f"```{lang}\n{file_content}\n```\n\n"
+                    )
                 except Exception as e:
-                    logger.error(f"Error reading file {filename} for source code prompt: {e}")
+                    logger.error(
+                        f"Error reading file {filename} for source code prompt: {e}"
+                    )
         return "".join(code_content)
 
     def get_prd_content(self) -> str:
         return self._safe_read_file(self.repo_path / self.repo_config.get("PRD", ""))
 
     def get_uml_class_content(self) -> str:
-        return self._safe_read_file(self.repo_path / self.repo_config.get("UML_class", ""))
+        return self._safe_read_file(
+            self.repo_path / self.repo_config.get("UML_class", "")
+        )
 
     def get_uml_sequence_content(self) -> str:
-        return self._safe_read_file(self.repo_path / self.repo_config.get("UML_sequence", ""))
+        return self._safe_read_file(
+            self.repo_path / self.repo_config.get("UML_sequence", "")
+        )
 
     def get_arch_design_content(self) -> str:
-        return self._safe_read_file(self.repo_path / self.repo_config.get("architecture_design", ""))
+        return self._safe_read_file(
+            self.repo_path / self.repo_config.get("architecture_design", "")
+        )
 
     @staticmethod
     def _safe_read_file(file_path: Path) -> str:
@@ -179,7 +196,9 @@ class DevEvalFileUtils:
         if match:
             prefix_whitespace = match.group(1)
             indent_level = len(prefix_whitespace) + 2
-            indented_content = DevEvalFileUtils.properly_indent_yaml_content(content, indent_level)
+            indented_content = DevEvalFileUtils.properly_indent_yaml_content(
+                content, indent_level
+            )
             return yaml_content.replace(placeholder, indented_content)
 
         # Fallback if placeholder not found with indentation
@@ -201,7 +220,10 @@ class DevEvalFileGenerator:
         lines = []
 
         if self.phase == "implementation":
-            if self.repo_config["code_file_DAG"] and "code_file_DAG" in self.repo_config:
+            if (
+                self.repo_config["code_file_DAG"]
+                and "code_file_DAG" in self.repo_config
+            ):
                 lines.append("# Remove implementation files for implementation phase")
                 for code_file in self.repo_config["code_file_DAG"]:
                     lines.append(f'RUN rm -rf "/app/{code_file}"')
@@ -210,7 +232,9 @@ class DevEvalFileGenerator:
                 lines.append(f'RUN chmod 700 "/app/{self.repo_config["unit_tests"]}"')
             if self.repo_config["acceptance_tests"]:
                 if "acceptance_tests" in self.repo_config:
-                    lines.append(f'RUN chmod 700 "/app/{self.repo_config["acceptance_tests"]}"')
+                    lines.append(
+                        f'RUN chmod 700 "/app/{self.repo_config["acceptance_tests"]}"'
+                    )
         elif self.phase == "unit_testing":
             if "unit_tests" in self.repo_config and self.repo_config["unit_tests"]:
                 lines.append("# Remove unit tests for unit_testing phase")
@@ -223,7 +247,9 @@ class DevEvalFileGenerator:
                         "# Remove acceptance tests \
                                  for acceptance_testing phase"
                     )
-                    lines.append(f'RUN rm -rf "/app/{self.repo_config["acceptance_tests"]}"')
+                    lines.append(
+                        f'RUN rm -rf "/app/{self.repo_config["acceptance_tests"]}"'
+                    )
                     lines.append("")
 
         return "\n".join(lines)
@@ -260,7 +286,9 @@ class DevEvalFileGenerator:
                 setup_content = setup_script_path.read_text()
                 setup_content = re.sub(r"\bsudo\s+", "", setup_content)
                 if repo_name_lower == "logistic_system" and language_lower == "cpp":
-                    setup_content = re.sub(r"chmod \+x acceptance_tests/test\.sh\s*\n?", "", setup_content)
+                    setup_content = re.sub(
+                        r"chmod \+x acceptance_tests/test\.sh\s*\n?", "", setup_content
+                    )
                 if repo_name_lower == "arxiv_digest" and language_lower == "python":
                     setup_content = re.sub(
                         r"pip install -r requirements(?:\.txt)?(?!\S)",
@@ -276,7 +304,8 @@ class DevEvalFileGenerator:
 
                     lines.extend(
                         [
-                            f"# Filter Python built-in modules from {req_file_path} " "BEFORE setup",
+                            f"# Filter Python built-in modules from {req_file_path} "
+                            "BEFORE setup",
                             f"if [ -f {req_file_path} ]; then",
                             f'    BUILTIN_MODULES="{BUILTIN_PYTHON_MODULES}"',
                             "    PATTERN=$(echo $BUILTIN_MODULES | tr ' ' '|')",
@@ -284,7 +313,10 @@ class DevEvalFileGenerator:
                                 f'    grep -vE "^($PATTERN)([<>=!~].*)?$" {req_file_path} > '
                                 f"{req_file_path}.filtered || true"
                             ),
-                            (f"    sed -i '/^[[:space:]]*$/d; /^[[:space:]]*#/d' " f"{req_file_path}.filtered"),
+                            (
+                                f"    sed -i '/^[[:space:]]*$/d; /^[[:space:]]*#/d' "
+                                f"{req_file_path}.filtered"
+                            ),
                             f"    mv {req_file_path}.filtered {req_file_path}",
                             "fi",
                             "",
@@ -311,7 +343,9 @@ class DevEvalFileGenerator:
             ]
         )
 
-        unit_test_script = self.repo_config.get("unit_test_script", "echo 'No unit test script defined'")
+        unit_test_script = self.repo_config.get(
+            "unit_test_script", "echo 'No unit test script defined'"
+        )
         acceptance_test_script = self.repo_config.get(
             "acceptance_test_script", "echo 'No acceptance test script defined'"
         )
@@ -427,7 +461,8 @@ class DevEvalFileGenerator:
             lines.extend(
                 [
                     "def test_unit_tests_passed():",
-                    '    """Test that unit tests ran successfully on ' 'agent implementation."""',
+                    '    """Test that unit tests ran successfully on '
+                    'agent implementation."""',
                     '    log_file = "/app/unit_test.log"',
                     "    assert os.path.exists(log_file), (",
                     '        f"Unit test log file not found: {log_file}"',
@@ -439,7 +474,8 @@ class DevEvalFileGenerator:
                     "    )",
                     "",
                     "def test_acceptance_tests_passed():",
-                    '    """Test that acceptance tests ran successfully on ' 'agent implementation."""',
+                    '    """Test that acceptance tests ran successfully on '
+                    'agent implementation."""',
                     '    log_file = "/app/acceptance_test.log"',
                     "    assert os.path.exists(log_file), (",
                     '        f"Acceptance test log file not found: {log_file}"',
@@ -455,7 +491,8 @@ class DevEvalFileGenerator:
             lines.extend(
                 [
                     "def test_unit_tests_passed():",
-                    '    """Test that agent-generated unit tests ' 'ran successfully on reference implementation."""',
+                    '    """Test that agent-generated unit tests '
+                    'ran successfully on reference implementation."""',
                     '    """reference implementation."""',
                     '    log_file = "/app/unit_test.log"',
                     "    assert os.path.exists(log_file), (",
@@ -493,12 +530,18 @@ class DevEvalFileGenerator:
         if self.phase == "implementation":
             if self.repo_config["code_file_DAG"]:
                 if "code_file_DAG" in self.repo_config:
-                    lines.append(f'echo "Recovering implementation files from /' f'{DEVEVAL_SOURCE_REPO_DIR_NAME}..."')
+                    lines.append(
+                        f'echo "Recovering implementation files from /'
+                        f'{DEVEVAL_SOURCE_REPO_DIR_NAME}..."'
+                    )
                     for code_file in self.repo_config["code_file_DAG"]:
                         dir_path = str(Path(code_file).parent)
                         if dir_path != ".":
                             lines.append(f'mkdir -p "{dir_path}"')
-                        lines.append(f'cp "/{DEVEVAL_SOURCE_REPO_DIR_NAME}/{code_file}" ' f'"/app/{code_file}"')
+                        lines.append(
+                            f'cp "/{DEVEVAL_SOURCE_REPO_DIR_NAME}/{code_file}" '
+                            f'"/app/{code_file}"'
+                        )
                         lines.append(f'echo "Recovered {code_file}"')
                     lines.append("")
             else:
@@ -508,8 +551,12 @@ class DevEvalFileGenerator:
                 unit_tests_dir = self.repo_config["unit_tests"]
                 lines.extend(
                     [
-                        f'echo "Recovering unit tests from /' f'{DEVEVAL_SOURCE_REPO_DIR_NAME}..."',
-                        (f'cp -r "/{DEVEVAL_SOURCE_REPO_DIR_NAME}/{unit_tests_dir}" ' f'"/app/{unit_tests_dir}"'),
+                        f'echo "Recovering unit tests from /'
+                        f'{DEVEVAL_SOURCE_REPO_DIR_NAME}..."',
+                        (
+                            f'cp -r "/{DEVEVAL_SOURCE_REPO_DIR_NAME}/{unit_tests_dir}" '
+                            f'"/app/{unit_tests_dir}"'
+                        ),
                         f'echo "Recovered {unit_tests_dir}/"',
                     ]
                 )
@@ -521,7 +568,8 @@ class DevEvalFileGenerator:
                     acceptance_tests_dir = self.repo_config["acceptance_tests"]
                     lines.extend(
                         [
-                            f'echo "Recovering acceptance tests from /' f'{DEVEVAL_SOURCE_REPO_DIR_NAME}..."',
+                            f'echo "Recovering acceptance tests from /'
+                            f'{DEVEVAL_SOURCE_REPO_DIR_NAME}..."',
                             (
                                 f'cp -r "/{DEVEVAL_SOURCE_REPO_DIR_NAME}/{acceptance_tests_dir}" '
                                 f'"/app/{acceptance_tests_dir}"'
@@ -589,11 +637,15 @@ class DevEvalTaskPreparer:
                 try:
                     content = file_path.read_text(encoding="utf-8", errors="ignore")
                     updated_content = re.sub(r"\btests/", "unit_tests/", content)
-                    updated_content = re.sub(r"\btests\b(?=\s|$|[^\w])", "unit_tests", updated_content)
+                    updated_content = re.sub(
+                        r"\btests\b(?=\s|$|[^\w])", "unit_tests", updated_content
+                    )
                     if updated_content != content:
                         file_path.write_text(updated_content, encoding="utf-8")
                 except Exception as e:
-                    logger.warning(f"Could not update tests reference in {file_path}: {e}")
+                    logger.warning(
+                        f"Could not update tests reference in {file_path}: {e}"
+                    )
 
     def _update_repo_config_tests_reference(self, repo_config_path: Path) -> None:
         """Update tests reference in repo_config.json."""
@@ -603,7 +655,9 @@ class DevEvalTaskPreparer:
             updated_content = re.sub(r'"tests"', '"unit_tests"', content)
             repo_config_path.write_text(updated_content, encoding="utf-8")
         except Exception as e:
-            logger.warning(f"Could not update {REPO_CONFIG_FILENAME} tests reference: {e}")
+            logger.warning(
+                f"Could not update {REPO_CONFIG_FILENAME} tests reference: {e}"
+            )
 
     def _create_instruction(self, task_yaml_content: str, output_dir: Path) -> None:
         """Create instruction.md from task.yaml content.
@@ -673,7 +727,7 @@ class DevEvalTaskPreparer:
             }
         )
 
-        toml_content = f"""version = "1.0"
+        toml_content = f'''version = "1.0"
 
 [metadata]
 author_name = "Terminal-Bench Community"
@@ -694,14 +748,17 @@ timeout_sec = 1000.0
 
 [environment]
 build_timeout_sec = 1800.0
-"""
+'''
         (output_dir / "task.toml").write_text(toml_content, encoding="utf-8")
 
     def prepare_task_files(self) -> None:
         # Verify template directory exists
         phase_template_dir = self.adapter_template_dir / self.phase
         if not phase_template_dir.exists():
-            logger.error(f"Template directory not found for phase {self.phase}: " f"{phase_template_dir}")
+            logger.error(
+                f"Template directory not found for phase {self.phase}: "
+                f"{phase_template_dir}"
+            )
             return
 
         # Create Harbor directory structure
@@ -788,7 +845,9 @@ build_timeout_sec = 1800.0
         instruction_content = "\n".join(instruction_parts)
 
         # Create instruction.md
-        (self.output_dir / "instruction.md").write_text(instruction_content, encoding="utf-8")
+        (self.output_dir / "instruction.md").write_text(
+            instruction_content, encoding="utf-8"
+        )
 
         # Create task.toml
         repo_name = self.repo_path.name
@@ -799,7 +858,9 @@ build_timeout_sec = 1800.0
         if dockerfile_template_path.exists():
             dockerfile_content = dockerfile_template_path.read_text()
             phase_commands = self.file_generator.get_phase_specific_commands()
-            dockerfile_content = dockerfile_content.replace(f"{{{self.phase}_phase_commands}}", phase_commands)
+            dockerfile_content = dockerfile_content.replace(
+                f"{{{self.phase}_phase_commands}}", phase_commands
+            )
             (environment_dir / "Dockerfile").write_text(dockerfile_content)
         else:
             logger.warning(f"Dockerfile template not found: {dockerfile_template_path}")
@@ -810,7 +871,9 @@ build_timeout_sec = 1800.0
         test_script_path.chmod(0o755)
 
         # Create test_outputs.py in tests/
-        (tests_dir / "test_outputs.py").write_text(self.file_generator.get_test_outputs_py_content())
+        (tests_dir / "test_outputs.py").write_text(
+            self.file_generator.get_test_outputs_py_content()
+        )
 
         # Create solution script in solution/solve.sh
         solve_script_path = solution_dir / "solve.sh"
@@ -835,7 +898,9 @@ class DevEvalAdapter(BaseAdapter):
         # t_bench_task_id is not used here
         parts = task_id.split("/")  # e.g. "python/hone"
         if len(parts) < 2:
-            logger.error(f"Invalid task ID format: {task_id}. Expected 'language/repo_name'.")
+            logger.error(
+                f"Invalid task ID format: {task_id}. Expected 'language/repo_name'."
+            )
             return
 
         language_from_task_id = parts[0]
@@ -845,7 +910,9 @@ class DevEvalAdapter(BaseAdapter):
             logger.info(f"Skipping repository {task_id} (excluded from adaptation)")
             return
 
-        repo_path = self.deveval_root / "benchmark_data" / language_from_task_id / repo_name
+        repo_path = (
+            self.deveval_root / "benchmark_data" / language_from_task_id / repo_name
+        )
         if not repo_path.exists() or not repo_path.is_dir():
             logger.error(f"Repository not found or not a directory: {repo_path}")
             return
@@ -864,18 +931,24 @@ class DevEvalAdapter(BaseAdapter):
         for phase in self.phases:
             # Create flat directory structure: {language}-{repo_name}-{phase}
             # Use effective_language from config for naming consistency
-            adapted_task_name = f"{effective_language}-{repo_name}-{phase}".lower().replace("_", "-")
+            adapted_task_name = (
+                f"{effective_language}-{repo_name}-{phase}".lower().replace("_", "-")
+            )
             output_task_dir = self.task_dir / adapted_task_name
             output_task_dir.mkdir(parents=True, exist_ok=True)
 
             try:
-                task_preparer = DevEvalTaskPreparer(config_loader, output_task_dir, phase, self.adapter_template_dir)
+                task_preparer = DevEvalTaskPreparer(
+                    config_loader, output_task_dir, phase, self.adapter_template_dir
+                )
                 task_preparer.prepare_task_files()
                 logger.info(
-                    f"Generated {phase} task for {task_id} " f"({effective_language}/{repo_name}): {output_task_dir}"
+                    f"Generated {phase} task for {task_id} "
+                    f"({effective_language}/{repo_name}): {output_task_dir}"
                 )
             except Exception as e:
                 logger.error(
-                    f"Error generating {phase} task for {task_id} " f"({effective_language}/{repo_name}): {e}",
+                    f"Error generating {phase} task for {task_id} "
+                    f"({effective_language}/{repo_name}): {e}",
                     exc_info=True,
                 )

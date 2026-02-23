@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Integration test for --agent-import-path CLI flag.
 
 Regression test for: https://github.com/laude-institute/harbor/issues/261
@@ -51,9 +48,11 @@ def test_agent_import_path_is_used_via_cli(tmp_path):
 
     # Verify the marker file has expected content
     marker_content = marker_files[0].read_text()
-    assert "MarkerAgent ran" in marker_content, f"Unexpected marker file content: {marker_content}"
+    assert "MarkerAgent ran" in marker_content, (
+        f"Unexpected marker file content: {marker_content}"
+    )
 
     # Verify CLI output shows the custom agent
-    assert (
-        "examples.agents.marker_agent:MarkerAgent" in result.output
-    ), f"CLI output should show custom agent import path. Got:\n{result.output}"
+    assert "examples.agents.marker_agent:MarkerAgent" in result.output, (
+        f"CLI output should show custom agent import path. Got:\n{result.output}"
+    )

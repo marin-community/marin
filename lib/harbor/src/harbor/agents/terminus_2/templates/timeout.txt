@@ -7,4 +7,4 @@ It is possible that the command is not yet finished executing. If that is the ca
 
 Here is the current state of the terminal:
 
-{terminal_state}
+{terminal_state} 

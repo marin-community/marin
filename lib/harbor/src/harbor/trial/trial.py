@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import asyncio
 import logging
 import traceback
@@ -46,10 +43,6 @@ class VerifierTimeoutError(asyncio.TimeoutError):
     pass
 
 
-class EnvironmentBuildTimeoutError(asyncio.TimeoutError):
-    pass
-
-
 class EnvironmentStartTimeoutError(asyncio.TimeoutError):
     pass
 
@@ -76,7 +69,9 @@ class Trial:
         self.job_id = config.job_id
         self._are_agent_logs_downloaded = False
 
-        self._hooks: dict[TrialEvent, list[TrialHookCallback]] = {event: [] for event in TrialEvent}
+        self._hooks: dict[TrialEvent, list[TrialHookCallback]] = {
+            event: [] for event in TrialEvent
+        }
 
         self._task = self._load_task()
         self._trial_paths = TrialPaths(trial_dir=self.trial_dir)
@@ -111,7 +106,8 @@ class Trial:
 
         self._agent_timeout_sec = (
             min(
-                config.agent.override_timeout_sec or self._task.config.agent.timeout_sec,
+                config.agent.override_timeout_sec
+                or self._task.config.agent.timeout_sec,
                 config.agent.max_timeout_sec or float("inf"),
             )
             * config.timeout_multiplier
@@ -119,7 +115,8 @@ class Trial:
 
         self._verifier_timeout_sec = (
             min(
-                config.verifier.override_timeout_sec or self._task.config.verifier.timeout_sec,
+                config.verifier.override_timeout_sec
+                or self._task.config.verifier.timeout_sec,
                 config.verifier.max_timeout_sec or float("inf"),
             )
             * config.timeout_multiplier
@@ -132,7 +129,8 @@ class Trial:
         ) * self.config.timeout_multiplier
 
         self._environment_build_timeout_sec = (
-            self._task.config.environment.build_timeout_sec * self.config.timeout_multiplier
+            self._task.config.environment.build_timeout_sec
+            * self.config.timeout_multiplier
         )
 
         self._result: TrialResult | None = None
@@ -194,7 +192,9 @@ class Trial:
     async def _setup_environment(self) -> None:
         await self._invoke_hooks(TrialEvent.ENVIRONMENT_START)
 
-        self.result.environment_setup = TimingInfo(started_at=datetime.now(timezone.utc))
+        self.result.environment_setup = TimingInfo(
+            started_at=datetime.now(timezone.utc)
+        )
 
         try:
             await self._start_environment_with_retry()
@@ -210,7 +210,9 @@ class Trial:
     async def _start_environment_with_retry(self) -> None:
         try:
             await asyncio.wait_for(
-                self._environment.start(force_build=self.config.environment.force_build),
+                self._environment.start(
+                    force_build=self.config.environment.force_build
+                ),
                 timeout=self._environment_build_timeout_sec,
             )
         except asyncio.TimeoutError as e:
@@ -226,7 +228,9 @@ class Trial:
                 timeout=self._agent_setup_timeout_sec,
             )
         except asyncio.TimeoutError as e:
-            raise AgentSetupTimeoutError(f"Agent setup timed out after {self._agent_setup_timeout_sec} seconds") from e
+            raise AgentSetupTimeoutError(
+                f"Agent setup timed out after {self._agent_setup_timeout_sec} seconds"
+            ) from e
         finally:
             self.result.agent_setup.finished_at = datetime.now(timezone.utc)
 
@@ -247,7 +251,9 @@ class Trial:
                 timeout=self._agent_timeout_sec,
             )
         except asyncio.TimeoutError as e:
-            raise AgentTimeoutError(f"Agent execution timed out after {self._agent_timeout_sec} seconds") from e
+            raise AgentTimeoutError(
+                f"Agent execution timed out after {self._agent_timeout_sec} seconds"
+            ) from e
         finally:
             self.result.agent_execution.finished_at = datetime.now(timezone.utc)
 
@@ -280,13 +286,17 @@ class Trial:
                 timeout=self._verifier_timeout_sec,
             )
         except asyncio.TimeoutError as e:
-            raise VerifierTimeoutError(f"Verifier execution timed out after {self._verifier_timeout_sec} seconds") from e
+            raise VerifierTimeoutError(
+                f"Verifier execution timed out after {self._verifier_timeout_sec} seconds"
+            ) from e
 
     async def _cleanup_and_finalize(self) -> None:
         try:
             await self._environment.stop(delete=self.config.environment.delete)
         except Exception as e:
-            logger.warning(f"Warning: Environment cleanup failed for {self.config.trial_name}: {e}")
+            logger.warning(
+                f"Warning: Environment cleanup failed for {self.config.trial_name}: {e}"
+            )
             if self.result.exception_info is None:
                 self.result.exception_info = ExceptionInfo.from_exception(e)
 
@@ -351,7 +361,9 @@ class Trial:
 
             except AgentTimeoutError as e:
                 self.result.exception_info = ExceptionInfo.from_exception(e)
-                self._trial_paths.exception_message_path.write_text(traceback.format_exc())
+                self._trial_paths.exception_message_path.write_text(
+                    traceback.format_exc()
+                )
                 await self._maybe_download_logs(
                     source_dir=EnvironmentPaths.agent_dir.as_posix(),
                     target_dir=self._trial_paths.agent_dir,
@@ -365,7 +377,9 @@ class Trial:
             self._logger.debug(f"Trial {self.config.trial_name} cancelled")
             if self.result.exception_info is None:
                 self.result.exception_info = ExceptionInfo.from_exception(e)
-                self._trial_paths.exception_message_path.write_text(traceback.format_exc())
+                self._trial_paths.exception_message_path.write_text(
+                    traceback.format_exc()
+                )
 
             await self._invoke_hooks(TrialEvent.CANCEL)
 
@@ -382,7 +396,9 @@ class Trial:
 
             if self.result.exception_info is None:
                 self.result.exception_info = ExceptionInfo.from_exception(e)
-                self._trial_paths.exception_message_path.write_text(traceback.format_exc())
+                self._trial_paths.exception_message_path.write_text(
+                    traceback.format_exc()
+                )
 
         finally:
             await self._cleanup_and_finalize()

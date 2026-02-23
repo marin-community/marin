@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable
 
@@ -38,7 +35,9 @@ class BaseOrchestrator(ABC):
         self._metrics = metrics
         self._quiet = quiet
         self._retry_config = retry_config or RetryConfig()
-        self._hooks: dict[TrialEvent, list[HookCallback]] = {event: [] for event in TrialEvent}
+        self._hooks: dict[TrialEvent, list[HookCallback]] = {
+            event: [] for event in TrialEvent
+        }
 
     def add_hook(self, event: TrialEvent, hook: HookCallback) -> None:
         """Add a hook to be called when the specified event occurs."""

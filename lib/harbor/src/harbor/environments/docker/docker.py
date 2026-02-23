@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import asyncio
 import asyncio.subprocess
 import os
@@ -18,7 +15,6 @@ from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
 class DockerEnvironmentEnvVars(BaseModel):
     main_image_name: str
     context_dir: str
-    test_dir: str
     host_verifier_logs_path: str
     host_agent_logs_path: str
     env_verifier_logs_path: str
@@ -26,8 +22,6 @@ class DockerEnvironmentEnvVars(BaseModel):
     prebuilt_image_name: str | None = None
     cpus: int = 1
     memory: str = "1G"
-    network_mode: str = "bridge"
-
     def to_env_dict(self, include_os_env: bool = True) -> dict[str, str]:
         env_dict = {} if not include_os_env else os.environ.copy()
 
@@ -41,8 +35,14 @@ class DockerEnvironmentEnvVars(BaseModel):
 
 
 class DockerEnvironment(BaseEnvironment):
+    _DOCKER_COMPOSE_BASE_PATH = Path(__file__).parent / "docker-compose-base.yaml"
     _DOCKER_COMPOSE_BUILD_PATH = Path(__file__).parent / "docker-compose-build.yaml"
-    _DOCKER_COMPOSE_PREBUILT_PATH = Path(__file__).parent / "docker-compose-prebuilt.yaml"
+    _DOCKER_COMPOSE_PREBUILT_PATH = (
+        Path(__file__).parent / "docker-compose-prebuilt.yaml"
+    )
+    _DOCKER_COMPOSE_NO_NETWORK_PATH = (
+        Path(__file__).parent / "docker-compose-no-network.yaml"
+    )
 
     # Class-level lock per image name to prevent parallel builds of the same image.
     _image_build_locks: dict[str, asyncio.Lock] = {}
@@ -72,7 +72,6 @@ class DockerEnvironment(BaseEnvironment):
         self._env_vars = DockerEnvironmentEnvVars(
             main_image_name=f"hb__{environment_name}",
             context_dir=str(self.environment_dir.resolve().absolute()),
-            test_dir=str(EnvironmentPaths.tests_dir),
             host_verifier_logs_path=str(trial_paths.verifier_dir.resolve().absolute()),
             host_agent_logs_path=str(trial_paths.agent_dir.resolve().absolute()),
             env_verifier_logs_path=str(EnvironmentPaths.verifier_dir),
@@ -80,7 +79,6 @@ class DockerEnvironment(BaseEnvironment):
             prebuilt_image_name=task_env_config.docker_image,
             cpus=task_env_config.cpus,
             memory=f"{task_env_config.memory_mb}M",
-            network_mode="bridge" if task_env_config.allow_internet else "none",
         )
         self._use_prebuilt = False
 
@@ -109,21 +107,51 @@ class DockerEnvironment(BaseEnvironment):
         return self.environment_dir / "docker-compose.yaml"
 
     @property
-    def _docker_compose_path(self) -> Path:
+    def _docker_compose_paths(self) -> list[Path]:
         """
-        Returns the appropriate docker-compose file based on whether we're using a
-        prebuilt image.
+        Returns the docker-compose file(s) to use.
+
+        Two options for task authors:
+
+        Option 1: Simple task (just Dockerfile)
+        - No docker-compose needed
+        - Uses: base + build/prebuilt
+
+        Option 2: Task with extra services (docker-compose.yaml)
+        - Create docker-compose.yaml with additional services or overrides
+        - Uses: base + build/prebuilt + docker-compose.yaml
+        - Task file is last so it can override scalars from build/prebuilt
+        - Relative paths (e.g. build context) resolve relative to the file
+          where they are defined, regardless of -f order
+
+        When allow_internet is False, the no-network compose file is appended
+        last to set network_mode: none on the main service.
         """
+        build_or_prebuilt = (
+            self._DOCKER_COMPOSE_PREBUILT_PATH
+            if self._use_prebuilt
+            else self._DOCKER_COMPOSE_BUILD_PATH
+        )
+
         if self._environment_docker_compose_path.exists():
-            return self._environment_docker_compose_path
+            paths = [
+                self._DOCKER_COMPOSE_BASE_PATH,
+                build_or_prebuilt,
+                self._environment_docker_compose_path,
+            ]
+        else:
+            paths = [self._DOCKER_COMPOSE_BASE_PATH, build_or_prebuilt]
 
-        if self._use_prebuilt:
-            return self._DOCKER_COMPOSE_PREBUILT_PATH
+        if not self.task_env_config.allow_internet:
+            paths.append(self._DOCKER_COMPOSE_NO_NETWORK_PATH)
 
-        return self._DOCKER_COMPOSE_BUILD_PATH
+        return paths
 
     def _validate_definition(self):
-        if not self._dockerfile_path.exists() and not self._environment_docker_compose_path.exists():
+        if (
+            not self._dockerfile_path.exists()
+            and not self._environment_docker_compose_path.exists()
+        ):
             raise FileNotFoundError(
                 f"{self._dockerfile_path} and {self._environment_docker_compose_path} "
                 "not found. Please ensure at least one of these files exist."
@@ -138,10 +166,12 @@ class DockerEnvironment(BaseEnvironment):
             "compose",
             "-p",
             self.session_id.lower().replace(".", "-"),
-            "-f",
-            str(self._docker_compose_path.resolve().absolute()),
-            *command,
+            "--project-directory",
+            str(self.environment_dir.resolve().absolute()),
         ]
+        for path in self._docker_compose_paths:
+            full_command.extend(["-f", str(path.resolve().absolute())])
+        full_command.extend(command)
 
         process = await asyncio.create_subprocess_exec(
             *full_command,
@@ -153,13 +183,17 @@ class DockerEnvironment(BaseEnvironment):
 
         try:
             if timeout_sec:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout_sec)
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    process.communicate(), timeout=timeout_sec
+                )
             else:
                 stdout_bytes, stderr_bytes = await process.communicate()
         except asyncio.TimeoutError:
             process.terminate()
             try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=5)
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    process.communicate(), timeout=5
+                )
             except asyncio.TimeoutError:
                 process.kill()
                 stdout_bytes, stderr_bytes = await process.communicate()
@@ -196,13 +230,19 @@ class DockerEnvironment(BaseEnvironment):
             async with lock:
                 await self._run_docker_compose_command(["build"])
 
-        # up -d can run concurrently
+        # Remove any stale containers from previous runs with the same session ID.
+        try:
+            await self._run_docker_compose_command(["down", "--remove-orphans"])
+        except RuntimeError:
+            pass
+
         await self._run_docker_compose_command(["up", "-d"])
 
     async def stop(self, delete: bool):
         if self._keep_containers and delete:
             self.logger.warning(
-                "Both `keep_containers` and `--delete` option are set. " "keep_containers takes precedence."
+                "Both `keep_containers` and `--delete` option are set. "
+                "keep_containers takes precedence."
             )
         if self._keep_containers:
             try:
@@ -211,7 +251,9 @@ class DockerEnvironment(BaseEnvironment):
                 self.logger.warning(f"Docker compose stop failed: {e}")
         elif delete:
             try:
-                await self._run_docker_compose_command(["down", "--rmi", "all", "--volumes", "--remove-orphans"])
+                await self._run_docker_compose_command(
+                    ["down", "--rmi", "all", "--volumes", "--remove-orphans"]
+                )
             except RuntimeError as e:
                 self.logger.warning(f"Docker compose down failed: {e}")
 
@@ -236,7 +278,7 @@ class DockerEnvironment(BaseEnvironment):
         await self._run_docker_compose_command(
             [
                 "cp",
-                str(source_dir),
+                f"{source_dir}/.",
                 f"main:{target_dir}",
             ],
             check=True,
@@ -256,7 +298,7 @@ class DockerEnvironment(BaseEnvironment):
         await self._run_docker_compose_command(
             [
                 "cp",
-                f"main:{source_dir}",
+                f"main:{source_dir}/.",
                 str(target_dir),
             ],
             check=True,
@@ -279,9 +321,11 @@ class DockerEnvironment(BaseEnvironment):
                 exec_command.extend(["-e", f"{key}={shlex.quote(value)}"])
 
         exec_command.append("main")
-        exec_command.extend(["bash", "-ic", command])
+        exec_command.extend(["bash", "-lc", command])
 
-        return await self._run_docker_compose_command(exec_command, check=False, timeout_sec=timeout_sec)
+        return await self._run_docker_compose_command(
+            exec_command, check=False, timeout_sec=timeout_sec
+        )
 
     async def _cleanup_build_cache(self) -> None:
         """Clean up Docker build cache to free up disk space."""
@@ -316,8 +360,17 @@ class DockerEnvironment(BaseEnvironment):
 
     async def attach(self) -> None:
         variables = " ".join(
-            f"export {k}={shlex.quote(str(v))}" for k, v in self._env_vars.to_env_dict(include_os_env=False).items()
+            f"export {k}={shlex.quote(str(v))}"
+            for k, v in self._env_vars.to_env_dict(include_os_env=False).items()
         )
+
+        # Build the -f flags for docker compose
+        compose_file_args = []
+        for path in self._docker_compose_paths:
+            compose_file_args.extend(["-f", str(path.resolve().absolute())])
+
+        project_name = self.session_id.lower().replace(".", "-")
+        compose_base = ["docker", "compose", "-p", project_name] + compose_file_args
 
         os.execvp(
             "bash",
@@ -325,27 +378,8 @@ class DockerEnvironment(BaseEnvironment):
                 "bash",
                 "-c",
                 f"{variables}; "
-                + " ".join(
-                    [
-                        "docker",
-                        "compose",
-                        "-p",
-                        self.session_id.lower().replace(".", "-"),
-                        "-f",
-                        str(self._docker_compose_path.resolve().absolute()),
-                        "exec",
-                        "-it",
-                        "main",
-                        "bash",
-                        ";",
-                        "docker",
-                        "compose",
-                        "-p",
-                        self.session_id.lower().replace(".", "-"),
-                        "-f",
-                        str(self._docker_compose_path.resolve().absolute()),
-                        "down",
-                    ]
-                ),
+                + " ".join(compose_base + ["exec", "-it", "main", "bash"])
+                + "; "
+                + " ".join(compose_base + ["down"]),
             ],
         )

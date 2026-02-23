@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,7 +15,9 @@ def init(
     adapter_id: Annotated[
         str | None,
         Argument(
-            help=("Adapter ID (lowercase, no spaces). Leave empty to derive from --name."),
+            help=(
+                "Adapter ID (lowercase, no spaces). Leave empty to derive from --name."
+            ),
         ),
     ] = None,
     adapters_dir: Annotated[

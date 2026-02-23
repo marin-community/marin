@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # ----- Individual Contributor (IC) -------
 
 IC_FIRST_PROMPT = """You are an expert software engineer maintaining the Expensify \
@@ -120,7 +117,9 @@ def construct_ic_task_prompt(
     use_user_tool: bool = True,
 ) -> list[str]:
     prompts = [
-        IC_FIRST_PROMPT.format(title=task_title, html_description=task_html_description, price=task_price),
+        IC_FIRST_PROMPT.format(
+            title=task_title, html_description=task_html_description, price=task_price
+        ),
         IMPORTANT_GUIDELINES_PROMPT,
         USER_TOOL_PROMPT,
         FINAL_PROMPT,

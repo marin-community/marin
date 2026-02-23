@@ -9,7 +9,7 @@ source $HOME/.local/bin/env
 
 {run_command} > /logs/test_output.log 2>&1
 
-cd /tests
+cd /tests 
 
 uv init
 

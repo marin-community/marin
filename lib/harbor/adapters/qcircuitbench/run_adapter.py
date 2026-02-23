@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Run the QCircuitBench adapter."""
 
 import argparse
@@ -80,7 +77,9 @@ def _configure_sparse_checkout(temp_dir: Path) -> bool:
         pass
 
     try:
-        _run_git(["git", "-C", str(temp_dir), "sparse-checkout", "set", "benchmark_subset"])
+        _run_git(
+            ["git", "-C", str(temp_dir), "sparse-checkout", "set", "benchmark_subset"]
+        )
         _run_git(
             [
                 "git",

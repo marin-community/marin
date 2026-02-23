@@ -16,4 +16,4 @@ if [ "$PWD" = "/" ]; then
 fi
 
 uv init
-uv add pytest
+uv add pytest 

@@ -6,12 +6,12 @@
 # Experimental Protocol (as recommended):
 #   Step 1: Sanity Check (optional, for quick validation)
 #     - Run 10 tasks on both platforms to verify setup
-#
+#   
 #   Step 2: First Round
 #     - Run 1 round on Harbor (this config)
 #     - Run 1 round on BFCL original
 #     - Compare results
-#
+#   
 #   Step 3: Multiple Rounds (if Step 2 matches)
 #     - Run 3 rounds total, alternating platforms
 #     - Calculate mean and std deviation
@@ -20,16 +20,16 @@
 # Usage:
 #   1. Generate tasks:
 #      python run_adapter.py --clone-bfcl --ids-file parity_sample_source_ids.txt
-#
+#   
 #   2. Run Round 1 (Harbor):
 #      uv run harbor jobs start -c adapters/bfcl/bfcl_parity.yaml
-#
+#   
 #   3. Run Round 1 (BFCL original):
 #      cd /path/to/gorilla/berkeley-function-call-leaderboard
 #      # Follow BFCL's evaluation instructions
-#
+#   
 #   4. Compare results and proceed to additional rounds if needed
-#
+#   
 #   5. Record final results in parity_experiment.json
 
 name: bfcl-parity

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import json
 import os
 import shlex
@@ -60,7 +57,9 @@ class OpenHands(BaseInstalledAgent):
         self._disable_tool_calls = disable_tool_calls
         self._git_version = kwargs.get("git_version", None)
         self._trajectory_config = trajectory_config or {}
-        self._save_raw_content_in_trajectory = self._trajectory_config.get("raw_content", False)
+        self._save_raw_content_in_trajectory = self._trajectory_config.get(
+            "raw_content", False
+        )
 
         # Validate that raw_content requires disable_tool_calls
         if self._save_raw_content_in_trajectory and not self._disable_tool_calls:
@@ -92,7 +91,9 @@ class OpenHands(BaseInstalledAgent):
             return None
 
         # Sanity check: there should be exactly one session
-        assert len(session_dirs) == 1, f"Expected exactly 1 session, found {len(session_dirs)}"
+        assert len(session_dirs) == 1, (
+            f"Expected exactly 1 session, found {len(session_dirs)}"
+        )
         return session_dirs[0]
 
     def _extract_version_and_metadata(
@@ -121,7 +122,11 @@ class OpenHands(BaseInstalledAgent):
                             version = event["args"]["openhands_version"]
 
                         # Extract extra info
-                        extra_data = {key: event["args"][key] for key in ["agent_class"] if key in event["args"]}
+                        extra_data = {
+                            key: event["args"][key]
+                            for key in ["agent_class"]
+                            if key in event["args"]
+                        }
                         if extra_data:
                             extra = extra_data
 
@@ -178,7 +183,10 @@ class OpenHands(BaseInstalledAgent):
                     if "message" in choice and "tool_calls" in choice["message"]:
                         tc_list = choice["message"]["tool_calls"]
                         if tc_list and len(tc_list) > 0:
-                            if "function" in tc_list[0] and "arguments" in tc_list[0]["function"]:
+                            if (
+                                "function" in tc_list[0]
+                                and "arguments" in tc_list[0]["function"]
+                            ):
                                 try:
                                     # Parse arguments if they're a JSON string
                                     args = tc_list[0]["function"]["arguments"]
@@ -199,7 +207,11 @@ class OpenHands(BaseInstalledAgent):
 
         # Handle observations (tool call results) - only for agent source
         observation: Observation | None = None
-        if "observation" in event and event.get("cause") is not None and event.get("source") == "agent":
+        if (
+            "observation" in event
+            and event.get("cause") is not None
+            and event.get("source") == "agent"
+        ):
             # Link observation to tool call if available
             source_call_id = None
             if "tool_call_metadata" in event:
@@ -274,7 +286,9 @@ class OpenHands(BaseInstalledAgent):
             return None
 
         # Extract version and metadata from events
-        version, extra, tool_definitions = self._extract_version_and_metadata(events_dir)
+        version, extra, tool_definitions = self._extract_version_and_metadata(
+            events_dir
+        )
 
         # Generate session_id from events directory path
         # Use the parent directory name (session folder name) as session_id
@@ -347,7 +361,9 @@ class OpenHands(BaseInstalledAgent):
 
                 # Update step metrics with deltas
                 step.metrics.prompt_tokens = delta_prompt if delta_prompt > 0 else None
-                step.metrics.completion_tokens = delta_completion if delta_completion > 0 else None
+                step.metrics.completion_tokens = (
+                    delta_completion if delta_completion > 0 else None
+                )
                 step.metrics.cached_tokens = delta_cached if delta_cached > 0 else None
                 step.metrics.cost_usd = delta_cost if delta_cost > 0 else None
 
@@ -361,16 +377,24 @@ class OpenHands(BaseInstalledAgent):
         final_metrics: FinalMetrics | None = None
         for event in reversed(events):
             if "llm_metrics" in event:
-                accumulated_usage = event["llm_metrics"].get("accumulated_token_usage", {})
+                accumulated_usage = event["llm_metrics"].get(
+                    "accumulated_token_usage", {}
+                )
                 total_prompt_tokens = accumulated_usage.get("prompt_tokens", 0)
                 total_completion_tokens = accumulated_usage.get("completion_tokens", 0)
                 total_cached_tokens = accumulated_usage.get("cache_read_tokens", 0)
                 total_cost_usd = event["llm_metrics"].get("accumulated_cost", 0)
 
                 final_metrics = FinalMetrics(
-                    total_prompt_tokens=total_prompt_tokens if total_prompt_tokens > 0 else None,
-                    total_completion_tokens=total_completion_tokens if total_completion_tokens > 0 else None,
-                    total_cached_tokens=total_cached_tokens if total_cached_tokens > 0 else None,
+                    total_prompt_tokens=total_prompt_tokens
+                    if total_prompt_tokens > 0
+                    else None,
+                    total_completion_tokens=total_completion_tokens
+                    if total_completion_tokens > 0
+                    else None,
+                    total_cached_tokens=total_cached_tokens
+                    if total_cached_tokens > 0
+                    else None,
                     total_cost_usd=total_cost_usd if total_cost_usd > 0 else None,
                 )
                 break
@@ -391,7 +415,9 @@ class OpenHands(BaseInstalledAgent):
 
         return trajectory
 
-    def _convert_completions_to_trajectory(self, completions_dir: Path, events_dir: Path) -> Trajectory:
+    def _convert_completions_to_trajectory(
+        self, completions_dir: Path, events_dir: Path
+    ) -> Trajectory:
         """Convert OpenHands completion files to ATIF trajectory format with raw LLM responses.
 
         This method reads from the completions folder which preserves the original format of LLM responses
@@ -485,7 +511,9 @@ class OpenHands(BaseInstalledAgent):
             # Convert timestamp to ISO format
             from datetime import datetime, timezone
 
-            timestamp = datetime.fromtimestamp(timestamp_float, tz=timezone.utc).isoformat()
+            timestamp = datetime.fromtimestamp(
+                timestamp_float, tz=timezone.utc
+            ).isoformat()
 
             # For the FIRST completion: extract system and user messages from messages array
             # For SUBSEQUENT completions: extract observation from fncall_messages
@@ -562,7 +590,9 @@ class OpenHands(BaseInstalledAgent):
             prompt_tokens = usage.get("prompt_tokens", 0)
             completion_tokens = usage.get("completion_tokens", 0)
             # Handle different cache token field names
-            cached_tokens = usage.get("cache_read_tokens", 0) or usage.get("cache_read_input_tokens", 0)
+            cached_tokens = usage.get("cache_read_tokens", 0) or usage.get(
+                "cache_read_input_tokens", 0
+            )
 
             # Get cost from completion metadata
             cost = completion.get("cost", 0.0)
@@ -595,9 +625,15 @@ class OpenHands(BaseInstalledAgent):
 
         # Build final metrics
         final_metrics = FinalMetrics(
-            total_prompt_tokens=total_prompt_tokens if total_prompt_tokens > 0 else None,
-            total_completion_tokens=total_completion_tokens if total_completion_tokens > 0 else None,
-            total_cached_tokens=total_cached_tokens if total_cached_tokens > 0 else None,
+            total_prompt_tokens=total_prompt_tokens
+            if total_prompt_tokens > 0
+            else None,
+            total_completion_tokens=total_completion_tokens
+            if total_completion_tokens > 0
+            else None,
+            total_cached_tokens=total_cached_tokens
+            if total_cached_tokens > 0
+            else None,
             total_cost_usd=total_cost_usd if total_cost_usd > 0 else None,
         )
 
@@ -649,7 +685,9 @@ class OpenHands(BaseInstalledAgent):
         if self._save_raw_content_in_trajectory:
             # Use completions folder for raw LLM responses
             completions_dir = self.logs_dir / "completions"
-            trajectory = self._convert_completions_to_trajectory(completions_dir, events_dir)
+            trajectory = self._convert_completions_to_trajectory(
+                completions_dir, events_dir
+            )
         else:
             # Use events folder for parsed tool calls
             trajectory = self._convert_events_to_trajectory(events_dir)
@@ -701,7 +739,10 @@ class OpenHands(BaseInstalledAgent):
 
         env = {}
 
-        is_hosted_vllm_model = self.model_name is not None and self.model_name.lower().startswith("hosted_vllm/")
+        is_hosted_vllm_model = (
+            self.model_name is not None
+            and self.model_name.lower().startswith("hosted_vllm/")
+        )
 
         # Handle LLM API key with fallback logic
         # For hosted_vllm models (local vLLM servers), use a dummy key if none set
@@ -713,7 +754,9 @@ class OpenHands(BaseInstalledAgent):
         else:
             if self.model_name:
                 try:
-                    api_key_vars = get_api_key_var_names_from_model_name(self.model_name)
+                    api_key_vars = get_api_key_var_names_from_model_name(
+                        self.model_name
+                    )
                     if len(api_key_vars) == 1:
                         api_key_var = api_key_vars[0]
                         if api_key_var in os.environ:
@@ -753,7 +796,10 @@ class OpenHands(BaseInstalledAgent):
         elif "ANTHROPIC_MODEL" in os.environ:
             env["LLM_MODEL"] = os.environ["ANTHROPIC_MODEL"]
         else:
-            raise ValueError("No LLM model found. Please set LLM_MODEL environment variable " "or specify it in the CLI")
+            raise ValueError(
+                "No LLM model found. Please set LLM_MODEL environment variable "
+                "or specify it in the CLI"
+            )
 
         if "LLM_BASE_URL" in os.environ:
             env["LLM_BASE_URL"] = os.environ["LLM_BASE_URL"]
@@ -778,7 +824,9 @@ class OpenHands(BaseInstalledAgent):
             if self._model_info.get("max_input_tokens"):
                 env["LLM_MAX_INPUT_TOKENS"] = str(self._model_info["max_input_tokens"])
             if self._model_info.get("max_output_tokens"):
-                env["LLM_MAX_OUTPUT_TOKENS"] = str(self._model_info["max_output_tokens"])
+                env["LLM_MAX_OUTPUT_TOKENS"] = str(
+                    self._model_info["max_output_tokens"]
+                )
 
         # Set reasoning_effort from kwargs or environment variable
         reasoning_effort = self._reasoning_effort
@@ -827,7 +875,8 @@ class OpenHands(BaseInstalledAgent):
 
         return [
             ExecInput(
-                command=" ".join(commands) + " 2>&1 </dev/null | tee /logs/agent/openhands.txt",
+                command=" ".join(commands)
+                + " 2>&1 </dev/null | tee /logs/agent/openhands.txt",
                 env=env,
             )
         ]

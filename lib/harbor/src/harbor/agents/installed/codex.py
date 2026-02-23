@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import json
 import os
 import shlex
@@ -69,7 +66,9 @@ class Codex(BaseInstalledAgent):
             return None
 
         # Sanity check: there should be exactly one session
-        assert len(session_dirs) == 1, f"Expected exactly 1 session, found {len(session_dirs)}"
+        assert len(session_dirs) == 1, (
+            f"Expected exactly 1 session, found {len(session_dirs)}"
+        )
         return session_dirs[0]
 
     @staticmethod
@@ -239,7 +238,9 @@ class Codex(BaseInstalledAgent):
         if not raw_events:
             return None
 
-        session_meta = next((e for e in raw_events if e.get("type") == "session_meta"), None)
+        session_meta = next(
+            (e for e in raw_events if e.get("type") == "session_meta"), None
+        )
         session_id = (
             session_meta.get("payload", {}).get("id")
             if session_meta and isinstance(session_meta, dict)
@@ -293,21 +294,29 @@ class Codex(BaseInstalledAgent):
             if payload_type == "reasoning":
                 summary = payload.get("summary")
                 if isinstance(summary, list) and summary:
-                    pending_reasoning = "\n".join(str(item) for item in summary if isinstance(item, str))
+                    pending_reasoning = "\n".join(
+                        str(item) for item in summary if isinstance(item, str)
+                    )
                 else:
                     pending_reasoning = None
                 continue
 
             if payload_type == "message":
                 content = payload.get("content", [])
-                text = self._extract_message_text(content) if isinstance(content, list) else ""
+                text = (
+                    self._extract_message_text(content)
+                    if isinstance(content, list)
+                    else ""
+                )
                 normalized_events.append(
                     {
                         "kind": "message",
                         "timestamp": timestamp,
                         "role": payload.get("role", "user"),
                         "text": text,
-                        "reasoning": pending_reasoning if payload.get("role") == "assistant" else None,
+                        "reasoning": pending_reasoning
+                        if payload.get("role") == "assistant"
+                        else None,
                     }
                 )
                 pending_reasoning = None
@@ -318,7 +327,9 @@ class Codex(BaseInstalledAgent):
                 if not call_id:
                     continue
 
-                raw_args_key = "arguments" if payload_type == "function_call" else "input"
+                raw_args_key = (
+                    "arguments" if payload_type == "function_call" else "input"
+                )
                 raw_arguments = payload.get(raw_args_key)
                 try:
                     parsed_args = json.loads(raw_arguments)
@@ -490,9 +501,14 @@ class Codex(BaseInstalledAgent):
             "CODEX_HOME": (EnvironmentPaths.agent_dir).as_posix(),
         }
 
+        if openai_base_url := os.environ.get("OPENAI_BASE_URL"):
+            env["OPENAI_BASE_URL"] = openai_base_url
+
         # Build command with optional reasoning_effort from kwargs
         reasoning_effort = self._reasoning_effort
-        reasoning_flag = f"-c model_reasoning_effort={reasoning_effort} " if reasoning_effort else ""
+        reasoning_flag = (
+            f"-c model_reasoning_effort={reasoning_effort} " if reasoning_effort else ""
+        )
 
         return [
             ExecInput(

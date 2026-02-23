@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 
 import argparse
 import logging
@@ -9,13 +6,17 @@ from pathlib import Path
 
 from adapter import BigCodeBenchHardAdapter
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate Harbor tasks from BigCodeBench-Hard dataset")
+    parser = argparse.ArgumentParser(
+        description="Generate Harbor tasks from BigCodeBench-Hard dataset"
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -48,7 +49,9 @@ def main():
         help="Dataset split version (default: v0.1.4)",
     )
     parser.add_argument("--list", action="store_true", help="List available task IDs and exit")
-    parser.add_argument("--list-limit", type=int, help="Limit the number of task IDs to list (default: all)")
+    parser.add_argument(
+        "--list-limit", type=int, help="Limit the number of task IDs to list (default: all)"
+    )
 
     args = parser.parse_args()
 

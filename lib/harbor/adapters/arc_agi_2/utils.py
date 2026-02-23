@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # Utility functions for ARC-AGI-2 adapter
 
 import json
@@ -142,7 +139,9 @@ def compute_puzzle_accuracy(result_path: Path) -> dict:
 
     for trial_name, reward in trial_results.items():
         puzzle_id, pair_idx = extract_puzzle_and_pair(trial_name)
-        pair_attempts[(puzzle_id, pair_idx)].append({"trial_name": trial_name, "reward": reward, "passed": reward > 0})
+        pair_attempts[(puzzle_id, pair_idx)].append(
+            {"trial_name": trial_name, "reward": reward, "passed": reward > 0}
+        )
 
     # Step 2: For each pair, check if ANY attempt passed (pass@k)
     # pair_results[(puzzle_id, pair_idx)] = {'passed': bool, 'n_attempts': int}
@@ -166,7 +165,9 @@ def compute_puzzle_accuracy(result_path: Path) -> dict:
 
     # Compute official fractional score per puzzle
     for puzzle_id, data in puzzle_results.items():
-        data["score"] = data["n_correct"] / data["n_pairs"] if data["n_pairs"] > 0 else 0.0
+        data["score"] = (
+            data["n_correct"] / data["n_pairs"] if data["n_pairs"] > 0 else 0.0
+        )
         data["all_passed"] = data["n_correct"] == data["n_pairs"]
 
     # Compute metrics
@@ -212,15 +213,21 @@ def print_accuracy_report(results: dict, verbose: bool = False) -> None:
 
     # Trial-level (raw Harbor output)
     print("\nTrial-level (raw attempts):")
-    print(f"  Trials: {results['n_trials_passed']}/{results['n_trials']} = {results['trial_accuracy']:.1%}")
+    print(
+        f"  Trials: {results['n_trials_passed']}/{results['n_trials']} = {results['trial_accuracy']:.1%}"
+    )
 
     # Pair-level with pass@k
     print("\nPair-level (pass@k: any attempt correct per test pair):")
-    print(f"  Pairs:  {results['n_pairs_passed']}/{results['n_pairs']} = {results['pair_accuracy']:.1%}")
+    print(
+        f"  Pairs:  {results['n_pairs_passed']}/{results['n_pairs']} = {results['pair_accuracy']:.1%}"
+    )
 
     # Official puzzle-level metric
     print("\nPuzzle-level OFFICIAL (correct_pairs / total_pairs per puzzle):")
-    print(f"  Score:  {results['total_puzzle_score']:.1f}/{results['n_puzzles']} = {results['puzzle_accuracy']:.1%}")
+    print(
+        f"  Score:  {results['total_puzzle_score']:.1f}/{results['n_puzzles']} = {results['puzzle_accuracy']:.1%}"
+    )
 
     # Strict metric
     print("\nPuzzle-level STRICT (all test pairs must pass):")
@@ -232,5 +239,9 @@ def print_accuracy_report(results: dict, verbose: bool = False) -> None:
     if verbose:
         print("\nPer-puzzle breakdown:")
         for puzzle_id, data in sorted(results["puzzle_results"].items()):
-            status = "✓" if data["all_passed"] else "○" if data["n_correct"] > 0 else "✗"
-            print(f"  {status} {puzzle_id}: {data['n_correct']}/{data['n_pairs']} pairs = {data['score']:.2f}")
+            status = (
+                "✓" if data["all_passed"] else "○" if data["n_correct"] > 0 else "✗"
+            )
+            print(
+                f"  {status} {puzzle_id}: {data['n_correct']}/{data['n_pairs']} pairs = {data['score']:.2f}"
+            )

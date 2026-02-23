@@ -45,7 +45,7 @@ agent:
     Please solve this issue: {{task}}
 
     You can execute bash commands and edit files to implement the necessary changes.
-
+    
     ## Instructions
 
     Now, you're going to train a model to improve performance on this task. Your terminal session has started and you're in the workspace root directory. You can use any bash commands or the provided tool scripts to help you. Edit all the files you need or create a new training script.

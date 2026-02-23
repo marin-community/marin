@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import numpy as np
 
 
@@ -36,9 +33,12 @@ def law(input_data: list[dict[str, float]], group: str) -> list[dict[str, float]
         E_max_safe = max(E_start_safe + 0.1, E_max)
         E_safe = max(E, 1.0001)
 
-        E_hat_inv = 1 / (E_safe - 1 + (1 / (E_start_safe - 1 + 1e-9) - 1 / (E_max_safe - 1 + 1e-9)) ** -1 + 1e-9) + 1 / (
-            E_max_safe + 1e-9
-        )
+        E_hat_inv = 1 / (
+            E_safe
+            - 1
+            + (1 / (E_start_safe - 1 + 1e-9) - 1 / (E_max_safe - 1 + 1e-9)) ** -1
+            + 1e-9
+        ) + 1 / (E_max_safe + 1e-9)
         E_hat = 1 / (E_hat_inv + 1e-9)
 
         log_N = np.log(N + 1e-9)

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import argparse
@@ -162,17 +159,23 @@ def _process_datasets(
                         )
                         total_tasks += 1
                         if (entry_index + 1) % 10 == 0:
-                            logger.info(f"      Generated {entry_index + 1}/{len(entries_to_process)} tasks...")
+                            logger.info(
+                                f"      Generated {entry_index + 1}/{len(entries_to_process)} tasks..."
+                            )
                     except Exception as e:
                         logger.error(
                             f"      Failed to generate task for {category_name}/{dataset_name}/{entry_index}: {e}",
                             exc_info=True,
                         )
 
-                logger.info(f"    Completed dataset {dataset_name}: {len(entries_to_process)} tasks")
+                logger.info(
+                    f"    Completed dataset {dataset_name}: {len(entries_to_process)} tasks"
+                )
 
             except Exception as e:
-                logger.error(f"    Failed to process dataset {dataset_name}: {e}", exc_info=True)
+                logger.error(
+                    f"    Failed to process dataset {dataset_name}: {e}", exc_info=True
+                )
 
     logger.info(f"All tasks written under: {output_dir}")
     logger.info(f"Total tasks generated: {total_tasks}")

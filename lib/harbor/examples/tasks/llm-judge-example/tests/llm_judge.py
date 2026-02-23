@@ -1,9 +1,6 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # /// script
 # dependencies = [
-#   "anthropic==0.75.0",
+#   "anthropic>=0.75.0",
 #   "pydantic==2.12.5",
 # ]
 # ///
@@ -37,19 +34,17 @@ def main():
 
     schema = transform_schema(FunnyScoreResponse.model_json_schema())
 
-    response = client.beta.messages.create(
+    response = client.messages.create(
         model=os.getenv("MODEL_NAME"),
         max_tokens=1024,
-        output_format={"type": "json_schema", "schema": schema},
+        output_config={"format": {"type": "json_schema", "schema": schema}},
         messages=[
             {
                 "role": "user",
-                "content": (
-                    f"""Rate how funny this poem is from 0.0 to 1.0.
+                "content": f"""Rate how funny this poem is from 0.0 to 1.0.
 
 Poem:
-{poem}"""
-                ),
+{poem}""",
             }
         ],
     )

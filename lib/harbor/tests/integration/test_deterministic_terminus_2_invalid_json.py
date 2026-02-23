@@ -1,7 +1,4 @@
 #!/usr/bin/env python
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Runtime test with a fake LLM server that returns invalid JSON responses for terminus_2.
 
 This test verifies that when the LLM returns invalid JSON (e.g., missing required fields),
@@ -61,8 +58,7 @@ async def fake_llm_server_invalid_json():
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": (
-                                """I need to create a file called hello.txt with 'Hello, world!' as the content.
+                            "content": """I need to create a file called hello.txt with 'Hello, world!' as the content.
 {
   "commands": [
     {
@@ -71,11 +67,8 @@ async def fake_llm_server_invalid_json():
     }
   ]
 }
-This should work!"""
-                            ),
-                            "reasoning_content": (
-                                "The task is straightforward - I need to create a single file with specific content. Using printf is more reliable than echo for exact content control."
-                            ),
+This should work!""",
+                            "reasoning_content": "The task is straightforward - I need to create a single file with specific content. Using printf is more reliable than echo for exact content control.",
                         },
                         "finish_reason": "stop",
                     }
@@ -98,8 +91,7 @@ This should work!"""
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": (
-                                """{
+                            "content": """{
   "analysis": "I received an error about missing required fields. Let me provide the complete response.",
   "plan": "I will create the hello.txt file with the correct content using printf.",
   "commands": [
@@ -109,11 +101,8 @@ This should work!"""
     }
   ],
   "task_complete": false
-}"""
-                            ),
-                            "reasoning_content": (
-                                "I made a mistake in my previous response by not including the required 'analysis' and 'plan' fields. I need to correct this to follow the proper JSON schema."
-                            ),
+}""",
+                            "reasoning_content": "I made a mistake in my previous response by not including the required 'analysis' and 'plan' fields. I need to correct this to follow the proper JSON schema.",
                         },
                         "finish_reason": "stop",
                     }
@@ -136,17 +125,13 @@ This should work!"""
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": (
-                                """{
+                            "content": """{
   "analysis": "The file creation command has been executed successfully.",
   "plan": "The task is complete.",
   "commands": [],
   "task_complete": true
-}"""
-                            ),
-                            "reasoning_content": (
-                                "The file has been created successfully with the correct content. No further actions are needed."
-                            ),
+}""",
+                            "reasoning_content": "The file has been created successfully with the correct content. No further actions are needed.",
                         },
                         "finish_reason": "stop",
                     }
@@ -169,17 +154,13 @@ This should work!"""
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": (
-                                """{
+                            "content": """{
   "analysis": "Task already completed.",
   "plan": "No further action needed.",
   "commands": [],
   "task_complete": true
-}"""
-                            ),
-                            "reasoning_content": (
-                                "The task was already marked as complete in the previous step. Confirming completion."
-                            ),
+}""",
+                            "reasoning_content": "The task was already marked as complete in the previous step. Confirming completion.",
                         },
                         "finish_reason": "stop",
                     }
@@ -216,7 +197,9 @@ This should work!"""
 @pytest.mark.asyncio
 @pytest.mark.runtime
 @pytest.mark.integration
-async def test_terminus_2_invalid_json_trajectory(fake_llm_server_invalid_json, tmp_path, monkeypatch):
+async def test_terminus_2_invalid_json_trajectory(
+    fake_llm_server_invalid_json, tmp_path, monkeypatch
+):
     """Test that terminus_2 properly captures invalid JSON responses in trajectory.
 
     This test verifies that when the LLM returns invalid JSON (missing required fields
@@ -268,7 +251,9 @@ async def test_terminus_2_invalid_json_trajectory(fake_llm_server_invalid_json, 
     # Create and run the trial
     trial = Trial(config=config)
 
-    print("\nRunning trial with fake LLM server (first response will be invalid JSON)...")
+    print(
+        "\nRunning trial with fake LLM server (first response will be invalid JSON)..."
+    )
     result = await trial.run()
 
     # Print results
@@ -281,27 +266,43 @@ async def test_terminus_2_invalid_json_trajectory(fake_llm_server_invalid_json, 
     print(f"   Finished: {result.finished_at}")
 
     # Check trajectory file
-    agent_trajectory_path = result.trial_uri.replace("file://", "") + "/agent/trajectory.json"
+    agent_trajectory_path = (
+        result.trial_uri.replace("file://", "") + "/agent/trajectory.json"
+    )
     print(f"\nChecking agent trajectory at: {agent_trajectory_path}")
 
     # Load trajectory file (assert it exists)
-    assert Path(agent_trajectory_path).exists(), f"Trajectory file should exist at {agent_trajectory_path}"
+    assert Path(agent_trajectory_path).exists(), (
+        f"Trajectory file should exist at {agent_trajectory_path}"
+    )
 
     with open(agent_trajectory_path, "r") as f:
         trajectory = json.load(f)
         print("\nAgent trajectory summary:")
         print(f"   Schema version: {trajectory.get('schema_version')}")
         print(f"   Total steps: {len(trajectory.get('steps', []))}")
-        print(f"   Total episodes: {trajectory.get('final_metrics', {}).get('total_episodes')}")
-        print(f"   Total prompt tokens: {trajectory.get('final_metrics', {}).get('total_prompt_tokens')}")
-        print(f"   Total completion tokens: {trajectory.get('final_metrics', {}).get('total_completion_tokens')}")
-        print(f"   Total cached tokens: {trajectory.get('final_metrics', {}).get('total_cached_tokens', 0)}")
+        print(
+            f"   Total episodes: {trajectory.get('final_metrics', {}).get('total_episodes')}"
+        )
+        print(
+            f"   Total prompt tokens: {trajectory.get('final_metrics', {}).get('total_prompt_tokens')}"
+        )
+        print(
+            f"   Total completion tokens: {trajectory.get('final_metrics', {}).get('total_completion_tokens')}"
+        )
+        print(
+            f"   Total cached tokens: {trajectory.get('final_metrics', {}).get('total_cached_tokens', 0)}"
+        )
 
     # Compare with golden trajectory (or update it if UPDATE_GOLDEN_TRAJECTORIES is set)
-    golden_path = Path("tests/golden/terminus_2/hello-world-invalid-json.trajectory.json")
+    golden_path = Path(
+        "tests/golden/terminus_2/hello-world-invalid-json.trajectory.json"
+    )
 
     if should_update_golden_trajectories():
-        print(f"\nUPDATE_GOLDEN_TRAJECTORIES is set - updating golden trajectory at: {golden_path}")
+        print(
+            f"\nUPDATE_GOLDEN_TRAJECTORIES is set - updating golden trajectory at: {golden_path}"
+        )
         save_golden_trajectory(trajectory, golden_path, print_output=True)
     else:
         print(f"\nComparing with golden trajectory at: {golden_path}")
@@ -313,9 +314,9 @@ async def test_terminus_2_invalid_json_trajectory(fake_llm_server_invalid_json, 
         normalized_golden = normalize_trajectory(golden_trajectory)
 
         # Compare the two dictionaries directly
-        assert (
-            normalized_trajectory == normalized_golden
-        ), f"Trajectory mismatch.\nGot:\n{json.dumps(normalized_trajectory, indent=2)}\n\nExpected:\n{json.dumps(normalized_golden, indent=2)}"
+        assert normalized_trajectory == normalized_golden, (
+            f"Trajectory mismatch.\nGot:\n{json.dumps(normalized_trajectory, indent=2)}\n\nExpected:\n{json.dumps(normalized_golden, indent=2)}"
+        )
 
         print("   Trajectory matches golden file!")
 
@@ -333,24 +334,30 @@ async def test_terminus_2_invalid_json_trajectory(fake_llm_server_invalid_json, 
     print(f"   Total calls: {call_count}")
 
     # Assertions
-    assert call_count >= 3, f"Expected at least 3 LLM calls (1 invalid + recovery), got {call_count}"
+    assert call_count >= 3, (
+        f"Expected at least 3 LLM calls (1 invalid + recovery), got {call_count}"
+    )
 
     assert result.agent_result is not None, "AgentResult should not be None"
 
     # Check that the task was completed successfully despite initial invalid JSON
     assert result.verifier_result is not None, "VerifierResult should not be None"
     assert result.verifier_result.rewards is not None, "Rewards should not be None"
-    assert (
-        result.verifier_result.rewards.get("reward") == 1.0
-    ), f"Task should be completed successfully with reward=1.0, but got reward={result.verifier_result.rewards.get('reward')}"
+    assert result.verifier_result.rewards.get("reward") == 1.0, (
+        f"Task should be completed successfully with reward=1.0, but got reward={result.verifier_result.rewards.get('reward')}"
+    )
 
     print(f"\n{'=' * 80}")
-    print("SUCCESS: terminus_2 correctly handled invalid JSON and captured it in trajectory!")
+    print(
+        "SUCCESS: terminus_2 correctly handled invalid JSON and captured it in trajectory!"
+    )
     print(f"{'=' * 80}")
     print(f"   - Environment Type: {config.environment.type}")
     print(f"   - Fake LLM server received {call_count} calls")
     print("   - Invalid JSON was properly captured in trajectory message field")
-    print(f"   - Task completed successfully with reward={result.verifier_result.rewards.get('reward')}!")
+    print(
+        f"   - Task completed successfully with reward={result.verifier_result.rewards.get('reward')}!"
+    )
     print(f"   - Trial results saved to: {result.trial_uri}")
     print(f"   - Trajectory saved to: {agent_trajectory_path}\n")
 
@@ -358,7 +365,9 @@ async def test_terminus_2_invalid_json_trajectory(fake_llm_server_invalid_json, 
 @pytest.mark.asyncio
 @pytest.mark.runtime
 @pytest.mark.integration
-async def test_terminus_2_invalid_json_traces(fake_llm_server_invalid_json, tmp_path, monkeypatch):
+async def test_terminus_2_invalid_json_traces(
+    fake_llm_server_invalid_json, tmp_path, monkeypatch
+):
     """Test terminus_2 invalid JSON traces export.
 
     This test focuses solely on verifying that traces are exported correctly

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import copy
 import time
 import uuid
@@ -23,6 +20,7 @@ from harbor.environments.base import BaseEnvironment
 from harbor.llms.base import (
     BaseLLM,
     ContextLengthExceededError,
+    LLMBackend,
     LLMResponse,
     OutputLengthExceededError,
 )
@@ -66,6 +64,67 @@ class SubagentMetrics:
 class Terminus2(BaseAgent):
     SUPPORTS_ATIF: bool = True
 
+    def _init_llm(
+        self,
+        llm_backend: LLMBackend | str,
+        model_name: str,
+        temperature: float,
+        collect_rollout_details: bool,
+        llm_kwargs: dict | None,
+        # LiteLLM-specific args
+        api_base: str | None,
+        session_id: str | None,
+        max_thinking_tokens: int | None,
+        reasoning_effort: str | None,
+        model_info: dict | None,
+        use_responses_api: bool,
+    ) -> BaseLLM:
+        """Initialize the LLM backend based on llm_backend parameter.
+
+        Args:
+            llm_backend: The LLM backend to use.
+            model_name: Name of the model.
+            temperature: Sampling temperature.
+            collect_rollout_details: Whether to collect token IDs and logprobs.
+            llm_kwargs: Additional kwargs passed to the LLM constructor.
+            api_base: Base URL for LiteLLM API endpoint.
+            session_id: Session ID for LiteLLM.
+            max_thinking_tokens: Max thinking tokens for LiteLLM extended thinking.
+            reasoning_effort: Reasoning effort level for LiteLLM.
+            model_info: Model info dict for LiteLLM custom models.
+            use_responses_api: Whether to use the Responses API.
+
+        Returns:
+            An initialized LLM instance.
+
+        Raises:
+            ValueError: If llm_backend is not a recognized backend.
+        """
+        # Normalize enum to string value for matching
+        backend_value = (
+            llm_backend.value if isinstance(llm_backend, LLMBackend) else llm_backend
+        )
+
+        match backend_value:
+            case LLMBackend.LITELLM.value:
+                return LiteLLM(
+                    model_name=model_name,
+                    api_base=api_base,
+                    temperature=temperature,
+                    collect_rollout_details=collect_rollout_details,
+                    session_id=session_id,
+                    max_thinking_tokens=max_thinking_tokens,
+                    reasoning_effort=reasoning_effort,
+                    model_info=model_info,
+                    use_responses_api=use_responses_api,
+                    **(llm_kwargs or {}),
+                )
+            case _:
+                raise ValueError(
+                    f"Unknown llm_backend: {llm_backend!r}. "
+                    f"Supported backends: {[b.value for b in LLMBackend]}"
+                )
+
     def __init__(
         self,
         logs_dir: Path,
@@ -74,7 +133,8 @@ class Terminus2(BaseAgent):
         parser_name: str = "json",
         api_base: str | None = None,
         temperature: float = 0.7,
-        reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"] | None = None,
+        reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]
+        | None = None,
         collect_rollout_details: bool = False,
         session_id: str | None = None,
         enable_summarize: bool = True,
@@ -86,8 +146,11 @@ class Terminus2(BaseAgent):
         tmux_pane_height: int = 40,
         store_all_messages: bool = False,
         record_terminal_session: bool = True,
-        llm: BaseLLM | None = None,
         interleaved_thinking: bool = False,
+        suppress_max_turns_warning: bool = False,
+        use_responses_api: bool = False,
+        llm_backend: LLMBackend | str = LLMBackend.LITELLM,
+        llm_kwargs: dict | None = None,
         *args,
         **kwargs,
     ):
@@ -130,11 +193,14 @@ class Terminus2(BaseAgent):
             tmux_pane_height: Starting tmux pane height (maps to `tmux -y`, default: 40)
             record_terminal_session: Whether to capture terminal recordings via asciinema.
                 (default: True)
-            llm: Optional pre-configured LLM backend. If provided, this LLM will be used
-                instead of LiteLLM. Enables training with custom backends for training.
-                (default: None)
             interleaved_thinking: Whether to include reasoning content in chat history
                 and send to litellm in next round's conversation (default: False)
+            suppress_max_turns_warning: Whether to suppress the warning about artificially
+                limiting max_turns (default: False)
+            llm_backend: LLM backend to use. Use LLMBackend.LITELLM or "litellm".
+                (default: LLMBackend.LITELLM)
+            llm_kwargs: Additional kwargs to pass to the LLM constructor.
+                (default: None)
             **kwargs: Additional arguments
         """
         super().__init__(logs_dir, model_name, *args, **kwargs)
@@ -147,15 +213,19 @@ class Terminus2(BaseAgent):
         self._collect_rollout_details = collect_rollout_details
         self._reasoning_effort = reasoning_effort
         resolved_model_info = self._resolve_model_info(model_name, model_info)
-        self._llm = llm or LiteLLM(
+
+        self._llm = self._init_llm(
+            llm_backend=llm_backend,
             model_name=model_name,
-            api_base=api_base,
             temperature=temperature,
             collect_rollout_details=collect_rollout_details,
+            llm_kwargs=llm_kwargs,
+            api_base=api_base,
             session_id=session_id,
             max_thinking_tokens=max_thinking_tokens,
             reasoning_effort=reasoning_effort,
             model_info=resolved_model_info,
+            use_responses_api=use_responses_api,
         )
         self._parser = self._get_parser()
         self._prompt_template = self._get_prompt_template_path().read_text()
@@ -184,10 +254,11 @@ class Terminus2(BaseAgent):
             final_max_episodes = episodes_from_kwargs
 
         if final_max_episodes is not None:
-            self.logger.warning(
-                f"max_episodes artificially limited to {final_max_episodes}. "
-                "Consider removing this limit for better task completion."
-            )
+            if not suppress_max_turns_warning:
+                self.logger.warning(
+                    f"max_turns (f.k.a. max_episodes) artificially limited to {final_max_episodes}. "
+                    "Consider removing this limit for better task completion."
+                )
             self._max_episodes = final_max_episodes
         else:
             self._max_episodes = 1000000
@@ -202,27 +273,40 @@ class Terminus2(BaseAgent):
         self._trajectory_steps: list[Step] = []
         self._record_terminal_session = record_terminal_session
 
-        self._summarization_count: int = 0  # Track number of summarization subagents created
+        self._summarization_count: int = (
+            0  # Track number of summarization subagents created
+        )
         self._pending_subagent_refs: list[SubagentTrajectoryRef] | None = (
             None  # Track subagent refs to include in next step
         )
-        self._pending_handoff_prompt: str | None = None  # Track handoff prompt to include as user step
+        self._pending_handoff_prompt: str | None = (
+            None  # Track handoff prompt to include as user step
+        )
         self._subagent_metrics = SubagentMetrics()  # Track subagent metrics separately
-        self._subagent_rollout_details: list[RolloutDetail] = []  # Track rollout details for each subagent
-        self._enable_summarize = enable_summarize  # Toggle for proactive and context limit summarization
+        self._subagent_rollout_details: list[
+            RolloutDetail
+        ] = []  # Track rollout details for each subagent
+        self._enable_summarize = (
+            enable_summarize  # Toggle for proactive and context limit summarization
+        )
         self._proactive_summarization_threshold = proactive_summarization_threshold
         self._tmux_pane_width = tmux_pane_width
         self._tmux_pane_height = tmux_pane_height
 
         # Trajectory configuration
         self._trajectory_config = trajectory_config or {}
-        self._save_raw_content_in_trajectory = self._trajectory_config.get("raw_content", False)
+        self._save_raw_content_in_trajectory = self._trajectory_config.get(
+            "raw_content", False
+        )
         self._linear_history = self._trajectory_config.get("linear_history", False)
         # Optional: include full chat messages in TrialResult metadata (can be large)
         self._store_all_messages = store_all_messages
         self._interleaved_thinking = interleaved_thinking
+        self._llm_kwargs = llm_kwargs
 
-    def _resolve_model_info(self, model_name: str | None, provided_model_info: dict | None) -> dict | None:
+    def _resolve_model_info(
+        self, model_name: str | None, provided_model_info: dict | None
+    ) -> dict | None:
         if provided_model_info:
             return provided_model_info
         if model_name and "hosted_vllm" in model_name:
@@ -267,7 +351,9 @@ class Terminus2(BaseAgent):
         elif self._parser_name == "xml":
             return TerminusXMLPlainParser()
         else:
-            raise ValueError(f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'.")
+            raise ValueError(
+                f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'."
+            )
 
     def _get_prompt_template_path(self) -> Path:
         """Return the path to the prompt template for this format."""
@@ -276,7 +362,9 @@ class Terminus2(BaseAgent):
         elif self._parser_name == "xml":
             return Path(__file__).parent / "templates" / "terminus-xml-plain.txt"
         else:
-            raise ValueError(f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'.")
+            raise ValueError(
+                f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'."
+            )
 
     def _get_timeout_template_path(self) -> Path:
         """Return the path to the timeout template for this format."""
@@ -292,7 +380,9 @@ class Terminus2(BaseAgent):
         elif self._parser_name == "xml":
             return "response"
         else:
-            raise ValueError(f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'.")
+            raise ValueError(
+                f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'."
+            )
 
     def _get_completion_confirmation_message(self, terminal_output: str) -> str:
         """Return the format-specific task completion confirmation message."""
@@ -313,7 +403,9 @@ class Terminus2(BaseAgent):
                 "<task_complete>true</task_complete> again."
             )
         else:
-            raise ValueError(f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'.")
+            raise ValueError(
+                f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'."
+            )
 
     def _setup_episode_logging(
         self, logging_dir: Path | None, episode: int
@@ -363,14 +455,20 @@ class Terminus2(BaseAgent):
         last_portion = output_bytes[-portion_size:].decode("utf-8", errors="ignore")
 
         # Calculate omitted bytes
-        omitted_bytes = len(output_bytes) - len(first_portion.encode("utf-8")) - len(last_portion.encode("utf-8"))
+        omitted_bytes = (
+            len(output_bytes)
+            - len(first_portion.encode("utf-8"))
+            - len(last_portion.encode("utf-8"))
+        )
 
         return (
             f"{first_portion}\n[... output limited to {max_bytes} bytes; "
             f"{omitted_bytes} interior bytes omitted ...]\n{last_portion}"
         )
 
-    def _unwind_messages_to_free_tokens(self, chat: Chat, target_free_tokens: int = 4000) -> None:
+    def _unwind_messages_to_free_tokens(
+        self, chat: Chat, target_free_tokens: int = 4000
+    ) -> None:
         """Remove recent messages until we have enough free tokens."""
         context_limit = self._llm.get_model_context_limit()
 
@@ -387,9 +485,11 @@ class Terminus2(BaseAgent):
             else:
                 break
 
+        chat.reset_response_chain()
         free_tokens = context_limit - self._count_total_tokens(chat)
         self.logger.debug(
-            f"Unwound messages. Remaining messages: {len(chat.messages)}, " f"Free tokens: approximately {free_tokens}"
+            f"Unwound messages. Remaining messages: {len(chat.messages)}, "
+            f"Free tokens: approximately {free_tokens}"
         )
 
     def _collect_subagent_rollout_detail(self, response: LLMResponse) -> None:
@@ -503,7 +603,9 @@ class Terminus2(BaseAgent):
         response_step_id = prompt_step_id + 1
 
         start_time = time.time()
-        response: LLMResponse = await self._llm.call(prompt=prompt, message_history=message_history)
+        response: LLMResponse = await self._llm.call(
+            prompt=prompt, message_history=message_history
+        )
         self._track_api_request_time(start_time)
 
         usage_info = response.usage
@@ -581,7 +683,9 @@ class Terminus2(BaseAgent):
         subagent_trajectory_refs = []
 
         # ===== SUBAGENT 1: Summary Generation =====
-        summary_session_id = f"{self._session_id}-summarization-{self._summarization_count}-summary"
+        summary_session_id = (
+            f"{self._session_id}-summarization-{self._summarization_count}-summary"
+        )
 
         # Trajectory needs to reflect what is sent to LLM: essentially the previous chat
         # history, minus the messages that were removed to free up tokens.
@@ -590,7 +694,9 @@ class Terminus2(BaseAgent):
         # - Trajectory has: [step1_system, step2_agent, step3_agent, ...]
         # - Formula: steps_to_include = 1 + (num_messages - 1) // 2
         steps_to_include = 1 + (len(chat.messages) - 1) // 2
-        summary_steps, step_id_counter = self._prepare_copied_trajectory_steps(steps_to_include)
+        summary_steps, step_id_counter = self._prepare_copied_trajectory_steps(
+            steps_to_include
+        )
 
         summary_prompt = f"""You are about to hand off your work to another AI agent.
             Please provide a comprehensive summary of what you have
@@ -625,7 +731,9 @@ Be comprehensive and detailed. The next agent needs to understand everything
 
         # ===== SUBAGENT 2: Question Asking =====
         current_screen = await session.capture_pane(capture_entire=False)
-        questions_session_id = f"{self._session_id}-summarization-{self._summarization_count}-questions"
+        questions_session_id = (
+            f"{self._session_id}-summarization-{self._summarization_count}-questions"
+        )
         questions_steps = []
 
         question_prompt = f"""You are picking up work from a previous AI agent on this task:
@@ -657,11 +765,15 @@ so ask everything you need to know."""
         subagent_trajectory_refs.append(questions_trajectory_ref)
 
         # ===== SUBAGENT 3: Answer Providing =====
-        answers_session_id = f"{self._session_id}-summarization-{self._summarization_count}-answers"
+        answers_session_id = (
+            f"{self._session_id}-summarization-{self._summarization_count}-answers"
+        )
 
         # Reuse the actual trajectory steps (same as summary subagent)
         # At this point, chat.messages has the same unwound history as in summary subagent
-        answers_steps, step_id_counter = self._prepare_copied_trajectory_steps(steps_to_include)
+        answers_steps, step_id_counter = self._prepare_copied_trajectory_steps(
+            steps_to_include
+        )
 
         # Add the summary prompt and response steps that are part of the message history
         # Mark these as copied context since they were already part of the summary subagent trajectory
@@ -685,7 +797,9 @@ so ask everything you need to know."""
                 message=summary_response.content,
                 reasoning_content=summary_response.reasoning_content,
                 is_copied_context=True,
-                extra={"note": "Copied from summary subagent - metrics already recorded there"},
+                extra={
+                    "note": "Copied from summary subagent - metrics already recorded there"
+                },
             )
         )
         step_id_counter += 1
@@ -721,6 +835,7 @@ so ask everything you need to know."""
             {"role": "user", "content": question_prompt},
             {"role": "assistant", "content": model_questions},
         ]
+        chat.reset_response_chain()
 
         handoff_prompt = (
             "Here are the answers the other agent provided.\n\n"
@@ -746,9 +861,13 @@ so ask everything you need to know."""
         free_tokens = context_limit - current_tokens
 
         if free_tokens < self._proactive_summarization_threshold:
-            self.logger.debug(f"Proactively summarizing. Free tokens: approximately {free_tokens}")
+            self.logger.debug(
+                f"Proactively summarizing. Free tokens: approximately {free_tokens}"
+            )
             try:
-                summary_prompt, subagent_trajectory_refs = await self._summarize(chat, original_instruction, session)
+                summary_prompt, subagent_trajectory_refs = await self._summarize(
+                    chat, original_instruction, session
+                )
                 return (summary_prompt, subagent_trajectory_refs)
             except Exception as e:
                 self.logger.error(f"Error in proactively summarizing: {e}")
@@ -800,7 +919,9 @@ so ask everything you need to know."""
             # Fallback 1: Try full summary
             try:
                 self.logger.debug("SUMMARIZATION: Attempting full summary")
-                summary_prompt, subagent_trajectory_refs = await self._summarize(chat, original_instruction, session)
+                summary_prompt, subagent_trajectory_refs = await self._summarize(
+                    chat, original_instruction, session
+                )
                 # Store subagent_refs to include in the trajectory
                 self._pending_subagent_refs = subagent_trajectory_refs
                 # Store handoff prompt to add as a user step
@@ -818,7 +939,9 @@ so ask everything you need to know."""
 
                     short_prompt = f"Briefly continue this task: {original_instruction}\n\nCurrent state: {limited_screen}\n\nNext steps (2-3 sentences):"
 
-                    short_llm_response: LLMResponse = await self._llm.call(prompt=short_prompt)
+                    short_llm_response: LLMResponse = await self._llm.call(
+                        prompt=short_prompt
+                    )
                     summary_prompt = f"{original_instruction}\n\nSummary: {short_llm_response.content}"
                     self.logger.debug("SUMMARIZATION: Short summary succeeded")
                 except Exception as e:
@@ -829,7 +952,9 @@ so ask everything you need to know."""
                 self.logger.debug("SUMMARIZATION: Using ultimate fallback")
                 current_screen = await session.capture_pane(capture_entire=False)
                 limited_screen = current_screen[-1000:] if current_screen else ""
-                summary_prompt = f"{original_instruction}\n\nCurrent state: {limited_screen}"
+                summary_prompt = (
+                    f"{original_instruction}\n\nCurrent state: {limited_screen}"
+                )
 
             if prompt_path is not None:
                 prompt_path.write_text(summary_prompt)
@@ -846,7 +971,9 @@ so ask everything you need to know."""
 
             except Exception as e:
                 self.logger.error(f"Even fallback chat failed: {e}")
-                llm_response = LLMResponse(content="Technical difficulties. Please continue with the task.")
+                llm_response = LLMResponse(
+                    content="Technical difficulties. Please continue with the task."
+                )
 
             if response_path is not None:
                 response_path.write_text(llm_response.content)
@@ -855,7 +982,9 @@ so ask everything you need to know."""
         except OutputLengthExceededError as e:
             self.logger.debug(f"Output length exceeded: {e}")
 
-            truncated_response = getattr(e, "truncated_response", "[TRUNCATED RESPONSE NOT AVAILABLE]")
+            truncated_response = getattr(
+                e, "truncated_response", "[TRUNCATED RESPONSE NOT AVAILABLE]"
+            )
 
             # Try to salvage a valid response from the truncated output
             # Only available for XML parser
@@ -863,12 +992,15 @@ so ask everything you need to know."""
             has_multiple_blocks = False
 
             if hasattr(self._parser, "salvage_truncated_response"):
-                salvaged_response, has_multiple_blocks = self._parser.salvage_truncated_response(
-                    truncated_response
-                )  # type: ignore
+                salvaged_response, has_multiple_blocks = (
+                    self._parser.salvage_truncated_response(truncated_response)  # type: ignore
+                )
 
             if salvaged_response:
-                self.logger.debug("Output exceeded length but found valid response. " "Using truncated version.")
+                self.logger.debug(
+                    "Output exceeded length but found valid response. "
+                    "Using truncated version."
+                )
 
                 if response_path is not None:
                     response_path.write_text(salvaged_response)
@@ -881,7 +1013,10 @@ so ask everything you need to know."""
             try:
                 parse_result = self._parser.parse_response(truncated_response)
                 if parse_result.warning:
-                    warnings_text = f"\n\nParser warnings from your truncated response:\n" f"{parse_result.warning}"
+                    warnings_text = (
+                        f"\n\nParser warnings from your truncated response:\n"
+                        f"{parse_result.warning}"
+                    )
             except Exception as parse_error:
                 self.logger.debug(f"Failed to parse truncated response: {parse_error}")
 
@@ -904,6 +1039,7 @@ so ask everything you need to know."""
 
             chat.messages.append({"role": "user", "content": prompt})
             chat.messages.append({"role": "assistant", "content": truncated_response})
+            chat.reset_response_chain()
 
             if response_path is not None:
                 response_path.write_text(error_msg)
@@ -928,7 +1064,9 @@ so ask everything you need to know."""
         original_instruction: str = "",
         session: TmuxSession | None = None,
     ) -> tuple[list[Command], bool, str, str, str, LLMResponse]:
-        llm_response = await self._query_llm(chat, prompt, logging_paths, original_instruction, session)
+        llm_response = await self._query_llm(
+            chat, prompt, logging_paths, original_instruction, session
+        )
 
         result = self._parser.parse_response(llm_response.content)
 
@@ -986,7 +1124,9 @@ so ask everything you need to know."""
                 return True, self._timeout_template.format(
                     timeout_sec=command.duration_sec,
                     command=command.keystrokes,
-                    terminal_state=self._limit_output_length(await session.get_incremental_output()),
+                    terminal_state=self._limit_output_length(
+                        await session.get_incremental_output()
+                    ),
                 )
 
         return False, self._limit_output_length(await session.get_incremental_output())
@@ -1049,7 +1189,9 @@ so ask everything you need to know."""
                 analysis,
                 plan,
                 llm_response,
-            ) = await self._handle_llm_interaction(chat, prompt, logging_paths, original_instruction, self._session)
+            ) = await self._handle_llm_interaction(
+                chat, prompt, logging_paths, original_instruction, self._session
+            )
 
             # If we have pending subagent refs, add a system step to record the delegation
             # This must happen before we build the agent step
@@ -1062,7 +1204,11 @@ so ask everything you need to know."""
                         source="system",
                         message="Performed context summarization and handoff to continue task.",
                         observation=Observation(
-                            results=[ObservationResult(subagent_trajectory_ref=self._pending_subagent_refs)]
+                            results=[
+                                ObservationResult(
+                                    subagent_trajectory_ref=self._pending_subagent_refs
+                                )
+                            ]
                         ),
                     )
                 )
@@ -1073,7 +1219,9 @@ so ask everything you need to know."""
                 # If linear_history mode is enabled, split trajectory immediately WITHOUT adding handoff step
                 # The handoff step will be added to the continuation trajectory during the split
                 if self._linear_history:
-                    self._split_trajectory_on_summarization(self._pending_handoff_prompt)
+                    self._split_trajectory_on_summarization(
+                        self._pending_handoff_prompt
+                    )
                 else:
                     # For non-linear mode, add the handoff prompt as a user step
                     self._trajectory_steps.append(
@@ -1136,8 +1284,11 @@ so ask everything you need to know."""
                         ),
                         metrics=Metrics(
                             prompt_tokens=chat.total_input_tokens - tokens_before_input,
-                            completion_tokens=chat.total_output_tokens - tokens_before_output,
-                            cached_tokens=cache_tokens_used if cache_tokens_used > 0 else None,
+                            completion_tokens=chat.total_output_tokens
+                            - tokens_before_output,
+                            cached_tokens=cache_tokens_used
+                            if cache_tokens_used > 0
+                            else None,
                             cost_usd=step_cost if step_cost > 0 else None,
                             prompt_token_ids=llm_response.prompt_token_ids,
                             completion_token_ids=llm_response.completion_token_ids,
@@ -1161,7 +1312,9 @@ so ask everything you need to know."""
                     observation = terminal_output
                 else:
                     self._pending_completion = True
-                    observation = self._get_completion_confirmation_message(terminal_output)
+                    observation = self._get_completion_confirmation_message(
+                        terminal_output
+                    )
             else:
                 self._pending_completion = False
                 if feedback and "WARNINGS:" in feedback:
@@ -1257,8 +1410,11 @@ so ask everything you need to know."""
                     observation=Observation(results=observation_results),
                     metrics=Metrics(
                         prompt_tokens=chat.total_input_tokens - tokens_before_input,
-                        completion_tokens=chat.total_output_tokens - tokens_before_output,
-                        cached_tokens=cache_tokens_used if cache_tokens_used > 0 else None,
+                        completion_tokens=chat.total_output_tokens
+                        - tokens_before_output,
+                        cached_tokens=cache_tokens_used
+                        if cache_tokens_used > 0
+                        else None,
                         cost_usd=step_cost if step_cost > 0 else None,
                         prompt_token_ids=llm_response.prompt_token_ids,
                         completion_token_ids=llm_response.completion_token_ids,
@@ -1283,7 +1439,9 @@ so ask everything you need to know."""
 
         return self._n_episodes
 
-    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+    async def run(
+        self, instruction: str, environment: BaseEnvironment, context: AgentContext
+    ) -> None:
         self._chat = Chat(self._llm, interleaved_thinking=self._interleaved_thinking)
         self._context = context
 
@@ -1291,7 +1449,9 @@ so ask everything you need to know."""
             raise RuntimeError("Session is not set")
 
         # Get the terminal state for the initial prompt
-        terminal_state = self._limit_output_length(await self._session.get_incremental_output())
+        terminal_state = self._limit_output_length(
+            await self._session.get_incremental_output()
+        )
 
         initial_prompt = self._prompt_template.format(
             instruction=instruction,
@@ -1318,12 +1478,23 @@ so ask everything you need to know."""
         finally:
             # Always capture metrics and rollout details even if the agent times out or errors
             # Combine main chat rollout details with subagent rollout details
-            context.rollout_details = self._chat.rollout_details + self._subagent_rollout_details
+            context.rollout_details = (
+                self._chat.rollout_details + self._subagent_rollout_details
+            )
 
             # Include subagent metrics in context totals
-            context.n_input_tokens = self._chat.total_input_tokens + self._subagent_metrics.total_prompt_tokens
-            context.n_output_tokens = self._chat.total_output_tokens + self._subagent_metrics.total_completion_tokens
-            context.n_cache_tokens = self._chat.total_cache_tokens + self._subagent_metrics.total_cached_tokens
+            context.n_input_tokens = (
+                self._chat.total_input_tokens
+                + self._subagent_metrics.total_prompt_tokens
+            )
+            context.n_output_tokens = (
+                self._chat.total_output_tokens
+                + self._subagent_metrics.total_completion_tokens
+            )
+            context.n_cache_tokens = (
+                self._chat.total_cache_tokens
+                + self._subagent_metrics.total_cached_tokens
+            )
             total_cost = self._chat.total_cost + self._subagent_metrics.total_cost_usd
             context.cost_usd = total_cost if total_cost > 0 else None
             context.metadata = {
@@ -1355,9 +1526,13 @@ so ask everything you need to know."""
                 step.metrics = None
                 if step.extra is None:
                     step.extra = {}
-                step.extra["note"] = "Metrics omitted to avoid duplication - already recorded in parent trajectory"
+                step.extra["note"] = (
+                    "Metrics omitted to avoid duplication - already recorded in parent trajectory"
+                )
 
-    def _prepare_copied_trajectory_steps(self, steps_to_include: int) -> tuple[list[Step], int]:
+    def _prepare_copied_trajectory_steps(
+        self, steps_to_include: int
+    ) -> tuple[list[Step], int]:
         """Prepare trajectory steps for subagent by copying and removing metrics.
 
         Args:
@@ -1401,7 +1576,9 @@ so ask everything you need to know."""
                         prompt_tokens=usage_info.prompt_tokens,
                         completion_tokens=usage_info.completion_tokens,
                         cached_tokens=usage_info.cache_tokens,
-                        cost_usd=usage_info.cost_usd if usage_info.cost_usd > 0 else None,
+                        cost_usd=usage_info.cost_usd
+                        if usage_info.cost_usd > 0
+                        else None,
                         prompt_token_ids=response.prompt_token_ids,
                         completion_token_ids=response.completion_token_ids,
                         logprobs=response.logprobs,
@@ -1443,7 +1620,9 @@ so ask everything you need to know."""
         Returns:
             SubagentTrajectoryRef for inclusion in parent trajectory
         """
-        total_prompt, total_completion, total_cached, total_cost = self._extract_usage_metrics(usage_info)
+        total_prompt, total_completion, total_cached, total_cost = (
+            self._extract_usage_metrics(usage_info)
+        )
 
         trajectory = Trajectory(
             session_id=session_id,
@@ -1465,13 +1644,20 @@ so ask everything you need to know."""
             ),
         )
 
-        trajectory_path = self.logs_dir / f"trajectory.summarization-{self._summarization_count}-{filename_suffix}.json"
+        trajectory_path = (
+            self.logs_dir
+            / f"trajectory.summarization-{self._summarization_count}-{filename_suffix}.json"
+        )
         try:
             with open(trajectory_path, "w") as f:
                 f.write(format_trajectory_json(trajectory.to_json_dict()))
-            self.logger.debug(f"{filename_suffix.capitalize()} subagent trajectory saved to {trajectory_path}")
+            self.logger.debug(
+                f"{filename_suffix.capitalize()} subagent trajectory saved to {trajectory_path}"
+            )
         except Exception as save_error:
-            self.logger.error(f"Failed to save {filename_suffix} subagent trajectory: {save_error}")
+            self.logger.error(
+                f"Failed to save {filename_suffix} subagent trajectory: {save_error}"
+            )
 
         return SubagentTrajectoryRef(
             session_id=session_id,
@@ -1553,14 +1739,18 @@ so ask everything you need to know."""
         self._dump_trajectory_with_continuation_index(self._summarization_count - 1)
 
         # Create new session_id for continuation
-        self._session_id = f"{self._session_id.split('-cont-')[0]}-cont-{self._summarization_count}"
+        self._session_id = (
+            f"{self._session_id.split('-cont-')[0]}-cont-{self._summarization_count}"
+        )
 
         # After dumping the trajectory till the summarization stage, reset trajectory by
         # converting from chat messages (excluding the last response which will be added
         # by the normal agent loop flow). Mark all these steps as copied context since they
         # were already present in the previous trajectory segment.
         if self._chat:
-            self._trajectory_steps = self._convert_chat_messages_to_steps(self._chat.messages[:-1], mark_as_copied=True)
+            self._trajectory_steps = self._convert_chat_messages_to_steps(
+                self._chat.messages[:-1], mark_as_copied=True
+            )
 
     def _dump_trajectory_with_continuation_index(self, continuation_index: int) -> None:
         """Dump trajectory data to JSON file with specified continuation index.
@@ -1586,6 +1776,8 @@ so ask everything you need to know."""
             "parser": self._parser_name,
             "temperature": self._temperature,
         }
+        if self._llm_kwargs:
+            agent_extra["llm_kwargs"] = self._llm_kwargs
         if self._linear_history and continuation_index > 0:
             agent_extra["continuation_index"] = continuation_index
 
@@ -1613,7 +1805,9 @@ so ask everything you need to know."""
 
         # Determine trajectory filename based on continuation index
         if self._linear_history and continuation_index > 0:
-            trajectory_path = self.logs_dir / f"trajectory.cont-{continuation_index}.json"
+            trajectory_path = (
+                self.logs_dir / f"trajectory.cont-{continuation_index}.json"
+            )
         else:
             trajectory_path = self.logs_dir / "trajectory.json"
 

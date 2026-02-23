@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """IneqMath LLM judge evaluator.
 
 This script uses an LLM judge (gpt-4o-mini) to extract answer from model's response and evaluate its correctness.
@@ -83,7 +80,9 @@ def query_openai(prompt: str, response_format=None):
         return res.choices[0].message.parsed
 
     # plain text
-    res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
+    res = client.chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}]
+    )
     return res.choices[0].message.content
 
 
@@ -140,7 +139,8 @@ def load_response() -> str:
                 return combined
 
     raise FileNotFoundError(
-        f"Response file not found: {RESPONSE_FILE}, " f"and no valid response in Codex output: {CODEX_OUTPUT_FILE}"
+        f"Response file not found: {RESPONSE_FILE}, "
+        f"and no valid response in Codex output: {CODEX_OUTPUT_FILE}"
     )
 
 
@@ -203,7 +203,7 @@ def extract_relation_answer(answer_sentence: str):
     # print(examples)
 
     prompt = f"""
-    You are an expert at extracting option letters (A, B, C, D, E, F) from answer sentences.
+    You are an expert at extracting option letters (A, B, C, D, E, F) from answer sentences. 
 
     The options are given below:
     {CHOICES}
@@ -244,7 +244,7 @@ def extract_bound_answer(prediction: str):
     # Use LLM to extract the answer
     examples = open(EXTRACTION_BOUND_PROMPT_PATH, "r").read()
     prompt = f"""
-    You are an expert at extracting numbers from answer sentences.
+    You are an expert at extracting numbers from answer sentences. 
 
     Below are examples of sentences and the corresponding numbers:
 

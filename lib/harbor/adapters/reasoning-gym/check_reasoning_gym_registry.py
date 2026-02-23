@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Check if reasoning-gym entries in registry.json match the actual directory listing.
 """
@@ -61,14 +58,18 @@ def compare_tasks(dataset_name: str, difficulty: str):
     print(f"Tasks only in directory: {len(in_directory_only)}")
 
     if in_registry_only:
-        print(f"\n⚠️  {len(in_registry_only)} task(s) in registry.json but NOT in directory:")
+        print(
+            f"\n⚠️  {len(in_registry_only)} task(s) in registry.json but NOT in directory:"
+        )
         for task in sorted(in_registry_only)[:10]:
             print(f"  - {task}")
         if len(in_registry_only) > 10:
             print(f"  ... and {len(in_registry_only) - 10} more")
 
     if in_directory_only:
-        print(f"\n⚠️  {len(in_directory_only)} task(s) in directory but NOT in registry.json:")
+        print(
+            f"\n⚠️  {len(in_directory_only)} task(s) in directory but NOT in registry.json:"
+        )
         for task in sorted(in_directory_only)[:10]:
             print(f"  - {task}")
         if len(in_directory_only) > 10:

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 def law(input_data: list[dict[str, float]], group: str) -> list[dict[str, float]]:
     """
     Predicts brier_score using a 5th degree polynomial on log10(FLOPs).
@@ -90,7 +87,9 @@ def law(input_data: list[dict[str, float]], group: str) -> list[dict[str, float]
         logC = point["log_flops"]
 
         # Apply 5th degree polynomial: a*x^5 + b*x^4 + c*x^3 + d*x^2 + e*x + f
-        brier_score = a * (logC**5) + b * (logC**4) + c * (logC**3) + d * (logC**2) + e * logC + f
+        brier_score = (
+            a * (logC**5) + b * (logC**4) + c * (logC**3) + d * (logC**2) + e * logC + f
+        )
 
         predictions.append({"brier_score": float(brier_score)})
 

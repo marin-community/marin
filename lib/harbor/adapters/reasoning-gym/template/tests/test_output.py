@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Test script for reasoning-gym task.
 This script validates the answer using reasoning_gym's score_answer method.

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import ast
 import logging
 from pathlib import Path
@@ -275,7 +272,9 @@ class BigCodeBenchHardAdapter:
 
         test_template = template_path.read_text(encoding="utf-8")
         # Fill in the template
-        test_content = test_template.format(calibration_code=code_prompt, entry_point=entry_point, test_code=test_code)
+        test_content = test_template.format(
+            calibration_code=code_prompt, entry_point=entry_point, test_code=test_code
+        )
 
         test_file.write_text(test_content, encoding="utf-8")
 
@@ -302,7 +301,10 @@ class BigCodeBenchHardAdapter:
             selected_segments: list[str] = []
             for node in tree.body:
                 # Stop collecting once we reach the first class definition
-                if first_class_lineno is not None and getattr(node, "lineno", 10**9) >= first_class_lineno:
+                if (
+                    first_class_lineno is not None
+                    and getattr(node, "lineno", 10**9) >= first_class_lineno
+                ):
                     break
 
                 # Collect imports
@@ -333,7 +335,9 @@ class BigCodeBenchHardAdapter:
             if selected_segments:
                 header_block = "\n".join(selected_segments).strip() + "\n"
         except Exception as e:
-            logger.warning(f"Failed to parse header from test code, falling back to empty header. Error: {e}")
+            logger.warning(
+                f"Failed to parse header from test code, falling back to empty header. Error: {e}"
+            )
             header_block = ""
 
         return header_block

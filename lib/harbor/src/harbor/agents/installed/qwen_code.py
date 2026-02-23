@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import os
 import shlex
 from pathlib import Path
@@ -62,7 +59,10 @@ class QwenCode(BaseInstalledAgent):
 
         return [
             ExecInput(
-                command=(f"echo {escaped_instruction} | qwen -y " f"2>&1 | tee /logs/agent/qwen-code.txt"),
+                command=(
+                    f"echo {escaped_instruction} | qwen -y "
+                    f"2>&1 | tee /logs/agent/qwen-code.txt"
+                ),
                 env=env,
             )
         ]

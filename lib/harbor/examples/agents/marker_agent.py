@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """A simple custom agent that creates a marker file to prove it ran.
 
 This agent is used for testing the --agent-import-path CLI flag.
@@ -52,7 +49,9 @@ class MarkerAgent(BaseAgent):
     async def setup(self, environment: BaseEnvironment) -> None:
         pass
 
-    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+    async def run(
+        self, instruction: str, environment: BaseEnvironment, context: AgentContext
+    ) -> None:
         # Create marker file to prove this agent ran (in agent logs dir)
         marker_path = self.logs_dir / self.MARKER_FILENAME
         marker_path.write_text(

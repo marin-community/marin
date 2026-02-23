@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +20,9 @@ sweeps_app = Typer(no_args_is_help=True)
 
 @sweeps_app.command("run")
 def run_sweeps(
-    config_path: Annotated[Path, Option("-c", "--config", help="Job config file (json or yaml)")],
+    config_path: Annotated[
+        Path, Option("-c", "--config", help="Job config file (json or yaml)")
+    ],
     sweeps: Annotated[
         int,
         Option("--max-sweeps", help="Max number of sweeps to run"),
@@ -129,11 +128,15 @@ def run_sweeps(
 
         if hints_map:
             # Run one job per task to inject per-task hint into agent kwargs
-            print(f"[sweeps] Starting sweep {sweep_idx} with per-task hints; {len(remaining_tasks)} tasks")
+            print(
+                f"[sweeps] Starting sweep {sweep_idx} with per-task hints; {len(remaining_tasks)} tasks"
+            )
             for task in remaining_tasks:
                 cfg = base_config.model_copy(deep=True)
                 cfg.tasks = [task]
-                cfg.job_name = f"{base_config.job_name}.sweep-{sweep_idx}.{task.path.name}"
+                cfg.job_name = (
+                    f"{base_config.job_name}.sweep-{sweep_idx}.{task.path.name}"
+                )
                 hint_val = hints_map.get(task.path.name)
                 if hint_val:
                     for ag in cfg.agents:
@@ -170,7 +173,9 @@ def run_sweeps(
             cfg = base_config.model_copy(deep=True)
             cfg.tasks = remaining_tasks
             cfg.job_name = f"{base_config.job_name}.sweep-{sweep_idx}"
-            print(f"[sweeps] Starting sweep {sweep_idx} with {len(cfg.tasks)} tasks, {cfg.n_attempts} trials/task")
+            print(
+                f"[sweeps] Starting sweep {sweep_idx} with {len(cfg.tasks)} tasks, {cfg.n_attempts} trials/task"
+            )
             job = Job(cfg)
             asyncio.run(job.run())
             job_dir = job.job_dir
@@ -199,8 +204,12 @@ def run_sweeps(
 
         # Filter remaining tasks for next sweep
         before = len(remaining_tasks)
-        remaining_tasks = [t for t in remaining_tasks if t.path.name not in succeeded_by_task]
-        print(f"[sweeps] Sweep {sweep_idx} complete. Tasks: {before} -> {len(remaining_tasks)} remaining")
+        remaining_tasks = [
+            t for t in remaining_tasks if t.path.name not in succeeded_by_task
+        ]
+        print(
+            f"[sweeps] Sweep {sweep_idx} complete. Tasks: {before} -> {len(remaining_tasks)} remaining"
+        )
 
     # Export traces at the end
     # Merge all job dirs and export success/failure splits
@@ -252,7 +261,9 @@ def run_sweeps(
             print(f"[sweeps] Pushed splits to {export_repo}")
         else:
             if not (export_repo_success and export_repo_failure):
-                raise ValueError("--export-separate requires --export-repo-success and --export-repo-failure")
+                raise ValueError(
+                    "--export-separate requires --export-repo-success and --export-repo-failure"
+                )
             if len(ds_success) > 0:
                 ds_success.push_to_hub(export_repo_success)  # type: ignore[union-attr]
                 print(f"[sweeps] Pushed successes to {export_repo_success}")

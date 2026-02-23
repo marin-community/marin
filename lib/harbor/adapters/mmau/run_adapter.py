@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """CLI utility to materialize Harbor tasks for the MMAU benchmark."""
 
 from __future__ import annotations
@@ -33,7 +30,9 @@ def _unique(sequence: Iterable[str]) -> list[str]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Convert MMAU problems into Harbor task directories.")
+    parser = argparse.ArgumentParser(
+        description="Convert MMAU problems into Harbor task directories."
+    )
     parser.add_argument(
         "task_ids",
         nargs="*",

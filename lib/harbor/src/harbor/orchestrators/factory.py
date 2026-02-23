@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from harbor.metrics.base import BaseMetric
 from harbor.models.job.config import RetryConfig
 from harbor.models.orchestrator_type import OrchestratorType
@@ -35,4 +32,6 @@ class OrchestratorFactory:
 
         orchestrator_class = cls._ORCHESTRATOR_MAP[orchestrator_type]
 
-        return orchestrator_class(trial_configs, n_concurrent_trials, metrics, quiet, retry_config, **kwargs)
+        return orchestrator_class(
+            trial_configs, n_concurrent_trials, metrics, quiet, retry_config, **kwargs
+        )

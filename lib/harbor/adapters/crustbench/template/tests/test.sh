@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Test script for CRUST-bench task
+# Test script for CRUST-bench task  
 # This script compiles and runs Rust tests to verify the transpilation
 
 set -Eeuo pipefail
@@ -55,7 +55,7 @@ RBENCH_DIR=""
 if [ -d "/workspace/rbench_reference" ]; then
     RBENCH_DIR="/workspace/rbench_reference"
 elif [ -d "/workspace/environment/rbench_reference" ]; then
-    RBENCH_DIR="/workspace/environment/rbench_reference"
+    RBENCH_DIR="/workspace/environment/rbench_reference"  
 elif [ -d "rbench_reference" ]; then
     RBENCH_DIR="rbench_reference"
 else

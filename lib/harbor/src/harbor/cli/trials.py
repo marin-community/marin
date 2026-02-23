@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import asyncio
 from pathlib import Path
 from typing import Annotated
@@ -30,7 +27,8 @@ def start(
         Option(
             "-p",
             "--path",
-            help="Path to a local task directory, or path within git repo if --task-git-url " "is specified",
+            help="Path to a local task directory, or path within git repo if --task-git-url "
+            "is specified",
             rich_help_panel="Task",
         ),
     ] = None,
@@ -247,7 +245,9 @@ def start(
     base_config = None
     if config_path is not None:
         if config_path.suffix == ".yaml":
-            base_config = TrialConfig.model_validate(yaml.safe_load(config_path.read_text()))
+            base_config = TrialConfig.model_validate(
+                yaml.safe_load(config_path.read_text())
+            )
         elif config_path.suffix == ".json":
             base_config = TrialConfig.model_validate_json(config_path.read_text())
         else:
@@ -337,7 +337,9 @@ def start(
     console.print(f"Finished: {result.finished_at}")
 
     if result.exception_info:
-        console.print(f"[bold red]Error: {result.exception_info.exception_type}[/bold red]")
+        console.print(
+            f"[bold red]Error: {result.exception_info.exception_type}[/bold red]"
+        )
         console.print(f"Message: {result.exception_info.exception_message}")
     elif result.verifier_result:
         console.print(f"Rewards: {result.verifier_result.rewards}")
@@ -384,7 +386,10 @@ def summarize(
 
     summary_path = trial_path / "summary.md"
     if summary_path.exists() and not overwrite:
-        console.print(f"[yellow]Summary already exists at: {summary_path}[/yellow]\n" "Use --overwrite to regenerate.")
+        console.print(
+            f"[yellow]Summary already exists at: {summary_path}[/yellow]\n"
+            "Use --overwrite to regenerate."
+        )
         raise SystemExit(0)
 
     # Create a summarizer with the parent directory as job_dir

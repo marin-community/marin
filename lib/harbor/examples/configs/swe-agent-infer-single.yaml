@@ -39,7 +39,7 @@ agent:
       <uploaded_files>
       {{working_dir}}
       </uploaded_files>
-      I've uploaded a python code repository in {{working_dir}}.
+      I've uploaded a python code repository in {{working_dir}}. 
 
       <pr_description>
       {{problem_statement}}

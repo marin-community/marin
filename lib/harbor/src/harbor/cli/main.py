@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 from importlib.metadata import version
 from typing import Optional
 
@@ -33,7 +30,9 @@ app = Typer(no_args_is_help=True)
 
 @app.callback()
 def main(
-    version: Optional[bool] = typer.Option(None, "--version", "-v", callback=version_callback, is_eager=True),
+    version: Optional[bool] = typer.Option(
+        None, "--version", "-v", callback=version_callback, is_eager=True
+    ),
 ) -> None:
     pass
 
@@ -44,12 +43,16 @@ app.add_typer(datasets_app, name="datasets", help="Manage datasets.")
 app.add_typer(jobs_app, name="jobs", help="Manage jobs.")
 app.add_typer(trials_app, name="trials", help="Manage trials.")
 app.add_typer(traces_app, name="traces", help="Trace export utilities.")
-app.add_typer(sweeps_app, name="sweeps", help="Run successive sweeps to focus on successes.")
+app.add_typer(
+    sweeps_app, name="sweeps", help="Run successive sweeps to focus on successes."
+)
 app.add_typer(cache_app, name="cache", help="Manage Harbor cache.")
 app.add_typer(admin_app, name="admin")
 
 app.command(name="run", help="Start a job. Alias for `harbor jobs start`.")(start)
-app.command(name="view", help="Start web server to browse trajectory files.")(view_command)
+app.command(name="view", help="Start web server to browse trajectory files.")(
+    view_command
+)
 
 if __name__ == "__main__":
     app()

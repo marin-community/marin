@@ -1,4 +1,4 @@
-What is the correct answer to this question:
+What is the correct answer to this question: 
 {question}
 
 Choices:

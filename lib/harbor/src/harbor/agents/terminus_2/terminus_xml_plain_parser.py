@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import re
 from dataclasses import dataclass
 from typing import List
@@ -50,8 +47,13 @@ class TerminusXMLPlainParser:
 
                     if corrected_result.error == "":
                         # Success! Add auto-correction warning
-                        auto_warning = f"AUTO-CORRECTED: {fix_name} - " "please fix this in future responses"
-                        corrected_result.warning = self._combine_warnings(auto_warning, corrected_result.warning)
+                        auto_warning = (
+                            f"AUTO-CORRECTED: {fix_name} - "
+                            "please fix this in future responses"
+                        )
+                        corrected_result.warning = self._combine_warnings(
+                            auto_warning, corrected_result.warning
+                        )
                         return corrected_result
 
         # Return original result if no fix worked
@@ -293,7 +295,10 @@ class TerminusXMLPlainParser:
         expected_tags = set(self.required_sections + ["task_complete"])
         unexpected = set(top_level_tags) - expected_tags
         for tag in unexpected:
-            warnings.append(f"Unknown tag found: <{tag}>, expected " f"analysis/plan/commands/task_complete")
+            warnings.append(
+                f"Unknown tag found: <{tag}>, expected "
+                f"analysis/plan/commands/task_complete"
+            )
 
         # Check for multiple instances of same tag
         for section_name in self.required_sections + ["task_complete"]:
@@ -312,12 +317,16 @@ class TerminusXMLPlainParser:
 
         return sections
 
-    def _parse_xml_commands(self, xml_content: str, warnings: List[str]) -> tuple[List[ParsedCommand], str]:
+    def _parse_xml_commands(
+        self, xml_content: str, warnings: List[str]
+    ) -> tuple[List[ParsedCommand], str]:
         """Parse XML content and extract command objects manually."""
 
         # Find all keystrokes elements manually for better error reporting
         commands = []
-        keystrokes_pattern = re.compile(r"<keystrokes([^>]*)>(.*?)</keystrokes>", re.DOTALL)
+        keystrokes_pattern = re.compile(
+            r"<keystrokes([^>]*)>(.*?)</keystrokes>", re.DOTALL
+        )
 
         matches = keystrokes_pattern.findall(xml_content)
         for i, (attributes_str, keystrokes_content) in enumerate(matches):
@@ -328,16 +337,21 @@ class TerminusXMLPlainParser:
             duration = 1.0
 
             # Parse duration attribute
-            duration_match = re.search(r'duration\s*=\s*["\']([^"\']*)["\']', attributes_str)
+            duration_match = re.search(
+                r'duration\s*=\s*["\']([^"\']*)["\']', attributes_str
+            )
             if duration_match:
                 try:
                     duration = float(duration_match.group(1))
                 except ValueError:
                     warnings.append(
-                        f"Command {i + 1}: Invalid duration value " f"'{duration_match.group(1)}', using default 1.0"
+                        f"Command {i + 1}: Invalid duration value "
+                        f"'{duration_match.group(1)}', using default 1.0"
                     )
             else:
-                warnings.append(f"Command {i + 1}: Missing duration attribute, using default 1.0")
+                warnings.append(
+                    f"Command {i + 1}: Missing duration attribute, using default 1.0"
+                )
 
             # Check for newline at end of keystrokes
             if i < len(matches) - 1 and not keystrokes_content.endswith("\n"):
@@ -347,7 +361,9 @@ class TerminusXMLPlainParser:
                     f"concatenated together on the same line."
                 )
 
-            commands.append(ParsedCommand(keystrokes=keystrokes_content, duration=duration))
+            commands.append(
+                ParsedCommand(keystrokes=keystrokes_content, duration=duration)
+            )
 
         # Check for XML entities and warn
         entities = {
@@ -367,7 +383,10 @@ class TerminusXMLPlainParser:
 
         # Check for \r\n line endings and warn
         if "\\r\\n" in xml_content:
-            warnings.append("Warning: \\r\\n line endings are not necessary - use \\n " "instead for simpler output")
+            warnings.append(
+                "Warning: \\r\\n line endings are not necessary - use \\n "
+                "instead for simpler output"
+            )
 
         return commands, ""
 
@@ -444,7 +463,9 @@ class TerminusXMLPlainParser:
                 present_sections.append((section, positions[section]))
 
         # Sort by position to get actual order
-        actual_order = [section for section, pos in sorted(present_sections, key=lambda x: x[1])]
+        actual_order = [
+            section for section, pos in sorted(present_sections, key=lambda x: x[1])
+        ]
 
         # Get expected order for present sections only
         expected_present = [s for s in expected_order if s in positions]
@@ -453,16 +474,22 @@ class TerminusXMLPlainParser:
         if actual_order != expected_present:
             actual_str = " → ".join(actual_order)
             expected_str = " → ".join(expected_present)
-            warnings.append(f"Sections appear in wrong order. Found: {actual_str}, " f"expected: {expected_str}")
+            warnings.append(
+                f"Sections appear in wrong order. Found: {actual_str}, "
+                f"expected: {expected_str}"
+            )
 
-    def _check_attribute_issues(self, attributes_str: str, command_num: int, warnings: List[str]) -> None:
+    def _check_attribute_issues(
+        self, attributes_str: str, command_num: int, warnings: List[str]
+    ) -> None:
         """Check for attribute-related issues."""
         # Check for missing quotes
         unquoted_pattern = re.compile(r'(\w+)\s*=\s*([^"\'\s>]+)')
         unquoted_matches = unquoted_pattern.findall(attributes_str)
         for attr_name, attr_value in unquoted_matches:
             warnings.append(
-                f"Command {command_num}: Attribute '{attr_name}' value should be " f'quoted: {attr_name}="{attr_value}"'
+                f"Command {command_num}: Attribute '{attr_name}' value should be "
+                f'quoted: {attr_name}="{attr_value}"'
             )
 
         # Check for single quotes (should use double quotes for consistency)
@@ -470,7 +497,8 @@ class TerminusXMLPlainParser:
         single_quote_matches = single_quote_pattern.findall(attributes_str)
         for attr_name, attr_value in single_quote_matches:
             warnings.append(
-                f"Command {command_num}: Use double quotes for attribute " f"'{attr_name}': {attr_name}=\"{attr_value}\""
+                f"Command {command_num}: Use double quotes for attribute "
+                f"'{attr_name}': {attr_name}=\"{attr_value}\""
             )
 
         # Check for unknown attribute names
@@ -497,7 +525,9 @@ class TerminusXMLPlainParser:
         # All other cases (false, empty, self-closing, missing) = not complete
         return False
 
-    def salvage_truncated_response(self, truncated_response: str) -> tuple[str | None, bool]:
+    def salvage_truncated_response(
+        self, truncated_response: str
+    ) -> tuple[str | None, bool]:
         """
         Try to salvage a valid response from truncated output.
 
@@ -533,7 +563,10 @@ class TerminusXMLPlainParser:
             has_multiple_blocks = False
             if parse_result.warning:
                 warning_lower = parse_result.warning.lower()
-                has_multiple_blocks = "only issue one" in warning_lower and "block at a time" in warning_lower
+                has_multiple_blocks = (
+                    "only issue one" in warning_lower
+                    and "block at a time" in warning_lower
+                )
 
             if not parse_result.error and not has_multiple_blocks:
                 # Valid response! Return the clean truncated version

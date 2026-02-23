@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import shlex
 import tempfile
 from datetime import timedelta
@@ -45,8 +42,11 @@ class RunloopEnvironment(BaseEnvironment):
         self._workdir = next(
             (
                 line.strip().split(maxsplit=1)[1]
-                for line in reversed(self._environment_definition_path.read_text().splitlines())
-                if line.strip().upper().startswith("WORKDIR") and len(line.strip().split(maxsplit=1)) == 2
+                for line in reversed(
+                    self._environment_definition_path.read_text().splitlines()
+                )
+                if line.strip().upper().startswith("WORKDIR")
+                and len(line.strip().split(maxsplit=1)) == 2
             ),
             "/workspace",
         )
@@ -77,7 +77,10 @@ class RunloopEnvironment(BaseEnvironment):
 
     def _validate_definition(self):
         if not self._environment_definition_path.exists():
-            raise FileNotFoundError(f"{self._environment_definition_path} not found. Please ensure the " "file exists.")
+            raise FileNotFoundError(
+                f"{self._environment_definition_path} not found. Please ensure the "
+                "file exists."
+            )
 
     def _build_launch_parameters(self) -> LaunchParameters:
         """
@@ -126,7 +129,11 @@ class RunloopEnvironment(BaseEnvironment):
         if not blueprints:
             return None
 
-        candidates = [bp for bp in blueprints if bp.name == blueprint_name and bp.status == "build_complete"]
+        candidates = [
+            bp
+            for bp in blueprints
+            if bp.name == blueprint_name and bp.status == "build_complete"
+        ]
         if not candidates:
             return None
 
@@ -222,7 +229,9 @@ class RunloopEnvironment(BaseEnvironment):
 
                 prebuilt_dockerfile = f"FROM {prebuilt_image}\n"
 
-                with tempfile.TemporaryDirectory(prefix="harbor-runloop-prebuilt-") as tmpdir:
+                with tempfile.TemporaryDirectory(
+                    prefix="harbor-runloop-prebuilt-"
+                ) as tmpdir:
                     tmp_path = Path(tmpdir)
                     (tmp_path / "Dockerfile").write_text(prebuilt_dockerfile)
 
@@ -290,7 +299,9 @@ class RunloopEnvironment(BaseEnvironment):
             try:
                 await self._client.aclose()
             except Exception as e:
-                self.logger.warning("Failed to close Runloop client cleanly: %s", e, exc_info=True)
+                self.logger.warning(
+                    "Failed to close Runloop client cleanly: %s", e, exc_info=True
+                )
         self._client = None
 
     @retry(
@@ -387,8 +398,7 @@ class RunloopEnvironment(BaseEnvironment):
         if not self._devbox or not self._client:
             raise RuntimeError("Devbox not found. Please build the environment first.")
 
-        # Wrap command with bash -ic
-        full_command = f"bash -ic {shlex.quote(command)}"
+        full_command = f"bash -lc {shlex.quote(command)}"
 
         # Add environment variables
         if env:
@@ -432,7 +442,9 @@ class RunloopEnvironment(BaseEnvironment):
             )
         except Exception as e:
             # Ensure we always return an ExecResult, even on errors such as timeouts.
-            self.logger.warning("Runloop exec failed for command %r: %s", command, e, exc_info=True)
+            self.logger.warning(
+                "Runloop exec failed for command %r: %s", command, e, exc_info=True
+            )
             return ExecResult(
                 stdout="",
                 stderr=str(e),

@@ -1,6 +1,3 @@
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Tests for registry.json validation using registry.py models."""
 
 from pathlib import Path
@@ -26,7 +23,9 @@ class TestRegistryParsing:
 
         assert registry is not None
         assert isinstance(registry.datasets, list)
-        assert len(registry.datasets) > 0, "Registry should contain at least one dataset"
+        assert len(registry.datasets) > 0, (
+            "Registry should contain at least one dataset"
+        )
 
     def test_all_datasets_have_required_fields(self):
         """Test that all datasets have required fields."""
@@ -36,7 +35,9 @@ class TestRegistryParsing:
             assert isinstance(dataset, DatasetSpec)
             assert dataset.name, f"Dataset missing name: {dataset}"
             assert dataset.version, f"Dataset missing version: {dataset}"
-            assert isinstance(dataset.description, str), f"Dataset {dataset.name}@{dataset.version} missing description"
+            assert isinstance(dataset.description, str), (
+                f"Dataset {dataset.name}@{dataset.version} missing description"
+            )
 
     def test_all_tasks_are_valid(self):
         """Test that all tasks in all datasets are valid RegistryTaskId instances."""
@@ -45,10 +46,12 @@ class TestRegistryParsing:
         for dataset in registry.datasets:
             assert isinstance(dataset.tasks, list)
             for task in dataset.tasks:
-                assert isinstance(
-                    task, RegistryTaskId
-                ), f"Task in {dataset.name}@{dataset.version} is not RegistryTaskId: {task}"
-                assert task.path, f"Task in {dataset.name}@{dataset.version} missing path"
+                assert isinstance(task, RegistryTaskId), (
+                    f"Task in {dataset.name}@{dataset.version} is not RegistryTaskId: {task}"
+                )
+                assert task.path, (
+                    f"Task in {dataset.name}@{dataset.version} missing path"
+                )
 
 
 class TestNoDuplicateDatasets:
@@ -69,10 +72,12 @@ class TestNoDuplicateDatasets:
 
         if duplicates:
             duplicate_info = [
-                f"{name}@{version} (appears {seen_keys[(name, version)]} times)" for name, version in set(duplicates)
+                f"{name}@{version} (appears {seen_keys[(name, version)]} times)"
+                for name, version in set(duplicates)
             ]
             pytest.fail(
-                "Found duplicate dataset keys in registry.json:\n" + "\n".join(f"  - {info}" for info in duplicate_info)
+                "Found duplicate dataset keys in registry.json:\n"
+                + "\n".join(f"  - {info}" for info in duplicate_info)
             )
 
 
@@ -89,13 +94,19 @@ class TestTasksHaveGitInfo:
             for task in dataset.tasks:
                 if task.git_url is None:
                     task_name = task.name or str(task.path)
-                    missing_git_url.append(f"{dataset.name}@{dataset.version}: {task_name}")
+                    missing_git_url.append(
+                        f"{dataset.name}@{dataset.version}: {task_name}"
+                    )
 
         if missing_git_url:
             pytest.fail(
                 f"Found {len(missing_git_url)} task(s) without git_url:\n"
                 + "\n".join(f"  - {item}" for item in missing_git_url[:20])
-                + (f"\n  ... and {len(missing_git_url) - 20} more" if len(missing_git_url) > 20 else "")
+                + (
+                    f"\n  ... and {len(missing_git_url) - 20} more"
+                    if len(missing_git_url) > 20
+                    else ""
+                )
             )
 
     def test_all_tasks_have_git_commit_id(self):
@@ -121,5 +132,9 @@ class TestTasksHaveGitInfo:
             pytest.fail(
                 f"Found {len(missing_git_commit_id)} task(s) without git_commit_id:\n"
                 + "\n".join(f"  - {item}" for item in missing_git_commit_id[:20])
-                + (f"\n  ... and {len(missing_git_commit_id) - 20} more" if len(missing_git_commit_id) > 20 else "")
+                + (
+                    f"\n  ... and {len(missing_git_commit_id) - 20} more"
+                    if len(missing_git_commit_id) > 20
+                    else ""
+                )
             )

@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Runtime setup script for LAB-Bench MCQ tasks.
 Runs at container startup to shuffle choices and generate instruction.
