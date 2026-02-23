@@ -1150,12 +1150,6 @@ class ZephyrContext:
         self._coordinator_group = None
         self._worker_group = None
 
-    def __enter__(self) -> ZephyrContext:
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.shutdown()
-
 
 def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
     """Reshard shard refs by output shard index without loading data."""

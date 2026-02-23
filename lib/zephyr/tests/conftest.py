@@ -112,14 +112,14 @@ def zephyr_ctx(fray_client, tmp_path_factory):
     """
     tmp_path = tmp_path_factory.mktemp("zephyr")
     chunk_prefix = str(tmp_path / "chunks")
-    with ZephyrContext(
+    ctx = ZephyrContext(
         client=fray_client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name="test-ctx",
-    ) as ctx:
-        yield ctx
+    )
+    yield ctx
 
 
 class CallCounter:

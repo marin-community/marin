@@ -106,20 +106,20 @@ def download(cfg: DownloadConfig) -> None:
     logger.info("Starting transfer of Wikipedia dump...")
     output_base = os.path.join(cfg.output_path, cfg.revision)
 
-    with ZephyrContext(name="download-wikipedia") as ctx:
-        download_metrics = ctx.execute(
-            Dataset.from_list(cfg.input_urls)
-            .map(lambda url: download_tar(url, output_base))
-            .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
-        )
+    ctx = ZephyrContext(name="download-wikipedia")
+    download_metrics = ctx.execute(
+        Dataset.from_list(cfg.input_urls)
+        .map(lambda url: download_tar(url, output_base))
+        .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
+    )
 
-        # load all of the output filenames to process
-        downloads = ctx.execute(Dataset.from_list(download_metrics).flat_map(load_jsonl))
+    # load all of the output filenames to process
+    downloads = ctx.execute(Dataset.from_list(download_metrics).flat_map(load_jsonl))
 
-        extracted = ctx.execute(
-            Dataset.from_list(downloads)
-            .flat_map(lambda file: process_file(file, output_base))
-            .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),
-        )
+    extracted = ctx.execute(
+        Dataset.from_list(downloads)
+        .flat_map(lambda file: process_file(file, output_base))
+        .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),
+    )
 
     logger.info("Wikipedia dump transfer complete, wrote: %s", list(extracted))
