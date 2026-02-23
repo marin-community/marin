@@ -245,11 +245,14 @@ def _force_vanilla_attention_backend_for_vlm_eval(model):
 
 def _make_dummy_eval_batch(EvalBatch, EvalPos):
     """Build a fixed-shape dummy batch used by non-source hosts in broadcast_shard."""
-    return hax.vmap(LmExample.causal, EvalBatch)(
+    dummy_batch = hax.vmap(LmExample.causal, EvalBatch)(
         hax.zeros(EvalPos, dtype=jnp.int32),
         loss_weight=hax.zeros(EvalPos, dtype=jnp.float32),
         segment_ids=hax.zeros(EvalPos, dtype=jnp.int32),
     )
+    # Keep dummy payload construction aligned with text-mc eval_harness worker
+    # setup so worker-side payload specs/sharding shape stay deterministic.
+    return hax.shard(dummy_batch, {})
 
 
 class _BatchLoopMessage:
@@ -270,6 +273,19 @@ def _receive_batch_loop_message() -> int:
     """Worker hosts block until a source control message is broadcast."""
     msg = broadcast_shard(jnp.array(_BatchLoopMessage.STOP, dtype=jnp.int32), PartitionSpec())
     return int(msg.item())
+
+
+def _send_batch_payload(payload):
+    """Source host sends one batch payload using text-mc's spec inference pattern."""
+    assert jax.process_index() == 0
+    payload_specs = hax.partitioning.infer_resource_partitions(payload)
+    return broadcast_shard(payload, payload_specs)
+
+
+def _receive_batch_payload(dummy_payload):
+    """Worker hosts receive one batch payload using dummy-payload-derived specs."""
+    payload_specs = hax.partitioning.infer_resource_partitions(dummy_payload)
+    return broadcast_shard(dummy_payload, payload_specs)
 
 
 def _run_batch_loop(
@@ -355,7 +371,7 @@ def _run_batch_loop(
 
     pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok") if is_source else None
     dummy_batch = _make_dummy_eval_batch(EvalBatch, EvalPos)
-    out_specs = hax.partitioning.infer_resource_partitions(dummy_batch, axis_resources)
+    out_specs = hax.partitioning.infer_resource_partitions(dummy_batch)
     logger.warning(
         "VLM_EVAL_OUT_SPECS eval_run_uuid=%s host=%d out_specs_crc32=%d mesh=%s",
         eval_run_uuid,
@@ -451,8 +467,27 @@ def _run_batch_loop(
                 batch_idx,
             )
 
+        if batch_idx == 0:
+            if is_source:
+                payload_specs = hax.partitioning.infer_resource_partitions(batch_orig)
+                role = "source"
+            else:
+                payload_specs = hax.partitioning.infer_resource_partitions(dummy_batch)
+                role = "worker"
+            logger.warning(
+                "VLM_EVAL_BATCH0_PAYLOAD_SPECS eval_run_uuid=%s host=%d role=%s payload_specs_crc32=%d payload_specs=%s",
+                eval_run_uuid,
+                jax.process_index(),
+                role,
+                int(zlib.crc32(str(payload_specs).encode())),
+                payload_specs,
+            )
+
         try:
-            batch = broadcast_shard(batch_orig, out_specs, source=0)
+            if is_source:
+                batch = _send_batch_payload(batch_orig)
+            else:
+                batch = _receive_batch_payload(dummy_batch)
         except Exception:
             tokens_array = batch_orig.tokens.array
             logger.exception(
@@ -1567,13 +1602,35 @@ def vlm_mc_eval_callback(
             logger.exception("vlm_mc_eval crashed")
             raise
         finally:
-            _log_vlm_hlo_fingerprints(eval_run_uuid=eval_run_uuid, dump_dir="/tmp/xla_dumps_vlm_once")
+            if jax.process_index() == 0:
+                _log_vlm_hlo_fingerprints(eval_run_uuid=eval_run_uuid, dump_dir="/tmp/xla_dumps_vlm_once")
+            else:
+                logger.warning(
+                    "VLM_HLO_FINGERPRINT_SKIPPED eval_run_uuid=%s host=%d reason=non_source_host",
+                    eval_run_uuid,
+                    jax.process_index(),
+                )
             logger.warning(
                 "VLM_HLO_DUMP_WINDOW_END eval_run_uuid=%s host=%d",
                 eval_run_uuid,
                 jax.process_index(),
             )
 
+        logger.warning(
+            "VLM_EVAL_CALLBACK_SYNC_ENTER eval_run_uuid=%s host=%d",
+            eval_run_uuid,
+            jax.process_index(),
+        )
+        sync_marker = (
+            f"{eval_run_uuid}:callback_exit_sync:host{jax.process_index()}" if jax.process_index() == 0 else ""
+        )
+        leader_sync_marker = multihost_broadcast_sync(sync_marker)
+        logger.warning(
+            "VLM_EVAL_CALLBACK_SYNC_EXIT eval_run_uuid=%s host=%d leader_sync_marker=%s",
+            eval_run_uuid,
+            jax.process_index(),
+            leader_sync_marker,
+        )
         logger.warning("VLM_EVAL_CALLBACK_EXIT eval_run_uuid=%s host=%d", eval_run_uuid, jax.process_index())
         logger.info("VLM eval done.")
 
