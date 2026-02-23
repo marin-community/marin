@@ -90,9 +90,11 @@ class disk_cache(Generic[P, T]):
     def _execute(self, *args: P.args, **kwargs: P.kwargs) -> T:
         def fingerprint_args(*args, **kwargs) -> str:
             """Create a deterministic fingerprint for args and kwargs."""
-            # Include the function name to avoid collisions across different functions.
-            fn_name = getattr(self._fn, "__name__", None)
-            data = cloudpickle.dumps((fn_name, args, sorted(kwargs.items())))
+            # Include module and qualified name to avoid collisions across
+            # different functions (e.g. two functions both named "compute").
+            fn_module = getattr(self._fn, "__module__", None)
+            fn_qualname = getattr(self._fn, "__qualname__", None) or getattr(self._fn, "__name__", None)
+            data = cloudpickle.dumps((fn_module, fn_qualname, args, sorted(kwargs.items())))
             return hashlib.sha256(data).hexdigest()[:16]
 
         output_path = self._output_path
