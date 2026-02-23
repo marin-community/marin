@@ -63,6 +63,25 @@ def rewrite_artifact_registry_region(image_tag: str, target_region: str) -> str:
     return "/".join(parts)
 
 
+def collect_all_regions(config: config_pb2.IrisClusterConfig) -> set[str]:
+    """Extract all unique GCP regions from an Iris cluster config.
+
+    Includes regions from all scale group zones and the controller zone.
+    """
+    regions: set[str] = set()
+
+    for sg in config.scale_groups.values():
+        template = sg.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            regions.add(template.gcp.zone.rsplit("-", 1)[0])
+
+    ctrl = config.controller
+    if ctrl.HasField("gcp") and ctrl.gcp.zone:
+        regions.add(ctrl.gcp.zone.rsplit("-", 1)[0])
+
+    return regions
+
+
 def render_template(template: str, **variables: str | int) -> str:
     """Render a template string with {{ variable }} placeholders.
 
@@ -427,4 +446,10 @@ def build_controller_bootstrap_script_from_config(
 
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
     port = config.controller.gcp.port or config.controller.manual.port or 10000
-    return build_controller_bootstrap_script(config.controller.image, port, config_yaml)
+    image = config.controller.image
+    ctrl = config.controller
+    if ctrl.HasField("gcp") and ctrl.gcp.zone:
+        controller_region = ctrl.gcp.zone.rsplit("-", 1)[0]
+        image = rewrite_artifact_registry_region(image, controller_region)
+
+    return build_controller_bootstrap_script(image, port, config_yaml)

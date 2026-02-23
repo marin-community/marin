@@ -8,6 +8,8 @@ from pathlib import Path
 
 import click
 
+from iris.cluster.platform.bootstrap import collect_all_regions, parse_artifact_registry_tag
+
 GHCR_DEFAULT_ORG = "marin-community"
 
 
@@ -510,7 +512,7 @@ def build_task_image(
 @click.option("--version", help="Version tag (default: derived from source tag)")
 @click.pass_context
 def build_push(
-    ctx,
+    ctx: click.Context,
     source_tag: str,
     registry: str,
     ghcr_org: str,
@@ -530,6 +532,29 @@ def build_push(
         iris build push iris-task:v1.0 --registry gcp --region us-central1
     """
     verbose = _is_verbose(ctx)
+    config = ctx.obj.get("config") if ctx.obj else None
+    if registry == "gcp" and config and not region:
+        regions = collect_all_regions(config)
+        if not regions:
+            raise click.ClickException("No GCP regions found in config")
+
+        parsed = parse_artifact_registry_tag(source_tag)
+        resolved_project = project
+        if parsed:
+            _, parsed_project, _, _ = parsed
+            resolved_project = parsed_project
+
+        ordered_regions = tuple(sorted(regions))
+        click.echo(f"Pushing to {len(ordered_regions)} region(s) from config: {', '.join(ordered_regions)}")
+        push_to_gcp_registries(
+            source_tag,
+            ordered_regions,
+            resolved_project,
+            image_name=image_name,
+            version=version,
+        )
+        return
+
     _push_image(
         source_tag,
         registry=registry,

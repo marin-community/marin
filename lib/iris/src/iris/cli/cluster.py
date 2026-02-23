@@ -23,7 +23,7 @@ from iris.cli.build import (
     push_to_gcp_registries,
     push_to_ghcr,
 )
-from iris.cluster.platform.bootstrap import parse_artifact_registry_tag
+from iris.cluster.platform.bootstrap import collect_all_regions, parse_artifact_registry_tag
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
@@ -143,16 +143,6 @@ def _build_and_push_image(params: _ImageBuildParams) -> None:
     )
 
 
-def _collect_scale_group_regions(config) -> set[str]:
-    """Collect unique cloud regions from all scale groups' GCP zones."""
-    regions: set[str] = set()
-    for sg in config.scale_groups.values():
-        template = sg.slice_template
-        if template.HasField("gcp") and template.gcp.zone:
-            regions.add(template.gcp.zone.rsplit("-", 1)[0])
-    return regions
-
-
 def _push_image_to_extra_regions(params: _ImageBuildParams, extra_regions: set[str]) -> None:
     """Push an already-built image to additional AR regions beyond the primary."""
     for region in sorted(extra_regions):
@@ -260,15 +250,15 @@ def _build_and_push_task_image(task_tag: str) -> None:
 
 def _build_cluster_images(config) -> dict[str, str]:
     built: dict[str, str] = {}
-    extra_regions = _collect_scale_group_regions(config)
+    extra_regions = collect_all_regions(config)
 
     for tag, typ in [(config.defaults.bootstrap.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
             _build_and_push_for_tag(tag, typ)
             built[typ] = tag
-            # Push AR images to all scale group regions
+            # Push AR images to all known cluster regions.
             gcp_parsed = parse_artifact_registry_tag(tag)
-            if gcp_parsed and typ == "worker":
+            if gcp_parsed:
                 region, project, image_name, version = gcp_parsed
                 params = _ImageBuildParams(
                     image_type=typ, region=region, project=project, image_name=image_name, version=version
@@ -279,6 +269,13 @@ def _build_cluster_images(config) -> dict[str, str]:
     if task_tag:
         _build_and_push_task_image(task_tag)
         built["task"] = task_tag
+        gcp_parsed = parse_artifact_registry_tag(task_tag)
+        if gcp_parsed:
+            region, project, image_name, version = gcp_parsed
+            params = _ImageBuildParams(
+                image_type="task", region=region, project=project, image_name=image_name, version=version
+            )
+            _push_image_to_extra_regions(params, extra_regions - {region})
 
     return built
 
