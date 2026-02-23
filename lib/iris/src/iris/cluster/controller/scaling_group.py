@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 
-from iris.cluster.platform.base import Platform, SliceHandle
+from iris.cluster.platform.base import Labels, Platform, SliceHandle
 from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
 from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
@@ -118,11 +118,12 @@ def prepare_slice_config(
     The template must already have accelerator_type, accelerator_variant, and
     num_vms set directly.
     """
+    labels = Labels(label_prefix)
     config = config_pb2.SliceConfig()
     config.CopyFrom(template)
     config.name_prefix = f"{label_prefix}-{parent_config.name}"
-    config.labels[f"{label_prefix}-managed"] = "true"
-    config.labels[f"{label_prefix}-scale-group"] = parent_config.name
+    config.labels[labels.iris_managed] = "true"
+    config.labels[labels.iris_scale_group] = parent_config.name
 
     if parent_config.HasField("resources"):
         config.gpu_count = parent_config.resources.gpu_count
@@ -207,6 +208,7 @@ class ScalingGroup:
         self._config = config
         self._platform = platform
         self._label_prefix = label_prefix
+        self._labels = Labels(label_prefix)
         self._slices: dict[str, SliceState] = {}
         self._pending_scale_ups: int = 0
         self._slices_lock = threading.Lock()
@@ -337,7 +339,7 @@ class ScalingGroup:
         Uses platform.list_slices() with the managed label to find our slices.
         """
         zones = _zones_from_config(self._config)
-        labels = {f"{self._label_prefix}-scale-group": self._config.name}
+        labels = {self._labels.iris_scale_group: self._config.name}
         slice_handles = self._platform.list_slices(zones, labels)
         with self._slices_lock:
             for handle in slice_handles:

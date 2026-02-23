@@ -42,6 +42,26 @@ from iris.time_utils import Deadline, Duration, Timestamp
 logger = logging.getLogger(__name__)
 
 # ============================================================================
+# Label Keys
+# ============================================================================
+
+
+class Labels:
+    """Label keys for Iris-managed cloud resources.
+
+    All keys follow the format ``iris-{prefix}-<suffix>`` so resources are
+    self-documenting and namespaced per cluster.
+    """
+
+    def __init__(self, prefix: str):
+        self.iris_managed = f"iris-{prefix}-managed"
+        self.iris_scale_group = f"iris-{prefix}-scale-group"
+        self.iris_controller = f"iris-{prefix}-controller"
+        self.iris_controller_address = f"iris-{prefix}-controller-address"
+        self.iris_slice_id = f"iris-{prefix}-slice-id"
+
+
+# ============================================================================
 # Exception Types
 # ============================================================================
 
@@ -429,9 +449,10 @@ def default_stop_all(
     that timed-out threads don't block interpreter shutdown.
     """
     prefix = label_prefix or config.platform.label_prefix or "iris"
+    labels = Labels(prefix)
 
     target_names: list[str] = ["controller"]
-    all_slices = platform.list_all_slices(labels={f"{prefix}-managed": "true"})
+    all_slices = platform.list_all_slices(labels={labels.iris_managed: "true"})
     for s in all_slices:
         logger.info("Found managed slice %s", s.slice_id)
         target_names.append(f"slice:{s.slice_id}")

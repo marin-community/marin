@@ -205,8 +205,8 @@ def test_start_controller_fresh(mock_wait_healthy, mock_bootstrap_script, config
     assert address == "http://10.0.0.5:10000"
     assert vm is new_vm
     assert len(new_vm.bootstrap_calls) == 1
-    assert new_vm.labels == {"test-controller": "true"}
-    assert "test-controller-address" in new_vm.metadata
+    assert new_vm.labels == {"iris-test-controller": "true"}
+    assert "iris-test-controller-address" in new_vm.metadata
     assert not new_vm.terminated
 
 

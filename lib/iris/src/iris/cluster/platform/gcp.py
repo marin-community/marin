@@ -46,6 +46,7 @@ from iris.cluster.platform._worker_base import RemoteExecWorkerBase
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
+    Labels,
     PlatformError,
     QuotaExhaustedError,
     SliceStatus,
@@ -304,6 +305,7 @@ class GcpSliceHandle:
         self._labels = _labels
         self._created_at = _created_at
         self._label_prefix = _label_prefix
+        self._iris_labels = Labels(_label_prefix)
         self._accelerator_variant = _accelerator_variant
         self._ssh_config = _ssh_config
         self._state = _state
@@ -320,7 +322,7 @@ class GcpSliceHandle:
 
     @property
     def scale_group(self) -> str:
-        return self._labels.get(f"{self._label_prefix}-scale-group", "")
+        return self._labels.get(self._iris_labels.iris_scale_group, "")
 
     @property
     def labels(self) -> dict[str, str]:
@@ -470,6 +472,7 @@ class GcpPlatform:
     ):
         self._project_id = gcp_config.project_id
         self._label_prefix = label_prefix
+        self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._zones = list(gcp_config.zones)
 
@@ -782,14 +785,15 @@ class GcpPlatform:
         """Discover controller by querying GCP for labeled controller VM."""
         gcp = controller_config.gcp
         port = gcp.port or 10000
-        label_key = f"{self._label_prefix}-controller"
 
         vms = self.list_vms(
             zones=[gcp.zone],
-            labels={label_key: "true"},
+            labels={self._iris_labels.iris_controller: "true"},
         )
         if not vms:
-            raise RuntimeError(f"No controller VM found (label={label_key}=true, project={self._project_id})")
+            raise RuntimeError(
+                f"No controller VM found (label={self._iris_labels.iris_controller}=true, project={self._project_id})"
+            )
         return f"{vms[0].internal_address}:{port}"
 
     def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
@@ -811,7 +815,8 @@ class GcpPlatform:
 
     def reload(self, config: config_pb2.IrisClusterConfig) -> str:
         label_prefix = config.platform.label_prefix or "iris"
-        all_slices = self.list_all_slices(labels={f"{label_prefix}-managed": "true"})
+        labels = Labels(label_prefix)
+        all_slices = self.list_all_slices(labels={labels.iris_managed: "true"})
         for s in all_slices:
             logger.info("Terminating slice %s for reload", s.slice_id)
             s.terminate()
@@ -925,7 +930,8 @@ def _gcp_tunnel(
     if local_port is None:
         local_port = _find_free_port()
 
-    label_filter = f"labels.{label_prefix}-controller=true AND status=RUNNING"
+    labels = Labels(label_prefix)
+    label_filter = f"labels.{labels.iris_controller}=true AND status=RUNNING"
     cmd = [
         "gcloud",
         "compute",
@@ -938,7 +944,7 @@ def _gcp_tunnel(
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0 or not result.stdout.strip():
-        raise RuntimeError(f"No controller VM found (label={label_prefix}-controller=true, project={project})")
+        raise RuntimeError(f"No controller VM found (label={labels.iris_controller}=true, project={project})")
 
     parts = result.stdout.strip().split()
     vm_name = parts[0]

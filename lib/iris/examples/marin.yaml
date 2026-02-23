@@ -2,7 +2,7 @@
 # Usage: uv run iris cluster --config=examples/marin.yaml start
 
 platform:
-  label_prefix: iris
+  label_prefix: marin
   gcp:
     project_id: hai-gcp-models
 
