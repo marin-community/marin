@@ -322,6 +322,8 @@ class ResourceConfig:
     regions: Sequence[str] | None = None
     replicas: int = 1
     max_concurrency: int = 1
+    # TODO(rav): is this the right place for max_restarts?
+    max_restarts: int | None = None
 
     def chip_count(self) -> int:
         """Total accelerator chips across all replicas."""

@@ -409,6 +409,12 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
         # node is preempted. Without this, the actor dies permanently and the
         # pool degrades over time (see marin#2943).
         options["max_restarts"] = -1
+    # Explicit max_restarts takes precedence over the preemptible default.
+    # Useful for actors like coordinators that are preemptible (not pinned to
+    # head node) but should NOT auto-restart because they require remote
+    # initialization beyond __init__.
+    if resources.max_restarts is not None:
+        options["max_restarts"] = resources.max_restarts
     if resources.max_concurrency > 1:
         options["max_concurrency"] = resources.max_concurrency
     return options
