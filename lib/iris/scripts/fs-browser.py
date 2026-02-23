@@ -12,12 +12,12 @@ Usage:
     export R2_SECRET_ACCESS_KEY=<your-key-secret>
 
     # Interactive TUI (default)
-    uv run lib/iris/scripts/s3-browser.py [prefix]
+    uv run lib/iris/scripts/fs-browser.py [prefix]
 
     # CLI commands
-    uv run lib/iris/scripts/s3-browser.py ls [path]
-    uv run lib/iris/scripts/s3-browser.py cat <path>
-    uv run lib/iris/scripts/s3-browser.py cp [-R] <src> <dst>
+    uv run lib/iris/scripts/fs-browser.py ls [path]
+    uv run lib/iris/scripts/fs-browser.py cat <path>
+    uv run lib/iris/scripts/fs-browser.py cp [-R] <src> <dst>
 """
 
 import curses

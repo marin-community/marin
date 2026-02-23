@@ -4,14 +4,10 @@
 """Kubernetes-native runtime for task execution.
 
 This runtime maps the ContainerRuntime protocol to Kubernetes Pods. Each Iris
-task attempt is represented as one Pod.
-
-Unlike the containerd runtime (which uses crictl to manage CRI containers on
-the host), this runtime creates full K8s Pods. This means GPU and RDMA
-resources must be explicitly requested in the Pod spec (the kubelet device
-plugin allocates them). When using this runtime on CoreWeave, the **worker Pod
-must not request GPU/RDMA resources** — those are claimed by the task Pods
-instead.
+task attempt is represented as one Pod. GPU and RDMA resources must be
+explicitly requested in the Pod spec (the kubelet device plugin allocates them).
+When using this runtime on CoreWeave, the **worker Pod must not request
+GPU/RDMA resources** — those are claimed by the task Pods instead.
 """
 
 from __future__ import annotations

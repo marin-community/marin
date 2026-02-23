@@ -66,7 +66,7 @@ def _make_bootstrap_config() -> config_pb2.BootstrapConfig:
         docker_image="ghcr.io/marin-community/iris-worker:latest",
         worker_port=10001,
         cache_dir="/var/cache/iris",
-        runtime="containerd",
+        runtime="kubernetes",
     )
 
 
@@ -1174,11 +1174,16 @@ def test_controller_deployment_includes_endpoint_url(fake_kubectl: FakeKubectl):
     platform.shutdown()
 
 
-def test_worker_pod_has_gpu_resource_limits(fake_kubectl: FakeKubectl):
-    """Worker Pods request nvidia.com/gpu resource limits based on SliceConfig.gpu_count."""
+def test_worker_pod_has_gpu_resource_limits_with_docker_runtime(fake_kubectl: FakeKubectl):
+    """Worker Pods request nvidia.com/gpu resource limits when runtime is docker."""
     platform = _make_platform()
     config = _make_slice_config(gpu_count=8)
-    bootstrap = _make_bootstrap_config()
+    bootstrap = config_pb2.BootstrapConfig(
+        docker_image="ghcr.io/marin-community/iris-worker:latest",
+        worker_port=10001,
+        cache_dir="/var/cache/iris",
+        runtime="docker",
+    )
 
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
@@ -1187,6 +1192,21 @@ def test_worker_pod_has_gpu_resource_limits(fake_kubectl: FakeKubectl):
     container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
     limits = container["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == "8"
+    platform.shutdown()
+
+
+def test_worker_pod_no_gpu_limits_with_kubernetes_runtime(fake_kubectl: FakeKubectl):
+    """With kubernetes runtime, worker Pods must not request GPU resources (task Pods claim them)."""
+    platform = _make_platform()
+    config = _make_slice_config(gpu_count=8)
+    bootstrap = _make_bootstrap_config()  # runtime="kubernetes"
+
+    handle = platform.create_slice(config, bootstrap)
+    _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
+
+    pod_name = f"iris-worker-{handle.slice_id}"
+    container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
+    assert "nvidia.com/gpu" not in container.get("resources", {}).get("limits", {})
     platform.shutdown()
 
 
@@ -1201,8 +1221,7 @@ def test_worker_pod_no_gpu_limits_when_zero(fake_kubectl: FakeKubectl):
 
     pod_name = f"iris-worker-{handle.slice_id}"
     container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
-    # No resources key at all when no GPU and no infiniband
-    assert "resources" not in container or "nvidia.com/gpu" not in container.get("resources", {}).get("limits", {})
+    assert "nvidia.com/gpu" not in container.get("resources", {}).get("limits", {})
     platform.shutdown()
 
 
@@ -1526,7 +1545,7 @@ def _make_cluster_config_with_workers(
             docker_image=worker_image,
             worker_port=10001,
             cache_dir="/var/cache/iris",
-            runtime="containerd",
+            runtime="kubernetes",
         )
     )
     sg = config.scale_groups[scale_group_name]

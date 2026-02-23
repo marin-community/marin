@@ -632,7 +632,6 @@ class CoreweavePlatform:
             {"name": "IRIS_POD_NAMESPACE", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}},
             {"name": "IRIS_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
             {"name": "IRIS_POD_UID", "valueFrom": {"fieldRef": {"fieldPath": "metadata.uid"}}},
-            {"name": "CONTAINER_RUNTIME_ENDPOINT", "value": "unix:///run/containerd/containerd.sock"},
         ]
         if bootstrap_config.env_vars:
             for k, v in bootstrap_config.env_vars.items():
@@ -650,14 +649,11 @@ class CoreweavePlatform:
 
         runtime = bootstrap_config.runtime
         if not runtime:
-            raise PlatformError("bootstrap_config.runtime must be set (docker/containerd/kubernetes)")
+            raise PlatformError("bootstrap_config.runtime must be set (docker/kubernetes)")
 
         worker_image = bootstrap_config.docker_image.strip()
         if not worker_image:
             raise PlatformError("bootstrap_config.docker_image must be non-empty")
-
-        if runtime == "containerd" and "IRIS_CGROUP_PARENT" not in (bootstrap_config.env_vars or {}):
-            env_vars.append({"name": "IRIS_CGROUP_PARENT", "value": "kubepods.slice"})
 
         # When using the kubernetes runtime, task containers are separate Pods
         # that claim GPU/RDMA resources directly from the device plugin. Pass
@@ -688,7 +684,6 @@ class CoreweavePlatform:
             "volumeMounts": [
                 {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
                 {"name": "cache", "mountPath": cache_dir},
-                {"name": "containerd-socket", "mountPath": "/run/containerd/containerd.sock"},
             ],
             "readinessProbe": {
                 "httpGet": {"path": "/health", "port": worker_port},
@@ -745,10 +740,6 @@ class CoreweavePlatform:
                 "volumes": [
                     {"name": "config", "configMap": {"name": "iris-cluster-config"}},
                     {"name": "cache", "hostPath": {"path": cache_dir, "type": "DirectoryOrCreate"}},
-                    {
-                        "name": "containerd-socket",
-                        "hostPath": {"path": "/run/containerd/containerd.sock", "type": "Socket"},
-                    },
                 ],
                 "restartPolicy": "Always",
             },

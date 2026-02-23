@@ -221,7 +221,7 @@ class ContainerRuntime(Protocol):
     ) -> None:
         """Materialize task bundle/workdir files for this runtime.
 
-        Runtimes that execute from worker-local paths (docker/containerd/process)
+        Runtimes that execute from worker-local paths (docker/process)
         stage the bundle into ``workdir`` directly. Kubernetes runtime may no-op
         and materialize inside the task Pod instead.
         """

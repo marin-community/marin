@@ -41,10 +41,6 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
     apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin && \
     rm -rf /var/lib/apt/lists/*
 
-# Install crictl for containerd-based platforms (CoreWeave bare metal nodes run containerd, not Docker)
-RUN curl -fsSL https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.32.0/crictl-v1.32.0-linux-amd64.tar.gz \
-    | tar -xz -C /usr/local/bin
-
 # Install kubectl (required for KubernetesRuntime task Pod management)
 RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
         -o /usr/local/bin/kubectl \

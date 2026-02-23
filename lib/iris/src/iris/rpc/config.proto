@@ -203,7 +203,7 @@ message BootstrapConfig {
   string docker_image = 4;        // Worker image to run
   string cache_dir = 5;           // Default: /var/cache/iris
   map<string, string> env_vars = 6;
-  string runtime = 7;             // "docker" or "containerd"
+  string runtime = 7;             // "docker" or "kubernetes"
   string config_json = 8;          // Serialized cluster config JSON for worker
 }
 

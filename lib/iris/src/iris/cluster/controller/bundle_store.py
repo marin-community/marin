@@ -6,10 +6,9 @@
 import hashlib
 import logging
 
+import fsspec.core
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
-import fsspec.core
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +45,8 @@ class BundleStore:
         bundle_path = f"{self._prefix}/{bundle_hash}/bundle.zip"
         try:
             fs, path = fsspec.core.url_to_fs(bundle_path)
-
-            # S3 has no real directories; only create parents for local filesystems.
-            if not bundle_path.startswith("s3://"):
-                parent_dir = path.rsplit("/", 1)[0]
-                fs.makedirs(parent_dir, exist_ok=True)
-
-            # Write directly to the final path. S3 PUTs are atomic so the old
-            # write-tmp-then-rename pattern is unnecessary (and s3fs.rename is
-            # unreliable on S3-compatible stores like CoreWeave Object Storage).
+            parent_dir = path.rsplit("/", 1)[0]
+            fs.makedirs(parent_dir, exist_ok=True)
             with fs.open(path, "wb") as f:
                 f.write(blob)
             logger.info("Uploaded bundle for job %s to %s (%d bytes)", job_id, bundle_path, len(blob))

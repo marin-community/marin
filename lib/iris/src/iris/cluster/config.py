@@ -253,8 +253,8 @@ def _validate_bootstrap_defaults(config: config_pb2.IrisClusterConfig) -> None:
         )
 
     runtime = config.defaults.bootstrap.runtime.strip()
-    if runtime and runtime not in {"docker", "containerd", "kubernetes"}:
-        raise ValueError(f"defaults.bootstrap.runtime must be one of docker/containerd/kubernetes, got {runtime!r}.")
+    if runtime and runtime not in {"docker", "kubernetes"}:
+        raise ValueError(f"defaults.bootstrap.runtime must be one of docker/kubernetes, got {runtime!r}.")
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:

@@ -136,24 +136,16 @@ to zero when idle). The controller runs as a Deployment with a `ClusterIP` Servi
 (`iris-controller-svc`). Workers discover the controller via in-cluster DNS
 (`iris-controller-svc.iris.svc.cluster.local:10000`).
 
-**Runtime** (two options):
-- `containerd` (`cluster/runtime/containerd.py`): Worker Pods mount the host containerd socket and
-  use `crictl` (CRI CLI) to run task containers. Each task gets a CRI pod sandbox for isolation.
-  The worker Pod requests GPU/RDMA resources and crictl containers access them at the host level.
-- `kubernetes` (`cluster/runtime/kubernetes.py`): Each task is a separate K8s Pod that can be
-  scheduled independently (not co-located with the worker). Task Pods claim GPU/RDMA resources
-  directly from the device plugin. The worker Pod must **not** request GPU/RDMA resources (the
-  platform skips them when `runtime: kubernetes`). Task Pods get `hostNetwork`, tolerations,
-  service account, S3 secret refs, and an emptyDir-backed UV cache automatically. Simpler than
-  containerd (no socket mount, no crictl) but requires the device plugin to manage resource
-  allocation.
+**Runtime**: `kubernetes` (`cluster/runtime/kubernetes.py`). Each task is a separate K8s Pod that
+can be scheduled independently (not co-located with the worker). Task Pods claim GPU/RDMA resources
+directly from the device plugin. The worker Pod must **not** request GPU/RDMA resources (the
+platform skips them when `runtime: kubernetes`). Task Pods get `hostNetwork`, tolerations,
+service account, S3 secret refs, and an emptyDir-backed UV cache automatically.
 Docker is not available on CoreWeave bare metal.
 
 **Networking**: All traffic stays inside the CoreWeave VPC. Worker Pods use `hostNetwork: True`
-(bypassing the Kubernetes overlay for RDMA/GPU performance). For the containerd runtime, CRI
-containers inherit the host network namespace (`namespace_options.network = NODE`). For the
-kubernetes runtime, task Pods set `hostNetwork: True` + `dnsPolicy: ClusterFirstWithHostNet`
-in their Pod spec.
+(bypassing the Kubernetes overlay for RDMA/GPU performance). Task Pods set
+`hostNetwork: True` + `dnsPolicy: ClusterFirstWithHostNet` in their Pod spec.
 
 ### Light Worker Mode (CoreWeave + runtime=kubernetes)
 

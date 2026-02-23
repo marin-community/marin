@@ -13,7 +13,6 @@ import click
 
 from iris.cluster.config import load_config
 from iris.cluster.platform.factory import create_platform
-from iris.cluster.runtime.containerd import ContainerdRuntime
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.worker.worker import Worker, WorkerConfig
@@ -64,13 +63,9 @@ def cli():
 @click.option("--controller-address", default=None, help="Controller address host:port (overrides --config discovery)")
 @click.option(
     "--runtime",
-    type=click.Choice(["docker", "containerd", "kubernetes"]),
+    type=click.Choice(["docker", "kubernetes"]),
     default="docker",
-    help=(
-        "Container runtime backend "
-        "(docker for GCP/Manual, containerd for CoreWeave bare metal, "
-        "kubernetes for Pod-per-task execution pinned to worker node)"
-    ),
+    help=("Container runtime backend " "(docker for GCP/Manual, " "kubernetes for Pod-per-task execution on CoreWeave)"),
 )
 def serve(
     host: str,
@@ -107,9 +102,7 @@ def serve(
 
     port_start, port_end = map(int, port_range.split("-"))
 
-    if runtime == "containerd":
-        container_runtime = ContainerdRuntime()
-    elif runtime == "kubernetes":
+    if runtime == "kubernetes":
         container_runtime = KubernetesRuntime()
     else:
         container_runtime = DockerRuntime()
