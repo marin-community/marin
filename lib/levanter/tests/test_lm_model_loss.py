@@ -126,3 +126,22 @@ def test_compute_next_token_loss_includes_aux_loss():
     with_aux = model_with_aux.compute_next_token_loss(example)
 
     assert pytest.approx(float(base) + 0.25, rel=1e-6, abs=1e-6) == float(with_aux)
+
+
+def test_compute_next_token_loss_terms_returns_aux_separately():
+    Vocab = Axis("vocab", 32)
+    cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
+    model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
+
+    Batch = Axis("batch", 4)
+    Pos = cfg.max_Pos.resize(8)
+    example = _toy_example(Batch, Pos, Vocab, key=jax.random.PRNGKey(1))
+
+    base_loss, aux_loss = model.compute_next_token_loss_terms(example)
+    assert pytest.approx(float(base_loss), rel=1e-6, abs=1e-6) == float(model.compute_next_token_loss(example))
+    model_with_aux = eqx.tree_at(lambda m: m.aux_loss, model, jnp.array(0.25, dtype=jnp.float32))
+    base_loss2, aux_loss2 = model_with_aux.compute_next_token_loss_terms(example)
+    assert pytest.approx(float(aux_loss2), rel=1e-6, abs=1e-6) == 0.25
+    assert pytest.approx(float(base_loss2) + 0.25, rel=1e-6, abs=1e-6) == float(
+        model_with_aux.compute_next_token_loss(example)
+    )
