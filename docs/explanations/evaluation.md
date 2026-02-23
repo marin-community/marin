@@ -15,13 +15,13 @@ We evaluate a few different ways, depending on the kind of task.
 
 For our multiple choice tasks, we use a fork of `lm-evaluation-harness` (https://github.com/stanford-crfm/lm-evaluation-harness).
 
-- Training a model using [`default_train`][experiments.defaults.default_train] automatically runs in-the-loop evaluations every 10,000 steps and logs it to WandB.
+- Training a model using [`default_train`][marin.training.default_train] automatically runs in-the-loop evaluations every 10,000 steps and logs it to WandB.
 - If you want to evaluate a model step after it has been trained, you can use [`default_evals`][experiments.evals.evals.default_eval] from [`evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py) as a a step in your experiment script.
 
 #### MCQA Tasks
 The list of tasks we evaluate models on is configured in [`task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py).
 - By default, we run `CORE_TASKS` for both in-the-loop and external evaluation. This is a subset of the [DCLM CORE tasks](https://arxiv.org/html/2406.11794v3#A7). Note that this does not include MMLU by default.
-- If you want to include MMLU in your evaluation run, you can use `CORE_TASKS_PLUS_MMLU` within [`default_train`](https://github.com/marin-community/marin/blob/main/experiments/defaults.py) or [`default_eval`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py).
+- If you want to include MMLU in your evaluation run, you can use `CORE_TASKS_PLUS_MMLU` within [`default_train`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/training/defaults.py) or [`default_eval`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py).
 - To define a new set of evals, you can also just create a new set of tasks within [`task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py) and pass in that list instead.
 
 !!! note

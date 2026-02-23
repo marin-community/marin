@@ -29,10 +29,8 @@ from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 from marin.utils import asdict_excluding
 
 import wandb
-from experiments.defaults import _get_tokenizer_for_train, default_train
-from experiments.llama import llama3_tokenizer_vocab_size
-from experiments.simple_train_config import SimpleTrainConfig
-from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
+from marin.training import default_train, get_tokenizer_for_train, SimpleTrainConfig
+from marin.processing.tokenize.known_tokenizers import LLAMA3_VOCAB_SIZE
 
 logger = logging.getLogger("ray")
 
@@ -65,13 +63,8 @@ class SpeedrunConfig:
 
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
-
-    # by default, this is fineweb_edu_subcache_10B
-    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_subcache_10B
-
-    @property
-    def vocab_size(self) -> int:
-        return llama3_tokenizer_vocab_size
+    tokenized_dataset: InputName | LMMixtureDatasetConfig | None = None
+    vocab_size: int = LLAMA3_VOCAB_SIZE
 
     def as_json_dict(self) -> dict:
         """Convert SpeedrunConfig to a JSON-serializable dictionary."""
@@ -368,17 +361,26 @@ def default_speedrun(
 
     run_tags = ["speedrun"] + (tags or [])
 
+    tokenized_dataset = config.tokenized_dataset
+    if tokenized_dataset is None:
+        from marin.processing.tokenize.download_pretokenized import download_pretokenized_cache
+        from marin.processing.tokenize.known_tokenizers import MARIN_TOKENIZER
+
+        tokenized_dataset = download_pretokenized_cache(
+            "fineweb-edu-10B", "marin-community/fineweb-edu-pretokenized-10B", MARIN_TOKENIZER
+        )
+
     train_config = dataclasses.replace(config.train_config, data_seed=42)
-    if isinstance(config.tokenized_dataset, InputName | ExecutorStep):
+    if isinstance(tokenized_dataset, InputName | ExecutorStep):
         pretraining_data = lm_data_config(
-            training_set=config.tokenized_dataset,
-            validation_sets=speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
+            training_set=tokenized_dataset,
+            validation_sets=speedrun_paloma_tokenized(tokenizer=(get_tokenizer_for_train(tokenized_dataset))),
             # TODO: when should we update this
         )
     else:
         pretraining_data = add_validation_sets_to_mixture(
-            config.tokenized_dataset,
-            speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
+            tokenized_dataset,
+            speedrun_paloma_tokenized(tokenizer=(get_tokenizer_for_train(tokenized_dataset))),
         )
 
     train_step = default_train(

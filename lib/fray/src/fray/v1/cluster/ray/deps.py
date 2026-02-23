@@ -79,14 +79,20 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
     cmd = [
         "uv",
         "export",
-        "--package",
-        "marin",
         "--no-default-groups",
         "--no-annotate",
         "--no-hashes",
         "--prune=ray",
-        *extra_flags(extra),
     ]
+
+    # In monorepo, explicitly export the marin package with accelerator extras.
+    # In external projects, export the current project without extras - the accelerator
+    # variant is already baked into the marin dependency (e.g., marin[cpu]).
+    if is_monorepo():
+        cmd.insert(2, "marin")
+        cmd.insert(2, "--package")
+        cmd.extend(extra_flags(extra))
+
     result = subprocess.check_output(cmd, text=True)
 
     # Parse the requirements.txt format output
@@ -94,23 +100,37 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
     package_specs = []
     for line in result.splitlines():
         line = line.strip()
-        # Skip comments, empty lines, and editable installs
-        if not line or line.startswith("#") or line.startswith("./"):
+        # Skip comments, empty lines, local paths, and editable installs
+        # Local paths (./foo, ../foo, -e ./foo) don't work on remote clusters
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("-e"):
+            # Editable installs won't work remotely - track as py_module for local use
+            py_modules.append(line[3:].strip())
+            continue
+        if line.startswith("."):
+            # Local path dependencies (./foo, ../foo) - skip for remote
             continue
         ignored = [line.startswith(f"{dep}==") or line.startswith(f"{dep}[") for dep in IGNORE_DEPS]
         if any(ignored):
             continue
-        if line.startswith("-e"):
-            # convert to a py_module. this isn't used for now, instead see `build_python_path`
-            py_modules.append(line[3:].strip())
-        else:
-            package_specs.append(line)
+        package_specs.append(line)
 
     return PackageSpec(package_specs=package_specs, py_modules=py_modules)
 
 
+def is_monorepo() -> bool:
+    """Detect if running from within the marin monorepo.
+
+    The monorepo has a characteristic structure with lib/marin/src and experiments
+    directories at the root. External projects using marin as a dependency will
+    not have this structure.
+    """
+    return os.path.isdir("lib/marin/src") and os.path.isdir("experiments")
+
+
 def build_python_path(submodules_dir: str = "submodules") -> list[str]:
-    """Build the PYTHONPATH for the given submodules.
+    """Build the PYTHONPATH for Ray jobs.
 
     Ray's installation process is... non-optimal. `py_modules` just injects
     the exact "py_module" itself into the PYTHONPATH, but not e.g. the src dir.
@@ -119,7 +139,14 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
     something like -e {module_path} but noooo, that would be too easy. For whatever
     reason, at install time, the py_modules are not yet in a usable state. So instead
     we have to just manually guess what our PYTHONPATH should be.
+
+    For monorepo: includes experiments/, lib/*/src paths and any submodules
+    For external projects: includes only the working directory (dependencies
+    come from the installed marin package)
     """
+    if not is_monorepo():
+        return ["."]
+
     # Workspace member src directories + experiments directory
     paths = [
         "experiments",

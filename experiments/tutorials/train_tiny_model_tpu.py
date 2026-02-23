@@ -9,10 +9,11 @@ For GPU training, see train_tiny_model_gpu.py
 """
 
 from fray.v2 import ResourceConfig
+from marin.training import default_train
 from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main, versioned
 
-from experiments.defaults import default_tokenize, default_train
+from experiments.defaults import default_tokenize
 from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig

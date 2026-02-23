@@ -19,7 +19,7 @@ In general, you should reach for the default steps before writing your own.
 
 ## Training
 
-::: experiments.defaults.default_train
+::: marin.training.default_train
 
 ::: experiments.defaults.default_sft
 

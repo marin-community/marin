@@ -7,8 +7,8 @@
 import dataclasses
 
 from levanter.optim import MuonHConfig
+from marin.training import SimpleTrainConfig, default_train
 
-from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.qwen3 import qwen3_1_7b, qwen3_8b
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main

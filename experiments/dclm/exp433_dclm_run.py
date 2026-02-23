@@ -1,7 +1,8 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
+from experiments.defaults import default_tokenize
+from marin.training import SimpleTrainConfig, default_train
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import LlamaConfig

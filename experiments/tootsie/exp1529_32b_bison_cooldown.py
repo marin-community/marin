@@ -13,10 +13,10 @@ Cooldown run for 32B Tootsie Model using the same data mixture as in Starling fo
 import dataclasses
 
 from levanter.optim import AdamConfig
+from marin.training import default_train
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from levanter.schedule import ScheduleStep
 
-from experiments.defaults import default_train
 from experiments.tootsie.exp1395_qwen3_32b import (
     marin_32b_qwen,
     qwen3_32b_remat,

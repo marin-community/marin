@@ -9,26 +9,14 @@ import dataclasses
 import logging
 import os
 from collections.abc import Sequence
-from datetime import timedelta
 from functools import lru_cache
 from typing import Any
 
-import jmp
 from fray.v2 import ResourceConfig
-from haliax.partitioning import ResourceAxis
-from haliax.quantization import QuantizationConfig
-from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, TextLmDatasetFormat
-from levanter.eval_harness import LmEvalHarnessConfig
-from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
-from levanter.optim import AdamConfig
-from levanter.schedule import BatchSchedule
-from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
-from levanter.utils.mesh import MeshConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
@@ -40,16 +28,11 @@ from marin.execution.executor import (
     unwrap_versioned_value,
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
-from marin.training.training import (
-    TrainLmOnPodConfig,
-    run_levanter_train_lm,
-)
+from marin.training import default_train as library_default_train
 
 from experiments.evals.task_configs import (
     CORE_TASKS,
-    convert_to_levanter_task_config,
 )
-from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
@@ -234,206 +217,14 @@ def simulated_epoching_train(
         + "Simulated Target Tokens {target_budget}"
     )
 
-    return default_train(
-        name, simulated_pretraining_data, model_config, train_config, tags, use_default_validation, eval_harness_tasks
-    )
-
-
-def default_train(
-    name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
-    model_config: LmConfig,
-    train_config: SimpleTrainConfig,
-    tags: Sequence[str] = (),
-    use_default_validation: bool = True,
-    eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
-    wandb_name: str | None = None,
-    wandb_group: str | None = None,
-    override_output_path: str | None = None,
-) -> ExecutorStep:
-    """
-    Train a language model using the default configuration.
-
-    Args:
-        name:  The name of the training run. Will form the basis of the output path for the executor step.
-        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
-        model_config: Levanter LmConfig for the model to train.
-        train_config: SimpleTrainConfig for the training run.
-        tags: Any additional tags to add to the Wandb tracker.
-        use_default_validation: Whether to use the default validation sets (currently Paloma).
-        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
-        wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
-        wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
-    """
-
-    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
-
-    vocab_size = _get_vocab_size(pretraining_data)
-
-    steps_per_export = train_config.steps_per_export
-
-    if wandb_group is None:
-        wandb_group = os.environ.get("WANDB_GROUP")
-
-    # Max length of 64 characters for WANDB run is 64 characters
-    # we don't want to use the first 64 because the UID bit goes at the end. instead, grab the trailing -XXX
-    # and add whatever we can fit in the remaining space.
-    if len(name) > 64:
-        old_name = name
-        if "-" not in name:
-            name = name[:64]
-        else:
-            prefix, suffix = name.rsplit("-", 1)
-            if len(suffix) >= 64:
-                suffix = suffix[:64]
-                name = suffix
-            else:
-                name = prefix[: 63 - len(suffix)] + "-" + suffix
-        logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
-
-    if eval_harness_tasks:
-        harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
-    else:
-        harness_config = None
-
-    if train_config.steps_per_hf_export is None:
-        steps_per_export_hf = steps_per_export
-    elif train_config.steps_per_hf_export == -1:
-        steps_per_export_hf = None
-    else:
-        steps_per_export_hf = train_config.steps_per_hf_export
-
-    model_averaging = None
-    if train_config.ema_beta is not None:
-        from levanter.optim.model_averaging import EmaModelAveragingConfig
-
-        model_averaging = EmaModelAveragingConfig(beta=train_config.ema_beta)
-
-    if train_config.per_device_eval_parallelism is None:
-        per_device_eval_parallelism = -1
-    else:
-        per_device_eval_parallelism = train_config.per_device_eval_parallelism
-
-    schedule = BatchSchedule(unwrap_versioned_value(train_config.train_batch_size))
-    total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
-
-    checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
-    hf_checkpoint_path_to_load_from = train_config.initialize_from_hf
-
-    if hf_checkpoint_path_to_load_from is not None and checkpoint_path_to_load_from is not None:
-        raise ValueError("Cannot specify both initialize_from_checkpoint_path and initialize_from_hf")
-
-    # Create the inner config
-    actual_model_config = unwrap_versioned_value(model_config)
-    train_length = train_config.train_seq_len or actual_model_config.max_seq_len
-    if train_length > actual_model_config.max_seq_len:
-        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
-
-    inner_config = TrainLmConfig(
-        data=pretraining_data,
-        trainer=TrainerConfig(
-            tracker=WandbConfig(
-                project="marin",
-                name=wandb_name,
-                tags=[*tags],
-                group=wandb_group,
-                replicate_path=this_output_path(),
-            ),
-            mp=jmp.get_policy("p=f32,c=bfloat16"),
-            train_batch_size=train_config.train_batch_size,
-            per_device_parallelism=train_config.per_device_parallelism,
-            num_train_steps=train_config.num_train_steps,
-            steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
-            checkpointer=CheckpointerConfig(
-                save_interval=timedelta(minutes=10),
-                keep=[dict(every=steps_per_export)],
-            ),
-            model_averaging=model_averaging,
-            mesh=MeshConfig(
-                # Special axes for MoEs
-                # TODO: this is actually bad and we should remove, but keeping for now
-                compute_mapping={
-                    "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
-                    "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
-                }
-            ),
-            allow_partial_checkpoint=train_config.allow_partial_checkpoint,
-            per_device_eval_parallelism=per_device_eval_parallelism,
-            max_eval_batches=train_config.max_eval_batches,
-            allow_nondivisible_batch_size=True,
-            quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
-            initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
-            watch=train_config.watch,
-            profiler=train_config.profiler,
-            profiler_start_step=train_config.profiler_start_step,
-            profiler_num_steps=train_config.profiler_num_steps,
-            use_explicit_mesh_axes=train_config.explicit_mesh_axes,
-        ),
-        initialize_from_checkpoint_path=(
-            checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
-        ),
-        initialize_from_hf=hf_checkpoint_path_to_load_from or False,
-        pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
-        z_loss_weight=train_config.z_loss_weight,
-        train_seq_len=train_length,
-        model=model_config,
-        optimizer=(
-            train_config.optimizer_config
-            if getattr(train_config, "optimizer_config", None) is not None
-            else AdamConfig(
-                learning_rate=train_config.learning_rate,
-                weight_decay=(
-                    train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
-                ),
-                beta1=(train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1),
-                beta2=(train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2),
-                epsilon=(train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon),
-                max_grad_norm=(
-                    train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
-                ),
-                warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
-                rewarmup=(train_config.rewarmup if train_config.rewarmup is not None else AdamConfig().rewarmup),
-                decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
-                lr_schedule=(
-                    train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule
-                ),
-                cycle_length=train_config.cycle_length,  # can be int, list[int], or None
-                min_lr_ratio=(
-                    train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
-                ),
-                skip_bad_steps=train_config.skip_bad_steps,
-            )
-        ),
-        hf_save_steps=steps_per_export_hf,
-        data_seed=train_config.data_seed,
-        eval_harness_steps=train_config.steps_per_task_eval or 10000,
-        eval_harness=harness_config,
-    )
-
-    # Create the pod config
-    pod_config = train_config.resources
-
-    # Create the full config
-    config = TrainLmOnPodConfig(
-        train_config=inner_config,
-        resources=pod_config,
-        output_path=this_output_path(),
-    )
-
-    model_config = unwrap_versioned_value(model_config)
-
-    return ExecutorStep(
-        name=os.path.join("checkpoints", name),
-        description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
-            f"{train_config.num_train_steps} (steps) * "
-            f"{train_config.train_batch_size} (batch_size) * "
-            f"{train_length} (train_seq_len) "
-            f"= {total_examples * train_length} tokens."
-        ),
-        fn=run_levanter_train_lm,
-        config=config,
-        override_output_path=override_output_path,
+    return library_default_train(
+        name=name,
+        tokenized=simulated_pretraining_data,
+        model_config=model_config,
+        train_config=train_config,
+        tags=tags,
+        use_default_validation=use_default_validation,
+        eval_harness_tasks=eval_harness_tasks,
     )
 
 
@@ -500,7 +291,7 @@ def default_sft(
         raise NotImplementedError("reinit_tokens is not supported by default_train")
 
     # Create and return the ExecutorStep
-    return default_train(
+    return library_default_train(
         name=name,
         tokenized=tokenized,
         model_config=model_config,

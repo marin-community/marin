@@ -3,14 +3,17 @@
 
 """Configuration management for cluster operations."""
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import jinja2
 import yaml
-
 from fray.v2.types import get_tpu_topology
+
+logger = logging.getLogger(__name__)
 
 # Cluster configuration constants and templates
 LATEST = "20260129"  # The latest docker tag used for the clusters
@@ -58,14 +61,66 @@ class RayClusterConfig:
         )
 
 
-def get_default_config_path(region: str) -> str:
+def get_default_config_path(region: str, infra_dir: str = "infra") -> str:
     """Get default config path for a region."""
-    return f"infra/marin-{region}.yaml"
+    return f"{infra_dir}/marin-{region}.yaml"
 
 
-def find_config_by_region(region: str) -> str:
-    """Find cluster config file by region."""
-    config_path = get_default_config_path(region)
+def _load_local_marin_config() -> dict[str, Any]:
+    """Load local `.marin.yaml` config if present."""
+    marin_yaml = Path(".marin.yaml")
+    if not marin_yaml.exists():
+        return {}
+
+    try:
+        with open(marin_yaml, "r") as f:
+            config = yaml.safe_load(f) or {}
+        if isinstance(config, dict):
+            return config
+    except Exception:
+        logger.warning("Failed to parse .marin.yaml", exc_info=True)
+    return {}
+
+
+def resolve_infra_dir(cli_infra_dir: str | None = None) -> str:
+    """Resolve infra directory from explicit input, config, or repo layout.
+
+    Resolution order:
+    1. explicit CLI input
+    2. `.marin.yaml` `infra` key
+    3. `infra/` in current working directory
+    4. nearest `infra/` discovered by walking up from this module path
+    """
+    if cli_infra_dir:
+        return cli_infra_dir
+
+    marin_config = _load_local_marin_config()
+    config_infra = marin_config.get("infra")
+    if isinstance(config_infra, str) and config_infra.strip():
+        return config_infra
+
+    cwd_infra = Path("infra")
+    if cwd_infra.exists():
+        return str(cwd_infra)
+
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "infra"
+        if candidate.exists():
+            return str(candidate)
+
+    return "infra"
+
+
+def find_config_by_region(region: str, infra_dir: str | None = None) -> str:
+    """Find cluster config file by region.
+
+    Args:
+        region: Cluster region name (e.g., "us-central2")
+        infra_dir: Optional infra directory override.
+    """
+    infra_dir = resolve_infra_dir(infra_dir)
+
+    config_path = get_default_config_path(region, infra_dir)
     if os.path.exists(config_path):
         return config_path
 
@@ -74,22 +129,22 @@ def find_config_by_region(region: str) -> str:
 
     # Try with common region variations
     variations = [
-        f"infra/marin-{region}.yaml",
-        f"infra/marin-{region}-a.yaml",
-        f"infra/marin-{region}-b.yaml",
-        f"infra/marin-{region}-vllm.yaml",
+        f"{infra_dir}/marin-{region}.yaml",
+        f"{infra_dir}/marin-{region}-a.yaml",
+        f"{infra_dir}/marin-{region}-b.yaml",
+        f"{infra_dir}/marin-{region}-vllm.yaml",
     ]
 
     for path in variations:
         if os.path.exists(path):
             return path
 
-    raise FileNotFoundError(f"No cluster config found for region {region}")
+    raise FileNotFoundError(f"No cluster config found for region {region} in {infra_dir}")
 
 
 def list_available_configs() -> list[str]:
     """List all available cluster configurations."""
-    infra_dir = Path("infra")
+    infra_dir = Path(resolve_infra_dir())
     if not infra_dir.exists():
         return []
 

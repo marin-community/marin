@@ -12,12 +12,12 @@ import dataclasses
 
 import haliax
 from levanter.callbacks.watch import WatchConfig
+from marin.training import default_train
 from levanter.optim import AdamConfig
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from levanter.schedule import ScheduleStep
 
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
-from experiments.defaults import default_train
 from experiments.llama import llama_32b
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig

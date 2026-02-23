@@ -26,7 +26,7 @@ if _default_token_path.exists() and "RAY_AUTH_TOKEN_PATH" not in os.environ:
 
 from ray.job_submission import JobSubmissionClient
 
-from marin.cluster.config import find_config_by_region
+from marin.cluster.config import find_config_by_region, resolve_infra_dir
 from fray.v1.cluster.ray import DashboardConfig, ray_dashboard
 from fray.v1.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
 
@@ -260,6 +260,12 @@ def main():
         help="Cluster name or config file path to submit job to",
     )
     parser.add_argument(
+        "--infra-dir",
+        type=str,
+        default=None,
+        help="Path to infra directory containing cluster YAML configs",
+    )
+    parser.add_argument(
         "--submission-id",
         type=str,
         default=None,
@@ -336,7 +342,8 @@ def main():
         if args.cluster.endswith(".yaml") or os.path.exists(args.cluster):
             cluster_config = args.cluster
         else:
-            cluster_config = find_config_by_region(args.cluster)
+            infra_dir = resolve_infra_dir(args.infra_dir)
+            cluster_config = find_config_by_region(args.cluster, infra_dir=infra_dir)
 
     _maybe_enable_ray_token_auth(require_token=cluster_config is None)
 

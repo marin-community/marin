@@ -16,7 +16,8 @@ Schedule details
 """
 import dataclasses
 
-from experiments.defaults import default_sft, default_train
+from experiments.defaults import default_sft
+from marin.training import default_train
 from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
 from experiments.llama import llama3_tokenizer, llama_600m
 from experiments.midtraining_datasets import finemath_3_plus_tokenized, megamath_tokenized
