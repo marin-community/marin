@@ -1935,3 +1935,88 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 
 - Assessment: **failed attempt / low impact**. Macro G implementation attempts were not robust (compile + correctness regressions), and the completed profile on reverted state showed no dominant-hotspot movement with slight end-to-end regression.
 - Next bold hypothesis: escalate to **Macro Move H** (shared-RHS matmul batching for `QK/KKT` and `inter/v_prime`) with explicit BF16-input/FP32-accum `dot_general` policy and train-path-only focus; if that still leaves `shard_map` unchanged, jump to **Macro Move E** V-tiling.
+
+### Iteration 37 - Macro Move H / shared-RHS matmul batching (reverted, low-impact)
+
+- Date: 2026-02-23T12:54:59Z
+- Commit: none (failed attempt)
+- Loop session/local index: `10/10`
+- Starting commit: `b268b5bbea285e8003396185f223709596cf2600`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map` bucket: `78.098 ms` (dominant).
+  - top closed-call shard-map paths:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `41.324 ms`.
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:` `26.266 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move H**: batch shared-RHS matmuls (`QK/KKT`, `inter/v_prime`) in train kernels (`+8-18%`, medium compiler/layout risk).
+  2. **Macro Move G**: centered outer-product exp for `exp_diff` (`+10-20%`, medium numerical/compile risk; previously unstable).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) for recurrent/backward state (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **H) Batch matmuls by stacking left operands that share a right operand**.
+- Selected hypothesis: reduce train-path dot count by batching `QK` and `KKT` into one matmul where feasible in fused forward + backward chunk recompute.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Attempted full H implementation (`QK/KKT` and `inter/v_prime`) across train recurrent/fused/backward kernels.
+  - TPU compilation exposed Mosaic limitations for the `inter/v_prime` batching forms (`concatenate` layout offset mismatch; `dynamic_update_slice` unsupported in Pallas TC lowering; constant-capture constraints for boolean selector tensors).
+  - Narrowed to the stable `QK/KKT` shared-`k^T` batching path only, validated on TPU, profiled, and measured end-to-end regression with unchanged hotspot family.
+  - Reverted kernel edits after profiling per governance/regression policy; working tree returned to `b268b5bbea285e8003396185f223709596cf2600`.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation attempt (failed; fallback used):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - failure: `ssh: connect to host ... port 22: Connection refused`.
+  - Required TPU validation (Ray fallback, success):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+    - job: `ray-run-calvinxu-levanter-20260223-124116`
+    - result: `49 passed, 40 skipped`.
+
+- Profile runs:
+  - Dev TPU profile attempt (failed; fallback used):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter10_macroH_qkbatch --no-sync`
+    - failure: host key mismatch + remote bootstrap failure (`REMOTE HOST IDENTIFICATION HAS CHANGED`, missing `/home/calvinxu/.local/bin/env`).
+  - Required profile (Ray fallback, success):
+    - submit: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter10_macroH_qkbatch_ray --no-wait`
+    - job: `ray-run-calvinxu-bash-20260223-124534`
+    - wait: `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-east5-a ray-run-calvinxu-bash-20260223-124534 --show-logs --tail 400`
+    - status: `SUCCEEDED`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter10_macroH_qkbatch_ray_130m_ch128_seg16_20s-b19617`
+  - W&B artifact: `run-gdn_loop_iter10_macroH_qkbatch_ray_130m_ch128_seg16_20s-b19617-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_loop_iter10_macroH_qkbatch_ray_130m_ch128_seg16_20s-b19617/plugins/profile/2026_02_23_04_51_22/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`):
+  - Dominant train-path bucket unchanged/slightly worse:
+    - `shard_map`: `78.098 ms -> 78.494 ms` (`+0.51%`).
+  - Closed-call `shard_map/pallas_call` deltas:
+    - forward closed-call: `41.324 ms -> 41.703 ms` (`+0.92%`).
+    - backward transpose closed-call: `26.266 ms -> 26.279 ms` (`+0.05%`).
+  - Other top buckets effectively flat:
+    - `fusion`: `63.680 ms -> 63.723 ms` (`+0.07%`).
+    - `all-gather`: `20.158 ms -> 20.131 ms` (`-0.13%`).
+  - Event count on the thread remained unchanged (`11761 -> 11762`).
+
+- MFU/throughput delta (vs baseline `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.787594 -> 5.685233` (`-1.77%`).
+  - `throughput/tokens_per_second`: `187227.57 -> 183916.19` (`-1.77%`).
+  - `throughput/duration`: `0.175017s -> 0.178168s` (`+1.80%`).
+  - Vs governance champion (`5.748507`): `-1.10%` (beyond regression threshold).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both` -> `49 passed, 40 skipped`.
+  - Perf:
+    - Forward `shard_map/pallas_call` delta: `+0.92%`.
+    - Backward `shard_map/pallas_call` delta: `+0.05%`.
+    - `throughput/mfu -1.77%`, `throughput/tokens_per_second -1.77%`, `throughput/duration +1.80%`.
+    - Dominant bucket delta: `shard_map +0.51%` (unchanged hotspot family).
+  - Governance:
+    - MFU gain `<3%` and dominant hotspot unchanged; attempt marked **low-impact** and reverted.
+
+- Assessment: **low-impact / regression**. The `QK/KKT` batching path did not reduce the dominant train-path hotspot and regressed end-to-end throughput.
+- Governance/escalation action:
+  - Reverted speculative kernel changes; no kernel commit produced for this attempt.
+- Next bold hypothesis:
+  - Escalate to **Macro Move E (V-tiling with shared-K precompute)** so backward/recurrent calls reduce per-program state pressure (`KxV -> KxVb`) and target structural reduction of the dominant `shard_map/custom-call` critical path.
