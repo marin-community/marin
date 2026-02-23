@@ -334,9 +334,11 @@ class ZephyrCoordinator:
         last_log_time = 0.0
 
         while not self._shutdown:
-            # Check heartbeats, re-queue stale tasks
-            with self._lock:
-                self._check_worker_heartbeats()
+            # Check heartbeats, re-queue stale tasks.
+            # NOTE: we could use self._self_handle.check_heartbeats.remote() to
+            # serialize this with worker RPCs (pull_task, report_result) via the
+            # concurrency queue instead of running it inline.
+            self.check_heartbeats()
 
             # Log status periodically during active execution
             now = time.monotonic()
@@ -416,9 +418,25 @@ class ZephyrCoordinator:
             }
             return (task, attempt, config)
 
+    def _assert_in_flight_consistent(self, worker_id: str, shard_idx: int) -> None:
+        """Assert _in_flight[worker_id], if present, matches the reported shard.
+
+        Workers block on report_result/report_error before calling pull_task,
+        so _in_flight can never point to a different shard. It may be absent
+        if a heartbeat timeout already re-queued the task.
+        """
+        in_flight = self._in_flight.get(worker_id)
+        if in_flight is not None:
+            assert in_flight[0].shard_idx == shard_idx, (
+                f"_in_flight mismatch for {worker_id}: reporting shard {shard_idx}, "
+                f"but _in_flight tracks shard {in_flight[0].shard_idx}. "
+                f"This indicates report_result/pull_task reordering — workers must block on report_result."
+            )
+
     def report_result(self, worker_id: str, shard_idx: int, attempt: int, result: TaskResult) -> None:
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
+            self._assert_in_flight_consistent(worker_id, shard_idx)
 
             current_attempt = self._task_attempts.get(shard_idx, 0)
             if attempt != current_attempt:
@@ -437,13 +455,15 @@ class ZephyrCoordinator:
         """Worker reports a task failure. All errors are fatal."""
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
+            self._assert_in_flight_consistent(worker_id, shard_idx)
             self._in_flight.pop(worker_id, None)
             self._fatal_error = error_info
             self._worker_states[worker_id] = WorkerState.DEAD
 
     def heartbeat(self, worker_id: str) -> None:
-        with self._lock:
-            self._last_seen[worker_id] = time.monotonic()
+        # No lock needed: _last_seen is only read by _check_worker_heartbeats
+        # (which holds the lock), and monotonic float writes are atomic on CPython.
+        self._last_seen[worker_id] = time.monotonic()
 
     def get_status(self) -> JobStatus:
         with self._lock:
@@ -703,8 +723,8 @@ class ZephyrWorker:
         actor_ctx = current_actor()
         self._worker_id = f"{actor_ctx.group_name}-{actor_ctx.index}"
 
-        # Register with coordinator
-        self._coordinator.register_worker.remote(self._worker_id, actor_ctx.handle)
+        # Register with coordinator - wait is not stricly necessary, but it reduces the complexity
+        self._coordinator.register_worker.remote(self._worker_id, actor_ctx.handle).result(timeout=60.0)
 
         # Start polling in a background thread
         self._polling_thread = threading.Thread(
@@ -743,7 +763,9 @@ class ZephyrWorker:
         heartbeat_count = 0
         while not self._shutdown_event.is_set():
             try:
-                coordinator.heartbeat.remote(self._worker_id)
+                # Block on result to avoid congesting the coordinator RPC pipe
+                # with fire-and-forget heartbeats.
+                coordinator.heartbeat.remote(self._worker_id).result()
                 heartbeat_count += 1
                 if heartbeat_count % 10 == 1:
                     logger.debug("[%s] Sent heartbeat #%d", self._worker_id, heartbeat_count)
@@ -788,8 +810,10 @@ class ZephyrWorker:
             logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
             try:
                 result = self._execute_shard(task, config)
-                logger.info("[%s] Task complete, reporting result for shard %d", self._worker_id, task.shard_idx)
-                coordinator.report_result.remote(self._worker_id, task.shard_idx, attempt, result)
+                # Block until coordinator records the result. This ensures
+                # report_result is fully processed before the next pull_task,
+                # preventing _in_flight tracking races.
+                coordinator.report_result.remote(self._worker_id, task.shard_idx, attempt, result).result()
                 task_count += 1
             except Exception as e:
                 logger.error("Worker %s error on shard %d: %s", self._worker_id, task.shard_idx, e)
@@ -799,7 +823,7 @@ class ZephyrWorker:
                     self._worker_id,
                     task.shard_idx,
                     "".join(traceback.format_exc()),
-                )
+                ).result()
 
     def _execute_shard(self, task: ShardTask, config: dict) -> TaskResult:
         """Execute a stage's operations on a single shard.
