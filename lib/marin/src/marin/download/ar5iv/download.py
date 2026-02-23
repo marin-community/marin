@@ -120,8 +120,8 @@ def download(cfg: DownloadConfig) -> None:
         .map(process_shard)
         .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
-    with ZephyrContext(name="download-ar5iv") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="download-ar5iv")
+    ctx.execute(pipeline)
 
     logger.info("Transfer completed successfully!")
 

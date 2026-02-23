@@ -10,7 +10,6 @@ protocol.
 """
 
 from __future__ import annotations
-
 import enum
 import logging
 import os
@@ -598,6 +597,10 @@ class ZephyrCoordinator:
         for shard in shards:
             for chunk in shard.chunks:
                 flat_result.extend(list(chunk))
+
+        # Signal workers to shut down now that all stages are complete.
+        self.shutdown()
+
         return flat_result
 
     def _compute_join_aux(
@@ -915,12 +918,10 @@ def _regroup_result_refs(
 class ZephyrContext:
     """Execution context for Zephyr pipelines.
 
-    Creates a coordinator actor on __enter__ which owns and manages the worker
-    pool. Workers are created lazily on the first execute() call, sized to
-    min(max_workers, plan.num_shards) to avoid over-provisioning. Workers
-    persist across pipeline stages and execute() calls, allowing cached state
-    (tokenizers, models) to be reused. Shared data broadcast via put() is
-    delivered to workers with each task.
+    Each execute() call creates a fresh coordinator and worker pool, runs
+    the pipeline, then tears everything down. Workers are sized to
+    min(max_workers, plan.num_shards) to avoid over-provisioning. Shared
+    data broadcast via put() is delivered to workers with each task.
 
     Args:
         client: The fray client to use. If None, auto-detects using current_client().
@@ -952,6 +953,8 @@ class ZephyrContext:
     _coordinator_group: Any = field(default=None, repr=False)
     _worker_group: Any = field(default=None, repr=False)
     _worker_count: int = field(default=0, repr=False)
+    # NOTE: execute calls increment this at the very beginning
+    _pipeline_id: int = field(default=-1, repr=False)
 
     def __post_init__(self):
         if self.client is None:
@@ -1003,29 +1006,36 @@ class ZephyrContext:
         verbose: bool = False,
         dry_run: bool = False,
     ) -> Sequence:
-        """Execute a dataset pipeline on the worker pool.
+        """Execute a dataset pipeline.
 
-        Workers persist across execute() calls, so cached state (tokenizers,
-        models) will be reused. If the coordinator dies mid-execution (e.g.,
-        VM preemption), the pipeline is retried with a fresh coordinator and
-        worker pool up to ``max_execution_retries`` times. Application errors
-        (``ZephyrWorkerError``) are never retried.
+        Each call creates a fresh coordinator and worker pool, runs the
+        pipeline, then tears everything down. If the coordinator dies
+        mid-execution (e.g., VM preemption), the pipeline is retried
+        with fresh actors up to ``max_execution_retries`` times.
+        Application errors (``ZephyrWorkerError``) are never retried.
         """
         plan = compute_plan(dataset, hints)
         if dry_run:
             _print_plan(dataset.operations, plan)
             return []
 
+        # NOTE: pipeline ID incremented on clean completion only
+        self._pipeline_id += 1
         last_exception: Exception | None = None
         for attempt in range(self.max_execution_retries + 1):
             execution_id = _generate_execution_id()
-            logger.info("Starting zephyr pipeline: %s (attempt %d)", execution_id, attempt)
+            logger.info(
+                "Starting zephyr pipeline: %s (pipeline %d, attempt %d)", execution_id, self._pipeline_id, attempt
+            )
 
             try:
-                self._ensure_coordinator()
-                self._ensure_workers(plan.num_shards)
+                self._create_coordinator(attempt)
+                self._create_workers(plan.num_shards, attempt)
 
-                # Run pipeline on coordinator (blocking call)
+                # Run pipeline on coordinator (blocking call).
+                # run_pipeline() calls coordinator.shutdown() at the end,
+                # which causes workers to receive SHUTDOWN on their next
+                # pull_task() call.
                 results = self._coordinator.run_pipeline.remote(plan, self._shared_data, execution_id, hints).result()
 
                 return results
@@ -1039,35 +1049,31 @@ class ZephyrContext:
                     raise
 
                 logger.warning(
-                    "Pipeline attempt %d/%d failed, retrying with fresh coordinator: %s",
-                    attempt + 1,
-                    self.max_execution_retries,
+                    "Pipeline attempt %d failed (%d retries left), retrying: %s",
+                    attempt,
+                    self.max_execution_retries - attempt,
                     e,
                 )
-                # Tear down dead coordinator and orphaned workers so
-                # _ensure_coordinator / _ensure_workers create fresh ones.
-                self.shutdown()
 
             finally:
-                # Clean up chunks for this execution only (workers persist)
+                # Tear down coordinator and workers for this pipeline
+                self.shutdown()
+                # Clean up chunks for this execution
                 _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
         # Should be unreachable, but just in case
         raise last_exception  # type: ignore[misc]
 
-    def _ensure_coordinator(self) -> None:
-        """Create coordinator if not already initialized."""
-        if self._coordinator is not None:
-            return
-
-        # Create coordinator actor with high max_concurrency to allow
-        # workers to call pull_task/report_result while run_pipeline blocks
-        logger.info("Starting coordinator for %s", self.name)
+    def _create_coordinator(self, attempt: int = 0) -> None:
+        """Create a fresh coordinator actor."""
+        # max_concurrency allows workers to call pull_task/report_result
+        # while run_pipeline blocks.
+        logger.info("Starting coordinator for %s (pipeline %d, attempt %d)", self.name, self._pipeline_id, attempt)
         coordinator_resources = ResourceConfig(cpu=1, ram="2g")
         coordinator_actor_config = ActorConfig(max_concurrency=100)
         self._coordinator_group = self.client.create_actor_group(
             ZephyrCoordinator,
-            name=f"zephyr-{self.name}-coord",
+            name=f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}-coord",
             count=1,
             resources=coordinator_resources,
             actor_config=coordinator_actor_config,
@@ -1082,27 +1088,28 @@ class ZephyrContext:
 
         logger.info("Coordinator initialized for %s", self.name)
 
-    def _ensure_workers(self, num_shards: int) -> None:
-        """Create workers if not already initialized, sized to demand.
+    def _create_workers(self, num_shards: int, attempt: int = 0) -> None:
+        """Create a fresh worker pool sized to demand.
 
         The worker count is min(max_workers, num_shards) to avoid
         over-provisioning when there are fewer shards than the cap.
         """
-        if self._worker_group is not None or num_shards == 0:
+        if num_shards == 0:
             return
 
         assert self.max_workers is not None  # set by __post_init__
         actual_workers = min(self.max_workers, num_shards)
         logger.info(
-            "Starting worker group: %d workers (max_workers=%d, num_shards=%d)",
+            "Starting worker group: %d workers (max_workers=%d, num_shards=%d, attempt=%d)",
             actual_workers,
             self.max_workers,
             num_shards,
+            attempt,
         )
         self._worker_group = self.client.create_actor_group(
             ZephyrWorker,
             self._coordinator,  # Pass coordinator handle as init arg
-            name=f"zephyr-{self.name}-workers",
+            name=f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}-workers",
             count=actual_workers,
             resources=self.resources,
         )
@@ -1129,14 +1136,6 @@ class ZephyrContext:
         self._coordinator = None
         self._coordinator_group = None
         self._worker_group = None
-
-    def __enter__(self) -> ZephyrContext:
-        # Eagerly initialize coordinator; workers are deferred to first execute()
-        self._ensure_coordinator()
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.shutdown()
 
 
 def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:

@@ -589,8 +589,8 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
             .write_jsonl(output_pattern)  # Compression auto-detected from .gz extension
         )
 
-        with ZephyrContext(name="dataset-to-eval") as ctx:
-            ctx.execute(pipeline)
+        ctx = ZephyrContext(name="dataset-to-eval")
+        ctx.execute(pipeline)
         logger.info(f"Wrote to {output_pattern}")
 
 

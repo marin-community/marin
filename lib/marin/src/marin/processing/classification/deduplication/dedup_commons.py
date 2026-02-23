@@ -209,14 +209,14 @@ def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
         shard_dup_map[record["hash"]] = {"canonical": record["canonical"]}
 
     with log_time(f"Load duplicate map from {len(shards)} shards"):
-        with ZephyrContext(client=LocalClient(), name="dedup-commons-map") as ctx:
-            ctx.execute(
-                Dataset.from_list(shards)
-                .load_parquet()
-                .select("hash", "canonical")
-                .filter(col("hash").is_not_null())
-                .map(add_to_dup_map),
-            )
+        ctx = ZephyrContext(client=LocalClient(), name="dedup-commons-map")
+        ctx.execute(
+            Dataset.from_list(shards)
+            .load_parquet()
+            .select("hash", "canonical")
+            .filter(col("hash").is_not_null())
+            .map(add_to_dup_map),
+        )
 
     return shard_dup_map
 
@@ -232,23 +232,23 @@ def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
 
 def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute deduplication stats from {len(shards)} shards"):
-        with ZephyrContext(client=LocalClient(), name="dedup-commons-counts") as ctx:
-            result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
-                Dataset.from_list(shards)
-                .load_parquet()
-                .select("cnt")
-                .map(
-                    lambda c: DupCounters(
-                        method=method,
-                        level=level,
-                        total=c["cnt"],
-                        dups=c["cnt"] if c["cnt"] > 1 else 0,
-                        unique=int(c["cnt"] == 1),
-                        dup_clusters=int(c["cnt"] > 1),
-                    )
+        ctx = ZephyrContext(client=LocalClient(), name="dedup-commons-counts")
+        result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
+            Dataset.from_list(shards)
+            .load_parquet()
+            .select("cnt")
+            .map(
+                lambda c: DupCounters(
+                    method=method,
+                    level=level,
+                    total=c["cnt"],
+                    dups=c["cnt"] if c["cnt"] > 1 else 0,
+                    unique=int(c["cnt"] == 1),
+                    dup_clusters=int(c["cnt"] > 1),
                 )
-                .reduce(partial(sum, start=DupCounters(method=method, level=level))),
-            )[0]
+            )
+            .reduce(partial(sum, start=DupCounters(method=method, level=level))),
+        )[0]
     return result
 
 

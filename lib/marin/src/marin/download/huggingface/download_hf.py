@@ -216,8 +216,8 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    with ZephyrContext(name="download-hf") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="download-hf")
+    ctx.execute(pipeline)
 
     # Write Provenance JSON
     write_provenance_json(
