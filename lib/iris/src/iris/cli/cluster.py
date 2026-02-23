@@ -145,15 +145,19 @@ def _build_and_push_image(params: _ImageBuildParams) -> None:
 
 def _push_image_to_extra_regions(params: _ImageBuildParams, extra_regions: set[str]) -> None:
     """Push an already-built image to additional AR regions beyond the primary."""
-    for region in sorted(extra_regions):
-        click.echo(f"Pushing {params.image_name} to additional region: {region}")
-        push_to_gcp_registries(
-            source_tag=params.local_tag,
-            regions=(region,),
-            project=params.project,
-            image_name=params.image_name,
-            version=params.version,
-        )
+    if not extra_regions:
+        return
+    ordered_regions = tuple(sorted(extra_regions))
+    click.echo(
+        f"Pushing {params.image_name} to {len(ordered_regions)} additional region(s): {', '.join(ordered_regions)}"
+    )
+    push_to_gcp_registries(
+        source_tag=params.local_tag,
+        regions=ordered_regions,
+        project=params.project,
+        image_name=params.image_name,
+        version=params.version,
+    )
 
 
 def _build_and_push_for_tag(image_tag: str, image_type: str) -> None:

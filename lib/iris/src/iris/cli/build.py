@@ -3,6 +3,7 @@
 
 """Image build commands."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import subprocess
 from pathlib import Path
 
@@ -164,11 +165,11 @@ def push_to_gcp_registries(
     """Push a local Docker image to multiple GCP Artifact Registry regions."""
     image_name, version = _resolve_image_name_and_version(source_tag, image_name, version)
 
-    click.echo(f"Pushing {source_tag} to {len(regions)} GCP region(s)...")
+    ordered_regions = tuple(sorted(set(regions)))
+    click.echo(f"Pushing {source_tag} to {len(ordered_regions)} GCP region(s)...")
 
-    for r in regions:
-        dest_tag = f"{r}-docker.pkg.dev/{project}/marin/{image_name}:{version}"
-
+    # Configure auth first to avoid concurrent writes to docker config.
+    for r in ordered_regions:
         click.echo(f"\nConfiguring {r}-docker.pkg.dev...")
         result = subprocess.run(
             ["gcloud", "auth", "configure-docker", f"{r}-docker.pkg.dev", "-q"],
@@ -180,30 +181,36 @@ def push_to_gcp_registries(
                 f"Warning: Failed to configure docker auth for {r}-docker.pkg.dev: {result.stderr.strip()}", err=True
             )
 
-        click.echo(f"Tagging as {dest_tag}")
-        result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
-        if result.returncode != 0:
-            click.echo(f"Failed to tag image for {r}", err=True)
-            raise SystemExit(1)
+    def _tag_and_push_region(r: str) -> tuple[str, bool, str]:
+        dest_tag = f"{r}-docker.pkg.dev/{project}/marin/{image_name}:{version}"
+        tag_result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
+        if tag_result.returncode != 0:
+            return r, False, f"Failed to tag image for {r}"
 
-        click.echo(f"Pushing to {r}...")
-        push_cmd = ["docker", "push", dest_tag]
-        if not verbose:
-            push_cmd.insert(2, "--quiet")
-        if verbose:
-            result = subprocess.run(push_cmd)
-        else:
-            result = subprocess.run(push_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            click.echo(f"Failed to push to {r}", err=True)
-            if not verbose:
-                if result.stdout:
-                    click.echo(result.stdout, err=True)
-                if result.stderr:
-                    click.echo(result.stderr, err=True)
-            raise SystemExit(1)
+        push_result = subprocess.run(["docker", "push", "--quiet", dest_tag], capture_output=True, text=True)
+        if push_result.returncode != 0:
+            details = [f"Failed to push to {r}"]
+            if push_result.stdout:
+                details.append(push_result.stdout.strip())
+            if push_result.stderr:
+                details.append(push_result.stderr.strip())
+            return r, False, "\n".join(x for x in details if x)
 
-        click.echo(f"Successfully pushed to {dest_tag}")
+        return r, True, f"Successfully pushed to {dest_tag}"
+
+    max_workers = min(4, len(ordered_regions))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_tag_and_push_region, r): r for r in ordered_regions}
+        failures: list[str] = []
+        for future in as_completed(futures):
+            region, ok, message = future.result()
+            click.echo(message, err=not ok)
+            if not ok:
+                failures.append(region)
+
+    if failures:
+        failed_list = ", ".join(sorted(failures))
+        raise SystemExit(f"Failed to push {source_tag} to region(s): {failed_list}")
 
     click.echo("\nDone!")
 
