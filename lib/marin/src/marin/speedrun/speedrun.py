@@ -381,7 +381,6 @@ def default_speedrun(
         tags=run_tags,
         eval_harness_tasks=None,
         override_output_path=override_output_path,
-        use_default_validation=False,
     )
 
     # Extract wandb info from train step
