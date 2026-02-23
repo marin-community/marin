@@ -21,7 +21,9 @@ from levanter.data.text import (
     DatasetComponent,
     GrugLmExample,
     LmDataConfig,
+    LmDatasetFormatBase,
     PreferenceChatLmDatasetFormat,
+    PreferenceChatProcessor,
     PrebuiltLmDatasetFormat,
     UrlDatasetSourceConfig,
     build_lm_dataset_cache,
@@ -249,6 +251,70 @@ def test_dataset_for_component_rejects_preference_format():
             eos_id=None,
             block_cross_document_attention=True,
         )
+
+
+def test_preprocessor_for_format_dispatches_preference_format():
+    class _DummyTokenizer:
+        chat_template = "{% generation %}"
+        name_or_path = "dummy"
+
+        def __len__(self):
+            return 128
+
+        def apply_chat_template(self, messages, **kwargs):
+            del kwargs
+            return {
+                "input_ids": [[11, 12, 13] for _ in messages],
+                "assistant_masks": [[0, 1, 1] for _ in messages],
+            }
+
+    tokenizer = _DummyTokenizer()
+    format = PreferenceChatLmDatasetFormat()
+
+    processor = preprocessor_for_format(format, tokenizer)  # type: ignore[arg-type]
+
+    assert isinstance(processor, PreferenceChatProcessor)
+
+    output = processor(
+        [
+            {
+                "chosen": [
+                    {"role": "user", "content": "Hi"},
+                    {"role": "assistant", "content": "Hello"},
+                ],
+                "rejected": [
+                    {"role": "user", "content": "Hi"},
+                    {"role": "assistant", "content": "No"},
+                ],
+            }
+        ]
+    )
+
+    assert len(output) == 1
+    row = output[0]
+    assert set(row.keys()) == {
+        "chosen_input_ids",
+        "chosen_assistant_masks",
+        "rejected_input_ids",
+        "rejected_assistant_masks",
+    }
+    assert row["chosen_input_ids"].shape == row["chosen_assistant_masks"].shape
+    assert row["rejected_input_ids"].shape == row["rejected_assistant_masks"].shape
+
+
+def test_preprocessor_for_format_rejects_unknown_format():
+    class _UnknownFormat(LmDatasetFormatBase):
+        pass
+
+    class _DummyTokenizer:
+        chat_template = "{% generation %}"
+        name_or_path = "dummy"
+
+        def __len__(self):
+            return 128
+
+    with pytest.raises(ValueError, match="Unknown format"):
+        preprocessor_for_format(_UnknownFormat(), _DummyTokenizer())  # type: ignore[arg-type]
 
 
 @pytest.fixture

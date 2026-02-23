@@ -23,6 +23,11 @@ class LmDatasetFormatBase(ChoiceRegistry):
     def token_data_key(self) -> str:
         return "input_ids"
 
+    def build_preprocessor(
+        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        raise ValueError(f"Unknown format {self}")
+
 
 @LmDatasetFormatBase.register_subclass("text")
 @dataclass(frozen=True)
@@ -30,6 +35,11 @@ class TextLmDatasetFormat(LmDatasetFormatBase):
     """Dataset configuration for raw text examples."""
 
     text_key: str = "text"  # key for the text field in the jsonl file
+
+    def build_preprocessor(
+        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=self.text_key)
 
 
 @LmDatasetFormatBase.register_subclass("chat")
@@ -43,6 +53,18 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     chat_template_kwargs: str | None = "chat_template_kwargs"
     pack: bool | int | Literal["pad"] | None = None  # None => default pack behavior (currently pack)
     mask_user_turns: bool = True
+
+    def build_preprocessor(
+        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        return ChatProcessor(
+            tokenizer,
+            messages_field=self.messages_field,
+            chat_template=self.chat_template,
+            system_prompt_field=self.system_prompt,
+            chat_template_kwargs_field=self.chat_template_kwargs,
+            mask_user_turns=self.mask_user_turns,
+        )
 
 
 @LmDatasetFormatBase.register_subclass("prebuilt")
@@ -63,6 +85,12 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     @property
     def token_data_key(self) -> str:
         return self.input_ids_key
+
+    def build_preprocessor(
+        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        del tokenizer, enforce_eos, enforce_bos
+        return PrebuiltCacheProcessor(self.input_ids_key, self.loss_weights_key)
 
 
 class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
@@ -254,30 +282,4 @@ class ChatProcessor(BatchProcessor[dict, dict]):
 def preprocessor_for_format(
     format: LmDatasetFormatBase, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
 ) -> BatchProcessor[dict, dict]:
-    match format:
-        case TextLmDatasetFormat(text_key=key):
-            return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=key)
-        case PrebuiltLmDatasetFormat(input_ids_key=input_ids_key, loss_weights_key=loss_weights_key):
-            return PrebuiltCacheProcessor(input_ids_key, loss_weights_key)
-        case ChatLmDatasetFormat(
-            messages_field=m,
-            chat_template=ct,
-            system_prompt=sp,
-            chat_template_kwargs=ct_kwargs,
-            mask_user_turns=mt,
-        ):
-            return ChatProcessor(
-                tokenizer,
-                messages_field=m,
-                chat_template=ct,
-                system_prompt_field=sp,
-                chat_template_kwargs_field=ct_kwargs,
-                mask_user_turns=mt,
-            )  # type: ignore
-        case _:
-            # Check for preference format (imported lazily to avoid circular imports)
-            from .preference import PreferenceChatLmDatasetFormat, preprocessor_for_preference_format
-
-            if isinstance(format, PreferenceChatLmDatasetFormat):
-                return preprocessor_for_preference_format(format, tokenizer)  # type: ignore
-            raise ValueError(f"Unknown format {format}")
+    return format.build_preprocessor(tokenizer, enforce_eos=enforce_eos, enforce_bos=enforce_bos)

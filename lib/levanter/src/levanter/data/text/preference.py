@@ -69,6 +69,12 @@ class PreferenceChatLmDatasetFormat(LmDatasetFormatBase):
     def token_data_key(self) -> str:
         return "chosen_input_ids"
 
+    def build_preprocessor(
+        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        del enforce_eos, enforce_bos
+        return preprocessor_for_preference_format(self, tokenizer)  # type: ignore[return-value]
+
 
 class PreferenceChatProcessor(BatchProcessor[dict, ProcessedPreferenceChatDict]):
     """
