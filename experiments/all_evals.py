@@ -847,7 +847,7 @@ def logprob_generative_eval(
 
     This evaluates log-probability of full reasoning traces (chain-of-thought solutions)
     for math, code, and QA tasks. Provides a low-noise, fast signal that correlates
-    with generative benchmark performance - ideal for pretraining comparisons.
+    which may provide a useful signal for pretraining comparisons.
 
     Tasks include:
     - Math: GSM8K (full CoT solutions), Hendrycks Math (all 7 categories)
@@ -949,7 +949,7 @@ def _load_json(path: str) -> dict:
         return json.load(f)
 
 
-def run_all_evals_aggregate(config: AllEvalsAggregateConfig) -> str:
+def aggregate_all_evals(config: AllEvalsAggregateConfig) -> str:
     """Aggregate evaluation results into a single JSON output."""
     result_files: list[str] = []
     for root in config.eval_runs:
@@ -1013,7 +1013,7 @@ def build_all_evals_aggregate_step(
 
     return ExecutorStep(
         name="evaluation/all_evals/aggregate",
-        fn=run_all_evals_aggregate,
+        fn=aggregate_all_evals,
         config=AllEvalsAggregateConfig(
             eval_runs=inputs,
             output_path=output_path or this_output_path(),

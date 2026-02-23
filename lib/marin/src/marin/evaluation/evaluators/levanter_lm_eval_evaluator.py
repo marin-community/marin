@@ -121,7 +121,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
     def cleanup(self, model: ModelConfig) -> None:
         """Clean up evaluator resources and local artifacts."""
         del model
-        levanter.tracker.current_tracker().finish()
+        try:
+            levanter.tracker.current_tracker().finish()
+        except RuntimeError:
+            pass
         artifact_path = "lm_eval_harness_results.json"
         if os.path.exists(artifact_path):
             os.remove(artifact_path)
