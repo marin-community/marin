@@ -112,8 +112,8 @@ def create_unified_tokenizer(output_path: str = UNIFIED_TOKENIZER_PATH) -> str:
 
 
 def unified_data_config(
-    text_weight: float = 0.7,
-    multimodal_weight: float = 0.3,
+    text_weight: float = 1.0,
+    multimodal_weight: float = 1.0,
     multimodal_cache_path: str = UNIFIED_CACHE_PATH,
     eval_benchmarks: list[str] | None = None,
     eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
@@ -128,12 +128,11 @@ def unified_data_config(
             components (train_weight=0.0). Set to None to disable eval.
         eval_cache_path: GCS path to eval benchmark Levanter caches.
     """
-    # Text: use existing Llama3-tokenized Nemotron caches (no re-tokenization needed)
+    # Text: only hq_actual from Nemotron-CC
     nemotron_steps = tokenize_nemotron()
-    text_components = {
-        name: step_to_lm_mixture_component(step, include_raw_paths=True) for name, step in nemotron_steps.items()
-    }
-    text_weights = {k: text_weight * v for k, v in NEMOTRON_WEIGHTS.items()}
+    hq_key = "nemotron_cc/hq_actual"
+    text_components = {hq_key: step_to_lm_mixture_component(nemotron_steps[hq_key], include_raw_paths=True)}
+    text_weights = {hq_key: text_weight}
 
     # Multimodal: pre-built cache with per-token loss weights.
     # pack=True to avoid wasting compute padding short sequences (~600 tokens) to 4096.
@@ -262,8 +261,8 @@ DEFAULT_EVAL_BENCHMARKS = [
 
 
 def make_unified_0_6b(
-    text_weight: float = 0.7,
-    multimodal_weight: float = 0.3,
+    text_weight: float = 1.0,
+    multimodal_weight: float = 1.0,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
     step = default_train(
@@ -284,8 +283,8 @@ def make_unified_0_6b(
 
 
 def make_unified_1_7b(
-    text_weight: float = 0.7,
-    multimodal_weight: float = 0.3,
+    text_weight: float = 1.0,
+    multimodal_weight: float = 1.0,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
     step = default_train(
@@ -306,8 +305,8 @@ def make_unified_1_7b(
 
 
 def make_unified_4b(
-    text_weight: float = 0.7,
-    multimodal_weight: float = 0.3,
+    text_weight: float = 1.0,
+    multimodal_weight: float = 1.0,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
     step = default_train(
