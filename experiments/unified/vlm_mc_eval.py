@@ -62,7 +62,7 @@ from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completio
 from levanter.eval_harness import get_padding_count_from_batch, get_segment_ids_from_batch
 from levanter.models.loss import next_token_loss
 from levanter.models.lm_model import LmExample
-from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync, sync_global_devices
+from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -382,8 +382,6 @@ def _run_batch_loop(
         int(zlib.crc32(str(out_specs).encode())),
         hax.partitioning._get_mesh(),
     )
-    sync_global_devices(f"vlm_eval_batch_loop_enter_{eval_run_uuid}")
-
     source_batch_idx = 0
     worker_batch_idx = 0
     while True:
@@ -558,8 +556,6 @@ def _run_batch_loop(
 
     if pbar is not None:
         pbar.close()
-    sync_global_devices(f"vlm_eval_batch_loop_exit_{eval_run_uuid}")
-
     if is_source and source_batch_idx != num_batches:
         raise RuntimeError(
             f"[{eval_run_uuid}] Source loop consumed {source_batch_idx} batches but expected {num_batches} batches."
@@ -1507,8 +1503,6 @@ def vlm_mc_eval_callback(
             ".*vlm_eval_loglikelihood.*",
             "/tmp/xla_dumps_vlm_once",
         )
-        sync_global_devices(f"vlm_eval_callback_enter_{eval_run_uuid}")
-
         # Process 0 prepares data; all hosts consume the same batch stream via
         # broadcast_shard(source=0) in _run_batch_loop.
         prepared: dict[str, tuple] = {}
@@ -1638,21 +1632,10 @@ def vlm_mc_eval_callback(
             )
 
         logger.warning(
-            "VLM_EVAL_CALLBACK_SYNC_ENTER eval_run_uuid=%s host=%d",
+            "VLM_EVAL_CALLBACK_SYNC_SKIPPED eval_run_uuid=%s host=%d reason=text_mc_alignment",
             eval_run_uuid,
             jax.process_index(),
         )
-        sync_marker = (
-            f"{eval_run_uuid}:callback_exit_sync:host{jax.process_index()}" if jax.process_index() == 0 else ""
-        )
-        leader_sync_marker = multihost_broadcast_sync(sync_marker)
-        logger.warning(
-            "VLM_EVAL_CALLBACK_SYNC_EXIT eval_run_uuid=%s host=%d leader_sync_marker=%s",
-            eval_run_uuid,
-            jax.process_index(),
-            leader_sync_marker,
-        )
-        sync_global_devices(f"vlm_eval_callback_device_exit_{eval_run_uuid}")
         logger.warning("VLM_EVAL_CALLBACK_EXIT eval_run_uuid=%s host=%d", eval_run_uuid, jax.process_index())
         logger.info("VLM eval done.")
 
