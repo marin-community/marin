@@ -134,7 +134,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             ray_memory=humanfriendly.parse_size("1GB", binary=True),
             ray_num_cpus=1,
         ),
-        pip_dependency_groups=["dedup"],
     )
     dedup_fuzzy_document_step = ExecutorStep(
         name=os.path.join(prefix, "dedup_fuzzy_document"),
@@ -146,7 +145,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             ray_memory=humanfriendly.parse_size("1GB", binary=True),
             ray_num_cpus=1,
         ),
-        pip_dependency_groups=["dedup"],
     )
 
     ############################################################
