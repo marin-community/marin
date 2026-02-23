@@ -22,6 +22,31 @@ OPENAI_FORMAT_SAMPLE = {
     ]
 }
 
+TOOL_CALL_SAMPLE = {
+    "id": "call_abc123",
+    "type": "function",
+    "function": {"name": "bash", "arguments": {"command": "ls -la"}},
+}
+
+TOOL_CALLING_SAMPLE = {
+    "messages": [
+        {"role": "user", "content": "List files in the current directory"},
+        {"role": "assistant", "content": "", "tool_calls": [TOOL_CALL_SAMPLE]},
+        {"role": "tool", "content": "file1.txt\nfile2.txt", "tool_call_id": "call_abc123", "name": "bash"},
+        {"role": "assistant", "content": "Here are the files: file1.txt and file2.txt"},
+    ]
+}
+
+# Mimics HuggingFace datasets where every row has all keys, with empty/null defaults
+TOOL_CALLING_SAMPLE_WITH_EMPTY_FIELDS = {
+    "messages": [
+        {"role": "user", "content": "List files", "tool_calls": [], "tool_call_id": None, "name": None},
+        {"role": "assistant", "content": "", "tool_calls": [TOOL_CALL_SAMPLE], "tool_call_id": None, "name": None},
+        {"role": "tool", "content": "file1.txt", "tool_calls": [], "tool_call_id": "call_abc123", "name": "bash"},
+        {"role": "assistant", "content": "Found file1.txt", "tool_calls": [], "tool_call_id": None, "name": None},
+    ]
+}
+
 SHAREGPT_FORMAT_SAMPLE = {
     "conversations": [
         {"from": "human", "value": "Explain quantum computing"},
@@ -71,6 +96,82 @@ class TestTransformAdapters:
         assert messages[0].content == "What is the capital of France?"
         assert messages[1].role == "assistant"
         assert messages[1].content == "The capital of France is Paris."
+
+    def test_tool_calling_adapter(self):
+        """Test that tool_calls, tool_call_id, and name are forwarded."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            conversation_column="messages",
+            role_key="role",
+            content_key="content",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+        )
+
+        messages = adapter.transform_conversation_to_openai_format(TOOL_CALLING_SAMPLE)
+
+        assert len(messages) == 4
+
+        # User message: no tool fields
+        assert messages[0].role == "user"
+        assert messages[0].tool_calls is None
+        assert messages[0].tool_call_id is None
+        assert messages[0].name is None
+
+        # Assistant message with tool_calls
+        assert messages[1].role == "assistant"
+        assert messages[1].content == ""
+        assert messages[1].tool_calls == [TOOL_CALL_SAMPLE]
+        assert messages[1].tool_call_id is None
+
+        # Tool response message
+        assert messages[2].role == "tool"
+        assert messages[2].content == "file1.txt\nfile2.txt"
+        assert messages[2].tool_call_id == "call_abc123"
+        assert messages[2].name == "bash"
+        assert messages[2].tool_calls is None
+
+        # Final assistant message: no tool fields
+        assert messages[3].role == "assistant"
+        assert messages[3].content == "Here are the files: file1.txt and file2.txt"
+        assert messages[3].tool_calls is None
+
+    def test_tool_calling_adapter_with_empty_fields(self):
+        """Test that empty/null tool fields (as HuggingFace datasets produce) are not forwarded."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            conversation_column="messages",
+            role_key="role",
+            content_key="content",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+        )
+
+        messages = adapter.transform_conversation_to_openai_format(TOOL_CALLING_SAMPLE_WITH_EMPTY_FIELDS)
+
+        assert len(messages) == 4
+
+        # User message: empty list and None should not be forwarded
+        assert messages[0].tool_calls is None
+        assert messages[0].tool_call_id is None
+        assert messages[0].name is None
+
+        # Assistant with tool_calls: only tool_calls is forwarded
+        assert messages[1].tool_calls == [TOOL_CALL_SAMPLE]
+        assert messages[1].tool_call_id is None
+        assert messages[1].name is None
+
+        # Tool response: tool_call_id and name forwarded, empty tool_calls not
+        assert messages[2].tool_calls is None
+        assert messages[2].tool_call_id == "call_abc123"
+        assert messages[2].name == "bash"
+
+        # Final assistant: nothing forwarded
+        assert messages[3].tool_calls is None
+        assert messages[3].tool_call_id is None
+        assert messages[3].name is None
 
     def test_sharegpt_format_adapter(self):
         """Test ShareGPT format adapter."""
@@ -126,6 +227,39 @@ class TestTransformRow:
         assert "<|start_think|>" in response_message.content
         assert "<|end_think|>" in response_message.content
         assert "<think>" not in response_message.content
+
+    def test_transform_row_preserves_tool_calls(self):
+        """Test that tool call fields survive the full transform_row pipeline."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            conversation_column="messages",
+            role_key="role",
+            content_key="content",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+        )
+
+        cfg = TransformSFTDatasetConfig(
+            source="test/dataset",
+            revision="main",
+            output_path="/tmp/output",
+            metadata_columns=[],
+            adapter=adapter,
+        )
+
+        result = transform_row(TOOL_CALLING_SAMPLE, cfg, adapter)
+
+        assert result is not None
+        msgs = result.messages
+        assert len(msgs) == 4
+
+        # Assistant message with tool_calls preserved through pipeline
+        assert msgs[1].tool_calls == [TOOL_CALL_SAMPLE]
+
+        # Tool response with tool_call_id and name preserved
+        assert msgs[2].tool_call_id == "call_abc123"
+        assert msgs[2].name == "bash"
 
 
 class TestPreferenceDataTransform:

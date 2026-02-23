@@ -35,6 +35,7 @@ Current datasets:
 20. nvidia/Nemotron-Post-Training-Dataset-v2
 21. HuggingFaceH4/no_robots
 22. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
+23. AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories  # SWE-smith Rust trajectories from gpt-5-mini
 """
 
 import dataclasses
@@ -516,6 +517,14 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ],
         name="nvidia/OpenMathReasoning/genselect",
         splits=["genselect"],
+    ),
+    "AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories": InstructionDatasetConfig(
+        hf_dataset_id="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
+        revision="de3bb10",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["instance_id", "resolved", "model", "traj_id"],
+        name="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
+        max_parallelism=32,
     ),
 }
 

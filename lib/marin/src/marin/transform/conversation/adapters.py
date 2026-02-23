@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -120,9 +121,18 @@ class TransformAdapter:
                 self.tool_value: "tool",
             }
             conversation = row[self.conversation_column]
+            if isinstance(conversation, str):
+                conversation = json.loads(conversation)
             for conv in conversation:
                 role = role_to_openai_role[conv[self.role_key]]
-                messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
+                kwargs: dict[str, Any] = {}
+                if conv.get("tool_calls"):
+                    kwargs["tool_calls"] = conv["tool_calls"]
+                if conv.get("tool_call_id"):
+                    kwargs["tool_call_id"] = conv["tool_call_id"]
+                if conv.get("name"):
+                    kwargs["name"] = conv["name"]
+                messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key], **kwargs))
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
             messages = []
