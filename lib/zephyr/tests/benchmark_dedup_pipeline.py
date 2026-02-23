@@ -135,8 +135,8 @@ def run_benchmark(
         print("Executing pipeline...")
         mem_before = process.memory_info().rss
         exec_start = time.time()
-        with ZephyrContext(name="benchmark") as ctx:
-            results = list(ctx.execute(pipeline))
+        ctx = ZephyrContext(name="benchmark")
+        results = list(ctx.execute(pipeline))
         exec_time = time.time() - exec_start
         mem_after = process.memory_info().rss
 

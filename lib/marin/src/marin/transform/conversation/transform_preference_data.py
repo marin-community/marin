@@ -292,8 +292,8 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
 
     # Process all tasks in parallel
     pipeline = Dataset.from_list(tasks).map(process_split_task)
-    with ZephyrContext(name="transform-preference") as ctx:
-        results = ctx.execute(pipeline)
+    ctx = ZephyrContext(name="transform-preference")
+    results = ctx.execute(pipeline)
 
     # Log summary
     for result in results:
