@@ -528,9 +528,7 @@ workdir = os.environ["IRIS_WORKDIR"]
 try:
     with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
         fn, args, kwargs = cloudpickle.loads(f.read())
-    result = fn(*args, **kwargs)
-    with open(os.path.join(workdir, "_result.pkl"), "wb") as f:
-        f.write(cloudpickle.dumps(result))
+    fn(*args, **kwargs)
 except Exception:
     traceback.print_exc()
     sys.exit(1)

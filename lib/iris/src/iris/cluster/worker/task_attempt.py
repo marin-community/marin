@@ -193,7 +193,7 @@ class TaskAttempt:
     read concurrently by RPC handlers via the TaskInfo protocol. Python's GIL
     ensures atomic field assignments. State transitions are one-way (PENDING →
     BUILDING → RUNNING → terminal), preventing inconsistent states. External
-    code should only read via TaskInfo protocol (status, result, to_proto()).
+    code should only read via TaskInfo protocol (status, to_proto()).
     """
 
     def __init__(
@@ -273,8 +273,6 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
-
-        self.result: bytes | None = None  # cloudpickle serialized return value from container
 
     @property
     def container_id(self) -> str | None:
@@ -624,15 +622,6 @@ class TaskAttempt:
                 )
                 # Final log fetch before container stops
                 self._stream_logs(log_reader)
-
-                # Read result file only if container succeeded
-                if status.exit_code == 0 and self.workdir:
-                    result_path = self.workdir / "_result.pkl"
-                    if result_path.exists():
-                        try:
-                            self.result = result_path.read_bytes()
-                        except Exception as e:
-                            self._log_sink.append(source="error", data=f"Failed to read result file: {e}")
 
                 # Container has stopped
                 if status.error:
