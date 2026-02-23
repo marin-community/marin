@@ -62,7 +62,7 @@ from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completio
 from levanter.eval_harness import get_padding_count_from_batch, get_segment_ids_from_batch
 from levanter.models.loss import next_token_loss
 from levanter.models.lm_model import LmExample
-from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync
+from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync, sync_global_devices
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -263,14 +263,17 @@ class _BatchLoopMessage:
 
 
 def _send_batch_loop_message(message: int) -> int:
-    """Source host sends a control message to all hosts."""
-    assert jax.process_index() == 0
+    """Source host sends a control message to all hosts (text-mc pattern)."""
+    if jax.process_index() != 0:
+        raise RuntimeError("Only source host can send batch-loop messages.")
     out = broadcast_shard(jnp.array(message, dtype=jnp.int32), PartitionSpec())
     return int(out.item())
 
 
 def _receive_batch_loop_message() -> int:
     """Worker hosts block until a source control message is broadcast."""
+    if jax.process_index() == 0:
+        raise RuntimeError("Source host must not call _receive_batch_loop_message.")
     msg = broadcast_shard(jnp.array(_BatchLoopMessage.STOP, dtype=jnp.int32), PartitionSpec())
     return int(msg.item())
 
@@ -379,6 +382,7 @@ def _run_batch_loop(
         int(zlib.crc32(str(out_specs).encode())),
         hax.partitioning._get_mesh(),
     )
+    sync_global_devices(f"vlm_eval_batch_loop_enter_{eval_run_uuid}")
 
     source_batch_idx = 0
     worker_batch_idx = 0
@@ -554,6 +558,7 @@ def _run_batch_loop(
 
     if pbar is not None:
         pbar.close()
+    sync_global_devices(f"vlm_eval_batch_loop_exit_{eval_run_uuid}")
 
     if is_source and source_batch_idx != num_batches:
         raise RuntimeError(
@@ -1423,7 +1428,10 @@ def vlm_mc_eval_callback(
         model = inference_mode(step.eval_model, True)
         model = _force_vanilla_attention_backend_for_vlm_eval(model)
         EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
-        safe_eval_batch_size = int(os.environ.get("VLM_EVAL_SAFE_BATCH_SIZE", "32"))
+        # Keep multi-host defaults aligned with text-mc style settings unless
+        # explicitly overridden via environment.
+        default_safe_batch = "8" if jax.process_count() > 1 else "32"
+        safe_eval_batch_size = int(os.environ.get("VLM_EVAL_SAFE_BATCH_SIZE", default_safe_batch))
         if safe_eval_batch_size <= 0:
             raise ValueError(f"VLM_EVAL_SAFE_BATCH_SIZE must be positive, got {safe_eval_batch_size}")
         effective_eval_batch_size = min(EvalBatch.size, safe_eval_batch_size)
@@ -1499,6 +1507,7 @@ def vlm_mc_eval_callback(
             ".*vlm_eval_loglikelihood.*",
             "/tmp/xla_dumps_vlm_once",
         )
+        sync_global_devices(f"vlm_eval_callback_enter_{eval_run_uuid}")
 
         # Process 0 prepares data; all hosts consume the same batch stream via
         # broadcast_shard(source=0) in _run_batch_loop.
@@ -1525,7 +1534,19 @@ def vlm_mc_eval_callback(
                 else:
                     logger.warning("Unknown task_type=%s for %s, skipping", task_type, bench_name)
 
-        max_packed_segments = 64
+        default_max_packed_segments = "32" if jax.process_count() > 1 else "64"
+        max_packed_segments = int(os.environ.get("VLM_EVAL_MAX_PACKED_SEGMENTS", default_max_packed_segments))
+        if max_packed_segments <= 0:
+            raise ValueError(f"VLM_EVAL_MAX_PACKED_SEGMENTS must be positive, got {max_packed_segments}")
+        logger.warning(
+            "VLM_EVAL_STABILITY_CONFIG eval_run_uuid=%s host=%d safe_batch=%d max_packed_segments=%d "
+            "process_count=%d",
+            eval_run_uuid,
+            jax.process_index(),
+            effective_eval_batch_size,
+            max_packed_segments,
+            jax.process_count(),
+        )
 
         # Create JIT function on first call for this (Pos, Batch) shape pair.
         jit_key = (EvalPos.size, VlmEvalBatch.size)
@@ -1631,6 +1652,7 @@ def vlm_mc_eval_callback(
             jax.process_index(),
             leader_sync_marker,
         )
+        sync_global_devices(f"vlm_eval_callback_device_exit_{eval_run_uuid}")
         logger.warning("VLM_EVAL_CALLBACK_EXIT eval_run_uuid=%s host=%d", eval_run_uuid, jax.process_index())
         logger.info("VLM eval done.")
 
