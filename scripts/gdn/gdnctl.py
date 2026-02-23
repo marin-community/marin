@@ -835,6 +835,43 @@ def _git_head(cwd: Path) -> str:
     return proc.stdout.strip()
 
 
+def _sync_branch_from_remote(
+    *,
+    workdir: Path,
+    remote: str,
+    branch: str,
+) -> None:
+    target_ref = f"{remote}/{branch}"
+    print(f"[gdnctl] syncing branch with {target_ref}")
+
+    fetch_cmd = ["git", "fetch", remote, branch]
+    _echo_cmd(fetch_cmd)
+    _run_git(["fetch", remote, branch], cwd=workdir, capture_output=True, check=True)
+
+    merge_cmd = ["git", "merge", "--no-edit", target_ref]
+    _echo_cmd(merge_cmd)
+    merge_proc = _run_git(
+        ["merge", "--no-edit", target_ref],
+        cwd=workdir,
+        capture_output=True,
+        check=False,
+    )
+    merge_output = ((merge_proc.stdout or "") + (merge_proc.stderr or "")).strip()
+    if merge_output:
+        sink = sys.stdout if merge_proc.returncode == 0 else sys.stderr
+        print(f"[gdnctl] {merge_output}", file=sink)
+
+    if merge_proc.returncode == 0:
+        return
+
+    _run_git(["merge", "--abort"], cwd=workdir, capture_output=True, check=False)
+    raise RuntimeError(
+        "[gdnctl] failed to merge "
+        f"{target_ref} into current branch (exit={merge_proc.returncode}). "
+        "Resolve conflicts and rerun."
+    )
+
+
 def _git_dirty(cwd: Path) -> bool:
     proc = _run_git(["status", "--porcelain"], cwd=cwd, capture_output=True, check=True)
     return bool(proc.stdout.strip())
@@ -2077,6 +2114,12 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     if args.perf_max_regression_pct < 0:
         raise SystemExit("[gdnctl] --perf-max-regression-pct must be >= 0.")
 
+    if args.sync_main_policy != "off":
+        if not args.sync_main_remote.strip():
+            raise SystemExit("[gdnctl] --sync-main-remote must be non-empty.")
+        if not args.sync_main_branch.strip():
+            raise SystemExit("[gdnctl] --sync-main-branch must be non-empty.")
+
     if args.resilient:
         print(
             "[gdnctl] resilient mode active: unlimited failures, stash dirty handling, "
@@ -2121,6 +2164,16 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
             print(f"\n[gdnctl] === codex iteration {iteration}/{args.iterations} ===")
             try:
                 with _clean_worktree_for_iteration(args, workdir=workdir, iteration=iteration):
+                    should_sync_main = args.sync_main_policy == "each-iteration" or (
+                        args.sync_main_policy == "once" and iteration == 1
+                    )
+                    if should_sync_main:
+                        _sync_branch_from_remote(
+                            workdir=workdir,
+                            remote=args.sync_main_remote,
+                            branch=args.sync_main_branch,
+                        )
+
                     head_before = _git_head(workdir)
                     prompt = _format_prompt(
                         prompt_template,
@@ -2422,6 +2475,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Prompt template file",
     )
     codex_loop.add_argument("--workdir", default=str(REPO_ROOT), help="Repository root for codex runs")
+    codex_loop.add_argument(
+        "--sync-main-policy",
+        choices=["off", "once", "each-iteration"],
+        default="off",
+        help="Synchronize branch with --sync-main-remote/--sync-main-branch before loop iterations.",
+    )
+    codex_loop.add_argument(
+        "--sync-main-remote",
+        default="origin",
+        help="Remote used by --sync-main-policy.",
+    )
+    codex_loop.add_argument(
+        "--sync-main-branch",
+        default="main",
+        help="Remote branch used by --sync-main-policy.",
+    )
     codex_loop.add_argument("--model", default="gpt-5.3-codex", help="Codex model")
     codex_loop.add_argument(
         "--codex-bin",
