@@ -34,7 +34,7 @@ storage:
 controller:
   image: us-central2-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
   gcp:
-    zone: us-west1-b
+    zone: us-central1-a
     machine_type: e2-standard-4
     port: 10000
 
