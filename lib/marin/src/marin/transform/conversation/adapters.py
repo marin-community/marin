@@ -124,7 +124,10 @@ class TransformAdapter:
             if isinstance(conversation, str):
                 conversation = json.loads(conversation)
             for conv in conversation:
-                role = role_to_openai_role[conv[self.role_key]]
+                raw_role = conv[self.role_key]
+                if raw_role not in role_to_openai_role:
+                    continue
+                role = role_to_openai_role[raw_role]
                 kwargs: dict[str, Any] = {}
                 if conv.get("tool_calls"):
                     kwargs["tool_calls"] = conv["tool_calls"]

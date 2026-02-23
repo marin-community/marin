@@ -47,6 +47,14 @@ TOOL_CALLING_SAMPLE_WITH_EMPTY_FIELDS = {
     ]
 }
 
+UNKNOWN_ROLE_SAMPLE = {
+    "messages": [
+        {"role": "user", "content": "Fix the bug"},
+        {"role": "assistant", "content": "Done."},
+        {"role": "exit", "content": ""},
+    ]
+}
+
 SHAREGPT_FORMAT_SAMPLE = {
     "conversations": [
         {"from": "human", "value": "Explain quantum computing"},
@@ -172,6 +180,24 @@ class TestTransformAdapters:
         assert messages[3].tool_calls is None
         assert messages[3].tool_call_id is None
         assert messages[3].name is None
+
+    def test_unknown_roles_are_skipped(self):
+        """Test that messages with unrecognized roles (e.g. 'exit') are silently skipped."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            conversation_column="messages",
+            role_key="role",
+            content_key="content",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+        )
+
+        messages = adapter.transform_conversation_to_openai_format(UNKNOWN_ROLE_SAMPLE)
+
+        assert len(messages) == 2
+        assert messages[0].role == "user"
+        assert messages[1].role == "assistant"
 
     def test_sharegpt_format_adapter(self):
         """Test ShareGPT format adapter."""
