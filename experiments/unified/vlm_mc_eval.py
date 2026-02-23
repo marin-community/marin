@@ -18,8 +18,8 @@ PromptCompletion → greedy_pack → make_array_from_callback → named_jit(eval
 
 All benchmarks are merged into a SINGLE continuous batch loop (via
 evaluate_all_vlm_benchmarks) to avoid TPU crashes at benchmark transitions.
-Each host independently builds identical completions from GCS parquet files;
-hax.shard distributes data across devices via local device_put (no extra JIT).
+Process 0 prepares eval payloads and broadcasts them to worker hosts in lockstep,
+matching the text-mc coordinator/worker communication pattern.
 Results are split by benchmark afterward.
 
 Usage (standalone):
@@ -252,6 +252,26 @@ def _make_dummy_eval_batch(EvalBatch, EvalPos):
     )
 
 
+class _BatchLoopMessage:
+    """Control messages used to keep source/worker batch execution in lockstep."""
+
+    STOP = 0
+    RUN_BATCH = 1
+
+
+def _send_batch_loop_message(message: int) -> int:
+    """Source host sends a control message to all hosts."""
+    assert jax.process_index() == 0
+    out = broadcast_shard(jnp.array(message, dtype=jnp.int32), PartitionSpec())
+    return int(out.item())
+
+
+def _receive_batch_loop_message() -> int:
+    """Worker hosts block until a source control message is broadcast."""
+    msg = broadcast_shard(jnp.array(_BatchLoopMessage.STOP, dtype=jnp.int32), PartitionSpec())
+    return int(msg.item())
+
+
 def _run_batch_loop(
     jit_fn,
     model,
@@ -336,24 +356,34 @@ def _run_batch_loop(
     pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok") if is_source else None
     dummy_batch = _make_dummy_eval_batch(EvalBatch, EvalPos)
     out_specs = hax.partitioning.infer_resource_partitions(dummy_batch, axis_resources)
-    message_pspec = PartitionSpec()
-    MSG_STOP = 0
-    MSG_BATCH = 1
+    logger.warning(
+        "VLM_EVAL_OUT_SPECS eval_run_uuid=%s host=%d out_specs_crc32=%d mesh=%s",
+        eval_run_uuid,
+        jax.process_index(),
+        int(zlib.crc32(str(out_specs).encode())),
+        hax.partitioning._get_mesh(),
+    )
 
     source_batch_idx = 0
-    loop_batch_idx = 0
+    worker_batch_idx = 0
     while True:
-        local_message = MSG_BATCH if (is_source and source_batch_idx < num_batches) else MSG_STOP
-        message_arr = broadcast_shard(jnp.array(local_message, dtype=jnp.int32), message_pspec, source=0)
-        message = int(np.asarray(message_arr).item())
-
-        if message == MSG_STOP:
-            break
-        if message != MSG_BATCH:
-            raise RuntimeError(f"[{eval_run_uuid}] Unknown VLM eval loop message: {message}")
-
-        batch_idx = loop_batch_idx
-        loop_batch_idx += 1
+        if is_source:
+            if source_batch_idx >= num_batches:
+                _send_batch_loop_message(_BatchLoopMessage.STOP)
+                break
+            batch_idx = source_batch_idx
+            _send_batch_loop_message(_BatchLoopMessage.RUN_BATCH)
+            batch_orig = all_batches[batch_idx]
+            source_batch_idx += 1
+        else:
+            message = _receive_batch_loop_message()
+            if message == _BatchLoopMessage.STOP:
+                break
+            if message != _BatchLoopMessage.RUN_BATCH:
+                raise RuntimeError(f"[{eval_run_uuid}] unknown batch-loop message={message}")
+            batch_idx = worker_batch_idx
+            worker_batch_idx += 1
+            batch_orig = dummy_batch
 
         logger.warning(
             "VLM_EVAL_BATCH_ENTER eval_run_uuid=%s host=%d batch_idx=%d leader_num_batches=%d",
@@ -362,16 +392,6 @@ def _run_batch_loop(
             batch_idx,
             num_batches,
         )
-
-        if is_source:
-            if batch_idx >= num_batches:
-                raise RuntimeError(
-                    f"[{eval_run_uuid}] Source batch index out of range: batch_idx={batch_idx}, num_batches={num_batches}"
-                )
-            batch_orig = all_batches[batch_idx]
-            source_batch_idx += 1
-        else:
-            batch_orig = dummy_batch
 
         if is_source:
             # Hard host-side guardrail: catch out-of-vocab ids before launching
@@ -423,6 +443,14 @@ def _run_batch_loop(
             batch_tokens = 0
             segments_this_batch = []
 
+        if batch_idx == num_batches - 1:
+            logger.warning(
+                "VLM_EVAL_LAST_BATCH_PRE_BROADCAST eval_run_uuid=%s host=%d batch_idx=%d",
+                eval_run_uuid,
+                jax.process_index(),
+                batch_idx,
+            )
+
         try:
             batch = broadcast_shard(batch_orig, out_specs, source=0)
         except Exception:
@@ -446,6 +474,13 @@ def _run_batch_loop(
         # source-side host parsing or the next control-message broadcast.
         jax.block_until_ready(out_ids.array)
         jax.block_until_ready(out_lls.array)
+        if batch_idx == num_batches - 1:
+            logger.warning(
+                "VLM_EVAL_LAST_BATCH_POST_JIT eval_run_uuid=%s host=%d batch_idx=%d",
+                eval_run_uuid,
+                jax.process_index(),
+                batch_idx,
+            )
 
         valid_points = 0
         if is_source:
@@ -488,6 +523,10 @@ def _run_batch_loop(
     if is_source and source_batch_idx != num_batches:
         raise RuntimeError(
             f"[{eval_run_uuid}] Source loop consumed {source_batch_idx} batches but expected {num_batches} batches."
+        )
+    if not is_source and worker_batch_idx != num_batches:
+        raise RuntimeError(
+            f"[{eval_run_uuid}] Worker loop consumed {worker_batch_idx} batches but expected {num_batches} batches."
         )
 
     logger.info("[%s][host=%d] vlm_eval batch loop complete", eval_run_uuid, jax.process_index())
@@ -1535,14 +1574,7 @@ def vlm_mc_eval_callback(
                 jax.process_index(),
             )
 
-        # Keep callback exit ordering deterministic across hosts. Without a
-        # final host-sync here, worker hosts can return to the next train-step
-        # launch while host0 is still finishing eval-side bookkeeping/logging,
-        # which is a common trigger for TPU "different launch id" failures.
-        _exit_sync = multihost_broadcast_sync(1 if jax.process_index() == 0 else 0)
-        if int(_exit_sync) != 1:
-            raise RuntimeError(f"[{eval_run_uuid}] unexpected callback-exit sync value: {_exit_sync}")
-
+        logger.warning("VLM_EVAL_CALLBACK_EXIT eval_run_uuid=%s host=%d", eval_run_uuid, jax.process_index())
         logger.info("VLM eval done.")
 
     return vlm_eval
