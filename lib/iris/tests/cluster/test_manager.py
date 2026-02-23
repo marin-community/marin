@@ -8,7 +8,8 @@ from __future__ import annotations
 import threading
 from unittest.mock import patch
 
-from iris.cluster.manager import _collect_terminate_targets, stop_all
+from iris.cluster.manager import stop_all
+from iris.cluster.platform.base import default_stop_all
 from iris.rpc import config_pb2
 
 
@@ -51,6 +52,7 @@ class FakeManagerPlatform:
 
     def __init__(self, slices: list[FakeSliceHandle] | None = None):
         self._slices = slices or []
+        self.controller_stopped = False
 
     def list_all_slices(self, labels: dict[str, str] | None = None) -> list[FakeSliceHandle]:
         results = list(self._slices)
@@ -60,6 +62,17 @@ class FakeManagerPlatform:
 
     def list_vms(self, zones: list[str], labels: dict[str, str] | None = None) -> list:
         return []
+
+    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
+        self.controller_stopped = True
+
+    def stop_all(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        dry_run: bool = False,
+        label_prefix: str | None = None,
+    ) -> list[str]:
+        return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
 
     def shutdown(self) -> None:
         pass
@@ -73,19 +86,23 @@ def _make_manager_config() -> config_pb2.IrisClusterConfig:
     return config
 
 
-def test_collect_terminate_targets_discovers_managed_slices():
-    """_collect_terminate_targets finds slices labeled {prefix}-managed=true."""
+def test_stop_all_dry_run_discovers_without_terminating():
+    """stop_all(dry_run=True) returns resource names but does not terminate anything."""
     managed = FakeSliceHandle("slice-1", labels={"iris-managed": "true"})
     unmanaged = FakeSliceHandle("slice-2", labels={})
     platform = FakeManagerPlatform(slices=[managed, unmanaged])
     config = _make_manager_config()
 
-    targets = _collect_terminate_targets(platform, config)
+    with patch("iris.cluster.manager.IrisConfig") as mock_config_cls:
+        mock_config_cls.return_value.platform.return_value = platform
+        names = stop_all(config, dry_run=True)
 
-    target_names = [name for name, _ in targets]
-    assert "controller" in target_names
-    assert "slice:slice-1" in target_names
-    assert "slice:slice-2" not in target_names
+    assert "controller" in names
+    assert "slice:slice-1" in names
+    assert "slice:slice-2" not in names
+    assert not managed.terminated
+    assert not unmanaged.terminated
+    assert not platform.controller_stopped
 
 
 def test_stop_all_terminates_all_slices():
@@ -94,8 +111,27 @@ def test_stop_all_terminates_all_slices():
     platform = FakeManagerPlatform(slices=slices)
     config = _make_manager_config()
 
-    with patch("iris.cluster.manager.IrisConfig") as mock_config_cls, patch("iris.cluster.manager.stop_controller"):
+    with patch("iris.cluster.manager.IrisConfig") as mock_config_cls:
         mock_config_cls.return_value.platform.return_value = platform
         stop_all(config)
 
     assert all(s.terminated for s in slices)
+    assert platform.controller_stopped
+
+
+def test_stop_all_custom_label_prefix():
+    """stop_all with custom label_prefix uses that prefix for discovery."""
+    managed = FakeSliceHandle("slice-a", labels={"custom-managed": "true"})
+    wrong_prefix = FakeSliceHandle("slice-b", labels={"iris-managed": "true"})
+    platform = FakeManagerPlatform(slices=[managed, wrong_prefix])
+    config = _make_manager_config()
+
+    with patch("iris.cluster.manager.IrisConfig") as mock_config_cls:
+        mock_config_cls.return_value.platform.return_value = platform
+        names = stop_all(config, label_prefix="custom")
+
+    assert "slice:slice-a" in names
+    assert "slice:slice-b" not in names
+    assert managed.terminated
+    assert not wrong_prefix.terminated
+    assert platform.controller_stopped

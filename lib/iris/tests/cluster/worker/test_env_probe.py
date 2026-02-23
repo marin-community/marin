@@ -6,7 +6,7 @@
 import pytest
 
 import iris.cluster.worker.env_probe as env_probe
-from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, _get_extra_attributes
+from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, _device_from_env, _get_extra_attributes
 
 
 @pytest.mark.parametrize(
@@ -144,3 +144,47 @@ def test_log_prefix_prefers_env_override(monkeypatch):
     )
 
     assert DefaultEnvironmentProvider().log_prefix() == "gs://custom/ttl=30d/iris-logs"
+
+
+def test_device_from_env_gpu(monkeypatch):
+    monkeypatch.setenv("IRIS_ACCELERATOR_TYPE", "gpu")
+    monkeypatch.setenv("IRIS_ACCELERATOR_VARIANT", "H100")
+    monkeypatch.setenv("IRIS_GPU_COUNT", "8")
+
+    device, gpu_count, gpu_name = _device_from_env()
+
+    assert device is not None
+    assert device.HasField("gpu")
+    assert device.gpu.variant == "H100"
+    assert device.gpu.count == 8
+    assert gpu_count == 8
+    assert gpu_name == "H100"
+
+
+def test_device_from_env_invalid_gpu_count_raises(monkeypatch):
+    monkeypatch.setenv("IRIS_ACCELERATOR_TYPE", "gpu")
+    monkeypatch.setenv("IRIS_GPU_COUNT", "abc")
+
+    with pytest.raises(ValueError, match="IRIS_GPU_COUNT must be an integer"):
+        _device_from_env()
+
+
+def test_environment_provider_prefers_configured_gpu_over_nvidia_smi(monkeypatch):
+    monkeypatch.setenv("IRIS_ACCELERATOR_TYPE", "gpu")
+    monkeypatch.setenv("IRIS_ACCELERATOR_VARIANT", "H100")
+    monkeypatch.setenv("IRIS_GPU_COUNT", "8")
+    monkeypatch.setattr(env_probe, "_probe_tpu_metadata", lambda: ("", "", "", "", ""))
+
+    def _fail_probe_gpu() -> tuple[int, str, int]:
+        raise AssertionError("nvidia-smi fallback should not run when env is configured")
+
+    monkeypatch.setattr(env_probe, "_probe_gpu_info", _fail_probe_gpu)
+
+    metadata = DefaultEnvironmentProvider().probe()
+
+    assert metadata.device.HasField("gpu")
+    assert metadata.device.gpu.variant == "H100"
+    assert metadata.device.gpu.count == 8
+    assert metadata.gpu_count == 8
+    assert metadata.gpu_name == "H100"
+    assert metadata.gpu_memory_mb == 0

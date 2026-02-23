@@ -40,6 +40,8 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 
+from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
+from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.platform._worker_base import RemoteExecWorkerBase
 from iris.cluster.platform.base import (
     CloudSliceState,
@@ -48,6 +50,7 @@ from iris.cluster.platform.base import (
     QuotaExhaustedError,
     SliceStatus,
     WorkerStatus,
+    default_stop_all,
 )
 from iris.cluster.platform.bootstrap import build_worker_bootstrap_script
 from iris.cluster.platform.debug import wait_for_port
@@ -788,6 +791,32 @@ class GcpPlatform:
         if not vms:
             raise RuntimeError(f"No controller VM found (label={label_key}=true, project={self._project_id})")
         return f"{vms[0].internal_address}:{port}"
+
+    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Start or discover existing controller on GCP. Returns address (host:port)."""
+        address, _vm = vm_start_controller(self, config)
+        return address
+
+    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
+        """Stop the controller on GCP by terminating the controller VM."""
+        vm_stop_controller(self, config)
+
+    def stop_all(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        dry_run: bool = False,
+        label_prefix: str | None = None,
+    ) -> list[str]:
+        return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
+
+    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
+        label_prefix = config.platform.label_prefix or "iris"
+        all_slices = self.list_all_slices(labels={f"{label_prefix}-managed": "true"})
+        for s in all_slices:
+            logger.info("Terminating slice %s for reload", s.slice_id)
+            s.terminate()
+        self.stop_controller(config)
+        return self.start_controller(config)
 
     # ========================================================================
     # Internal helpers

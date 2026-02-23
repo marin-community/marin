@@ -184,11 +184,11 @@ def make_mock_platform(slices_to_discover: list[MagicMock] | None = None) -> Mag
     return platform
 
 
-def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock]) -> None:
+def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock], timestamp: Timestamp | None = None) -> None:
     """Mark discovered slices as READY with their VM addresses."""
     for handle in handles:
         vm_addresses = [w.internal_address for w in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, vm_addresses)
+        group.mark_slice_ready(handle.slice_id, vm_addresses, timestamp=timestamp)
 
 
 def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> None:
@@ -416,6 +416,7 @@ class TestAutoscalerScaleDown:
 
     def test_scales_down_idle_slice_via_run_once(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """run_once() scales down idle slices via ScalingGroup.scale_down_if_idle()."""
+        ready_ts = Timestamp.from_ms(1_000)
         discovered = [
             make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000),
             make_mock_slice_handle("slice-002", all_ready=True, created_at_ms=200000),
@@ -428,7 +429,7 @@ class TestAutoscalerScaleDown:
             idle_threshold=Duration.from_ms(1000),
         )
         group.reconcile()
-        _mark_discovered_ready(group, discovered)
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -443,6 +444,7 @@ class TestAutoscalerScaleDown:
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
+        # Timestamp must be past idle_threshold (1000ms) from when slices became ready
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
         assert group.slice_count() == 1
@@ -1789,21 +1791,35 @@ class TestPerGroupBootstrapConfig:
         env = json.loads(bc.env_vars["IRIS_TASK_DEFAULT_ENV_JSON"])
         assert env["IRIS_REGION"] == "us-west4"
         assert bc.env_vars["IRIS_SCALE_GROUP"] == "west-group"
+        assert bc.env_vars["IRIS_ACCELERATOR_TYPE"] == "tpu"
+        assert bc.env_vars["IRIS_ACCELERATOR_VARIANT"] == "v5p-8"
+        assert "IRIS_GPU_COUNT" not in bc.env_vars
 
-    def test_returns_base_when_no_worker(self):
-        """Groups without worker config get the base bootstrap config unchanged."""
+    def test_injects_accelerator_env_without_worker_settings(self):
+        """Groups without worker settings still inject accelerator env vars."""
         base_bc = config_pb2.BootstrapConfig(
             docker_image="test:latest",
             worker_port=10001,
             controller_address="controller:10000",
         )
-        sg_config = make_scale_group_config(name="plain-group", max_slices=5)
+        sg_config = make_scale_group_config(
+            name="plain-group",
+            max_slices=5,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="H100",
+        )
+        sg_config.resources.gpu_count = 8
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"plain-group": group}, bootstrap_config=base_bc)
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
-        assert bc is base_bc
+        assert bc is not None
+        assert bc is not base_bc
+        assert bc.env_vars["IRIS_ACCELERATOR_TYPE"] == "gpu"
+        assert bc.env_vars["IRIS_ACCELERATOR_VARIANT"] == "H100"
+        assert bc.env_vars["IRIS_GPU_COUNT"] == "8"
+        assert bc.env_vars["IRIS_SCALE_GROUP"] == "plain-group"
 
     def test_returns_none_without_base(self):
         """Without a base bootstrap config, returns None."""
@@ -1866,10 +1882,12 @@ class TestPerGroupBootstrapConfig:
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
-        assert bc is base_bc
+        assert bc is not None
+        # GHCR images are not rewritten but still get a copy with accel env vars
+        assert bc.docker_image == "ghcr.io/org/iris-worker:latest"
 
     def test_no_rewrite_for_same_region(self):
-        """When the group zone matches the image region, returns base config."""
+        """When the group zone matches the image region, no rewrite needed."""
         base_bc = config_pb2.BootstrapConfig(
             docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
             worker_port=10001,
@@ -1882,7 +1900,8 @@ class TestPerGroupBootstrapConfig:
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
-        assert bc is base_bc
+        assert bc is not None
+        assert bc.docker_image == "us-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
 
     def test_rewrite_combined_with_worker_attributes(self):
         """Image rewrite and worker attribute injection both apply when both are needed."""
@@ -1905,3 +1924,121 @@ class TestPerGroupBootstrapConfig:
         assert bc.docker_image == "europe-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
         attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
         assert attrs["region"] == "europe-west4"
+
+
+class TestGpuScaleGroupBugs:
+    """Reproduction tests for GPU scale group bugs observed on CoreWeave.
+
+    Production behavior: GPU job submitted -> h100-8x scales up -> slice becomes
+    READY 20s later -> immediately scaled down. Worker shows CPU=128, Memory=2TB
+    but no GPU info. All GPU jobs stuck in no_capacity.
+
+    Root cause: mark_slice_ready() doesn't initialize last_active, so freshly-ready
+    slices have last_active=epoch(0) and are immediately eligible for scaledown
+    regardless of idle_threshold.
+    """
+
+    def test_freshly_ready_slice_has_nonzero_last_active(self):
+        """When a slice transitions to READY, last_active should be initialized
+        to at least the current time, not epoch(0).
+
+        Reproduces: mark_slice_ready() doesn't touch last_active, so it stays
+        at epoch(0). is_slice_eligible_for_scaledown() returns True for
+        last_active=epoch(0), making fresh slices immediately eligible for scaledown.
+        """
+        config = make_scale_group_config(
+            name="h100-8x",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="H100",
+            min_slices=0,
+            max_slices=1,
+        )
+        platform = make_mock_platform()
+        group = ScalingGroup(
+            config,
+            platform,
+            scale_up_cooldown=Duration.from_ms(0),
+            idle_threshold=Duration.from_ms(60_000),
+        )
+
+        ts = Timestamp.from_ms(1_000_000)
+
+        # Scale up and complete
+        group.begin_scale_up()
+        handle = group.scale_up(timestamp=ts)
+        group.complete_scale_up(handle, ts)
+
+        # Mark the slice as READY (simulates bootstrap completion)
+        vm_addresses = [w.internal_address for w in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, vm_addresses)
+
+        # last_active should be initialized to at least the ready time
+        with group._slices_lock:
+            state = group._slices[handle.slice_id]
+
+        assert state.last_active.epoch_ms() > 0, (
+            "Freshly READY slice should have last_active set to at least the ready time, "
+            f"not epoch(0). Got last_active={state.last_active.epoch_ms()}"
+        )
+
+        # Consequently, the slice should NOT be eligible for scaledown immediately
+        assert not group.is_slice_eligible_for_scaledown(
+            handle.slice_id, ts
+        ), "Freshly READY slice should not be eligible for scaledown immediately"
+
+    def test_idle_threshold_protects_freshly_ready_slice(self):
+        """A freshly-ready slice should be protected by idle_threshold even when
+        demand temporarily drops to 0 (e.g., between job resubmission).
+
+        With idle_threshold=300s, a slice that became ready 1 second ago should
+        NOT be eligible for scaledown. But with last_active=epoch(0), the idle
+        duration is computed as (current_time - 0) = millions of ms, which always
+        exceeds idle_threshold.
+        """
+        config = make_scale_group_config(
+            name="h100-8x",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="H100",
+            min_slices=0,
+            max_slices=2,
+        )
+        discovered = [
+            make_mock_slice_handle("slice-001", all_ready=True),
+            make_mock_slice_handle("slice-002", all_ready=True),
+        ]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(
+            config,
+            platform,
+            scale_up_cooldown=Duration.from_ms(0),
+            scale_down_cooldown=Duration.from_ms(0),
+            idle_threshold=Duration.from_ms(300_000),  # 5 minutes
+        )
+        group.reconcile()
+
+        # Mark both slices as READY (simulating bootstrap completion)
+        _mark_discovered_ready(group, discovered)
+
+        autoscaler = make_autoscaler({"h100-8x": group})
+
+        # Slices just became ready; demand drops to 0 (transient gap)
+        # target_capacity = max(0, 0) = 0, ready=2 > 0 -> scaledown check runs
+        slice_001 = group.get_slice("slice-001")
+        slice_002 = group.get_slice("slice-002")
+        addr1 = slice_001.describe().workers[0].internal_address
+        addr2 = slice_002.describe().workers[0].internal_address
+        vm_status_map = {
+            addr1: VmWorkerStatus(vm_address=addr1, running_task_ids=frozenset()),
+            addr2: VmWorkerStatus(vm_address=addr2, running_task_ids=frozenset()),
+        }
+
+        # Run 1 second after ready — well within the 5-minute idle_threshold.
+        # Slices should NOT be scaled down.
+        ts = Timestamp.from_ms(10_000)
+        autoscaler.run_once([], vm_status_map, ts)
+
+        assert group.slice_count() == 2, (
+            "Freshly-ready slices should be protected by idle_threshold (300s). "
+            "With last_active=epoch(0), idle_duration is computed from epoch, "
+            f"making all slices appear idle for >300s. Got slice_count={group.slice_count()}"
+        )

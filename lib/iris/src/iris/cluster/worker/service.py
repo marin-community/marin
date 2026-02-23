@@ -55,12 +55,7 @@ class WorkerServiceImpl:
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
 
-        status = task.to_proto()
-        if request.include_result and task.result:
-            # TaskStatus doesn't have serialized_result field, but we could add it
-            # For now, result is available via the task object
-            pass
-        return status
+        return task.to_proto()
 
     def list_tasks(
         self,

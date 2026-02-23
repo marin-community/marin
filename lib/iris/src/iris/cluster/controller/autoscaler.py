@@ -185,17 +185,36 @@ def route_demand(
 
     def make_pending(group: ScalingGroup) -> PendingGroup:
         counts = group.slice_state_counts()
-        pending_slices = (
+        inflight = (
             counts.get(SliceLifecycleState.REQUESTING, 0)
             + counts.get(SliceLifecycleState.BOOTING, 0)
             + counts.get(SliceLifecycleState.INITIALIZING, 0)
         )
+        ready = counts.get(SliceLifecycleState.READY, 0)
         current = sum(counts.values())
         headroom = group.max_slices - current
+
+        if headroom > 0:
+            # Group can still create new slices. Only count in-flight
+            # slices as pending capacity; headroom determines how many
+            # new demand entries can trigger scale-ups.
+            return PendingGroup(
+                name=group.name,
+                pending_slices=inflight,
+                remaining_slices=inflight + headroom,
+                assigned_entries=[],
+                reason="demand-routed",
+            )
+
+        # Group is at max_slices (AT_CAPACITY). Include ready slices so
+        # demand can still be routed here for demand tracking. Without
+        # this, current_demand drops to 0 when a group hits max_slices,
+        # causing immediate scale-down of newly ready slices.
+        existing_capacity = inflight + ready
         return PendingGroup(
             name=group.name,
-            pending_slices=pending_slices,
-            remaining_slices=pending_slices + headroom,
+            pending_slices=existing_capacity,
+            remaining_slices=existing_capacity,
             assigned_entries=[],
             reason="demand-routed",
         )
@@ -234,8 +253,10 @@ def route_demand(
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
-        if not any(g.can_fit_resources(entry.resources) for g in matching_groups):
-            reason = f"insufficient_resources: task needs {entry.resources}" f" but no matching group can fit it"
+        fit_reasons = [g.check_resource_fit(entry.resources) for g in matching_groups]
+        if all(r is not None for r in fit_reasons):
+            details = "; ".join(r for r in fit_reasons if r is not None)
+            reason = f"insufficient_resources: {details}"
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
@@ -458,6 +479,16 @@ class Autoscaler:
                 "CAPACITY INSUFFICIENT: %d demand entries cannot be satisfied by any group",
                 len(result.unmet_entries),
             )
+            for unmet in result.unmet_entries[:10]:
+                entry = unmet.entry
+                logger.warning(
+                    "Unmet demand: reason=%s device=%s:%s resources=%s tasks=%s",
+                    unmet.reason,
+                    entry.device_type,
+                    entry.device_variant,
+                    entry.resources,
+                    entry.task_ids,
+                )
 
         decisions = []
         for name, group in self._groups.items():
@@ -596,19 +627,20 @@ class Autoscaler:
             return False
         except Exception as e:
             group.cancel_scale_up()
-            logger.error("Failed to create slice for %s: %s", group.name, e)
+            logger.exception("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)
             return False
 
     def _per_group_bootstrap_config(self, group: ScalingGroup) -> config_pb2.BootstrapConfig | None:
-        """Build a per-group BootstrapConfig by merging worker attributes and rewriting docker image region.
+        """Build a per-group BootstrapConfig by merging worker attributes, image region, and accelerator settings.
 
         Copies the base bootstrap config and:
         1. Rewrites docker_image's AR region to match the group's GCP zone
         2. Injects IRIS_WORKER_ATTRIBUTES, IRIS_TASK_DEFAULT_ENV_JSON, and
            IRIS_SCALE_GROUP from the group's worker settings into env_vars.
+        3. Injects accelerator type/variant/GPU count env vars for the group.
         """
         if not self._bootstrap_config:
             return None
@@ -623,9 +655,6 @@ class Autoscaler:
             and rewrite_artifact_registry_region(self._bootstrap_config.docker_image, target_region)
             != self._bootstrap_config.docker_image
         )
-
-        if not has_worker and not needs_image_rewrite:
-            return self._bootstrap_config
 
         bc = config_pb2.BootstrapConfig()
         bc.CopyFrom(self._bootstrap_config)
@@ -642,7 +671,21 @@ class Autoscaler:
 
         if group.config.name:
             bc.env_vars["IRIS_SCALE_GROUP"] = group.config.name
-
+        accel_type = group.config.accelerator_type
+        if accel_type == config_pb2.ACCELERATOR_TYPE_GPU:
+            bc.env_vars["IRIS_ACCELERATOR_TYPE"] = "gpu"
+        elif accel_type == config_pb2.ACCELERATOR_TYPE_TPU:
+            bc.env_vars["IRIS_ACCELERATOR_TYPE"] = "tpu"
+        elif accel_type == config_pb2.ACCELERATOR_TYPE_CPU:
+            bc.env_vars["IRIS_ACCELERATOR_TYPE"] = "cpu"
+        if group.config.accelerator_variant:
+            bc.env_vars["IRIS_ACCELERATOR_VARIANT"] = group.config.accelerator_variant
+        if (
+            accel_type == config_pb2.ACCELERATOR_TYPE_GPU
+            and group.config.HasField("resources")
+            and group.config.resources.gpu_count > 0
+        ):
+            bc.env_vars["IRIS_GPU_COUNT"] = str(group.config.resources.gpu_count)
         return bc
 
     def _register_slice_workers(
@@ -711,15 +754,16 @@ class Autoscaler:
                             reason=f"bootstrap completed ({len(addrs)} workers)",
                         )
                     elif status.state == CloudSliceState.FAILED:
-                        group.mark_slice_failed(slice_id)
+                        group.mark_slice_failed(slice_id, error_message=status.error_message)
                         group.scale_down(slice_id)
                         self._unregister_slice_workers(slice_id)
                         group.record_failure()
+                        reason = status.error_message if status.error_message else "bootstrap failed"
                         self._log_action(
                             "slice_failed",
                             group.name,
                             slice_id,
-                            reason="bootstrap failed",
+                            reason=reason,
                             status="failed",
                         )
 

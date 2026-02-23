@@ -180,7 +180,7 @@ message JobStatus {
 
   BuildMetrics build_metrics = 10;
 
-  bytes serialized_result = 13;  // cloudpickle serialized return value (if requested)
+  reserved 13;  // was serialized_result (removed: dead store, never populated)
 
   int32 failure_count = 17;                // Total task failures (aggregated)
   int32 preemption_count = 18;             // Total task preemptions (aggregated)
@@ -443,7 +443,7 @@ message Controller {
 
   message GetJobStatusRequest {
     string job_id = 1;
-    bool include_result = 2;  // If true, include serialized_result in response
+    reserved 2;  // was include_result (removed: serialized_result no longer exists)
   }
 
   message GetJobStatusResponse {
@@ -701,7 +701,7 @@ message Worker {
 
   message GetTaskStatusRequest {
     string task_id = 1;
-    bool include_result = 2;
+    reserved 2;  // was include_result (removed: serialized_result no longer exists)
   }
 
   message ListTasksRequest {}
