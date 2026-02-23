@@ -67,8 +67,18 @@ class Labels:
 # ============================================================================
 
 
-def find_free_port(start: int = 10000) -> int:
-    """Find an available port, scanning upward from start."""
+def find_free_port(start: int = -1) -> int:
+    """Find an available port.
+
+    Args:
+        start: Starting port for sequential scan. Default of -1 lets the kernel
+            pick a random ephemeral port, which avoids collisions when multiple
+            processes search for ports concurrently (e.g. pytest-xdist).
+    """
+    if start == -1:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
     for port in range(start, start + 1000):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
