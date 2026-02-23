@@ -48,8 +48,6 @@ class TrainLmOnPodConfig:
 
     Note that trainer.id and the RUN_ID env variable take precedence, in that order.
     """
-    allow_out_of_region: tuple[str, ...] = ()
-    """Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
     auto_build_caches: bool = False
@@ -75,8 +73,6 @@ class TrainDpoOnPodConfig:
 
     Note that trainer.id and the RUN_ID env variable take precedence, in that order.
     """
-    allow_out_of_region: tuple[str, ...] = ()
-    """Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
     auto_build_caches: bool = False
@@ -208,7 +204,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
     - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
-    - if allow_out_of_region is False, it checks that the data cache paths are in the same region as the VM.
+    - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
@@ -246,7 +242,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         trainer = replace(train_config.trainer, require_accelerator=False)
         train_config = replace(train_config, trainer=trainer)
 
-    if not config.allow_out_of_region and not isinstance(config.resources.device, CpuConfig):
+    if not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
     client = current_client()
@@ -311,7 +307,7 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
         trainer = replace(train_config.trainer, require_accelerator=False)
         train_config = replace(train_config, trainer=trainer)
 
-    if not config.allow_out_of_region and not isinstance(config.resources.device, CpuConfig):
+    if not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
     client = current_client()
@@ -340,9 +336,6 @@ def _doublecheck_paths(config: TrainOnPodConfigT):
 
     This function recursively examines all strings/paths in the config to identify GCS paths and checks their regions.
     """
-    # Determine if we're running locally or if path checks should be bypassed
-    allow_out_of_region = config.allow_out_of_region
-
     local_ok = not isinstance(config.resources.device, TpuConfig)
 
     try:
@@ -354,12 +347,12 @@ def _doublecheck_paths(config: TrainOnPodConfigT):
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
     # Recursively check all paths in the config
-    _check_paths_recursively(config.train_config, "", region, local_ok, allow_out_of_region)
+    _check_paths_recursively(config.train_config, "", region, local_ok)
 
     return config
 
 
-def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_region):
+def _check_paths_recursively(obj, path_prefix, region, local_ok):
     """
     Check all strings in the config object that look like GCS paths appear to respect same-region constraints.
 
@@ -368,17 +361,15 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
         path_prefix: The prefix for the current path (e.g., "config.trainer")
         region: The region of the VM
         local_ok: Whether local paths are allowed
-        allow_out_of_region: Tuple of paths that are allowed to be read from or written to different regions
-        must_save_checkpoints: Whether checkpoints must be saved
     """
     if isinstance(obj, dict):
         for key, value in obj.items():
             new_prefix = f"{path_prefix}.{key}" if path_prefix else key
-            _check_paths_recursively(value, new_prefix, region, local_ok, allow_out_of_region)
+            _check_paths_recursively(value, new_prefix, region, local_ok)
     elif isinstance(obj, list | tuple):
         for i, item in enumerate(obj):
             new_prefix = f"{path_prefix}[{i}]"
-            _check_paths_recursively(item, new_prefix, region, local_ok, allow_out_of_region)
+            _check_paths_recursively(item, new_prefix, region, local_ok)
     elif isinstance(obj, str | os.PathLike):
         if isinstance(obj, os.PathLike):
             path_str = os.fspath(obj)
@@ -391,20 +382,15 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
             path_str = obj
 
         if path_str.startswith("gs://"):
-            # This is a GCS path, check if it's in the right region
-            is_allow_listed_path = any(path_prefix.startswith(p) for p in allow_out_of_region)
-            # whitelist train and validation urls because we are always cached
+            # Source URLs are always read-and-cached, so they may be out of region.
             if "train_urls" in path_prefix or "validation_urls" in path_prefix:
-                is_allow_listed_path = True
-
-            # Determine if this path should be checked
-            if not is_allow_listed_path:
-                _check_path_in_region(
-                    path_prefix,
-                    path_str,
-                    region=region,
-                    local_ok=local_ok,
-                )
+                return
+            _check_path_in_region(
+                path_prefix,
+                path_str,
+                region=region,
+                local_ok=local_ok,
+            )
     elif dataclasses.is_dataclass(obj):
         for field in dataclasses.fields(obj):
             new_prefix = f"{path_prefix}.{field.name}" if path_prefix else field.name
@@ -414,7 +400,6 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
                 new_prefix,
                 region,
                 local_ok,
-                allow_out_of_region,
             )
     # allow primitives through, warn on other types
     elif not isinstance(obj, str | int | float | bool | type(None)):
