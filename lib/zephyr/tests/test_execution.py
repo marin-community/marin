@@ -134,7 +134,11 @@ def test_chunk_cleanup(fray_client, tmp_path):
 
 def test_status_reports_alive_workers_not_total(tmp_path):
     """After heartbeat timeout, get_status workers dict reflects FAILED state,
-    and the status log distinguishes alive from total workers."""
+    and the status log distinguishes alive from total workers.
+
+    Also verifies that re-registering a worker that had an in-flight task
+    requeues that task so it is not silently lost.
+    """
     from zephyr.execution import Shard, ShardTask, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
@@ -161,6 +165,10 @@ def test_status_reports_alive_workers_not_total(tmp_path):
     assert len(status.workers) == 3
     assert all(w["state"] == "ready" for w in status.workers.values())
 
+    # worker-0 pulls the task so it becomes in-flight
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+
     # Simulate 2 workers dying via heartbeat timeout
     coord._last_seen["worker-0"] = 0.0
     coord._last_seen["worker-1"] = 0.0
@@ -176,12 +184,26 @@ def test_status_reports_alive_workers_not_total(tmp_path):
     assert alive == 1
     assert len(status.workers) == 3
 
-    # Simulate worker-0 re-registering (as if Ray restarted it)
+    # worker-2 picks up the requeued task
+    pulled2 = coord.pull_task("worker-2")
+    assert pulled2 is not None and pulled2 != "SHUTDOWN"
+
+    # Simulate worker-0 re-registering while worker-2 holds the task in-flight
+    # (race between heartbeat requeue and re-registration).
+    # Since worker-0 has no in-flight task anymore, this is a no-op for requeueing.
     coord.register_worker("worker-0", MagicMock())
     status = coord.get_status()
     assert status.workers["worker-0"]["state"] == "ready"
     alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
-    assert alive == 2
+    assert alive == 2  # worker-0 ready, worker-1 still failed, worker-2 busy
+
+    # Now test the direct re-registration requeue path:
+    # worker-2 dies while holding the task, and before heartbeat fires,
+    # it re-registers — the in-flight task should be requeued.
+    assert "worker-2" in coord._in_flight  # worker-2 has the task
+    coord.register_worker("worker-2", MagicMock())
+    assert "worker-2" not in coord._in_flight  # in-flight cleared
+    assert len(coord._task_queue) == 1  # task was requeued
 
 
 def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):

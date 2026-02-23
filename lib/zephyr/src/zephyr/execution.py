@@ -314,6 +314,10 @@ class ZephyrCoordinator:
                 self._worker_handles[worker_id] = worker_handle
                 self._worker_states[worker_id] = WorkerState.READY
                 self._last_seen[worker_id] = time.monotonic()
+                # NOTE: if there was a task assigned to the worker, there's a race condition between marking
+                # the worker as unhealthy via heartbeat and re-registration. If we do not requeue we may silently
+                # lose tasks.
+                self._maybe_requeue_worker_task(worker_id)
                 return
 
             self._worker_handles[worker_id] = worker_handle
@@ -360,6 +364,16 @@ class ZephyrCoordinator:
             dead,
         )
 
+    def _maybe_requeue_worker_task(self, worker_id: str) -> None:
+        """If the worker has a task in-flight, re-queue it and mark the worker as failed."""
+        task_and_attempt = self._in_flight.pop(worker_id, None)
+        if task_and_attempt is not None:
+            logger.info("Worker %s had an in-flight task, re-queuing", worker_id)
+            task, _old_attempt = task_and_attempt
+            self._task_attempts[task.shard_idx] += 1
+            self._task_queue.append(task)
+            self._retries += 1
+
     def _check_worker_heartbeats(self, timeout: float = 30.0) -> None:
         """Internal heartbeat check (called with lock held)."""
         now = time.monotonic()
@@ -367,13 +381,7 @@ class ZephyrCoordinator:
             if now - last > timeout and self._worker_states.get(worker_id) not in {WorkerState.FAILED, WorkerState.DEAD}:
                 logger.warning(f"Zephyr worker {worker_id} failed to heartbeat within timeout ({now - last:.1f}s)")
                 self._worker_states[worker_id] = WorkerState.FAILED
-                task_and_attempt = self._in_flight.pop(worker_id, None)
-                if task_and_attempt is not None:
-                    logger.info("Removed task %s from worker %s, re-queueing", task_and_attempt, worker_id)
-                    task, _old_attempt = task_and_attempt
-                    self._task_attempts[task.shard_idx] += 1
-                    self._task_queue.append(task)
-                    self._retries += 1
+                self._maybe_requeue_worker_task(worker_id)
 
     def pull_task(self, worker_id: str) -> tuple[ShardTask, int, dict] | str | None:
         """Called by workers to get next task.
