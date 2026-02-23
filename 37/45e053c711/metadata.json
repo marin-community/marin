@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "3745e053c711",
+  "strategy": "manual-commit",
+  "branch": "rav-shrink-pool",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/zephyr/src/zephyr/execution.py",
+    "lib/zephyr/tests/test_execution.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/37/45e053c711/0/metadata.json",
+      "transcript": "/37/45e053c711/0/full.jsonl",
+      "context": "/37/45e053c711/0/context.md",
+      "content_hash": "/37/45e053c711/0/content_hash.txt",
+      "prompt": "/37/45e053c711/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 74872,
+    "cache_read_tokens": 1180476,
+    "output_tokens": 1563,
+    "api_call_count": 14
+  }
+}
