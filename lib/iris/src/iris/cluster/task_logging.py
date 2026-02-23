@@ -553,12 +553,14 @@ class ProcessLogSink:
         records = self._log_buffer.query_since(self._last_seq, limit=self._max_entries)
         if not records:
             return
-        self._last_seq = max(r.seq for r in records)
+        new_seq = max(r.seq for r in records)
         lines = [self._record_to_json_line(r) for r in records]
         try:
             self._append_lines(self._storage_log_path, lines)
         except Exception as e:
             logger.warning("Failed to write process logs to %s: %r", self.log_path, e, exc_info=True)
+            return
+        self._last_seq = new_seq
 
     def close(self) -> None:
         self._stop_event.set()

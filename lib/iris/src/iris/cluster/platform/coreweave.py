@@ -425,7 +425,7 @@ class CoreweavePlatform:
 
     def _nodepool_name(self, scale_group: str) -> str:
         # NodePool metadata.name must be a valid RFC 1123 subdomain (lowercase alphanumeric, '-', '.')
-        return f"{self._label_prefix}-{scale_group}".replace("_", "-")
+        return f"{self._label_prefix}-{scale_group}".replace("_", "-").lower()
 
     def ensure_nodepools(self, config: config_pb2.IrisClusterConfig) -> None:
         """Create shared NodePools for all scale groups and delete stale ones.
@@ -603,6 +603,10 @@ class CoreweavePlatform:
             logger.info("Slice %s is READY (pod=%s, ip=%s)", handle.slice_id, pod_name, pod_ip)
 
         except Exception as e:
+            # With CoreWeave-managed autoscaling, quota errors surface as K8s events on the
+            # NodePool rather than errors we observe directly. We won't see QuotaExhaustedError
+            # here because CoreWeave's autoscaler handles node provisioning. Failures reaching
+            # this path are typically Pod scheduling or readiness timeouts.
             logger.error("Slice %s monitoring failed: %s", handle.slice_id, e)
             try:
                 pod_name = _worker_pod_name(handle.slice_id)

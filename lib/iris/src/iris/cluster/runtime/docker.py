@@ -200,7 +200,8 @@ class DockerLogReader:
             return []
         lines = _docker_logs(self._container_id, since=self._last_timestamp)
         if lines:
-            self._last_timestamp = Timestamp.from_seconds(lines[-1].timestamp.timestamp()).add_ms(1)
+            max_ts = max(line.timestamp for line in lines)
+            self._last_timestamp = Timestamp.from_seconds(max_ts.timestamp()).add_ms(1)
         return lines
 
     def read_all(self) -> list[LogLine]:
