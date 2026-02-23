@@ -11,59 +11,105 @@ is performed by the worker environment probe at runtime.
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 
 import yaml
 
-from iris.cluster.platform.base import PlatformError, VmHandle
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# Worker Bootstrap
-# ============================================================================
 
+def parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | None:
+    """Parse ``REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION``.
 
-class WorkerBootstrap:
-    """Bootstraps individual worker VMs with embedded cluster config.
-
-    Workers receive the full cluster config.yaml and use it to discover
-    the controller themselves via platform.discover_controller().
-    The autoscaler calls bootstrap_vm() for each VM in parallel via
-    bootstrap_slice_vms().
+    Returns:
+        (region, project, image_name, version) or None if not an AR tag.
     """
+    if "-docker.pkg.dev/" not in image_tag:
+        return None
+    parts = image_tag.split("/")
+    if len(parts) < 4:
+        return None
+    registry = parts[0]
+    if not registry.endswith("-docker.pkg.dev"):
+        return None
+    region = registry.replace("-docker.pkg.dev", "")
+    project = parts[1]
+    image_and_version = parts[3]
+    if ":" in image_and_version:
+        image_name, version = image_and_version.split(":", 1)
+    else:
+        image_name = image_and_version
+        version = "latest"
+    return region, project, image_name, version
 
-    def __init__(self, cluster_config: config_pb2.IrisClusterConfig):
-        self._cluster_config = cluster_config
 
-    def bootstrap_vm(self, vm: VmHandle) -> str:
-        """Bootstrap a single VM: wait for connection, validate, run script.
+def rewrite_artifact_registry_region(image_tag: str, target_region: str) -> str:
+    """Rewrite an Artifact Registry image tag to use a different region.
 
-        Returns bootstrap log text. Raises PlatformError on failure.
-        """
-        if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
-            raise PlatformError(f"VM {vm.vm_id} failed to become reachable within timeout.")
-        if not vm.internal_address:
-            raise PlatformError(f"VM {vm.vm_id} has no internal address.")
-        script = build_worker_bootstrap_script(self._cluster_config, vm.internal_address)
-        vm.bootstrap(script)
-        return vm.bootstrap_log
+    Non-AR images pass through unchanged. If the image is already in the
+    target region, returns the original tag.
+    """
+    parsed = parse_artifact_registry_tag(image_tag)
+    if parsed is None:
+        return image_tag
+    current_region = parsed[0]
+    if current_region == target_region:
+        return image_tag
+    parts = image_tag.split("/")
+    parts[0] = f"{target_region}-docker.pkg.dev"
+    return "/".join(parts)
+
+
+def render_template(template: str, **variables: str | int) -> str:
+    """Render a template string with {{ variable }} placeholders.
+
+    Uses ``{{ variable }}`` syntax (double braces with exactly one space) to
+    avoid conflicts with shell ``${var}`` and Docker ``{{.Field}}`` syntax.
+
+    Args:
+        template: Template string with ``{{ variable }}`` placeholders.
+        **variables: Variable values to substitute.
+
+    Returns:
+        Rendered template string.
+
+    Raises:
+        ValueError: If a required variable is missing from the template or if
+            variables are passed that do not appear in the template.
+    """
+    used_vars: set[str] = set()
+
+    def replace_var(match: re.Match) -> str:
+        var_name = match.group(1)
+        if var_name not in variables:
+            raise ValueError(f"Template variable '{var_name}' not provided")
+        used_vars.add(var_name)
+        value = variables[var_name]
+        return str(value)
+
+    # Match {{ variable_name }} — exactly one space inside each brace pair.
+    result = re.sub(r"\{\{ (\w+) \}\}", replace_var, template)
+
+    unused = set(variables) - used_vars
+    if unused:
+        raise ValueError(f"Unused template variables: {', '.join(sorted(unused))}")
+
+    return result
+
+
+# ============================================================================
+# Worker Bootstrap Script
+# ============================================================================
 
 
 # Bootstrap script template for worker VMs.
-#
-# Workers receive the full cluster config.yaml and use platform.discover_controller()
-# to find the controller address themselves. The config is embedded in the script
-# and written to /etc/iris/config.yaml.
 WORKER_BOOTSTRAP_SCRIPT = """
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
-
-# Write config file
-{config_setup}
 
 echo "[iris-init] Phase: prerequisites"
 
@@ -82,27 +128,18 @@ fi
 sudo systemctl start docker || true
 
 # Create cache directory
-sudo mkdir -p {cache_dir}
+sudo mkdir -p {{ cache_dir }}
 
 echo "[iris-init] Phase: docker_pull"
-echo "[iris-init] Configuring docker authentication"
-# Configure docker for common GCP Artifact Registry regions
-sudo gcloud auth configure-docker \\
-  europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
+echo "[iris-init] Pulling image: {{ docker_image }}"
+sudo docker pull {{ docker_image }}
 
-echo "[iris-init] Pulling image: {docker_image}"
-sudo docker pull {docker_image}
-
-# Pull the pre-built task image (base image for job containers).
-# Derive registry path from the worker image by replacing the image name.
-TASK_IMAGE_REGISTRY=$(echo "{docker_image}" | sed 's|/iris-worker:|/iris-task:|')
-echo "[iris-init] Pulling task image: $TASK_IMAGE_REGISTRY"
-if sudo docker pull "$TASK_IMAGE_REGISTRY"; then
-    sudo docker tag "$TASK_IMAGE_REGISTRY" iris-task:latest
-    echo "[iris-init] Task image tagged as iris-task:latest"
-else
-    echo "[iris-init] WARNING: Failed to pull task image, jobs may fail"
-fi
+echo "[iris-init] Phase: config_setup"
+sudo mkdir -p /etc/iris
+cat > /tmp/iris_config.json << 'IRIS_CONFIG_EOF'
+{{ config_json }}
+IRIS_CONFIG_EOF
+sudo mv /tmp/iris_config.json /etc/iris/config.json
 
 echo "[iris-init] Phase: worker_start"
 
@@ -119,15 +156,16 @@ fi
 # Start worker container without restart policy first (fail fast during bootstrap)
 sudo docker run -d --name iris-worker \\
     --network=host \\
-    -v {cache_dir}:{cache_dir} \\
+    -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
-    {config_volume} \\
-    {env_flags} \\
-    {docker_image} \\
+    -v /etc/iris/config.json:/etc/iris/config.json:ro \\
+    {{ env_flags }} \\
+    {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.worker.main serve \\
-        --host 0.0.0.0 --port {worker_port} \\
-        --cache-dir {cache_dir} \\
-        --config /etc/iris/config.yaml
+        --host 0.0.0.0 --port {{ worker_port }} \\
+        --cache-dir {{ cache_dir }} \\
+        --controller-address {{ controller_address }} \\
+        --config /etc/iris/config.json
 
 echo "[iris-init] Worker container started"
 echo "[iris-init] Phase: registration"
@@ -139,13 +177,13 @@ for i in $(seq 1 60); do
     if ! sudo docker ps -q -f name=iris-worker | grep -q .; then
         echo "[iris-init] ERROR: Worker container exited unexpectedly"
         echo "[iris-init] Container status:"
-        sudo docker ps -a -f name=iris-worker --format "table {{{{.Status}}}}\\t{{{{.State}}}}"
+        sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}"
         echo "[iris-init] Container logs:"
         sudo docker logs iris-worker --tail 100
         exit 1
     fi
 
-    if curl -sf http://localhost:{worker_port}/health > /dev/null 2>&1; then
+    if curl -sf http://localhost:{{ worker_port }}/health > /dev/null 2>&1; then
         echo "[iris-init] Worker is healthy"
         # Now add restart policy for production
         sudo docker update --restart=unless-stopped iris-worker
@@ -157,21 +195,26 @@ done
 
 echo "[iris-init] ERROR: Worker failed to become healthy after 120s"
 echo "[iris-init] Container status:"
-sudo docker ps -a -f name=iris-worker --format "table {{{{.Status}}}}\\t{{{{.State}}}}"
+sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}"
 echo "[iris-init] Container logs:"
 sudo docker logs iris-worker --tail 100
 exit 1
 """
 
 
-def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str:
+def build_worker_env_flags(
+    config: config_pb2.BootstrapConfig,
+    vm_address: str,
+) -> str:
     """Generate docker -e flags with proper escaping.
 
     TPU metadata is probed by the worker process via env_probe.py, so bootstrap
     only forwards explicit bootstrap env vars plus IRIS_VM_ADDRESS.
     """
+    env_vars = dict(config.env_vars)
+
     flags = []
-    for k, v in config.env_vars.items():
+    for k, v in env_vars.items():
         flags.append(f"-e {shlex.quote(k)}={shlex.quote(v)}")
     # Inject VM address so worker can include it in registration for autoscaler tracking
     if vm_address:
@@ -181,36 +224,33 @@ def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) 
 
 
 def build_worker_bootstrap_script(
-    cluster_config: config_pb2.IrisClusterConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
     vm_address: str,
 ) -> str:
     """Build the bootstrap script for a worker VM.
 
-    The worker receives the full cluster config.yaml and discovers the controller
-    itself via platform.discover_controller().
-
     Args:
-        cluster_config: Full cluster configuration
+        bootstrap_config: Worker bootstrap settings
         vm_address: VM IP address for autoscaler tracking
     """
-    # Local import to avoid circular dependency (config.py imports WorkerBootstrap)
-    from iris.cluster.config import config_to_dict
-
-    bootstrap_config = cluster_config.defaults.bootstrap
-
-    # Serialize cluster config to YAML and embed it
-    config_yaml = yaml.dump(config_to_dict(cluster_config), default_flow_style=False)
-    config_setup = _build_config_setup(config_yaml, log_prefix="[iris-init]")
-
     env_flags = build_worker_env_flags(bootstrap_config, vm_address)
+    if not bootstrap_config.controller_address:
+        raise ValueError("bootstrap_config.controller_address is required for worker bootstrap")
+    if not bootstrap_config.docker_image:
+        raise ValueError("bootstrap_config.docker_image is required for worker bootstrap")
+    if bootstrap_config.worker_port <= 0:
+        raise ValueError("bootstrap_config.worker_port must be > 0 for worker bootstrap")
+    if not bootstrap_config.cache_dir:
+        raise ValueError("bootstrap_config.cache_dir is required for worker bootstrap")
 
-    return WORKER_BOOTSTRAP_SCRIPT.format(
-        config_setup=config_setup,
-        cache_dir=bootstrap_config.cache_dir or "/var/cache/iris",
+    return render_template(
+        WORKER_BOOTSTRAP_SCRIPT,
+        cache_dir=bootstrap_config.cache_dir,
         docker_image=bootstrap_config.docker_image,
-        worker_port=bootstrap_config.worker_port or 10001,
-        config_volume="-v /etc/iris/config.yaml:/etc/iris/config.yaml:ro",
+        worker_port=bootstrap_config.worker_port,
+        controller_address=bootstrap_config.controller_address,
         env_flags=env_flags,
+        config_json=bootstrap_config.config_json,
     )
 
 
@@ -228,7 +268,7 @@ echo "[iris-controller] Starting controller bootstrap at $(date -Iseconds)"
 echo "[iris-controller] ================================================"
 
 # Write config file if provided
-{config_setup}
+{{ config_setup }}
 
 # Install Docker if missing
 if ! command -v docker &> /dev/null; then
@@ -250,15 +290,9 @@ else
     exit 1
 fi
 
-# Configure docker for GCP Artifact Registry
-echo "[iris-controller] [3/5] Configuring Docker for GCP Artifact Registry..."
-sudo gcloud auth configure-docker \\
-  europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
-echo "[iris-controller] [3/5] Docker registry configuration complete"
-
-echo "[iris-controller] [4/5] Pulling image: {docker_image}"
+echo "[iris-controller] [3/5] Pulling image: {{ docker_image }}"
 echo "[iris-controller]       This may take several minutes for large images..."
-if sudo docker pull {docker_image}; then
+if sudo docker pull {{ docker_image }}; then
     echo "[iris-controller] [4/5] Image pull complete"
 else
     echo "[iris-controller] [4/5] ERROR: Image pull failed"
@@ -267,24 +301,24 @@ fi
 
 # Stop existing controller if running
 echo "[iris-controller] [5/5] Starting controller container..."
-if sudo docker ps -a --format '{{{{.Names}}}}' | grep -q "^{container_name}$"; then
+if sudo docker ps -a --format '{{.Names}}' | grep -q "^{{ container_name }}$"; then
     echo "[iris-controller]       Stopping existing container..."
-    sudo docker stop {container_name} 2>/dev/null || true
-    sudo docker rm {container_name} 2>/dev/null || true
+    sudo docker stop {{ container_name }} 2>/dev/null || true
+    sudo docker rm {{ container_name }} 2>/dev/null || true
 fi
 
 # Create cache directory
 sudo mkdir -p /var/cache/iris
 
 # Start controller container with restart policy
-sudo docker run -d --name {container_name} \\
+sudo docker run -d --name {{ container_name }} \\
     --network=host \\
     --restart=unless-stopped \\
     -v /var/cache/iris:/var/cache/iris \\
-    {config_volume} \\
-    {docker_image} \\
+    {{ config_volume }} \\
+    {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.controller.main serve \\
-        --host 0.0.0.0 --port {port} {config_flag}
+        --host 0.0.0.0 --port {{ port }} {{ config_flag }}
 
 echo "[iris-controller] [5/5] Controller container started"
 
@@ -293,14 +327,14 @@ echo "[iris-controller] Waiting for controller to become healthy..."
 RESTART_COUNT=0
 for i in $(seq 1 30); do
     echo "[iris-controller] Health check attempt $i/30 at $(date -Iseconds)..."
-    if curl -sf http://localhost:{port}/health > /dev/null 2>&1; then
+    if curl -sf http://localhost:{{ port }}/health > /dev/null 2>&1; then
         echo "[iris-controller] ================================================"
         echo "[iris-controller] Controller is healthy! Bootstrap complete."
         echo "[iris-controller] ================================================"
         exit 0
     fi
     # Check container status and detect restart loop
-    STATUS=$(sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'unknown')
+    STATUS=$(sudo docker inspect --format='{{.State.Status}}' {{ container_name }} 2>/dev/null || echo 'unknown')
     echo "[iris-controller] Container status: $STATUS"
 
     # Detect restart loop - if container keeps restarting, fail early
@@ -311,10 +345,10 @@ for i in $(seq 1 30); do
             echo "[iris-controller] ERROR: Container in restart loop (restarting $RESTART_COUNT times)"
             echo "[iris-controller] ================================================"
             echo "[iris-controller] Full container logs:"
-            sudo docker logs {container_name} 2>&1
+            sudo docker logs {{ container_name }} 2>&1
             echo "[iris-controller] ================================================"
             echo "[iris-controller] Container inspect:"
-            sudo docker inspect {container_name} 2>&1
+            sudo docker inspect {{ container_name }} 2>&1
             exit 1
         fi
     else
@@ -327,26 +361,26 @@ echo "[iris-controller] ================================================"
 echo "[iris-controller] ERROR: Controller failed to become healthy after 60 seconds"
 echo "[iris-controller] ================================================"
 echo "[iris-controller] Full container logs:"
-sudo docker logs {container_name} 2>&1
+sudo docker logs {{ container_name }} 2>&1
 echo "[iris-controller] ================================================"
 echo "[iris-controller] Container inspect:"
-sudo docker inspect {container_name} 2>&1
+sudo docker inspect {{ container_name }} 2>&1
 exit 1
 """
 
 CONFIG_SETUP_TEMPLATE = """
 sudo mkdir -p /etc/iris
 cat > /tmp/iris_config.yaml << 'IRIS_CONFIG_EOF'
-{config_yaml}
+{{ config_yaml }}
 IRIS_CONFIG_EOF
 sudo mv /tmp/iris_config.yaml /etc/iris/config.yaml
-echo "{log_prefix} Config written to /etc/iris/config.yaml"
+echo "{{ log_prefix }} Config written to /etc/iris/config.yaml"
 """
 
 
 def _build_config_setup(config_yaml: str, log_prefix: str) -> str:
     """Generate config setup script fragment with given log prefix."""
-    return CONFIG_SETUP_TEMPLATE.format(config_yaml=config_yaml, log_prefix=log_prefix)
+    return render_template(CONFIG_SETUP_TEMPLATE, config_yaml=config_yaml, log_prefix=log_prefix)
 
 
 def build_controller_bootstrap_script(
@@ -370,7 +404,8 @@ def build_controller_bootstrap_script(
         config_volume = ""
         config_flag = ""
 
-    return CONTROLLER_BOOTSTRAP_SCRIPT.format(
+    return render_template(
+        CONTROLLER_BOOTSTRAP_SCRIPT,
         docker_image=docker_image,
         container_name=CONTROLLER_CONTAINER_NAME,
         port=port,
@@ -387,7 +422,7 @@ def build_controller_bootstrap_script_from_config(
 
     Serializes the config to YAML and embeds it in the bootstrap script.
     """
-    # Local import to avoid circular dependency (config.py imports WorkerBootstrap)
+    # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
 
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)

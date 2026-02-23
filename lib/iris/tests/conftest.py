@@ -14,7 +14,6 @@ import traceback
 import warnings
 
 import pytest
-from iris.cluster.types import DEFAULT_BASE_IMAGE
 from iris.test_util import SentinelFile
 from iris.time_utils import Deadline, Duration
 
@@ -39,12 +38,12 @@ def pytest_collection_modifyitems(config, items):
     """Skip docker-marked tests if the task image isn't available."""
     global _task_image_available
     if _task_image_available is None:
-        _task_image_available = _docker_image_exists(DEFAULT_BASE_IMAGE)
+        _task_image_available = _docker_image_exists("iris-task:latest")
 
     if _task_image_available:
         return
 
-    skip = pytest.mark.skip(reason=f"Docker image {DEFAULT_BASE_IMAGE} not built")
+    skip = pytest.mark.skip(reason="Docker image iris-task:latest not built")
     for item in items:
         if "docker" in item.keywords:
             item.add_marker(skip)

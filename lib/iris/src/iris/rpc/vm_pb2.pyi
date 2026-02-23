@@ -97,16 +97,18 @@ class VmInfo(_message.Message):
     def __init__(self, vm_id: _Optional[str] = ..., slice_id: _Optional[str] = ..., scale_group: _Optional[str] = ..., state: _Optional[_Union[VmState, str]] = ..., address: _Optional[str] = ..., zone: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., state_changed_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., worker_id: _Optional[str] = ..., worker_healthy: _Optional[bool] = ..., init_phase: _Optional[str] = ..., init_log_tail: _Optional[str] = ..., init_error: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class SliceInfo(_message.Message):
-    __slots__ = ("slice_id", "scale_group", "created_at", "vms")
+    __slots__ = ("slice_id", "scale_group", "created_at", "vms", "error_message")
     SLICE_ID_FIELD_NUMBER: _ClassVar[int]
     SCALE_GROUP_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_FIELD_NUMBER: _ClassVar[int]
     VMS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     slice_id: str
     scale_group: str
     created_at: _time_pb2.Timestamp
     vms: _containers.RepeatedCompositeFieldContainer[VmInfo]
-    def __init__(self, slice_id: _Optional[str] = ..., scale_group: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., vms: _Optional[_Iterable[_Union[VmInfo, _Mapping]]] = ...) -> None: ...
+    error_message: str
+    def __init__(self, slice_id: _Optional[str] = ..., scale_group: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., vms: _Optional[_Iterable[_Union[VmInfo, _Mapping]]] = ..., error_message: _Optional[str] = ...) -> None: ...
 
 class ScalingDecision(_message.Message):
     __slots__ = ("scale_group", "action", "slice_delta", "reason")

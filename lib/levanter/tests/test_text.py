@@ -7,6 +7,7 @@ from pathlib import Path
 
 from transformers import AutoTokenizer
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -18,16 +19,20 @@ from levanter.data.text import (
     ChatLmDatasetFormat,
     ChatDataset,
     DatasetComponent,
+    GrugLmExample,
     LmDataConfig,
     PreferenceChatLmDatasetFormat,
     PrebuiltLmDatasetFormat,
     UrlDatasetSourceConfig,
     build_lm_dataset_cache,
     dataset_for_component,
+    grug_lm_example_from_named,
+    named_lm_example_from_grug,
     preprocessor_for_format,
 )
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
+from levanter.schedule import BatchSchedule
 from tests.test_utils import skip_if_hf_model_not_accessible
 
 
@@ -73,6 +78,37 @@ def test_lm_example_handles_ignore_id():
     )
 
     assert no_ignore_loss.item() >= ignored_loss.item() + 100 / Pos.size
+
+
+def test_unnamed_lm_example_parity_with_named():
+    Pos = hax.Axis("position", 10)
+    tokens = hax.arange(Pos, dtype=jnp.int32)
+
+    named = LmExample.causal(tokens, ignore_id=6, eos_id=9)
+    grug_example = GrugLmExample.causal(tokens.array, ignore_id=6, eos_id=9)
+    converted = named_lm_example_from_grug(grug_example, Pos)
+
+    np.testing.assert_array_equal(converted.tokens.array, named.tokens.array)
+    np.testing.assert_array_equal(converted.loss_weight.array, named.loss_weight.array)
+    assert converted.attn_mask.is_causal == named.attn_mask.is_causal
+    assert converted.attn_mask.sliding_window == named.attn_mask.sliding_window
+    np.testing.assert_array_equal(converted.attn_mask.segment_ids[0].array, named.attn_mask.segment_ids[0].array)
+    np.testing.assert_array_equal(converted.attn_mask.segment_ids[1].array, named.attn_mask.segment_ids[1].array)
+
+
+def test_named_unnamed_lm_example_roundtrip():
+    Pos = hax.Axis("position", 8)
+    named = LmExample.causal(hax.arange(Pos, dtype=jnp.int32), eos_id=7)
+
+    grug_example = grug_lm_example_from_named(named)
+    converted_back = named_lm_example_from_grug(grug_example, Pos)
+
+    np.testing.assert_array_equal(converted_back.tokens.array, named.tokens.array)
+    np.testing.assert_array_equal(converted_back.loss_weight.array, named.loss_weight.array)
+    np.testing.assert_array_equal(
+        converted_back.attn_mask.segment_ids[0].array,
+        named.attn_mask.segment_ids[0].array,
+    )
 
 
 def test_merge_split_encodings(local_gpt2_tokenizer):
@@ -136,9 +172,9 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
     ).as_sync_dataset()
 
     example = ds[0]
-    np.testing.assert_array_equal(example.tokens.array, np.array(records[0]["input_ids"], dtype=np.int32))
-    expected_loss_weight = np.array([2.0, 1.0, 0.0, 0.0], dtype=example.loss_weight.array.dtype)
-    np.testing.assert_array_equal(example.loss_weight.array, expected_loss_weight)
+    np.testing.assert_array_equal(np.asarray(example.tokens), np.array(records[0]["input_ids"], dtype=np.int32))
+    expected_loss_weight = np.array([2.0, 1.0, 0.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
+    np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
 
 
 def test_prebuilt_cache_without_loss_weights(tmp_path):
@@ -170,8 +206,36 @@ def test_prebuilt_cache_without_loss_weights(tmp_path):
     ).as_sync_dataset()
 
     example = ds[0]
-    expected_loss_weight = np.array([1.0, 1.0, 1.0, 0.0], dtype=example.loss_weight.array.dtype)
-    np.testing.assert_array_equal(example.loss_weight.array, expected_loss_weight)
+    expected_loss_weight = np.array([1.0, 1.0, 1.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
+    np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
+
+
+def test_train_set_last_mile_wraps_to_named(tmp_path):
+    records = [{"input_ids": [1, 2, 3, 4]}]
+    data_path = tmp_path / "prebuilt_train.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(),
+        cache_dir=str(tmp_path),
+    )
+    config = LmDataConfig(
+        components={"prebuilt": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    Pos = hax.Axis("position", 4)
+    train_sets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))
+    grug_example = train_sets["prebuilt"].as_sync_dataset()[0]
+    assert isinstance(grug_example, GrugLmExample)
+
+    named_train_set = config.train_set(Pos, BatchSchedule(1), key=jax.random.PRNGKey(0)).as_sync_dataset()
+    named_example = named_train_set[0]
+    assert isinstance(named_example, LmExample)
 
 
 def test_dataset_for_component_rejects_preference_format():
@@ -241,8 +305,8 @@ def assert_loss_weight_matches_all_assistants(example, tokenizer):
     # To get to the other side.<|eot_id|>
     # <|start_header_id|>assistant<|end_header_id|>
     # No, the other side.<|eot_id|>
-    tok_arr = example.tokens.array
-    loss_weight = example.loss_weight.array
+    tok_arr = np.asarray(example.tokens)
+    loss_weight = np.asarray(example.loss_weight)
 
     start_hdr_id = tokenizer.convert_tokens_to_ids("<|start_header_id|>")
     end_hdr_id = tokenizer.convert_tokens_to_ids("<|end_header_id|>")
@@ -330,9 +394,9 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
         assert len(packed_ds) == 1
 
         ex = packed_ds[0]
-        assert ex.tokens.axes == (Pos,)
-        assert ex.loss_weight.axes == (Pos,)
-        assert ex.attn_mask.segment_ids[0].axes == (Pos,)
+        assert ex.tokens.shape == (Pos.size,)
+        assert ex.loss_weight.shape == (Pos.size,)
+        assert ex.attn_mask.segment_ids[0].shape == (Pos.size,)
 
         assert_loss_weight_matches_all_assistants(ex, tokenizer)
 
@@ -344,9 +408,9 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
 
         for ex in packed_ds:
             # basic structural checks
-            assert ex.tokens.axes == (Pos,)
-            assert ex.loss_weight.axes == (Pos,)
-            assert ex.attn_mask.segment_ids[0].axes == (Pos,)
+            assert ex.tokens.shape == (Pos.size,)
+            assert ex.loss_weight.shape == (Pos.size,)
+            assert ex.attn_mask.segment_ids[0].shape == (Pos.size,)
 
             # loss_weight should coincide with assistant tokens only
             assert_loss_weight_matches_all_assistants(ex, tokenizer)

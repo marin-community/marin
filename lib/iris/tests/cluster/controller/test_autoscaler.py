@@ -20,9 +20,9 @@ from iris.cluster.controller.autoscaler import (
     ScalingDecision,
     route_demand,
 )
-from iris.cluster.controller.scaling_group import ScalingGroup, SliceLifecycleState
-from iris.cluster.platform.base import CloudSliceState, CloudVmState, QuotaExhaustedError, SliceStatus, VmStatus
-from iris.cluster.types import DeviceType, VmWorkerStatus
+from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.platform.base import CloudSliceState, CloudWorkerState, QuotaExhaustedError, SliceStatus, WorkerStatus
+from iris.cluster.types import REGION_ATTRIBUTE_KEY, DeviceType, VmWorkerStatus
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
@@ -93,24 +93,26 @@ def make_scale_group_config(**kwargs: object) -> config_pb2.ScaleGroupConfig:
     return config
 
 
-def _cloud_vm_state_from_iris(state: vm_pb2.VmState) -> CloudVmState:
-    """Reverse map from Iris VM state to CloudVmState for test setup."""
+def _cloud_worker_state_from_iris(state: vm_pb2.VmState) -> CloudWorkerState:
+    """Reverse map from Iris VM state to CloudWorkerState for test setup."""
     if state == vm_pb2.VM_STATE_READY:
-        return CloudVmState.RUNNING
+        return CloudWorkerState.RUNNING
     if state == vm_pb2.VM_STATE_FAILED:
-        return CloudVmState.STOPPED
+        return CloudWorkerState.STOPPED
     if state == vm_pb2.VM_STATE_TERMINATED:
-        return CloudVmState.TERMINATED
-    return CloudVmState.UNKNOWN
+        return CloudWorkerState.TERMINATED
+    return CloudWorkerState.UNKNOWN
 
 
-def make_mock_vm_handle(vm_id: str, address: str, state: vm_pb2.VmState) -> MagicMock:
-    """Create a mock VmHandle for testing."""
+def make_mock_worker_handle(vm_id: str, address: str, state: vm_pb2.VmState, bootstrap_log: str = "") -> MagicMock:
+    """Create a mock RemoteWorkerHandle for testing."""
     handle = MagicMock()
     handle.vm_id = vm_id
+    handle.worker_id = vm_id
     handle.internal_address = address
     handle.external_address = None
-    handle.status.return_value = VmStatus(state=_cloud_vm_state_from_iris(state))
+    handle.bootstrap_log = bootstrap_log
+    handle.status.return_value = WorkerStatus(state=_cloud_worker_state_from_iris(state))
     return handle
 
 
@@ -120,6 +122,7 @@ def make_mock_slice_handle(
     all_ready: bool = False,
     any_failed: bool = False,
     vm_states: list[vm_pb2.VmState] | None = None,
+    bootstrap_logs: list[str] | None = None,
     created_at_ms: int = 1000000,
 ) -> MagicMock:
     """Create a mock SliceHandle for testing."""
@@ -149,16 +152,18 @@ def make_mock_slice_handle(
         slice_state = CloudSliceState.CREATING
 
     slice_hash = abs(hash(slice_id)) % 256
-    vm_handles = []
+    worker_handles = []
     for i, state in enumerate(vm_states):
-        vm_handle = make_mock_vm_handle(
+        bootstrap_log = bootstrap_logs[i] if bootstrap_logs and i < len(bootstrap_logs) else ""
+        worker_handle = make_mock_worker_handle(
             vm_id=f"{slice_id}-vm-{i}",
             address=f"10.0.{slice_hash}.{i}",
             state=state,
+            bootstrap_log=bootstrap_log,
         )
-        vm_handles.append(vm_handle)
+        worker_handles.append(worker_handle)
 
-    handle.describe.return_value = SliceStatus(state=slice_state, vm_count=len(vm_states), vms=vm_handles)
+    handle.describe.return_value = SliceStatus(state=slice_state, worker_count=len(vm_states), workers=worker_handles)
 
     return handle
 
@@ -170,7 +175,7 @@ def make_mock_platform(slices_to_discover: list[MagicMock] | None = None) -> Mag
 
     create_count = [0]
 
-    def create_slice_side_effect(config: config_pb2.SliceConfig) -> MagicMock:
+    def create_slice_side_effect(config: config_pb2.SliceConfig, bootstrap_config=None) -> MagicMock:
         create_count[0] += 1
         slice_id = f"new-slice-{create_count[0]}"
         return make_mock_slice_handle(slice_id)
@@ -179,11 +184,11 @@ def make_mock_platform(slices_to_discover: list[MagicMock] | None = None) -> Mag
     return platform
 
 
-def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock]) -> None:
+def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock], timestamp: Timestamp | None = None) -> None:
     """Mark discovered slices as READY with their VM addresses."""
     for handle in handles:
-        vm_addresses = [vm.internal_address for vm in handle.describe().vms]
-        group.mark_slice_ready(handle.slice_id, vm_addresses)
+        vm_addresses = [w.internal_address for w in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, vm_addresses, timestamp=timestamp)
 
 
 def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> None:
@@ -201,7 +206,7 @@ def _mark_all_slices_ready(group: ScalingGroup) -> None:
     for handle in group.slice_handles():
         desc = handle.describe()
         if desc.state == CloudSliceState.READY:
-            vm_addresses = [vm.internal_address for vm in desc.vms]
+            vm_addresses = [w.internal_address for w in desc.workers]
             group.mark_slice_ready(handle.slice_id, vm_addresses)
 
 
@@ -253,7 +258,7 @@ def make_autoscaler(
     scale_groups: dict[str, ScalingGroup],
     config: config_pb2.AutoscalerConfig | None = None,
     platform: MagicMock | None = None,
-    worker_bootstrap=None,
+    bootstrap_config: config_pb2.BootstrapConfig | None = None,
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
     mock_platform = platform or make_mock_platform()
@@ -263,14 +268,14 @@ def make_autoscaler(
             scale_groups=scale_groups,
             config=config,
             platform=mock_platform,
-            worker_bootstrap=worker_bootstrap,
+            bootstrap_config=bootstrap_config,
         )
     else:
         return Autoscaler(
             scale_groups=scale_groups,
             evaluation_interval=Duration.from_seconds(0.1),
             platform=mock_platform,
-            worker_bootstrap=worker_bootstrap,
+            bootstrap_config=bootstrap_config,
         )
 
 
@@ -411,6 +416,7 @@ class TestAutoscalerScaleDown:
 
     def test_scales_down_idle_slice_via_run_once(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """run_once() scales down idle slices via ScalingGroup.scale_down_if_idle()."""
+        ready_ts = Timestamp.from_ms(1_000)
         discovered = [
             make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000),
             make_mock_slice_handle("slice-002", all_ready=True, created_at_ms=200000),
@@ -423,7 +429,7 @@ class TestAutoscalerScaleDown:
             idle_threshold=Duration.from_ms(1000),
         )
         group.reconcile()
-        _mark_discovered_ready(group, discovered)
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -431,13 +437,14 @@ class TestAutoscalerScaleDown:
         # Get VM addresses from the adapter
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.describe().vms[0].internal_address
-        slice_002_addr = slice_002.describe().vms[0].internal_address
+        slice_001_addr = slice_001.describe().workers[0].internal_address
+        slice_002_addr = slice_002.describe().workers[0].internal_address
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
+        # Timestamp must be past idle_threshold (1000ms) from when slices became ready
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
         assert group.slice_count() == 1
@@ -470,8 +477,8 @@ class TestAutoscalerScaleDown:
         demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.describe().vms[0].internal_address
-        slice_002_addr = slice_002.describe().vms[0].internal_address
+        slice_001_addr = slice_001.describe().workers[0].internal_address
+        slice_002_addr = slice_002.describe().workers[0].internal_address
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
@@ -497,10 +504,13 @@ class TestAutoscalerScaleDown:
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
+        # State polling moves discovered slices to READY and populates vm_addresses
+        autoscaler.refresh({})
+
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.describe().vms[0].internal_address
-        slice_002_addr = slice_002.describe().vms[0].internal_address
+        slice_001_addr = slice_001.describe().workers[0].internal_address
+        slice_002_addr = slice_002.describe().workers[0].internal_address
 
         vm_status_map_active = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
@@ -539,8 +549,8 @@ class TestAutoscalerScaleDown:
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.describe().vms[0].internal_address
-        slice_002_addr = slice_002.describe().vms[0].internal_address
+        slice_001_addr = slice_001.describe().workers[0].internal_address
+        slice_002_addr = slice_002.describe().workers[0].internal_address
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
@@ -626,31 +636,6 @@ class TestAutoscalerExecution:
         assert group.slice_count() == 0
 
 
-class TestAutoscalerReconcile:
-    """Tests for reconcile behavior."""
-
-    def test_reconcile_discovers_slices_in_all_groups(self):
-        """reconcile() calls reconcile on all groups."""
-        config1 = make_scale_group_config(name="group-1", min_slices=0, max_slices=5, zones=["us-central1-a"])
-        config2 = make_scale_group_config(name="group-2", min_slices=0, max_slices=5, zones=["us-central1-a"])
-
-        platform1 = make_mock_platform(
-            slices_to_discover=[make_mock_slice_handle("slice-1", scale_group="group-1", all_ready=True)]
-        )
-        platform2 = make_mock_platform(
-            slices_to_discover=[make_mock_slice_handle("slice-2", scale_group="group-2", all_ready=True)]
-        )
-
-        group1 = ScalingGroup(config1, platform1)
-        group2 = ScalingGroup(config2, platform2)
-
-        autoscaler = make_autoscaler({"group-1": group1, "group-2": group2})
-        autoscaler.reconcile()
-
-        assert group1.slice_count() == 1
-        assert group2.slice_count() == 1
-
-
 class TestAutoscalerWorkerFailure:
     """Tests for worker failure handling."""
 
@@ -659,8 +644,8 @@ class TestAutoscalerWorkerFailure:
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
-        autoscaler.reconcile()
         _mark_discovered_ready(group, [mock_handle])
 
         vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
@@ -703,7 +688,7 @@ class TestAutoscalerIdleVerification:
         demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
 
         slice_001 = group.get_slice("slice-001")
-        slice_001_addr = slice_001.describe().vms[0].internal_address
+        slice_001_addr = slice_001.describe().workers[0].internal_address
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(
                 vm_address=slice_001_addr,
@@ -757,6 +742,24 @@ class TestAutoscalerStatusReporting:
 
         assert status.HasField("last_routing_decision")
         assert "test-group" in status.last_routing_decision.routed_entries
+
+
+class TestAutoscalerBootstrapLogs:
+    """Tests for bootstrap log reporting."""
+
+    def test_get_init_log_returns_bootstrap_output(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Worker bootstrap logs are captured in autoscaler worker tracking."""
+        bootstrap_log = "line1\nline2\nline3"
+        mock_handle = make_mock_slice_handle("slice-001", all_ready=True, bootstrap_logs=[bootstrap_log])
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        autoscaler._register_slice_workers(mock_handle, "test-group")
+
+        vm_id = mock_handle.describe().workers[0].worker_id
+        assert autoscaler.get_init_log(vm_id) == bootstrap_log
+        assert autoscaler.get_init_log(vm_id, tail=2) == "line2\nline3"
 
 
 class TestWaterfallRouting:
@@ -925,6 +928,74 @@ class TestPreemptibleRouting:
         result = route_demand([group_preemptible, group_on_demand], demand)
 
         assert len(result.routed_entries["preemptible-group"]) == 3
+        assert result.unmet_entries == []
+
+
+class TestRegionRouting:
+    def test_route_demand_filters_by_required_region(self):
+        config_west = make_scale_group_config(name="west", max_slices=5, priority=10, zones=["us-west4-b"])
+        config_west.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+
+        config_eu = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
+        config_eu.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+
+        west = ScalingGroup(config_west, make_mock_platform())
+        eu = ScalingGroup(config_eu, make_mock_platform())
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        for entry in demand:
+            entry.required_regions = frozenset({"us-west4"})
+
+        result = route_demand([west, eu], demand)
+
+        assert len(result.routed_entries["west"]) == 2
+        assert result.routed_entries.get("eu") is None
+        assert result.unmet_entries == []
+
+    def test_route_demand_unmet_when_no_group_matches_region(self):
+        config_eu = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
+        config_eu.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+        eu = ScalingGroup(config_eu, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_regions = frozenset({"us-west4"})
+
+        result = route_demand([eu], demand)
+
+        assert result.routed_entries.get("eu") is None
+        assert len(result.unmet_entries) == 1
+        assert "required_regions=['us-west4']" in result.unmet_entries[0].reason
+
+    def test_route_demand_combined_region_and_preemptible(self):
+        """Demand requiring both region=us-west4 and preemptible=True only routes to the matching group."""
+        config_west_preemptible = make_scale_group_config(
+            name="west-preemptible", max_slices=5, priority=10, zones=["us-west4-b"], preemptible=True
+        )
+        config_west_preemptible.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+
+        config_west_ondemand = make_scale_group_config(
+            name="west-ondemand", max_slices=5, priority=10, zones=["us-west4-b"], preemptible=False
+        )
+        config_west_ondemand.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-west4"
+
+        config_eu_preemptible = make_scale_group_config(
+            name="eu-preemptible", max_slices=5, priority=10, zones=["europe-west4-b"], preemptible=True
+        )
+        config_eu_preemptible.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+
+        west_preemptible = ScalingGroup(config_west_preemptible, make_mock_platform())
+        west_ondemand = ScalingGroup(config_west_ondemand, make_mock_platform())
+        eu_preemptible = ScalingGroup(config_eu_preemptible, make_mock_platform())
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8", preemptible=True)
+        for entry in demand:
+            entry.required_regions = frozenset({"us-west4"})
+
+        result = route_demand([west_preemptible, west_ondemand, eu_preemptible], demand)
+
+        assert len(result.routed_entries["west-preemptible"]) == 2
+        assert result.routed_entries.get("west-ondemand") is None
+        assert result.routed_entries.get("eu-preemptible") is None
         assert result.unmet_entries == []
 
 
@@ -1250,16 +1321,12 @@ class TestAutoscalerActionLogging:
         empty_autoscaler._wait_for_inflight()
 
         status = empty_autoscaler.get_status()
-        assert len(status.recent_actions) == 2
+        assert len(status.recent_actions) >= 1
         action = status.recent_actions[0]
         assert action.action_type == "scale_up"
         assert action.scale_group == "test-group"
         assert action.slice_id != ""
         assert "demand" in action.reason
-        ready_action = status.recent_actions[1]
-        assert ready_action.action_type == "slice_ready"
-        assert ready_action.scale_group == "test-group"
-        assert "bootstrap completed" in ready_action.reason
 
     def test_action_log_records_quota_exceeded(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Verify quota exceeded events are logged."""
@@ -1284,8 +1351,8 @@ class TestAutoscalerActionLogging:
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
-        autoscaler.reconcile()
         _mark_discovered_ready(group, [mock_handle])
 
         vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
@@ -1430,9 +1497,9 @@ class TestAutoscalerAsyncScaleUp:
         platform = make_mock_platform()
         original_create = platform.create_slice.side_effect
 
-        def slow_create(config):
+        def slow_create(config, bootstrap_config=None):
             time.sleep(0.5)
-            return original_create(config)
+            return original_create(config, bootstrap_config)
 
         platform.create_slice.side_effect = slow_create
 
@@ -1461,9 +1528,9 @@ class TestAutoscalerAsyncScaleUp:
         platform = make_mock_platform()
         original_create = platform.create_slice.side_effect
 
-        def slow_create(config):
+        def slow_create(config, bootstrap_config=None):
             time.sleep(0.2)
-            return original_create(config)
+            return original_create(config, bootstrap_config)
 
         platform.create_slice.side_effect = slow_create
 
@@ -1498,9 +1565,9 @@ class TestAutoscalerAsyncScaleUp:
         original_create = platform.create_slice.side_effect
         create_completed = []
 
-        def slow_create(config):
+        def slow_create(config, bootstrap_config=None):
             time.sleep(0.2)
-            result = original_create(config)
+            result = original_create(config, bootstrap_config)
             create_completed.append(True)
             return result
 
@@ -1554,9 +1621,9 @@ def test_pending_counter_prevents_double_scaleup():
     class SlowFakePlatform(FakePlatform):
         """FakePlatform where create_slice blocks until barrier is released."""
 
-        def create_slice(self, config):
+        def create_slice(self, config, bootstrap_config=None):
             create_barrier.wait(timeout=10)
-            return super().create_slice(config)
+            return super().create_slice(config, bootstrap_config)
 
     sg_config = make_scale_group_config(
         name="test-group",
@@ -1605,16 +1672,19 @@ def test_pending_counter_prevents_double_scaleup():
 
 
 def test_bootstrap_called_after_scaleup():
-    """After scale_up creates a slice, bootstrap() is called on every VM
-    when a WorkerBootstrap is provided.
+    """After scale_up with bootstrap_config, platform handles bootstrap internally
+    and describe() reaches READY after tick().
     """
-    from iris.cluster.platform.bootstrap import WorkerBootstrap
-
     sg_config = make_scale_group_config(
         name="test-group",
         min_slices=0,
         max_slices=4,
         zones=["us-central1-a"],
+    )
+    bootstrap_config = config_pb2.BootstrapConfig(
+        docker_image="test:latest",
+        worker_port=10001,
+        controller_address="controller:10000",
     )
     platform = FakePlatform(FakePlatformConfig(config=sg_config))
     group = ScalingGroup(
@@ -1622,17 +1692,11 @@ def test_bootstrap_called_after_scaleup():
         platform,
         scale_up_cooldown=Duration.from_ms(0),
     )
-
-    cluster_config = config_pb2.IrisClusterConfig()
-    cluster_config.defaults.bootstrap.docker_image = "test:latest"
-    cluster_config.defaults.bootstrap.worker_port = 10001
-    worker_bootstrap = WorkerBootstrap(cluster_config)
-
     autoscaler = Autoscaler(
         scale_groups={"test-group": group},
         evaluation_interval=Duration.from_ms(100),
         platform=platform,
-        worker_bootstrap=worker_bootstrap,
+        bootstrap_config=bootstrap_config,
     )
 
     demand = make_demand_entries(1)
@@ -1640,21 +1704,26 @@ def test_bootstrap_called_after_scaleup():
 
     decisions = autoscaler.run_once(demand, {}, t0)
     assert len(decisions) == 1
-
     autoscaler._wait_for_inflight()
+
+    # tick() drives VM state transitions and bootstrap
     platform.tick()
 
+    # _poll_slice_states() detects READY from describe()
+    autoscaler.refresh({})
+
     assert group.slice_count() == 1
+    assert group.ready_slice_count() == 1
 
     slice_handle = group.slice_handles()[0]
-    for vm in slice_handle.describe().vms:
-        assert vm._bootstrap_count == 1, "bootstrap() should be called once per VM after scale-up"
+    for vm in slice_handle.describe().workers:
+        assert vm._bootstrap_count == 1
 
     autoscaler.shutdown()
 
 
 def test_bootstrap_skipped_without_config():
-    """Without worker_bootstrap, bootstrap() is not called (test/local mode)."""
+    """Without bootstrap_config, slices reach READY immediately after tick() (no bootstrap)."""
     sg_config = make_scale_group_config(
         name="test-group",
         min_slices=0,
@@ -1679,149 +1748,297 @@ def test_bootstrap_skipped_without_config():
     autoscaler.run_once(demand, {}, t0)
     autoscaler._wait_for_inflight()
 
+    platform.tick()
+    autoscaler.refresh({})
+
     assert group.slice_count() == 1
+    assert group.ready_slice_count() == 1
 
     slice_handle = group.slice_handles()[0]
-    for vm in slice_handle.describe().vms:
+    for vm in slice_handle.describe().workers:
         assert vm._bootstrap_count == 0, "No bootstrap without config"
 
     autoscaler.shutdown()
 
 
-class TestBootstrapTimeout:
-    """Tests for boot_timeout in bootstrap_slice_vms."""
+class TestPerGroupBootstrapConfig:
+    """Tests for _per_group_bootstrap_config merging worker attributes into env vars."""
 
-    def test_bootstrap_timeout_raises_platform_error(self):
-        """bootstrap_slice_vms raises PlatformError when a bootstrap thread hangs past boot_timeout."""
-        from iris.cluster.controller.autoscaler import bootstrap_slice_vms
-        from iris.cluster.platform.base import PlatformError
-        from iris.cluster.platform.bootstrap import WorkerBootstrap
-        from iris.managed_thread import get_thread_container
+    def test_merges_worker_attributes(self):
+        """Worker attributes, env, and scale group name are injected into env_vars."""
+        import json
 
-        sg_config = make_scale_group_config(name="test-group", min_slices=0, max_slices=4, zones=["us-central1-a"])
-        platform = FakePlatform(FakePlatformConfig(config=sg_config))
-        handle = platform.create_slice(sg_config.slice_template)
-        platform.tick()
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="test:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="west-group", max_slices=5)
+        sg_config.worker.attributes["region"] = "us-west4"
+        sg_config.worker.attributes["preemptible"] = "true"
+        sg_config.worker.env["IRIS_REGION"] = "us-west4"
 
-        cluster_config = config_pb2.IrisClusterConfig()
-        cluster_config.defaults.bootstrap.docker_image = "test:latest"
-        cluster_config.defaults.bootstrap.worker_port = 10001
-        worker_bootstrap = WorkerBootstrap(cluster_config)
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc)
 
-        hang_event = threading.Event()
-        original_bootstrap = worker_bootstrap.bootstrap_vm
+        bc = autoscaler._per_group_bootstrap_config(group)
 
-        def slow_bootstrap(vm):
-            hang_event.wait(timeout=10)
-            return original_bootstrap(vm)
+        assert bc is not None
+        assert bc.docker_image == "test:latest"
+        attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
+        assert attrs["region"] == "us-west4"
+        assert attrs["preemptible"] == "true"
+        env = json.loads(bc.env_vars["IRIS_TASK_DEFAULT_ENV_JSON"])
+        assert env["IRIS_REGION"] == "us-west4"
+        assert bc.env_vars["IRIS_SCALE_GROUP"] == "west-group"
+        assert bc.env_vars["IRIS_ACCELERATOR_TYPE"] == "tpu"
+        assert bc.env_vars["IRIS_ACCELERATOR_VARIANT"] == "v5p-8"
+        assert "IRIS_GPU_COUNT" not in bc.env_vars
 
-        worker_bootstrap.bootstrap_vm = slow_bootstrap
+    def test_injects_accelerator_env_without_worker_settings(self):
+        """Groups without worker settings still inject accelerator env vars."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="test:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(
+            name="plain-group",
+            max_slices=5,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="H100",
+        )
+        sg_config.resources.gpu_count = 8
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"plain-group": group}, bootstrap_config=base_bc)
 
-        threads = get_thread_container()
-        try:
-            with pytest.raises(PlatformError, match="boot timeout"):
-                bootstrap_slice_vms(handle, worker_bootstrap, threads, timeout=1.0, poll_interval=0.1, boot_timeout=0.5)
-        finally:
-            hang_event.set()
-            threads.stop()
+        bc = autoscaler._per_group_bootstrap_config(group)
 
-    def test_bootstrap_timeout_triggers_slice_cleanup(self):
-        """When bootstrap times out, _bootstrap_slice_safe marks slice failed and scales down."""
-        from iris.cluster.controller.autoscaler import bootstrap_slice_vms
-        from iris.cluster.platform.base import PlatformError
-        from iris.cluster.platform.bootstrap import WorkerBootstrap
-        from iris.managed_thread import get_thread_container
+        assert bc is not None
+        assert bc is not base_bc
+        assert bc.env_vars["IRIS_ACCELERATOR_TYPE"] == "gpu"
+        assert bc.env_vars["IRIS_ACCELERATOR_VARIANT"] == "H100"
+        assert bc.env_vars["IRIS_GPU_COUNT"] == "8"
+        assert bc.env_vars["IRIS_SCALE_GROUP"] == "plain-group"
 
-        sg_config = make_scale_group_config(name="test-group", min_slices=0, max_slices=4, zones=["us-central1-a"])
-        platform = FakePlatform(FakePlatformConfig(config=sg_config))
-        group = ScalingGroup(sg_config, platform, scale_up_cooldown=Duration.from_ms(0))
+    def test_returns_none_without_base(self):
+        """Without a base bootstrap config, returns None."""
+        sg_config = make_scale_group_config(name="test-group", max_slices=5)
+        sg_config.worker.attributes["region"] = "us-west4"
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"test-group": group}, bootstrap_config=None)
 
-        cluster_config = config_pb2.IrisClusterConfig()
-        cluster_config.defaults.bootstrap.docker_image = "test:latest"
-        cluster_config.defaults.bootstrap.worker_port = 10001
-        worker_bootstrap = WorkerBootstrap(cluster_config)
+        bc = autoscaler._per_group_bootstrap_config(group)
 
-        hang_event = threading.Event()
-        original_bootstrap = worker_bootstrap.bootstrap_vm
+        assert bc is None
 
-        def slow_bootstrap(vm):
-            hang_event.wait(timeout=10)
-            return original_bootstrap(vm)
+    def test_does_not_mutate_base_config(self):
+        """Merging should not modify the original base bootstrap config."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="test:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="west-group", max_slices=5)
+        sg_config.worker.attributes["region"] = "us-west4"
 
-        worker_bootstrap.bootstrap_vm = slow_bootstrap
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc)
 
-        # Create a slice through ScalingGroup so it's tracked
+        autoscaler._per_group_bootstrap_config(group)
+
+        assert "IRIS_WORKER_ATTRIBUTES" not in base_bc.env_vars
+
+    def test_rewrites_docker_image_region_for_gcp_group(self):
+        """AR image is rewritten to match the group's GCP zone region."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is not None
+        assert bc.docker_image == "europe-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        # Base config must not be mutated
+        assert base_bc.docker_image == "us-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+
+    def test_no_rewrite_for_non_ar_image(self):
+        """Non-AR images (e.g. ghcr.io) pass through unchanged."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="ghcr.io/org/iris-worker:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is not None
+        # GHCR images are not rewritten but still get a copy with accel env vars
+        assert bc.docker_image == "ghcr.io/org/iris-worker:latest"
+
+    def test_no_rewrite_for_same_region(self):
+        """When the group zone matches the image region, no rewrite needed."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="west-group", max_slices=5, zones=["us-west4-a"])
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is not None
+        assert bc.docker_image == "us-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+
+    def test_rewrite_combined_with_worker_attributes(self):
+        """Image rewrite and worker attribute injection both apply when both are needed."""
+        import json
+
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
+        sg_config.worker.attributes["region"] = "europe-west4"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is not None
+        assert bc.docker_image == "europe-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
+        assert attrs["region"] == "europe-west4"
+
+
+class TestGpuScaleGroupBugs:
+    """Reproduction tests for GPU scale group bugs observed on CoreWeave.
+
+    Production behavior: GPU job submitted -> h100-8x scales up -> slice becomes
+    READY 20s later -> immediately scaled down. Worker shows CPU=128, Memory=2TB
+    but no GPU info. All GPU jobs stuck in no_capacity.
+
+    Root cause: mark_slice_ready() doesn't initialize last_active, so freshly-ready
+    slices have last_active=epoch(0) and are immediately eligible for scaledown
+    regardless of idle_threshold.
+    """
+
+    def test_freshly_ready_slice_has_nonzero_last_active(self):
+        """When a slice transitions to READY, last_active should be initialized
+        to at least the current time, not epoch(0).
+
+        Reproduces: mark_slice_ready() doesn't touch last_active, so it stays
+        at epoch(0). is_slice_eligible_for_scaledown() returns True for
+        last_active=epoch(0), making fresh slices immediately eligible for scaledown.
+        """
+        config = make_scale_group_config(
+            name="h100-8x",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="H100",
+            min_slices=0,
+            max_slices=1,
+        )
+        platform = make_mock_platform()
+        group = ScalingGroup(
+            config,
+            platform,
+            scale_up_cooldown=Duration.from_ms(0),
+            idle_threshold=Duration.from_ms(60_000),
+        )
+
+        ts = Timestamp.from_ms(1_000_000)
+
+        # Scale up and complete
         group.begin_scale_up()
-        handle = group.scale_up()
-        group.complete_scale_up(handle)
-        platform.tick()
-        assert group.slice_count() == 1
+        handle = group.scale_up(timestamp=ts)
+        group.complete_scale_up(handle, ts)
 
-        # Directly call bootstrap_slice_vms with short timeout — should raise
-        threads = get_thread_container()
-        try:
-            with pytest.raises(PlatformError, match="boot timeout"):
-                bootstrap_slice_vms(handle, worker_bootstrap, threads, timeout=1.0, poll_interval=0.1, boot_timeout=0.5)
-            # The caller (_bootstrap_slice_safe) would handle cleanup.
-            # Verify the error is raised so the caller can act on it.
-        finally:
-            hang_event.set()
-            threads.stop()
+        # Mark the slice as READY (simulates bootstrap completion)
+        vm_addresses = [w.internal_address for w in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, vm_addresses)
 
-
-class TestReconcileBootstrap:
-    """Tests for reconcile spawning bootstrap threads."""
-
-    def _create_discoverable_slice(self, sg_config: config_pb2.ScaleGroupConfig, platform: FakePlatform):
-        """Create a slice through the platform with labels that reconcile will discover."""
-        from iris.cluster.controller.scaling_group import prepare_slice_config
-
-        slice_config = prepare_slice_config(sg_config.slice_template, sg_config, "iris")
-        handle = platform.create_slice(slice_config)
-        platform.tick()
-        return handle
-
-    def test_reconcile_spawns_bootstrap_for_discovered_slices(self):
-        """After reconcile, bootstrap threads are spawned and slices move to READY."""
-        sg_config = make_scale_group_config(name="test-group", min_slices=0, max_slices=4, zones=["us-central1-a"])
-        platform = FakePlatform(FakePlatformConfig(config=sg_config))
-        self._create_discoverable_slice(sg_config, platform)
-
-        group = ScalingGroup(sg_config, platform, scale_up_cooldown=Duration.from_ms(0))
-        autoscaler = Autoscaler(
-            scale_groups={"test-group": group},
-            evaluation_interval=Duration.from_ms(100),
-            platform=platform,
-        )
-
-        autoscaler.reconcile()
-        autoscaler._wait_for_inflight()
-
-        assert group.slice_count() == 1
-        assert group.ready_slice_count() == 1
-
-        autoscaler.shutdown()
-
-    def test_reconcile_bootstrap_populates_vm_addresses(self):
-        """After reconcile + bootstrap, slices have vm_addresses populated."""
-        sg_config = make_scale_group_config(name="test-group", min_slices=0, max_slices=4, zones=["us-central1-a"])
-        platform = FakePlatform(FakePlatformConfig(config=sg_config))
-        self._create_discoverable_slice(sg_config, platform)
-
-        group = ScalingGroup(sg_config, platform, scale_up_cooldown=Duration.from_ms(0))
-        autoscaler = Autoscaler(
-            scale_groups={"test-group": group},
-            evaluation_interval=Duration.from_ms(100),
-            platform=platform,
-        )
-
-        autoscaler.reconcile()
-        autoscaler._wait_for_inflight()
-
+        # last_active should be initialized to at least the ready time
         with group._slices_lock:
-            states = list(group._slices.values())
-        assert len(states) == 1
-        assert states[0].lifecycle == SliceLifecycleState.READY
-        assert len(states[0].vm_addresses) > 0
+            state = group._slices[handle.slice_id]
 
-        autoscaler.shutdown()
+        assert state.last_active.epoch_ms() > 0, (
+            "Freshly READY slice should have last_active set to at least the ready time, "
+            f"not epoch(0). Got last_active={state.last_active.epoch_ms()}"
+        )
+
+        # Consequently, the slice should NOT be eligible for scaledown immediately
+        assert not group.is_slice_eligible_for_scaledown(
+            handle.slice_id, ts
+        ), "Freshly READY slice should not be eligible for scaledown immediately"
+
+    def test_idle_threshold_protects_freshly_ready_slice(self):
+        """A freshly-ready slice should be protected by idle_threshold even when
+        demand temporarily drops to 0 (e.g., between job resubmission).
+
+        With idle_threshold=300s, a slice that became ready 1 second ago should
+        NOT be eligible for scaledown. But with last_active=epoch(0), the idle
+        duration is computed as (current_time - 0) = millions of ms, which always
+        exceeds idle_threshold.
+        """
+        config = make_scale_group_config(
+            name="h100-8x",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="H100",
+            min_slices=0,
+            max_slices=2,
+        )
+        discovered = [
+            make_mock_slice_handle("slice-001", all_ready=True),
+            make_mock_slice_handle("slice-002", all_ready=True),
+        ]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(
+            config,
+            platform,
+            scale_up_cooldown=Duration.from_ms(0),
+            scale_down_cooldown=Duration.from_ms(0),
+            idle_threshold=Duration.from_ms(300_000),  # 5 minutes
+        )
+        group.reconcile()
+
+        # Mark both slices as READY (simulating bootstrap completion)
+        _mark_discovered_ready(group, discovered)
+
+        autoscaler = make_autoscaler({"h100-8x": group})
+
+        # Slices just became ready; demand drops to 0 (transient gap)
+        # target_capacity = max(0, 0) = 0, ready=2 > 0 -> scaledown check runs
+        slice_001 = group.get_slice("slice-001")
+        slice_002 = group.get_slice("slice-002")
+        addr1 = slice_001.describe().workers[0].internal_address
+        addr2 = slice_002.describe().workers[0].internal_address
+        vm_status_map = {
+            addr1: VmWorkerStatus(vm_address=addr1, running_task_ids=frozenset()),
+            addr2: VmWorkerStatus(vm_address=addr2, running_task_ids=frozenset()),
+        }
+
+        # Run 1 second after ready — well within the 5-minute idle_threshold.
+        # Slices should NOT be scaled down.
+        ts = Timestamp.from_ms(10_000)
+        autoscaler.run_once([], vm_status_map, ts)
+
+        assert group.slice_count() == 2, (
+            "Freshly-ready slices should be protected by idle_threshold (300s). "
+            "With last_active=epoch(0), idle_duration is computed from epoch, "
+            f"making all slices appear idle for >300s. Got slice_count={group.slice_count()}"
+        )

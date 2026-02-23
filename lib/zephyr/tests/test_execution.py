@@ -39,7 +39,7 @@ def test_shared_data(fray_client):
 
     zctx = ZephyrContext(
         client=fray_client,
-        num_workers=1,
+        max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
@@ -61,7 +61,7 @@ def test_context_manager(fray_client):
     """ZephyrContext works as context manager."""
     with ZephyrContext(
         client=fray_client,
-        num_workers=1,
+        max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
     ) as zctx:
@@ -112,7 +112,7 @@ def test_chunk_cleanup(fray_client, tmp_path):
     chunk_prefix = str(tmp_path / "chunks")
     ctx = ZephyrContext(
         client=fray_client,
-        num_workers=2,
+        max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
@@ -130,6 +130,80 @@ def test_chunk_cleanup(fray_client, tmp_path):
         # Should be empty or not exist
         files = list(Path(chunk_prefix).rglob("*"))
         assert len(files) == 0, f"Expected cleanup but found: {files}"
+
+
+def test_status_reports_alive_workers_not_total(tmp_path):
+    """After heartbeat timeout, get_status workers dict reflects FAILED state,
+    and the status log distinguishes alive from total workers.
+
+    Also verifies that re-registering a worker that had an in-flight task
+    requeues that task so it is not silently lost.
+    """
+    from zephyr.execution import Shard, ShardTask, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord.set_shared_data({})
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+
+    # Register 3 workers
+    from unittest.mock import MagicMock
+
+    for i in range(3):
+        coord.register_worker(f"worker-{i}", MagicMock())
+
+    status = coord.get_status()
+    assert len(status.workers) == 3
+    assert all(w["state"] == "ready" for w in status.workers.values())
+
+    # worker-0 pulls the task so it becomes in-flight
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+
+    # Simulate 2 workers dying via heartbeat timeout
+    coord._last_seen["worker-0"] = 0.0
+    coord._last_seen["worker-1"] = 0.0
+    coord.check_heartbeats(timeout=30.0)
+
+    status = coord.get_status()
+    assert status.workers["worker-0"]["state"] == "failed"
+    assert status.workers["worker-1"]["state"] == "failed"
+    assert status.workers["worker-2"]["state"] == "ready"
+
+    # Total workers in dict is still 3, but only 1 is alive
+    alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
+    assert alive == 1
+    assert len(status.workers) == 3
+
+    # worker-2 picks up the requeued task
+    pulled2 = coord.pull_task("worker-2")
+    assert pulled2 is not None and pulled2 != "SHUTDOWN"
+
+    # Simulate worker-0 re-registering while worker-2 holds the task in-flight
+    # (race between heartbeat requeue and re-registration).
+    # Since worker-0 has no in-flight task anymore, this is a no-op for requeueing.
+    coord.register_worker("worker-0", MagicMock())
+    status = coord.get_status()
+    assert status.workers["worker-0"]["state"] == "ready"
+    alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
+    assert alive == 2  # worker-0 ready, worker-1 still failed, worker-2 busy
+
+    # Now test the direct re-registration requeue path:
+    # worker-2 dies while holding the task, and before heartbeat fires,
+    # it re-registers — the in-flight task should be requeued.
+    assert "worker-2" in coord._in_flight  # worker-2 has the task
+    coord.register_worker("worker-2", MagicMock())
+    assert "worker-2" not in coord._in_flight  # in-flight cleared
+    assert len(coord._task_queue) == 1  # task was requeued
 
 
 def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
@@ -181,6 +255,88 @@ def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
     assert coord._completed_shards == 1
 
 
+def test_disk_chunk_write_uses_unique_paths(tmp_path):
+    """Each DiskChunk.write() writes to a unique location, avoiding collisions."""
+    from zephyr.execution import DiskChunk
+
+    base_path = str(tmp_path / "chunk.pkl")
+    refs = [DiskChunk.write(base_path, [i]) for i in range(3)]
+
+    # Each written to a distinct UUID path (no rename needed)
+    paths = [r.path for r in refs]
+    assert len(set(paths)) == 3
+    for p in paths:
+        assert ".tmp." in p
+        assert Path(p).exists()
+
+    # Each chunk is directly readable
+    for i, ref in enumerate(refs):
+        assert ref.read() == [i]
+
+
+def test_coordinator_accepts_winner_ignores_stale(tmp_path):
+    """Coordinator accepts the winning result and ignores stale ones.
+
+    Stale chunk files are left for context-dir cleanup (no per-chunk deletion).
+    """
+    from zephyr.execution import DiskChunk, ResultChunk, Shard, ShardTask, TaskResult, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord.set_shared_data({})
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+
+    # Worker A pulls task (attempt 0)
+    pulled_a = coord.pull_task("worker-A")
+    _task_a, attempt_a, _config = pulled_a
+
+    # Worker A writes a chunk (simulating slow completion)
+    stale_ref = DiskChunk.write(str(tmp_path / "stale-chunk.pkl"), [1, 2, 3])
+    assert Path(stale_ref.path).exists()
+
+    # Heartbeat timeout re-queues the task
+    coord._last_seen["worker-A"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+
+    # Worker B pulls and completes the re-queued task (attempt 1)
+    pulled_b = coord.pull_task("worker-B")
+    _task_b, attempt_b, _config = pulled_b
+
+    winner_ref = DiskChunk.write(str(tmp_path / "winner-chunk.pkl"), [4, 5, 6])
+
+    coord.report_result(
+        "worker-B",
+        0,
+        attempt_b,
+        TaskResult(chunks=[ResultChunk(source_shard=0, target_shard=0, data=winner_ref)]),
+    )
+
+    # Worker A's stale result is rejected
+    coord.report_result(
+        "worker-A",
+        0,
+        attempt_a,
+        TaskResult(chunks=[ResultChunk(source_shard=0, target_shard=0, data=stale_ref)]),
+    )
+
+    # Winner's data is directly readable (no rename needed)
+    assert Path(winner_ref.path).exists()
+    assert winner_ref.read() == [4, 5, 6]
+
+    # Stale file still exists (cleaned up by context-dir cleanup, not coordinator)
+    assert Path(stale_ref.path).exists()
+    assert coord._completed_shards == 1
+
+
 def test_chunk_streaming_low_memory(tmp_path):
     """Shard loads chunks one at a time from disk via iter_chunks.
 
@@ -188,11 +344,12 @@ def test_chunk_streaming_low_memory(tmp_path):
     """
     from zephyr.execution import DiskChunk, Shard
 
-    # Write 3 chunks to disk
+    # Write 3 chunks to disk (directly readable, no finalize needed)
     refs = []
     for i in range(3):
         path = str(tmp_path / f"chunk-{i}.pkl")
-        refs.append(DiskChunk.write(path, [i * 10 + j for j in range(5)]))
+        chunk = DiskChunk.write(path, [i * 10 + j for j in range(5)])
+        refs.append(chunk)
 
     shard = Shard(chunks=refs)
 
@@ -215,7 +372,7 @@ def test_workers_persist_across_executes(fray_client, tmp_path):
 
     with ZephyrContext(
         client=fray_client,
-        num_workers=2,
+        max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
@@ -249,7 +406,7 @@ def test_fatal_errors_fail_fast(fray_client, tmp_path):
 
     with ZephyrContext(
         client=fray_client,
-        num_workers=1,
+        max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
@@ -270,7 +427,7 @@ def test_chunk_storage_with_join(fray_client, tmp_path):
     chunk_prefix = str(tmp_path / "chunks")
     ctx = ZephyrContext(
         client=fray_client,
-        num_workers=2,
+        max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
@@ -291,3 +448,109 @@ def test_chunk_storage_with_join(fray_client, tmp_path):
     assert len(results) == 2
     assert results[0] == {"id": 1, "a": "x", "b": "p"}
     assert results[1] == {"id": 2, "a": "y", "b": "q"}
+
+
+def test_workers_capped_to_shard_count(fray_client, tmp_path):
+    """When max_workers > num_shards, only num_shards workers are created."""
+    ds = Dataset.from_list([1, 2, 3])  # 3 shards
+    with ZephyrContext(
+        client=fray_client,
+        max_workers=10,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    ) as ctx:
+        # Workers not yet created before execute()
+        assert ctx._worker_group is None
+        results = list(ctx.execute(ds.map(lambda x: x * 2)))
+        assert sorted(results) == [2, 4, 6]
+        # Worker group sized to min(10, 3) = 3
+        assert ctx._worker_count == 3
+
+
+def test_worker_group_identity_stable_across_executes(fray_client, tmp_path):
+    """Second execute() reuses the same worker group object (no re-creation)."""
+    with ZephyrContext(
+        client=fray_client,
+        max_workers=10,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    ) as ctx:
+        ctx.execute(Dataset.from_list([1, 2]).map(lambda x: x))
+        group_after_first = ctx._worker_group
+        ctx.execute(Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x))
+        assert ctx._worker_group is group_after_first
+
+
+def test_execute_retries_on_coordinator_death(tmp_path):
+    """When the coordinator dies mid-execution, execute() retries with a fresh
+    coordinator and worker pool and eventually succeeds.
+
+    Uses LocalClient directly because simulating coordinator death requires
+    manipulating the local actor registry.
+    """
+    from fray.v2.local_backend import LocalClient, _local_actor_registry
+
+    client = LocalClient()
+    chunk_prefix = str(tmp_path / "chunks")
+
+    ctx = ZephyrContext(
+        client=client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=chunk_prefix,
+        max_execution_retries=2,
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    )
+
+    # First execute() succeeds normally — establishes coordinator + workers
+    ctx._ensure_coordinator()
+    coord_endpoint = ctx._coordinator._endpoint
+
+    results = list(ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)))
+    assert sorted(results) == [2, 4, 6]
+
+    # Kill the coordinator by removing it from the local actor registry.
+    # This simulates VM preemption — the handle becomes stale and any RPC
+    # through it will raise RuntimeError("Actor not found in registry").
+    _local_actor_registry.pop(coord_endpoint, None)
+
+    # Next execute() should: fail on attempt 0 (dead coordinator),
+    # shutdown + recreate everything, then succeed on attempt 1.
+    results = list(ctx.execute(Dataset.from_list([10, 20]).map(lambda x: x + 1)))
+    assert sorted(results) == [11, 21]
+
+    # Verify coordinator was recreated (handle is not None after retry)
+    assert ctx._coordinator is not None
+
+    ctx.shutdown()
+    client.shutdown(wait=True)
+
+
+def test_execute_does_not_retry_worker_errors(fray_client, tmp_path):
+    """ZephyrWorkerError (application errors) are never retried."""
+    from zephyr.execution import ZephyrWorkerError
+
+    chunk_prefix = str(tmp_path / "chunks")
+
+    def exploding_map(x):
+        raise ValueError(f"bad value: {x}")
+
+    with ZephyrContext(
+        client=fray_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=chunk_prefix,
+        max_execution_retries=3,
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    ) as ctx:
+        ds = Dataset.from_list([1, 2, 3]).map(exploding_map)
+
+        start = time.monotonic()
+        with pytest.raises(ZephyrWorkerError, match="ValueError"):
+            list(ctx.execute(ds))
+        elapsed = time.monotonic() - start
+
+        # Should fail fast — no retries for application errors
+        assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure (no retries)"

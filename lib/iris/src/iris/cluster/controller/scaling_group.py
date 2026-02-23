@@ -87,6 +87,7 @@ class SliceState:
     last_active: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
     vm_addresses: list[str] = field(default_factory=list)
+    error_message: str = ""
 
 
 def prepare_slice_config(
@@ -105,6 +106,9 @@ def prepare_slice_config(
     config.name_prefix = f"{label_prefix}-{parent_config.name}"
     config.labels[f"{label_prefix}-managed"] = "true"
     config.labels[f"{label_prefix}-scale-group"] = parent_config.name
+
+    if parent_config.HasField("resources"):
+        config.gpu_count = parent_config.resources.gpu_count
 
     return config
 
@@ -155,6 +159,7 @@ def slice_state_to_proto(state: SliceState) -> vm_pb2.SliceInfo:
             )
             for i, addr in enumerate(state.vm_addresses)
         ],
+        error_message=state.error_message,
     )
 
 
@@ -286,20 +291,27 @@ class ScalingGroup:
         with self._slices_lock:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
 
-    def mark_slice_ready(self, slice_id: str, vm_addresses: list[str]) -> None:
-        """Mark a slice as READY with its VM addresses. Called after successful bootstrap."""
+    def mark_slice_ready(self, slice_id: str, vm_addresses: list[str], timestamp: Timestamp | None = None) -> None:
+        """Mark a slice as READY with its VM addresses. Called after successful bootstrap.
+
+        Initializes last_active to prevent the slice from appearing idle since epoch(0),
+        which would make it immediately eligible for scaledown.
+        """
+        timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
             state = self._slices.get(slice_id)
             if state is not None:
                 state.lifecycle = SliceLifecycleState.READY
                 state.vm_addresses = vm_addresses
+                state.last_active = timestamp
 
-    def mark_slice_failed(self, slice_id: str) -> None:
+    def mark_slice_failed(self, slice_id: str, error_message: str = "") -> None:
         """Mark a slice as FAILED. Called when bootstrap fails."""
         with self._slices_lock:
             state = self._slices.get(slice_id)
             if state is not None:
                 state.lifecycle = SliceLifecycleState.FAILED
+                state.error_message = error_message
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
@@ -314,7 +326,12 @@ class ScalingGroup:
             for handle in slice_handles:
                 self._slices[handle.slice_id] = SliceState(handle=handle)
 
-    def scale_up(self, tags: dict[str, str] | None = None, timestamp: Timestamp | None = None) -> SliceHandle:
+    def scale_up(
+        self,
+        tags: dict[str, str] | None = None,
+        timestamp: Timestamp | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+    ) -> SliceHandle:
         """Create a new slice via the platform.
 
         Does NOT add to _slices tracking. Use begin_scale_up/complete_scale_up
@@ -323,6 +340,7 @@ class ScalingGroup:
         Args:
             tags: Optional extra labels/tags for the slice (merged with managed labels)
             timestamp: Optional timestamp (for testing)
+            bootstrap_config: Bootstrap settings passed to platform.create_slice()
 
         Returns:
             The newly created SliceHandle
@@ -338,8 +356,17 @@ class ScalingGroup:
         if tags:
             for k, v in tags.items():
                 slice_config.labels[k] = v
+        logger.info(
+            "Scale group %s: create_slice accel=%s:%s gpu_count=%d labels=%s coreweave_instance=%s",
+            self.name,
+            slice_config.accelerator_type,
+            slice_config.accelerator_variant,
+            slice_config.gpu_count,
+            dict(slice_config.labels),
+            slice_config.coreweave.instance_type if slice_config.HasField("coreweave") else "n/a",
+        )
 
-        return self._platform.create_slice(slice_config)
+        return self._platform.create_slice(slice_config, bootstrap_config=bootstrap_config)
 
     def scale_down(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
         """Terminate a slice.
@@ -387,26 +414,41 @@ class ScalingGroup:
 
     def can_fit_resources(self, resources: cluster_pb2.ResourceSpecProto) -> bool:
         """Check whether a demand entry's resources fit within one VM."""
+        return self.check_resource_fit(resources) is None
+
+    def check_resource_fit(self, resources: cluster_pb2.ResourceSpecProto) -> str | None:
+        """Check whether a demand entry's resources fit within one VM.
+
+        A group resource value of 0 means "not configured" and is treated as
+        unlimited for that dimension. This prevents groups that omit optional
+        resource limits (e.g. disk) from rejecting all tasks that request them.
+
+        Returns None if the resources fit, or a human-readable reason string.
+        """
         sg_resources = self.resources
         if sg_resources is None:
-            return False
+            return f"group '{self.name}' has no resources configured"
 
-        if resources.cpu and resources.cpu > sg_resources.cpu:
-            return False
-        if resources.memory_bytes and resources.memory_bytes > sg_resources.memory_bytes:
-            return False
-        if resources.disk_bytes and resources.disk_bytes > sg_resources.disk_bytes:
-            return False
+        if sg_resources.cpu and resources.cpu > sg_resources.cpu:
+            return f"cpu: need {resources.cpu}, group '{self.name}' has {sg_resources.cpu}"
+        if sg_resources.memory_bytes and resources.memory_bytes > sg_resources.memory_bytes:
+            need_gb = resources.memory_bytes / (1024**3)
+            have_gb = sg_resources.memory_bytes / (1024**3)
+            return f"memory: need {need_gb:.1f}GB, group '{self.name}' has {have_gb:.1f}GB"
+        if sg_resources.disk_bytes and resources.disk_bytes > sg_resources.disk_bytes:
+            need_gb = resources.disk_bytes / (1024**3)
+            have_gb = sg_resources.disk_bytes / (1024**3)
+            return f"disk: need {need_gb:.1f}GB, group '{self.name}' has {have_gb:.1f}GB"
 
         gpu_count = get_gpu_count(resources.device)
         if gpu_count > sg_resources.gpu_count:
-            return False
+            return f"gpu: need {gpu_count}, group '{self.name}' has {sg_resources.gpu_count}"
 
         tpu_count = get_tpu_count(resources.device)
         if tpu_count > sg_resources.tpu_count:
-            return False
+            return f"tpu: need {tpu_count}, group '{self.name}' has {sg_resources.tpu_count}"
 
-        return True
+        return None
 
     def update_slice_activity(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp) -> None:
         """Update activity timestamps for all slices based on worker status.
@@ -505,12 +547,15 @@ class ScalingGroup:
                 with self._slices_lock:
                     state = self._slices.get(slice_state.handle.slice_id)
                 last_active = state.last_active if state else Timestamp.from_ms(0)
+                never_active = last_active.epoch_ms() == 0
                 idle_duration = Duration.from_ms(timestamp.epoch_ms() - last_active.epoch_ms())
                 logger.info(
-                    "Scale group %s: scaling down slice %s (idle for %dms, ready=%d, pending=%d, target=%d)",
+                    "Scale group %s: scaling down slice %s "
+                    "(idle for %dms, never_active=%s, ready=%d, pending=%d, target=%d)",
                     self.name,
                     slice_state.handle.slice_id,
                     idle_duration.to_ms(),
+                    never_active,
                     ready,
                     pending,
                     target_capacity,
@@ -682,11 +727,17 @@ class ScalingGroup:
         return AvailabilityState(GroupAvailability.AVAILABLE)
 
     def can_accept_demand(self, timestamp: Timestamp | None = None) -> bool:
-        """Whether this group can accept demand for waterfall routing."""
+        """Whether this group can accept demand for waterfall routing.
+
+        AT_CAPACITY groups are included because they have existing ready
+        slices that can serve demand. Routing demand to them keeps
+        current_demand accurate, preventing premature scale-down.
+        """
         return self.availability(timestamp).status in {
             GroupAvailability.AVAILABLE,
             GroupAvailability.REQUESTING,
             GroupAvailability.BACKOFF,
+            GroupAvailability.AT_CAPACITY,
         }
 
     def _get_slice_vm_addresses(self, state: SliceState) -> list[str]:

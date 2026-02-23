@@ -13,7 +13,7 @@ from collections.abc import Generator, Sequence
 from typing import Any, Protocol
 
 from fray.v2.actor import ActorGroup, ActorHandle
-from fray.v2.types import JobRequest, JobStatus, ResourceConfig
+from fray.v2.types import ActorConfig, JobRequest, JobStatus, ResourceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,14 @@ class JobHandle(Protocol):
 
 
 class Client(Protocol):
-    def submit(self, request: JobRequest) -> JobHandle:
-        """Submit a job for execution. Returns immediately."""
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> JobHandle:
+        """Submit a job for execution. Returns immediately.
+
+        Args:
+            request: The job request to submit.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
+                          If False, raise JobAlreadyExists on duplicate names.
+        """
         ...
 
     def create_actor(
@@ -42,6 +48,7 @@ class Client(Protocol):
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorHandle:
         """Create a named actor instance. Returns a handle immediately."""
@@ -54,6 +61,7 @@ class Client(Protocol):
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorGroup:
         """Create N instances of an actor, returning a group handle."""
@@ -71,6 +79,19 @@ class JobFailed(RuntimeError):
         self.job_id = job_id
         self.failed_status = status
         super().__init__(f"Job {job_id} finished with status {status}")
+
+
+class JobAlreadyExists(RuntimeError):
+    """Raised when submitting a job whose name is already in use.
+
+    When ``handle`` is set the caller can adopt the running job instead of
+    failing.
+    """
+
+    def __init__(self, job_name: str, handle: JobHandle | None = None):
+        self.job_name = job_name
+        self.handle = handle
+        super().__init__(f"Job {job_name} already exists")
 
 
 def wait_all(

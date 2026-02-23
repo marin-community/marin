@@ -16,7 +16,7 @@ from iris.cluster.controller.scaling_group import (
     SliceState,
     _zones_from_config,
 )
-from iris.cluster.platform.base import CloudSliceState, CloudVmState, QuotaExhaustedError, SliceStatus, VmStatus
+from iris.cluster.platform.base import CloudSliceState, CloudWorkerState, QuotaExhaustedError, SliceStatus, WorkerStatus
 from iris.cluster.types import VmWorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -38,24 +38,25 @@ def _with_resources(config: config_pb2.ScaleGroupConfig, *, num_vms: int = 1) ->
     return config
 
 
-def _cloud_vm_state_from_iris(state: vm_pb2.VmState) -> CloudVmState:
-    """Reverse map from Iris VM state to CloudVmState for test setup."""
+def _cloud_worker_state_from_iris(state: vm_pb2.VmState) -> CloudWorkerState:
+    """Reverse map from Iris VM state to CloudWorkerState for test setup."""
     if state == vm_pb2.VM_STATE_READY:
-        return CloudVmState.RUNNING
+        return CloudWorkerState.RUNNING
     if state == vm_pb2.VM_STATE_FAILED:
-        return CloudVmState.STOPPED
+        return CloudWorkerState.STOPPED
     if state == vm_pb2.VM_STATE_TERMINATED:
-        return CloudVmState.TERMINATED
-    return CloudVmState.UNKNOWN
+        return CloudWorkerState.TERMINATED
+    return CloudWorkerState.UNKNOWN
 
 
-def make_mock_vm_handle(vm_id: str, address: str, state: vm_pb2.VmState) -> MagicMock:
-    """Create a mock VmHandle for testing."""
+def make_mock_worker_handle(vm_id: str, address: str, state: vm_pb2.VmState) -> MagicMock:
+    """Create a mock RemoteWorkerHandle for testing."""
     handle = MagicMock()
     handle.vm_id = vm_id
+    handle.worker_id = vm_id
     handle.internal_address = address
     handle.external_address = None
-    handle.status.return_value = VmStatus(state=_cloud_vm_state_from_iris(state))
+    handle.status.return_value = WorkerStatus(state=_cloud_worker_state_from_iris(state))
     return handle
 
 
@@ -93,18 +94,19 @@ def make_mock_slice_handle(
     else:
         slice_state = CloudSliceState.CREATING
 
-    # Generate unique addresses by hashing slice_id
-    slice_hash = abs(hash(slice_id)) % 256
-    vm_handles = []
+    # Addresses are not valid IPs (e.g. "10.0.slice-001.0"), but that's fine —
+    # ScalingGroup only uses them as opaque dict keys for worker status lookups,
+    # never parsed or validated as IP addresses.
+    worker_handles = []
     for i, state in enumerate(vm_states):
-        vm_handle = make_mock_vm_handle(
+        worker_handle = make_mock_worker_handle(
             vm_id=f"{slice_id}-vm-{i}",
-            address=f"10.0.{slice_hash}.{i}",
+            address=f"10.0.{slice_id}.{i}",
             state=state,
         )
-        vm_handles.append(vm_handle)
+        worker_handles.append(worker_handle)
 
-    handle.describe.return_value = SliceStatus(state=slice_state, vm_count=len(vm_states), vms=vm_handles)
+    handle.describe.return_value = SliceStatus(state=slice_state, worker_count=len(vm_states), workers=worker_handles)
 
     return handle
 
@@ -116,7 +118,7 @@ def make_mock_platform(slice_handles_to_discover: list[MagicMock] | None = None)
 
     create_count = [0]
 
-    def create_slice_side_effect(config: config_pb2.SliceConfig) -> MagicMock:
+    def create_slice_side_effect(config: config_pb2.SliceConfig, bootstrap_config=None) -> MagicMock:
         create_count[0] += 1
         slice_id = f"new-slice-{create_count[0]}"
         return make_mock_slice_handle(slice_id)
@@ -125,11 +127,11 @@ def make_mock_platform(slice_handles_to_discover: list[MagicMock] | None = None)
     return platform
 
 
-def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock]) -> None:
+def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock], timestamp: Timestamp | None = None) -> None:
     """Mark discovered slices as READY with their VM addresses."""
     for handle in handles:
-        vm_addresses = [vm.internal_address for vm in handle.describe().vms]
-        group.mark_slice_ready(handle.slice_id, vm_addresses)
+        vm_addresses = [vm.internal_address for vm in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, vm_addresses, timestamp=timestamp)
 
 
 def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> None:
@@ -140,7 +142,7 @@ def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> No
 
 def _get_vm_address(handle: MagicMock) -> str:
     """Get the first VM's internal_address from a SliceHandle."""
-    return handle.describe().vms[0].internal_address
+    return handle.describe().workers[0].internal_address
 
 
 def _get_slice_state(group: ScalingGroup, handle: MagicMock) -> SliceState:
@@ -548,9 +550,10 @@ class TestScalingGroupIdleTracking:
             make_mock_slice_handle("slice-002", all_ready=True),
         ]
         platform = make_mock_platform(slice_handles_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, platform)
+        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(1000))
         group.reconcile()
-        _mark_discovered_ready(group, discovered)
+        ready_ts = Timestamp.from_ms(1000)
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
 
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
@@ -563,12 +566,13 @@ class TestScalingGroupIdleTracking:
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
-        group.update_slice_activity(vm_status_map, Timestamp.from_ms(5000))
+        check_ts = Timestamp.from_ms(5000)
+        group.update_slice_activity(vm_status_map, check_ts)
 
         # Observable behavior: slice-001 should not be eligible for scaledown (recently active)
-        # slice-002 should remain eligible (no activity tracked)
-        assert not group.is_slice_eligible_for_scaledown("slice-001", Timestamp.from_ms(5000))
-        assert group.is_slice_eligible_for_scaledown("slice-002", Timestamp.from_ms(5000))
+        # slice-002 is eligible because idle_threshold (1000ms) has passed since ready_ts (1000ms)
+        assert not group.is_slice_eligible_for_scaledown("slice-001", check_ts)
+        assert group.is_slice_eligible_for_scaledown("slice-002", check_ts)
 
     def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """scale_down_if_idle terminates an eligible idle slice."""
@@ -776,8 +780,8 @@ class TestScalingGroupAvailability:
 
         assert group.can_accept_demand() is True
 
-    def test_can_accept_demand_false_when_at_capacity(self):
-        """can_accept_demand() returns False when AT_CAPACITY."""
+    def test_can_accept_demand_true_when_at_capacity(self):
+        """AT_CAPACITY groups accept demand so ready slices keep current_demand accurate."""
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
                 name="test-group",
@@ -792,7 +796,7 @@ class TestScalingGroupAvailability:
         group = ScalingGroup(config, platform)
         group.reconcile()
 
-        assert group.can_accept_demand() is False
+        assert group.can_accept_demand() is True
 
     def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded state auto-expires after timeout."""
@@ -909,7 +913,7 @@ class TestVerifySliceIdle:
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1000000)
         handle = _tracked_scale_up(group, timestamp=ts)
-        vm_addresses = [vm.internal_address for vm in handle.describe().vms]
+        vm_addresses = [vm.internal_address for vm in handle.describe().workers]
         group.mark_slice_ready(handle.slice_id, vm_addresses)
         state = _get_slice_state(group, handle)
 
@@ -1008,6 +1012,47 @@ class TestPrepareSliceConfigPreemptible:
         assert result.preemptible is False
 
 
+class TestPrepareSliceConfigGpuCount:
+    """prepare_slice_config propagates gpu_count from parent resources."""
+
+    def test_gpu_count_propagated_from_resources(self):
+        from iris.cluster.controller.scaling_group import prepare_slice_config
+
+        parent = config_pb2.ScaleGroupConfig(name="gpu-group")
+        parent.resources.CopyFrom(config_pb2.ScaleGroupResources(gpu_count=8))
+        parent.slice_template.coreweave.instance_type = "gd-8xh100ib-i128"
+
+        result = prepare_slice_config(parent.slice_template, parent, "iris")
+        assert result.gpu_count == 8
+
+    def test_gpu_count_zero_when_no_resources(self):
+        from iris.cluster.controller.scaling_group import prepare_slice_config
+
+        parent = config_pb2.ScaleGroupConfig(name="cpu-group")
+        parent.slice_template.coreweave.instance_type = "cd-gp-i64-erapids"
+
+        result = prepare_slice_config(parent.slice_template, parent, "iris")
+        assert result.gpu_count == 0
+
+    def test_coreweave_yaml_gpu_count_flows_through(self):
+        """Loading coreweave.yaml and running prepare_slice_config produces correct gpu_count."""
+        from pathlib import Path
+
+        from iris.cluster.config import load_config
+        from iris.cluster.controller.scaling_group import prepare_slice_config
+
+        yaml_path = Path(__file__).parents[3] / "examples" / "coreweave.yaml"
+        config = load_config(yaml_path)
+
+        h100_sg = config.scale_groups["h100-8x"]
+        slice_config = prepare_slice_config(h100_sg.slice_template, h100_sg, config.platform.label_prefix)
+        assert slice_config.gpu_count == 8
+
+        cpu_sg = config.scale_groups["cpu-erapids"]
+        cpu_slice = prepare_slice_config(cpu_sg.slice_template, cpu_sg, config.platform.label_prefix)
+        assert cpu_slice.gpu_count == 0
+
+
 class TestMarkSliceLockDiscipline:
     """Tests that mark_slice_ready/mark_slice_failed hold the lock during mutation."""
 
@@ -1056,11 +1101,12 @@ class TestMarkSliceLockDiscipline:
         group.mark_slice_failed("nonexistent")
 
 
-def _make_vm_handle(vm_id: str, cloud_state: CloudVmState, address: str = "10.0.0.1") -> MagicMock:
+def _make_worker_handle(vm_id: str, cloud_state: CloudWorkerState, address: str = "10.0.0.1") -> MagicMock:
     handle = MagicMock()
     handle.vm_id = vm_id
+    handle.worker_id = vm_id
     handle.internal_address = address
-    handle.status.return_value = VmStatus(state=cloud_state)
+    handle.status.return_value = WorkerStatus(state=cloud_state)
     return handle
 
 
@@ -1071,5 +1117,5 @@ def _make_slice_handle(
 ) -> MagicMock:
     handle = MagicMock()
     handle.slice_id = slice_id
-    handle.describe.return_value = SliceStatus(state=slice_state, vm_count=len(vm_handles), vms=vm_handles)
+    handle.describe.return_value = SliceStatus(state=slice_state, worker_count=len(vm_handles), workers=vm_handles)
     return handle

@@ -110,11 +110,14 @@ def test_get_job_status_no_retry_on_not_found(mock_client):
 
 
 def test_fetch_task_logs_retries_on_connection_error(mock_client):
-    """Verify fetch_task_logs retries on connection errors."""
+    """Verify fetch_task_logs retries the GetTaskLogs RPC on connection errors."""
     job_id = JobName.root("test-job")
 
-    # Mock: fail once, then succeed
-    mock_response = cluster_pb2.Controller.GetTaskLogsResponse()
+    logs_response = cluster_pb2.Controller.GetTaskLogsResponse(
+        task_logs=[],
+        last_timestamp_ms=0,
+        truncated=False,
+    )
 
     call_count = 0
 
@@ -123,12 +126,14 @@ def test_fetch_task_logs_retries_on_connection_error(mock_client):
         call_count += 1
         if call_count == 1:
             raise ConnectError(Code.UNAVAILABLE, "Connection lost")
-        return mock_response
+        return logs_response
 
     mock_client._client.get_task_logs.side_effect = side_effect
 
     result = mock_client.fetch_task_logs(job_id)
-    assert result == mock_response
+    assert result.task_logs == []
+    assert result.truncated is False
+    assert result.last_timestamp_ms == 0
     assert call_count == 2
 
 

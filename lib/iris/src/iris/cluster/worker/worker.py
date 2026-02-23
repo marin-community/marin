@@ -19,12 +19,13 @@ from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.task_logging import FsspecLogSink, LogSink, LogSinkConfig, ProcessLogSink
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -41,6 +42,10 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
+    worker_attributes: dict[str, str] = field(default_factory=dict)
+    default_task_env: dict[str, str] = field(default_factory=dict)
+    default_task_image: str | None = None
+    log_prefix: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
 
@@ -68,6 +73,7 @@ class Worker:
         self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
         self._runtime = container_runtime or DockerRuntime()
         self._environment_provider = environment_provider or DefaultEnvironmentProvider()
+        self._inferred_log_prefix = self._environment_provider.log_prefix()
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Probe worker metadata eagerly so it's available before any task arrives.
@@ -91,6 +97,7 @@ class Worker:
 
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
+        self._process_log_sink: ProcessLogSink | None = None
 
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
@@ -100,12 +107,15 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         # Start HTTP server
+        # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
+        # causing TCP resets on idle connections.
         self._server = uvicorn.Server(
             uvicorn.Config(
                 self._dashboard._app,
                 host=self._config.host,
                 port=self._config.port,
                 log_level="error",
+                timeout_keep_alive=120,
             )
         )
         self._threads.spawn_server(self._server, name="worker-server")
@@ -147,6 +157,8 @@ class Worker:
         if self._server:
             self._server.should_exit = True
         self._threads.stop()
+        if self._process_log_sink:
+            self._process_log_sink.close()
 
         # Remove any remaining containers (tasks already killed above via stop_event)
         with self._lock:
@@ -167,14 +179,24 @@ class Worker:
         3. Serve (wait for heartbeats from controller)
         4. If heartbeat timeout expires, return to step 1
         """
-        while not stop_event.is_set():
-            self._reset_worker_state()
-            worker_id = self._register(stop_event)
-            if worker_id is None:
-                # Shutdown requested during registration
-                break
-            self._worker_id = worker_id
-            self._serve(stop_event)
+        try:
+            while not stop_event.is_set():
+                self._reset_worker_state()
+                worker_id = self._register(stop_event)
+                if worker_id is None:
+                    # Shutdown requested during registration
+                    break
+                self._worker_id = worker_id
+                self._ensure_process_log_sink()
+                self._serve(stop_event)
+        except Exception:
+            logger.exception("Worker lifecycle crashed; flushing process logs before exit")
+            raise
+        finally:
+            # Flush process logs on any exit (clean or crash) so the last log
+            # entries reach object storage before the pod is deleted.
+            if self._process_log_sink:
+                self._process_log_sink.sync()
 
     def _register(self, stop_event: threading.Event) -> str | None:
         """Register with controller. Retries until accepted or shutdown.
@@ -213,6 +235,21 @@ class Worker:
             stop_event.wait(5.0)
 
         return None
+
+    def _ensure_process_log_sink(self) -> None:
+        if self._process_log_sink:
+            return
+        prefix = self._config.log_prefix or self._inferred_log_prefix
+        if not prefix:
+            logger.warning("Process log sink disabled: log prefix not configured")
+            return
+        worker_id = self._worker_id or "unknown"
+        self._process_log_sink = ProcessLogSink(
+            prefix=prefix,
+            worker_id=worker_id,
+            log_buffer=get_global_buffer(),
+        )
+        logger.info("Process log sink enabled: %s", self._process_log_sink.log_path)
 
     def _resolve_address(self) -> str:
         """Resolve the address to advertise to the controller."""
@@ -281,6 +318,33 @@ class Worker:
         except Exception as e:
             # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
             logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)
+
+    def create_log_sink(self, task_id_wire: str, attempt_id: int) -> LogSink:
+        """Create log sink for task logs.
+
+        Uses FsspecLogSink if IRIS_WORKER_PREFIX is configured, otherwise LocalLogSink.
+
+        Args:
+            task_id_wire: Full task ID in wire format
+            attempt_id: Attempt ID for this execution
+
+        Returns:
+            LogSink instance (FsspecLogSink or LocalLogSink)
+        """
+        config = LogSinkConfig(
+            prefix="",  # Will be set below
+            worker_id=self._worker_id or "unknown",
+            task_id=JobName.from_wire(task_id_wire),
+            attempt_id=attempt_id,
+        )
+
+        prefix = self._config.log_prefix or self._inferred_log_prefix
+        if not prefix:
+            raise ValueError(
+                "log prefix is required; set IRIS_LOG_PREFIX or run in an environment with inferrable prefix"
+            )
+        config.prefix = prefix
+        return FsspecLogSink(config)
 
     # Task management methods
 
@@ -384,6 +448,9 @@ class Worker:
             cache_dir=self._cache_dir,
         )
 
+        # Create log sink for task logs
+        log_sink = self.create_log_sink(task_id.to_wire(), attempt_id)
+
         attempt = TaskAttempt(
             config=config,
             bundle_provider=self._bundle_cache,
@@ -391,8 +458,11 @@ class Worker:
             worker_metadata=self._worker_metadata,
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
+            default_task_env=self._config.default_task_env,
+            default_task_image=self._config.default_task_image,
             port_allocator=self._port_allocator,
             report_state=lambda: self._notify_task_update(attempt),
+            log_sink=log_sink,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
@@ -518,15 +588,22 @@ class Worker:
                             error=task_proto.error,
                             finished_at=task_proto.finished_at,
                             attempt_id=task_proto.current_attempt_id,
+                            log_directory=task.log_directory,
                         )
                     )
                 else:
-                    # Task is running/building - include in running_tasks
+                    # Task is running/building - include in running_tasks.
+                    # Report BUILDING if the thread hasn't transitioned out of PENDING yet
+                    # (the thread starts in PENDING before calling _download_bundle).
+                    reported_state = task.status
+                    if reported_state == cluster_pb2.TASK_STATE_PENDING:
+                        reported_state = cluster_pb2.TASK_STATE_BUILDING
                     running_tasks.append(
                         cluster_pb2.Controller.RunningTaskEntry(
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
-                            state=task.status,
+                            state=reported_state,
+                            log_directory=task.log_directory,
                         )
                     )
 
@@ -613,7 +690,7 @@ class Worker:
         task_id: str,
         start_line: int = 0,
         attempt_id: int = -1,
-    ) -> list[cluster_pb2.Worker.LogEntry]:
+    ) -> list[logging_pb2.LogEntry]:
         """Get logs for a task.
 
         Logs are streamed into task.logs during execution (single source of truth).
@@ -632,21 +709,22 @@ class Worker:
             task = self._tasks.get((task_id, attempt_id))
             if not task:
                 return []
-            logs = [log_line.to_proto() for log_line in task.logs.lines]
-            for log in logs:
-                log.attempt_id = attempt_id
+            logs = task.recent_logs(max_entries=0)
             logs.sort(key=lambda x: x.timestamp.epoch_ms)
             return logs[start_line:]
 
         # All attempts for this task
-        all_logs: list[cluster_pb2.Worker.LogEntry] = []
+        all_logs: list[logging_pb2.LogEntry] = []
         for (tid, aid), task in self._tasks.items():
             if tid != task_id:
                 continue
-            for log_line in task.logs.lines:
-                proto = log_line.to_proto()
-                proto.attempt_id = aid
-                all_logs.append(proto)
+            logs = task.recent_logs(max_entries=0)
+            for log in logs:
+                entry = logging_pb2.LogEntry()
+                entry.CopyFrom(log)
+                if entry.attempt_id == 0:
+                    entry.attempt_id = aid
+                all_logs.append(entry)
 
         all_logs.sort(key=lambda x: x.timestamp.epoch_ms)
         return all_logs[start_line:]

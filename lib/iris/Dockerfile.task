@@ -9,6 +9,9 @@
 
 FROM python:3.12
 
+LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
+LABEL org.opencontainers.image.description="Iris task base image"
+
 RUN sed -i 's|deb.debian.org|cdn-fastly.deb.debian.org|g' /etc/apt/sources.list.d/*.sources 2>/dev/null; \
     sed -i 's|deb.debian.org|cdn-fastly.deb.debian.org|g' /etc/apt/sources.list 2>/dev/null; \
     apt-get update && apt-get install -y --no-install-recommends git curl build-essential \
@@ -21,6 +24,26 @@ ENV PATH="/root/.cargo/bin:$PATH"
 
 # uv cache location - actual cache is mounted as Docker named volume at runtime
 ENV UV_CACHE_DIR=/uv/cache
+ENV CARGO_TARGET_DIR=/root/.cargo/target
 ENV PYTHONDONTWRITEBYTECODE=1
+
+# =============================================================================
+# !!! DO NOT REMOVE !!!
+#
+# KubernetesRuntime extracts IRIS_BUNDLE_GCS_PATH into /app BEFORE setup_commands
+# run. At that point we cannot rely on `uv sync` or project-local imports.
+# The extraction preamble must use base-image dependencies only, so object-store
+# clients required by fsspec need to be installed here.
+#
+# If these packages are missing, bundle extraction can fail before task setup
+# starts, especially for s3:// and gs:// bundle URIs.
+# =============================================================================
+RUN python -m pip install --no-cache-dir \
+    fsspec \
+    s3fs \
+    gcsfs
+
+ARG IRIS_GIT_HASH=unknown
+ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 
 WORKDIR /app

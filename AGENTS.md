@@ -14,6 +14,7 @@
 - Begin with the agent-friendly recipes in `docs/recipes/`.
 - The first step for dataset addition is schema inspection. See the [add_dataset.md](docs/recipes/add_dataset.md) recipe for details.
 - You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
+- For long-running benchmark/research threads, follow [agent_research.md](docs/recipes/agent_research.md).
 - When making significant changes to Grug/Grugformer, follow [change_grug.md](docs/recipes/change_grug.md).
 - Follow the rules and examples in each recipe to ensure compatibility and automation-friendliness.
 
@@ -31,6 +32,11 @@
 - NEVER SAY "You're absolutely right!"
 - You never credit yourself in commits.
 - NEVER EVER EVER credit yourself in commit messages.
+
+### Agent-Generated GitHub Activity
+
+- When an agent creates a PR or an issue using the user's auth token, it must add the `agent-generated` label.
+- When an agent comments on a PR or issue using the user's auth token, the comment must begin with an `🤖` emoji unless the exact comment text was explicitly approved by the user. If it cannot be at the very beginning for formatting or workflow reasons, it should come as soon as possible.
 
 ### Code Style
 
@@ -58,6 +64,7 @@
 
 - Keep MkDocs content in sync with code. Docs live in `docs/` or in the subproject's `docs/` directory; use Markdown and mkdocs-style links when referencing symbols.
 - Public-facing modules and APIs need concise Google-style docstrings; align terminology across code and docs.
+- Write docs for readers who do not have conversational context: include enough problem framing, assumptions, commands, and results that the document stands on its own.
 
 ### Deprecation
 

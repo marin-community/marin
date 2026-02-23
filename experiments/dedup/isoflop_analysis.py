@@ -65,6 +65,7 @@ def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism:
         name=f"dedup/{variant}_{mode.lower()}",
         fn=deduplicate,
         config=dedup_config,
+        pip_dependency_groups=["dedup"],
     )
 
     dedup_mode_to_filter_type = {

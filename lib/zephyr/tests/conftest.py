@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Pytest fixtures for zephyr tests."""
+import tempfile
 
+import atexit
 import logging
 import os
 import sys
@@ -112,7 +114,7 @@ def zephyr_ctx(fray_client, tmp_path_factory):
     chunk_prefix = str(tmp_path / "chunks")
     with ZephyrContext(
         client=fray_client,
-        num_workers=2,
+        max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name="test-ctx",
@@ -141,6 +143,16 @@ class CallCounter:
         self.map_count += 1
         self.processed_ids.append(x["id"])
         return {**x, "processed": True}
+
+
+@pytest.fixture(autouse=True)
+def _configure_marin_prefix():
+    """Set MARIN_PREFIX to a temp directory for tests that rely on it."""
+    if "MARIN_PREFIX" not in os.environ:
+        with tempfile.TemporaryDirectory(prefix="marin_prefix") as temp_dir:
+            os.environ["MARIN_PREFIX"] = temp_dir
+            yield
+            del os.environ["MARIN_PREFIX"]
 
 
 @pytest.fixture(autouse=True)
@@ -188,4 +200,4 @@ def pytest_sessionfinish(session, exitstatus):
         tty.flush()
         tty.close()
         if exitstatus != 0:
-            os._exit(exitstatus)
+            atexit.register(os._exit, exitstatus)

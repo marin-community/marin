@@ -5,6 +5,7 @@
 
 import logging
 import time
+from collections.abc import Callable
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
@@ -60,7 +61,6 @@ class RemoteClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
-        fail_if_exists: bool = False,
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -84,7 +84,7 @@ class RemoteClusterClient:
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
-                fail_if_exists=fail_if_exists,
+                fail_if_exists=False,
             )
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
@@ -98,7 +98,7 @@ class RemoteClusterClient:
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
-                fail_if_exists=fail_if_exists,
+                fail_if_exists=False,
             )
 
         if scheduling_timeout is not None:
@@ -149,6 +149,59 @@ class RemoteClusterClient:
 
             interval = backoff.next_interval()
             time.sleep(min(interval, deadline.remaining_seconds()))
+
+    def wait_for_job_with_streaming(
+        self,
+        job_id: JobName,
+        *,
+        timeout: float,
+        poll_interval: float,
+        include_children: bool,
+        since_ms: int = 0,
+        on_logs: Callable[[cluster_pb2.Controller.GetTaskLogsResponse], None] | None = None,
+    ) -> cluster_pb2.JobStatus:
+        """Wait for job completion while streaming task logs via the controller RPC.
+
+        Delegates log reading to the controller (which has the correct storage
+        credentials and endpoint configuration), avoiding client-side S3 access.
+        """
+        deadline = Deadline.from_seconds(timeout)
+        last_timestamp_ms = since_ms
+        terminal_status: cluster_pb2.JobStatus | None = None
+
+        while True:
+            status = self.get_job_status(job_id)
+            state_name = cluster_pb2.JobState.Name(status.state)
+
+            log_response = self._fetch_task_logs_rpc(
+                job_id,
+                include_children=include_children,
+                since_ms=last_timestamp_ms,
+            )
+
+            if log_response.last_timestamp_ms > last_timestamp_ms:
+                last_timestamp_ms = log_response.last_timestamp_ms
+
+            if on_logs is not None:
+                on_logs(log_response)
+
+            if is_job_finished(status.state):
+                total_lines = sum(len(b.logs) for b in log_response.task_logs)
+                logger.info(
+                    "job=%s finished with state=%s, draining logs (total_lines=%d)",
+                    job_id,
+                    state_name,
+                    total_lines,
+                )
+                if terminal_status is not None:
+                    return terminal_status
+                # Give log writers a moment to flush, then drain once more.
+                terminal_status = status
+                time.sleep(1)
+                continue
+
+            deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")
+            time.sleep(poll_interval)
 
     def terminate_job(self, job_id: JobName) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
@@ -245,29 +298,52 @@ class RemoteClusterClient:
         regex: str | None = None,
         attempt_id: int = -1,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Fetch logs for a task or all tasks in a job.
+        """Fetch logs for a task or job via the controller RPC.
+
+        The controller reads from storage with the correct credentials and
+        endpoint configuration.
 
         Args:
-            target: Task ID or Job ID (detected by trailing numeric)
+            target: Task ID or Job ID
             include_children: Include logs from child jobs (job ID only)
             since_ms: Only return logs after this timestamp (exclusive)
             max_total_lines: Maximum total lines (0 = default 10000)
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
         """
+        return self._fetch_task_logs_rpc(
+            target,
+            include_children=include_children,
+            since_ms=since_ms,
+            max_total_lines=max_total_lines,
+            regex=regex,
+            attempt_id=attempt_id,
+        )
+
+    def _fetch_task_logs_rpc(
+        self,
+        target: JobName,
+        *,
+        include_children: bool = False,
+        since_ms: int = 0,
+        max_total_lines: int = 0,
+        regex: str | None = None,
+        attempt_id: int = -1,
+    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
+        """Call the GetTaskLogs RPC on the controller."""
+        request = cluster_pb2.Controller.GetTaskLogsRequest(
+            id=target.to_wire(),
+            include_children=include_children,
+            since_ms=since_ms,
+            max_total_lines=max_total_lines,
+            regex=regex or "",
+            attempt_id=attempt_id,
+        )
 
         def _call():
-            request = cluster_pb2.Controller.GetTaskLogsRequest(
-                id=target.to_wire(),
-                include_children=include_children,
-                since_ms=since_ms,
-                max_total_lines=max_total_lines,
-                regex=regex or "",
-                attempt_id=attempt_id,
-            )
             return self._client.get_task_logs(request)
 
-        return call_with_retry(f"fetch_task_logs({target})", _call)
+        return call_with_retry(f"get_task_logs({target})", _call)
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.

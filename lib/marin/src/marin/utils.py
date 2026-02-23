@@ -380,7 +380,9 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
     rel_path = os.path.relpath(file_path, base_in_path)
 
     # Construct the output file path
-    # TODO: if old_extension is not None, but new_extension is None, raise an error or warning?
+    if old_extension and not new_extension:
+        raise ValueError("old_extension requires new_extension to be set")
+
     if new_extension:
         if old_extension:
             rel_path = rel_path[: rel_path.rfind(old_extension)] + new_extension

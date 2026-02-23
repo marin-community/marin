@@ -15,9 +15,14 @@ from iris.cluster.controller.events import (
     TaskStateChangedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingResult
+from iris.cluster.controller.scheduler import (
+    JobRequirements,
+    Scheduler,
+    SchedulingResult,
+    device_variant_matches,
+)
 from iris.cluster.controller.state import ControllerState, ControllerTask
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
@@ -694,6 +699,58 @@ def test_constraint_numeric_operators_with_floats(scheduler, state, job_request,
     assert result.assignments[0][1] == WorkerId("w1")
 
 
+def test_constraint_in_operator_matches_any_value(scheduler, state, job_request, worker_metadata):
+    """IN constraint matches workers whose attribute value is in the provided set."""
+    meta1 = worker_metadata()
+    meta1.attributes["region"].string_value = "us-central1"
+    register_worker(state, "w1", "addr1", meta1)
+
+    meta2 = worker_metadata()
+    meta2.attributes["region"].string_value = "us-central2"
+    register_worker(state, "w2", "addr2", meta2)
+
+    meta3 = worker_metadata()
+    meta3.attributes["region"].string_value = "eu-west4"
+    register_worker(state, "w3", "addr3", meta3)
+
+    # Job with IN constraint: region IN (us-central1, us-central2)
+    req = job_request()
+    constraint = req.constraints.add()
+    constraint.key = "region"
+    constraint.op = cluster_pb2.CONSTRAINT_OP_IN
+    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central1"))
+    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central2"))
+
+    submit_job(state, "j1", req)
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    # Only w1 and w2 match the IN constraint (not w3 in eu-west4)
+    assert len(result.assignments) == 1
+    assert result.assignments[0][1] in {WorkerId("w1"), WorkerId("w2")}
+
+
+def test_constraint_in_operator_no_match(scheduler, state, job_request, worker_metadata):
+    """IN constraint with no matching workers produces no assignments."""
+    meta = worker_metadata()
+    meta.attributes["region"].string_value = "eu-west4"
+    register_worker(state, "w1", "addr1", meta)
+
+    req = job_request()
+    constraint = req.constraints.add()
+    constraint.key = "region"
+    constraint.op = cluster_pb2.CONSTRAINT_OP_IN
+    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central1"))
+    constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central2"))
+    submit_job(state, "j1", req)
+
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
+
+    assert len(result.assignments) == 0
+
+
 def test_multiple_constraints_all_must_match(scheduler, state, job_request, worker_metadata):
     """Multiple constraints are ANDed together."""
     # Worker 1: tpu-name=tpu-a, tpu-worker-id=0
@@ -1252,18 +1309,18 @@ def test_preemptible_constraint_routes_to_matching_worker(scheduler, state, job_
     """Job constrained to non-preemptible workers is only scheduled on a matching worker."""
     # Preemptible worker
     meta_preemptible = worker_metadata()
-    meta_preemptible.attributes["preemptible"].string_value = "true"
+    meta_preemptible.attributes[PREEMPTIBLE_ATTRIBUTE_KEY].string_value = "true"
     register_worker(state, "w-preemptible", "addr1", meta_preemptible)
 
     # On-demand worker
     meta_ondemand = worker_metadata()
-    meta_ondemand.attributes["preemptible"].string_value = "false"
+    meta_ondemand.attributes[PREEMPTIBLE_ATTRIBUTE_KEY].string_value = "false"
     register_worker(state, "w-ondemand", "addr2", meta_ondemand)
 
     # Job requiring non-preemptible worker
     req = job_request()
     constraint = req.constraints.add()
-    constraint.key = "preemptible"
+    constraint.key = PREEMPTIBLE_ATTRIBUTE_KEY
     constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
     constraint.value.string_value = "false"
     tasks = submit_job(state, "j1", req)
@@ -1857,3 +1914,52 @@ def test_mixed_variant_cluster_many_jobs_all_scheduled(state, worker_metadata):
             assert (
                 worker.device_variant == "v5litepod-16"
             ), f"Job {job_name} assigned to {worker.device_variant}, expected v5litepod-16"
+
+
+def test_gpu_job_matches_worker_with_full_nvidia_smi_variant(scheduler, state, worker_metadata):
+    """A job requesting variant="H100" matches a worker reporting "NVIDIA H100 80GB HBM3".
+
+    nvidia-smi reports the full GPU model string, but configs and jobs use short
+    names. The scheduler uses substring matching so these interoperate.
+    """
+    meta = worker_metadata(gpu_count=8, gpu_name="NVIDIA H100 80GB HBM3")
+    register_worker(state, "gpu-w1", "addr", meta)
+
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="gpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="H100", count=8)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    context = scheduler.create_scheduling_context(
+        state.get_available_workers(),
+        pending_tasks=[t.task_id for t in tasks],
+        jobs={tasks[0].job_id: _job_requirements_from_job(state.get_job(tasks[0].job_id))},
+    )
+    result = scheduler.find_assignments(context)
+    assert len(result.assignments) == 1, f"Expected 1 assignment, got {len(result.assignments)}"
+    assert result.assignments[0][1] == WorkerId("gpu-w1")
+
+
+@pytest.mark.parametrize(
+    "job_variant, worker_variant, expected",
+    [
+        ("H100", "NVIDIA H100 80GB HBM3", True),
+        ("h100", "NVIDIA H100 80GB HBM3", True),
+        ("H100", "H100", True),
+        ("A100", "NVIDIA H100 80GB HBM3", False),
+        ("H100", "NVIDIA H200", False),
+        ("H100", None, False),
+        ("A100", "NVIDIA A100-SXM4-80GB", True),
+        ("v5litepod", "v5litepod-16", True),
+    ],
+)
+def test_device_variant_matches(job_variant, worker_variant, expected):
+    assert device_variant_matches(job_variant, worker_variant) == expected

@@ -14,6 +14,7 @@ from typing import Any, cast
 
 from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
 from fray.v2.types import (
+    ActorConfig,
     BinaryEntrypoint,
     CallableEntrypoint,
     JobRequest,
@@ -100,7 +101,15 @@ class LocalClient:
         self._executor = ThreadPoolExecutor(max_workers=max_threads)
         self._jobs: list[LocalJobHandle] = []
 
-    def submit(self, request: JobRequest) -> LocalJobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> LocalJobHandle:
+        """Submit a job for execution.
+
+        Args:
+            request: The job request to submit.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
+                          LocalClient currently doesn't enforce unique names, so this
+                          parameter has no effect but is included for API compatibility.
+        """
         entry = request.entrypoint
         if entry.callable_entrypoint is not None:
             future = self._executor.submit(_run_callable, entry.callable_entrypoint)
@@ -127,6 +136,7 @@ class LocalClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> LocalActorHandle:
         """Create an in-process actor, returning a handle immediately."""
@@ -140,6 +150,7 @@ class LocalClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorGroup:
         """Create N in-process actor instances, returning a group handle."""
