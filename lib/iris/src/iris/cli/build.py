@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from iris.cluster.platform.bootstrap import collect_all_regions, parse_artifact_registry_tag
+from iris.rpc import config_pb2
 
 GHCR_DEFAULT_ORG = "marin-community"
 
@@ -336,6 +337,29 @@ def _add_registry_options(fn):
     return fn
 
 
+def _resolve_gcp_push_targets(
+    config: config_pb2.IrisClusterConfig | None,
+    registry: str,
+    gcp_regions: tuple[str, ...],
+    gcp_project: str,
+) -> tuple[tuple[str, ...], str]:
+    """Resolve GCP push regions/project, deriving from config when possible."""
+    if registry != "gcp" or gcp_regions or config is None:
+        return gcp_regions, gcp_project
+
+    regions = collect_all_regions(config)
+    if not regions:
+        raise click.ClickException("No GCP regions found in config")
+
+    resolved_project = gcp_project
+    if config.platform.HasField("gcp") and config.platform.gcp.project_id:
+        resolved_project = config.platform.gcp.project_id
+
+    ordered_regions = tuple(sorted(regions))
+    click.echo(f"Using {len(ordered_regions)} GCP region(s) from config: {', '.join(ordered_regions)}")
+    return ordered_regions, resolved_project
+
+
 def _build_all(
     push: bool,
     platform: str,
@@ -343,20 +367,20 @@ def _build_all(
     ghcr_org: str,
     gcp_regions: tuple[str, ...],
     gcp_project: str,
-    verbose: bool = False,
+    config: config_pb2.IrisClusterConfig | None = None,
 ) -> None:
     """Build all Iris images (worker, controller, task).
 
     Tags are derived automatically: git SHA + latest.
     """
+    resolved_regions, resolved_project = _resolve_gcp_push_targets(config, registry, gcp_regions, gcp_project)
+
     marin_root = find_marin_root()
     iris_root = find_iris_root()
 
     for image_type in ("worker", "controller"):
         tag = _default_versioned_tag(f"iris-{image_type}")
-        build_image(
-            image_type, tag, push, None, None, platform, registry, ghcr_org, gcp_regions, gcp_project, verbose=verbose
-        )
+        build_image(image_type, tag, push, None, None, platform, registry, ghcr_org, resolved_regions, resolved_project)
         click.echo()
 
     task_dockerfile = str(iris_root / "Dockerfile.task")
@@ -369,9 +393,8 @@ def _build_all(
         platform,
         registry,
         ghcr_org,
-        gcp_regions,
-        gcp_project,
-        verbose=verbose,
+        resolved_regions,
+        resolved_project,
     )
 
 
@@ -386,7 +409,8 @@ def build(ctx, push: bool, platform: str, registry: str, ghcr_org: str, region: 
     When invoked without a subcommand, builds all images (worker, controller, task).
     """
     if ctx.invoked_subcommand is None:
-        _build_all(push, platform, registry, ghcr_org, gcp_regions=region, gcp_project=project, verbose=_is_verbose(ctx))
+        config = ctx.obj.get("config") if ctx.obj else None
+        _build_all(push, platform, registry, ghcr_org, gcp_regions=region, gcp_project=project, config=config)
 
 
 @build.command("all")
@@ -394,10 +418,18 @@ def build(ctx, push: bool, platform: str, registry: str, ghcr_org: str, region: 
 @click.option("--platform", default="linux/amd64", help="Target platform")
 @_add_registry_options
 @click.pass_context
-def build_all(ctx, push: bool, platform: str, registry: str, ghcr_org: str, region: tuple[str, ...], project: str):
+def build_all(
+    ctx: click.Context,
+    push: bool,
+    platform: str,
+    registry: str,
+    ghcr_org: str,
+    region: tuple[str, ...],
+    project: str,
+):
     """Build all Iris images (worker, controller, task)."""
-    verbose = _is_verbose(ctx)
-    _build_all(push, platform, registry, ghcr_org, gcp_regions=region, gcp_project=project, verbose=verbose)
+    config = ctx.obj.get("config") if ctx.obj else None
+    _build_all(push, platform, registry, ghcr_org, gcp_regions=region, gcp_project=project, config=config)
 
 
 @build.command("worker-image")
