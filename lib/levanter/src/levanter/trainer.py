@@ -526,7 +526,10 @@ class Trainer:
             info = self.train_step(state, example)
             state = info.state
 
-            levanter.tracker.log({"throughput/loading_time": loading_time()}, step=info.step)
+            metrics_to_log: dict[str, float] = {"throughput/loading_time": loading_time()}
+            if hasattr(iter_data, "step_metrics") and iter_data.step_metrics:
+                metrics_to_log.update(iter_data.step_metrics)
+            levanter.tracker.log(metrics_to_log, step=info.step)
 
             yield info
 
