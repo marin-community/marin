@@ -1853,3 +1853,77 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - Re-attempt Macro Move G once TPU infra is stable (reserved dev TPU or healthy Ray queue), then immediately capture forward/backward `shard_map/pallas_call` deltas and exp-op reduction evidence.
   - If infra remains unstable, pivot next validated kernel iteration to **Macro Move H** with stacked shared-RHS matmuls after securing a stable execution lane.
+
+### Iteration 36 - Macro Move G / exp-diff centered outer-product (compile fix attempted, infra-blocked)
+
+- Date: 2026-02-23T01:29:02Z
+- Commit: none (failed attempt)
+- Loop session/local index: `2/10`
+- Starting commit: `0b28e3b3bc1b1f12e1b5e9def51e866df352e7be`
+- Dominant bottleneck carried in (latest successful trace):
+  - train-path `shard_map/custom-call` bucket remained dominant at ~`78 ms` on TPU:0 XLA Ops thread (`gdn_segpipe_i17_dev` baseline in Iteration 33).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` in prepare/recurrent/backward (`+10-20%`, medium numerical/compile risk).
+  2. **Macro Move H**: stack shared-RHS matmuls (`QK/KKT`, `inter/v_prime`) (`+8-18%`, medium integration/VMEM risk).
+  3. **Macro Move E**: V-tiling recurrent/backward state (`KxV -> KxVb`) (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: add `_exp_diff_and_mask_from_g` and replace train-path `exp_diff` construction in prepare/recurrent/fused-forward/backward chunk kernels so fast path uses O(Ct) vector exponentials.
+
+- Change attempt summary:
+  - Implemented `_exp_diff_and_mask_from_g` and wired it into train-path chunk kernels.
+  - First TPU validation run failed with Mosaic compilation error from in-kernel control flow:
+    - `MosaicError: failed to legalize operation 'scf.if'` (`gated_deltanet.py:3998`, job below).
+  - Patched helper to remove `lax.cond`/`scf.if` (branchless select form) and attempted to re-run TPU validation.
+  - Could not complete required TPU validation/profile cycle after patch due infra instability (dev TPU SSH timeouts; Ray jobs stuck pending).
+  - Reverted speculative kernel edits to leave tree clean.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation attempt #1 (Ray, us-east5-a):
+    - Command: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+    - Job: `ray-run-calvinxu-levanter-20260223-010252`
+    - Result: `4 failed, 45 passed, 40 skipped`; failure root cause was TPU compile-time `MosaicError` (`failed to legalize operation 'scf.if'`) from Macro G helper branch in Pallas backward path.
+  - TPU validation re-run attempts after compile-fix patch (blocked):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+      - failed repeatedly with `ssh: connect to host 136.112.108.150 port 22: Operation timed out` at `ssh dev-tpu-calvinxu-gdn mkdir -p marin`.
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+      - submitted `ray-run-calvinxu-levanter-20260223-011045`, remained `PENDING` (resource wait).
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+      - submitted `ray-run-calvinxu-levanter-20260223-012217`, remained `PENDING` (resource wait).
+
+- Profile run:
+  - Not run. Correctness gate for the post-fix code state could not be completed.
+
+- Hotspots observed:
+  - No new valid before/after profile comparison for this iteration.
+  - Carry-in dominant hotspot remains train-path `shard_map/custom-call` bucket.
+
+- MFU/throughput delta:
+  - Unavailable (no completed validated profile run).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command attempted: `dev-tpu-test` and `ray-test` fallbacks (see commands above).
+    - Terminal blocker: dev TPU SSH timeouts + Ray jobs stuck `PENDING` after compile-fix patch.
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: unavailable.
+    - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`: unavailable.
+    - Macro G exp-op reduction note: unavailable (no validated profile/IR capture on final state).
+  - Governance:
+    - Failed attempt with infra blocker after compile-fix retry; reverted speculative kernel edits.
+
+- Infra/cleanup actions:
+  - Dev TPU allocation retry command:
+    - `uv run scripts/ray/dev_tpu.py --cluster us-east5-a --tpu-name calvinxu-gdn allocate --tpu-type v5p-8`
+    - allocation reached "TPU allocated successfully" but environment sync still failed with SSH timeout to `136.112.108.150`.
+  - Stop-job attempts (for queued fallback jobs) did not complete cleanly:
+    - `uv run scripts/ray/cluster.py --cluster us-east5-a stop-job ray-run-calvinxu-levanter-20260223-011045` -> 404 (job not found at stop time).
+    - `uv run scripts/ray/cluster.py --cluster us-central1 stop-job ray-run-calvinxu-levanter-20260223-012217` -> timeout (`ray job stop` timed out after 60s).
+
+- Next bold hypothesis:
+  - Retry Macro G only after a confirmed healthy TPU lane (stable dev TPU SSH or a Ray queue slot that transitions out of `PENDING`), then revalidate and profile immediately.
+  - If TPU availability remains unstable, pivot to Macro Move H after infra stabilization so the next validated iteration changes train-path matmul launch structure without in-kernel control-flow risk.
