@@ -22,6 +22,7 @@ import pytest
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
+    Labels,
     PlatformError,
 )
 from iris.cluster.platform.coreweave import CoreweavePlatform
@@ -572,7 +573,7 @@ def test_list_slices_by_label(fake_kubectl: FakeKubectl):
 
     handles = platform.list_slices(
         zones=["LGA1"],
-        labels={"iris-scale-group": "h100-8x"},
+        labels={Labels("iris").iris_scale_group: "h100-8x"},
     )
     assert len(handles) == 1
     assert handles[0].slice_id == "iris-h100-8x-1000"
@@ -588,11 +589,12 @@ def test_list_all_slices(fake_kubectl: FakeKubectl):
     _seed_worker_pod(fake_kubectl, "iris-a100-4x-2000", "a100-4x")
 
     # Add a non-worker Pod that should be ignored
+    iris_labels = Labels("iris")
     fake_kubectl._pods["some-other-pod"] = {
         "metadata": {
             "name": "some-other-pod",
             "namespace": "iris",
-            "labels": {"iris-managed": "true"},
+            "labels": {iris_labels.iris_managed: "true"},
         },
         "spec": {},
         "status": {"phase": "Running", "podIP": "10.0.0.99", "conditions": []},
@@ -739,8 +741,9 @@ def test_node_selector_uses_label_override_not_name_prefix(fake_kubectl: FakeKub
     platform = _make_platform()
     # Simulate what prepare_slice_config does: name_prefix = "iris-h100_8x"
     # but labels override iris-scale-group = "h100_8x" (the bare scale group name).
+    iris_labels = Labels("iris")
     config = _make_slice_config(name_prefix="iris-h100_8x")
-    config.labels["iris-scale-group"] = "h100_8x"
+    config.labels[iris_labels.iris_scale_group] = "h100_8x"
     bootstrap = _make_bootstrap_config()
 
     handle = platform.create_slice(config, bootstrap)
@@ -750,7 +753,7 @@ def test_node_selector_uses_label_override_not_name_prefix(fake_kubectl: FakeKub
 
     pod_name = f"iris-worker-{handle.slice_id}"
     node_selector = fake_kubectl._pods[pod_name]["spec"]["nodeSelector"]
-    assert node_selector == {"iris-scale-group": "h100_8x"}
+    assert node_selector == {iris_labels.iris_scale_group: "h100_8x"}
     platform.shutdown()
 
 
@@ -780,11 +783,12 @@ def test_list_slices_only_returns_worker_pods(fake_kubectl: FakeKubectl):
     _seed_worker_pod(fake_kubectl, "iris-h100-8x-1000", "h100-8x")
 
     # Non-worker Pod (e.g. controller or auxiliary)
+    iris_labels = Labels("iris")
     fake_kubectl._pods["iris-controller-abc"] = {
         "metadata": {
             "name": "iris-controller-abc",
             "namespace": "iris",
-            "labels": {"iris-managed": "true"},
+            "labels": {iris_labels.iris_managed: "true"},
         },
         "spec": {},
         "status": {"phase": "Running", "podIP": "10.0.0.99", "conditions": []},
@@ -888,10 +892,11 @@ def test_ensure_nodepools_deletes_stale_pools(fake_kubectl: FakeKubectl):
     cluster_config = _make_cluster_config()
 
     # Pre-create a stale NodePool from a previous config (e.g. renamed scale group)
+    iris_labels = Labels("iris")
     fake_kubectl._nodepools["iris-old-gpu-pool"] = {
         "metadata": {
             "name": "iris-old-gpu-pool",
-            "labels": {"iris-managed": "true", "iris-scale-group": "old-gpu-pool"},
+            "labels": {iris_labels.iris_managed: "true", iris_labels.iris_scale_group: "old-gpu-pool"},
         },
         "spec": {"instanceType": "gd-8xh100ib-i128"},
         "status": {"readyNodes": 0, "conditions": []},
@@ -997,9 +1002,10 @@ def test_start_controller_creates_all_resources(fake_kubectl: FakeKubectl):
     assert "iris-controller-svc" in fake_kubectl._services
 
     # Verify Deployment nodeSelector targets the configured scale group
+    iris_labels = Labels("iris")
     deploy_spec = fake_kubectl._deployments["iris-controller"]["spec"]
     node_selector = deploy_spec["template"]["spec"]["nodeSelector"]
-    assert node_selector == {"iris-scale-group": "cpu-erapids"}
+    assert node_selector == {iris_labels.iris_scale_group: "cpu-erapids"}
 
     # Verify controller uses S3 env vars (no GCS credentials)
     container = deploy_spec["template"]["spec"]["containers"][0]
@@ -1575,15 +1581,16 @@ def _seed_worker_pod(
     ready: bool = True,
 ) -> None:
     """Inject a managed worker Pod into FakeKubectl state."""
+    pod_labels = Labels(label_prefix)
     pod_name = f"iris-worker-{slice_id}"
     fake_kubectl._pods[pod_name] = {
         "metadata": {
             "name": pod_name,
             "namespace": "iris",
             "labels": {
-                f"{label_prefix}-managed": "true",
-                f"{label_prefix}-scale-group": scale_group,
-                f"{label_prefix}-slice-id": slice_id,
+                pod_labels.iris_managed: "true",
+                pod_labels.iris_scale_group: scale_group,
+                pod_labels.iris_slice_id: slice_id,
             },
             "creationTimestamp": "2026-02-18T00:00:00Z",
         },

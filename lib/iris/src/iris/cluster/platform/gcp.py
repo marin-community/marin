@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import logging
-import socket
 import subprocess
 import threading
 import time
@@ -52,6 +51,7 @@ from iris.cluster.platform.base import (
     SliceStatus,
     WorkerStatus,
     default_stop_all,
+    find_free_port,
 )
 from iris.cluster.platform.bootstrap import build_worker_bootstrap_script
 from iris.cluster.platform.debug import wait_for_port
@@ -147,13 +147,6 @@ def _validate_vm_config(config: config_pb2.VmConfig) -> None:
         missing.append("gcp.zone")
     if missing:
         raise ValueError(f"VmConfig is missing required fields: {', '.join(missing)}")
-
-
-def _find_free_port(host: str = "127.0.0.1") -> int:
-    """Find a free port on the given host by binding to port 0."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((host, 0))
-        return s.getsockname()[1]
 
 
 # ============================================================================
@@ -928,7 +921,7 @@ def _gcp_tunnel(
     Picks a free port automatically if none is specified.
     """
     if local_port is None:
-        local_port = _find_free_port()
+        local_port = find_free_port()
 
     labels = Labels(label_prefix)
     label_filter = f"labels.{labels.iris_controller}=true AND status=RUNNING"

@@ -33,7 +33,6 @@ the ThreadContainer.
 from __future__ import annotations
 
 import logging
-import socket
 import subprocess
 import uuid
 from collections.abc import Callable
@@ -49,6 +48,7 @@ from iris.cluster.platform.base import (
     SliceStatus,
     WorkerStatus,
     default_stop_all,
+    find_free_port,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
@@ -61,13 +61,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Local Providers (in-process implementations for testing)
 # ============================================================================
-
-
-def find_free_port() -> int:
-    """Find an available port."""
-    with socket.socket() as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
 
 class _LocalBundleProvider:

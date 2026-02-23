@@ -58,6 +58,7 @@ from iris.cluster.platform.base import (
     SliceStatus,
     StandaloneWorkerHandle,
     WorkerStatus,
+    find_free_port,
 )
 from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
@@ -102,12 +103,6 @@ def _classify_kubectl_error(stderr: str) -> PlatformError:
     if "quota" in lower or "insufficient" in lower or "capacity" in lower:
         return QuotaExhaustedError(stderr)
     return PlatformError(stderr)
-
-
-def _find_free_port(host: str = "127.0.0.1") -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((host, 0))
-        return s.getsockname()[1]
 
 
 # ============================================================================
@@ -1360,7 +1355,7 @@ def _coreweave_tunnel(
 ) -> Iterator[str]:
     """kubectl port-forward to a K8s Service, yielding the local URL."""
     if local_port is None:
-        local_port = _find_free_port()
+        local_port = find_free_port()
 
     proc = kubectl.popen(
         ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],

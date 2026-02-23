@@ -29,6 +29,7 @@ provider's view of resources, distinct from the Iris lifecycle states in vm.prot
 from __future__ import annotations
 
 import logging
+import socket
 import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -59,6 +60,23 @@ class Labels:
         self.iris_controller = f"iris-{prefix}-controller"
         self.iris_controller_address = f"iris-{prefix}-controller-address"
         self.iris_slice_id = f"iris-{prefix}-slice-id"
+
+
+# ============================================================================
+# Port Utilities
+# ============================================================================
+
+
+def find_free_port(start: int = 10000) -> int:
+    """Find an available port, scanning upward from start."""
+    for port in range(start, start + 1000):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
 
 
 # ============================================================================
@@ -248,7 +266,7 @@ class SliceHandle(Protocol):
     def scale_group(self) -> str:
         """Name of the scale group this slice belongs to.
 
-        Extracted from labels (e.g., labels["{prefix}-scale-group"]).
+        Extracted from labels (e.g., labels["iris-{prefix}-scale-group"]).
         """
         ...
 
