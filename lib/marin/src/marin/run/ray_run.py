@@ -26,7 +26,7 @@ if _default_token_path.exists() and "RAY_AUTH_TOKEN_PATH" not in os.environ:
 
 from ray.job_submission import JobSubmissionClient
 
-from marin.cluster.config import find_config_by_region
+from marin.cluster.config import find_config_by_region, resolve_infra_dir
 from fray.v1.cluster.ray import DashboardConfig, ray_dashboard
 from fray.v1.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
 
@@ -83,34 +83,6 @@ def generate_submission_id(command: str) -> str:
     timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     parts = ["ray-run", getpass.getuser(), parsed["entrypoint"], timestamp]
     return "-".join(parts)
-
-
-def load_marin_config() -> dict:
-    """Load .marin.yaml configuration."""
-    marin_yaml = Path(".marin.yaml")
-    if not marin_yaml.exists():
-        return {}
-
-    try:
-        with open(marin_yaml, "r") as f:
-            return yaml.safe_load(f) or {}
-    except Exception:
-        return {}
-
-
-def resolve_infra_dir(cli_infra_dir: str | None = None) -> str:
-    """Resolve infra directory from CLI > env > .marin.yaml > default."""
-    if cli_infra_dir:
-        return cli_infra_dir
-
-    if "MARIN_INFRA_DIR" in os.environ:
-        return os.environ["MARIN_INFRA_DIR"]
-
-    config = load_marin_config()
-    if "infra" in config:
-        return config["infra"]
-
-    return "infra"
 
 
 def tpus_per_node(tpu_type: str) -> int:

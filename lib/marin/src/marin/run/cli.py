@@ -17,8 +17,20 @@
 
 import subprocess
 import sys
+import time
 
 import click
+import yaml
+
+from fray.v1.cluster.ray import DashboardConfig, ray_dashboard
+from marin.cluster.config import RayClusterConfig, find_config_by_region, resolve_infra_dir
+
+
+def _resolve_cluster_config(cluster: str, infra_dir: str | None) -> str:
+    """Resolve cluster identifier to a YAML config path."""
+    if cluster.endswith(".yaml"):
+        return cluster
+    return find_config_by_region(cluster, infra_dir=resolve_infra_dir(infra_dir))
 
 
 @click.group()
@@ -109,6 +121,58 @@ def submit(
 
     result = subprocess.run(ray_cmd)
     sys.exit(result.returncode)
+
+
+@main.command("dashboard")
+@click.option("--cluster", required=True, help="Cluster name or config path")
+@click.option("--infra-dir", help="Path to infra/ directory with cluster configs")
+@click.option("--open-browser", is_flag=True, help="Open dashboard URL in browser")
+def dashboard(cluster: str, infra_dir: str | None, open_browser: bool) -> None:
+    """Open an SSH tunnel to a cluster dashboard and keep it alive."""
+    cluster_config = _resolve_cluster_config(cluster, infra_dir)
+
+    with ray_dashboard(DashboardConfig.from_cluster(cluster_config)) as connection:
+        cluster_name = next(iter(connection.clusters.keys()))
+        ports = connection.port_mappings[cluster_name]
+        dashboard_url = f"http://localhost:{ports.dashboard_port}"
+
+        click.echo(f"Cluster: {cluster_name}")
+        click.echo(f"Config: {cluster_config}")
+        click.echo(f"Dashboard: {dashboard_url}")
+        click.echo("Press Ctrl+C to close the dashboard tunnel.")
+
+        if open_browser:
+            import webbrowser
+
+            webbrowser.open(dashboard_url)
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            click.echo("\nClosing dashboard tunnel.")
+
+
+@main.command("cluster-info")
+@click.option("--cluster", required=True, help="Cluster name or config path")
+@click.option("--infra-dir", help="Path to infra/ directory with cluster configs")
+def cluster_info(cluster: str, infra_dir: str | None) -> None:
+    """Print resolved cluster configuration details."""
+    cluster_config = _resolve_cluster_config(cluster, infra_dir)
+    resolved_infra = resolve_infra_dir(infra_dir)
+
+    cfg = RayClusterConfig.from_yaml(cluster_config)
+    with open(cluster_config, "r") as f:
+        raw = yaml.safe_load(f) or {}
+
+    click.echo(f"cluster_name: {cfg.cluster_name}")
+    click.echo(f"config_file: {cluster_config}")
+    click.echo(f"infra_dir: {resolved_infra}")
+    click.echo(f"project_id: {cfg.project_id}")
+    click.echo(f"region: {cfg.region}")
+    click.echo(f"zone: {cfg.zone}")
+    click.echo(f"docker_image: {cfg.docker_image}")
+    click.echo(f"head_node_type: {raw.get('head_node_type', '')}")
 
 
 if __name__ == "__main__":
