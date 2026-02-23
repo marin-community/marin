@@ -69,21 +69,28 @@ MC_BENCHMARKS = ["ai2d", "mmmu"]
 VLM_EVAL_BENCHMARKS = ["ai2d", "mmmu", "textvqa", "chartqa"]
 
 
-def _enable_single_vlm_eval_hlo_dump() -> None:
-    """Append one-shot VLM-eval-focused HLO dump flags to XLA_FLAGS."""
-    required_flags = [
-        "--xla_dump_to=/tmp/xla_dumps_vlm_once",
-        "--xla_dump_hlo_as_text",
-        "--xla_dump_hlo_pass_re=.*(before_optimizations|after_optimizations).*",
-        "--xla_dump_hlo_module_re=.*vlm_eval_loglikelihood.*",
-    ]
-    existing = os.environ.get("XLA_FLAGS", "").strip()
-    merged = existing
+_VLM_HLO_DUMP_XLA_FLAGS = [
+    "--xla_dump_to=/tmp/xla_dumps_vlm_once",
+    "--xla_dump_hlo_as_text",
+    "--xla_dump_hlo_pass_re=.*(before_optimizations|after_optimizations).*",
+    "--xla_dump_hlo_module_re=.*vlm_eval_loglikelihood.*",
+]
+
+
+def _merge_xla_flags(existing: str, required_flags: list[str]) -> str:
+    merged = existing.strip()
     for flag in required_flags:
         if flag not in merged:
             merged = f"{merged} {flag}".strip()
-    os.environ["XLA_FLAGS"] = merged
-    logger.warning("Enabled one-shot VLM eval HLO dump via XLA_FLAGS=%s", merged)
+    return merged
+
+
+def _with_vlm_hlo_dump_env(step):
+    """Attach XLA HLO dump flags to the remote worker runtime env for this step."""
+    env_vars = dict(step.env_vars or {})
+    env_vars["XLA_FLAGS"] = _merge_xla_flags(env_vars.get("XLA_FLAGS", ""), _VLM_HLO_DUMP_XLA_FLAGS)
+    logger.warning("Configured step env XLA_FLAGS for one-shot VLM HLO dump: %s", env_vars["XLA_FLAGS"])
+    return dataclasses.replace(step, env_vars=env_vars)
 
 
 # --- Extended Tokenizer Creation ---
@@ -291,7 +298,8 @@ def make_unified_0_6b(
         use_default_validation=False,
     )
     # Multimodal caches live in gs://marin-vlm (us multi-region); allow cross-region read
-    return dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
+    step = dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
+    return _with_vlm_hlo_dump_env(step)
 
 
 def make_unified_1_7b(
@@ -312,7 +320,8 @@ def make_unified_1_7b(
         eval_harness_tasks=[],
         use_default_validation=False,
     )
-    return dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
+    step = dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
+    return _with_vlm_hlo_dump_env(step)
 
 
 def make_unified_4b(
@@ -333,11 +342,11 @@ def make_unified_4b(
         eval_harness_tasks=[],
         use_default_validation=False,
     )
-    return dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
+    step = dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
+    return _with_vlm_hlo_dump_env(step)
 
 
 if __name__ == "__main__":
-    _enable_single_vlm_eval_hlo_dump()
     steps = [make_unified_0_6b()]
     executor_main(
         steps,

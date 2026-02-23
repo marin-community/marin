@@ -333,7 +333,7 @@ def _run_batch_loop(
     result_probs = np.zeros(total_points)
     covered_points = np.zeros(total_points, dtype=bool)
 
-    pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok")
+    pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok") if is_source else None
     dummy_batch = _make_dummy_eval_batch(EvalBatch, EvalPos)
     out_specs = hax.partitioning.infer_resource_partitions(dummy_batch, axis_resources)
 
@@ -347,17 +347,7 @@ def _run_batch_loop(
         )
         batch_orig = all_batches[batch_idx] if is_source else dummy_batch
 
-        local_fp = _compute_batch_fingerprint(batch_orig, batch_idx) if is_source else {}
-        leader_fp = multihost_broadcast_sync(local_fp)
         if is_source:
-            local_fp_canon = _canonicalize_fingerprint(local_fp)
-            leader_fp_canon = _canonicalize_fingerprint(leader_fp)
-            if local_fp_canon != leader_fp_canon:
-                raise RuntimeError(
-                    f"[{eval_run_uuid}][host={jax.process_index()}] Batch fingerprint mismatch at batch={batch_idx}: "
-                    f"local={local_fp}, leader={leader_fp}, local_canon={local_fp_canon}, leader_canon={leader_fp_canon}"
-                )
-
             # Hard host-side guardrail: catch out-of-vocab ids before launching
             # TPU kernels so failures surface as actionable Python exceptions.
             tokens_host = np.asarray(_to_host_array_for_debug(batch_orig.tokens.array))
@@ -401,13 +391,11 @@ def _run_batch_loop(
                 )
 
         if is_source:
-            _padding_count, local_batch_tokens = get_padding_count_from_batch(batch_orig, pad_token)
-            local_segments = get_segment_ids_from_batch(batch_orig, max_packed_segments * EvalBatch.size)
+            _padding_count, batch_tokens = get_padding_count_from_batch(batch_orig, pad_token)
+            segments_this_batch = get_segment_ids_from_batch(batch_orig, max_packed_segments * EvalBatch.size)
         else:
-            local_batch_tokens = 0
-            local_segments = []
-        batch_tokens = int(multihost_broadcast_sync(local_batch_tokens))
-        segments_this_batch = multihost_broadcast_sync(local_segments)
+            batch_tokens = 0
+            segments_this_batch = []
 
         try:
             batch = broadcast_shard(batch_orig, out_specs, source=0)
@@ -429,42 +417,50 @@ def _run_batch_loop(
 
         out_ids, out_lls = jit_fn(model, batch)
 
-        # out_axis_resources={} means outputs are fully replicated on every
-        # host, so we can read them directly without shard iteration.
-        out_ids = _to_host_array_for_debug(out_ids.array)
-        out_lls = _to_host_array_for_debug(out_lls.array)
-        valid = out_ids != -1
-        out_ids_this_batch = out_ids[valid].astype(int).tolist()
-        missing_ids = set(segments_this_batch) - set(out_ids_this_batch)
-        extra_ids = set(out_ids_this_batch) - set(segments_this_batch)
-        if missing_ids or extra_ids:
-            raise RuntimeError(
-                f"[{eval_run_uuid}][host={jax.process_index()}] Segment mismatch at batch={batch_idx}: "
-                f"segments={len(segments_this_batch)}, out_ids={len(out_ids_this_batch)}, "
-                f"missing={sorted(list(missing_ids))[:10]}, extra={sorted(list(extra_ids))[:10]}, "
-                f"segments_sample={segments_this_batch[:10]}, out_ids_sample={out_ids_this_batch[:10]}"
-            )
+        valid_points = 0
+        if is_source:
+            # out_axis_resources={} means outputs are fully replicated on every
+            # host. We only materialize host values on source to avoid extra
+            # host/device synchronization paths on worker hosts.
+            out_ids = _to_host_array_for_debug(out_ids.array)
+            out_lls = _to_host_array_for_debug(out_lls.array)
+            valid = out_ids != -1
+            out_ids_this_batch = out_ids[valid].astype(int).tolist()
+            missing_ids = set(segments_this_batch) - set(out_ids_this_batch)
+            extra_ids = set(out_ids_this_batch) - set(segments_this_batch)
+            if missing_ids or extra_ids:
+                raise RuntimeError(
+                    f"[{eval_run_uuid}][host={jax.process_index()}] Segment mismatch at batch={batch_idx}: "
+                    f"segments={len(segments_this_batch)}, out_ids={len(out_ids_this_batch)}, "
+                    f"missing={sorted(list(missing_ids))[:10]}, extra={sorted(list(extra_ids))[:10]}, "
+                    f"segments_sample={segments_this_batch[:10]}, out_ids_sample={out_ids_this_batch[:10]}"
+                )
 
-        result_probs[out_ids[valid].astype(int)] = out_lls[valid]
-        covered_points[out_ids[valid].astype(int)] = True
+            result_probs[out_ids[valid].astype(int)] = out_lls[valid]
+            covered_points[out_ids[valid].astype(int)] = True
+            valid_points = int(np.sum(valid))
 
-        pbar.update(batch_tokens)
+            if pbar is not None:
+                pbar.update(batch_tokens)
+
         logger.warning(
             "VLM_EVAL_BATCH_EXIT eval_run_uuid=%s host=%d batch_idx=%d valid_points=%d batch_tokens=%d",
             eval_run_uuid,
             jax.process_index(),
             batch_idx,
-            int(np.sum(valid)),
+            valid_points,
             batch_tokens,
         )
 
-    pbar.close()
+    if pbar is not None:
+        pbar.close()
     sync_global_devices(f"vlm_eval_batch_loop_exit_{eval_run_uuid}")
     logger.info("[%s][host=%d] vlm_eval batch loop complete", eval_run_uuid, jax.process_index())
 
-    missing = np.where(~covered_points)[0]
-    if len(missing) > 0:
-        logger.warning("Missing %d segments: %s", len(missing), missing[:10])
+    if is_source:
+        missing = np.where(~covered_points)[0]
+        if len(missing) > 0:
+            logger.warning("Missing %d segments: %s", len(missing), missing[:10])
 
     return result_probs, covered_points
 
@@ -598,27 +594,52 @@ def evaluate_all_vlm_benchmarks(
     """
     all_completions = []
     bench_slices = {}
-    offset = 0
     if jax.process_index() == 0:
         for bench_name, (task_type, completions, metadata) in prepared.items():
             if not completions:
                 continue
-            bench_slices[bench_name] = (offset, len(completions), task_type, metadata)
-            # Each prepare_* function assigns 0-based segment IDs.  When merging
-            # multiple benchmarks we must offset them so they don't collide in the
-            # packer (which uses segment_id for attention masking and result mapping).
-            if offset == 0:
-                all_completions.extend(completions)
-            else:
-                all_completions.extend(
+            bench_start = len(all_completions)
+
+            # Explicitly map segment IDs by completion list index (0..N-1) for
+            # each benchmark, then map to global ids by adding bench_start.
+            # This avoids relying on implicit "offset + original segment_id"
+            # behavior that can silently break when prepare_* changes.
+            original_seg_ids = []
+            remapped_completions = []
+            for local_idx, pc in enumerate(completions):
+                original_seg_ids.append(pc.segment_id if pc.segment_id is not None else local_idx)
+                remapped_completions.append(
                     PromptCompletion(
                         ids=pc.ids,
                         prompt_length=pc.prompt_length,
-                        segment_id=(pc.segment_id if pc.segment_id is not None else 0) + offset,
+                        segment_id=bench_start + local_idx,
                     )
-                    for pc in completions
                 )
-            offset += len(completions)
+
+            if len(set(original_seg_ids)) != len(original_seg_ids):
+                raise RuntimeError(
+                    f"[{eval_run_uuid}] Duplicate segment ids in benchmark={bench_name}: "
+                    f"sample={original_seg_ids[:10]}"
+                )
+
+            original_to_local = {seg_id: idx for idx, seg_id in enumerate(original_seg_ids)}
+            remapped_metadata = {}
+            for old_seg_id, meta in metadata.items():
+                if old_seg_id not in original_to_local:
+                    raise RuntimeError(
+                        f"[{eval_run_uuid}] Metadata segment id missing from completions in benchmark={bench_name}: "
+                        f"seg_id={old_seg_id}"
+                    )
+                remapped_metadata[original_to_local[old_seg_id]] = meta
+
+            if len(remapped_metadata) != len(remapped_completions):
+                raise RuntimeError(
+                    f"[{eval_run_uuid}] Benchmark={bench_name} completion/metadata size mismatch: "
+                    f"completions={len(remapped_completions)}, metadata={len(remapped_metadata)}"
+                )
+
+            all_completions.extend(remapped_completions)
+            bench_slices[bench_name] = (bench_start, len(remapped_completions), task_type, remapped_metadata)
 
     # One sync for the combined completion count
     local_n = len(all_completions)
@@ -1418,61 +1439,72 @@ def vlm_mc_eval_callback(
                 len(tokenizer),
                 eval_run_uuid=eval_run_uuid,
             )
+            post_eval_exception: Exception | None = None
             if jax.process_index() == 0:
-                for bench_name, result in results.items():
-                    task_type = prepared[bench_name][0]
-                    if task_type == "multiple_choice":
-                        accuracy = result["accuracy"]
-                        loss = result["loss"]
-                        logger.info(
-                            "%s: accuracy=%.4f (%d/%d), loss=%.4f",
-                            bench_name,
-                            accuracy,
-                            result["num_correct"],
-                            result["num_questions"],
-                            loss,
-                        )
-                        levanter.tracker.log(
-                            {
-                                f"eval/{bench_name}/accuracy": accuracy,
-                                f"eval/{bench_name}/loss": loss,
-                            },
-                            step=step.step,
-                            commit=True,
-                        )
-                        logger.warning(
-                            "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=multiple_choice "
-                            "accuracy=%.6f loss=%.6f num_correct=%d num_questions=%d",
-                            eval_run_uuid,
-                            jax.process_index(),
-                            bench_name,
-                            accuracy,
-                            loss,
-                            result["num_correct"],
-                            result["num_questions"],
-                        )
-                    elif task_type == "open_ended":
-                        mean_ll = result["mean_ll"]
-                        logger.info(
-                            "%s: mean_ll=%.4f (%d questions)",
-                            bench_name,
-                            mean_ll,
-                            result["num_questions"],
-                        )
-                        levanter.tracker.log(
-                            {f"eval/{bench_name}/mean_ll": mean_ll},
-                            step=step.step,
-                            commit=True,
-                        )
-                        logger.warning(
-                            "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=open_ended "
-                            "mean_ll=%.6f num_questions=%d",
-                            eval_run_uuid,
-                            jax.process_index(),
-                            bench_name,
-                            mean_ll,
-                            result["num_questions"],
-                        )
+                try:
+                    for bench_name, result in results.items():
+                        task_type = prepared[bench_name][0]
+                        if task_type == "multiple_choice":
+                            accuracy = result["accuracy"]
+                            loss = result["loss"]
+                            logger.info(
+                                "%s: accuracy=%.4f (%d/%d), loss=%.4f",
+                                bench_name,
+                                accuracy,
+                                result["num_correct"],
+                                result["num_questions"],
+                                loss,
+                            )
+                            levanter.tracker.log(
+                                {
+                                    f"eval/{bench_name}/accuracy": accuracy,
+                                    f"eval/{bench_name}/loss": loss,
+                                },
+                                step=None,
+                                commit=True,
+                            )
+                            logger.warning(
+                                "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=multiple_choice "
+                                "accuracy=%.6f loss=%.6f num_correct=%d num_questions=%d",
+                                eval_run_uuid,
+                                jax.process_index(),
+                                bench_name,
+                                accuracy,
+                                loss,
+                                result["num_correct"],
+                                result["num_questions"],
+                            )
+                        elif task_type == "open_ended":
+                            mean_ll = result["mean_ll"]
+                            logger.info(
+                                "%s: mean_ll=%.4f (%d questions)",
+                                bench_name,
+                                mean_ll,
+                                result["num_questions"],
+                            )
+                            levanter.tracker.log(
+                                {f"eval/{bench_name}/mean_ll": mean_ll},
+                                step=None,
+                                commit=True,
+                            )
+                            logger.warning(
+                                "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=open_ended "
+                                "mean_ll=%.6f num_questions=%d",
+                                eval_run_uuid,
+                                jax.process_index(),
+                                bench_name,
+                                mean_ll,
+                                result["num_questions"],
+                            )
+                except Exception as e:
+                    post_eval_exception = e
+
+            sync_global_devices(f"vlm_eval_callback_exit_{eval_run_uuid}")
+            leader_post_eval_error = bool(multihost_broadcast_sync(post_eval_exception is not None))
+            if leader_post_eval_error:
+                if post_eval_exception is not None:
+                    raise post_eval_exception
+                raise RuntimeError(f"[{eval_run_uuid}] host0 failed while post-eval logging; aborting all hosts.")
         except Exception:
             logger.exception("vlm_mc_eval crashed")
             raise

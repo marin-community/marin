@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Unified image-text model pre-training experiment.
+Unified image-text model pre-training experiment (us-west4 variant).
 
 Trains a Qwen3-architecture model from scratch on a mixture of text-only data
 (Nemotron-CC) and pre-tokenized multimodal data (dual-ordering image-caption
@@ -21,10 +21,10 @@ Usage:
 
     # 3. Run training (WANDB_API_KEY and TPU_TYPE are passed as env vars)
     uv run python -m marin.run.ray_run \
-        --cluster infra/marin-us-central2.yaml \
+        --cluster infra/marin-us-west4.yaml \
         -e WANDB_API_KEY ${WANDB_API_KEY} \
-        -e TPU_TYPE v4-64 \
-        -- python experiments/unified/unified_pretrain_demo.py
+        -e TPU_TYPE v5e-64 \
+        -- python experiments/unified/unified_pretrain_demo_west4.py
 """
 
 import dataclasses
@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # --- Constants ---
 
-LLAMA3_GCS_TOKENIZER = "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+LLAMA3_GCS_TOKENIZER = "gs://marin-us-west4/tokenizers/llama-3.1-8b"
 LLAMA3_VOCAB_SIZE = 128_256
 TOKLIP_CODEBOOK_SIZE = 16_384
 UNIFIED_VOCAB_SIZE = LLAMA3_VOCAB_SIZE + TOKLIP_CODEBOOK_SIZE  # 144,640
@@ -58,7 +58,7 @@ UNIFIED_VOCAB_SIZE = LLAMA3_VOCAB_SIZE + TOKLIP_CODEBOOK_SIZE  # 144,640
 VISION_START_ID = 128_004  # <|reserved_special_token_2|> → <|vision_start|>
 VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 
-UNIFIED_TOKENIZER_PATH = "gs://marin-us-central2/tokenizers/llama3-unified-144k"
+UNIFIED_TOKENIZER_PATH = "gs://marin-us-west4/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm/hf_85m_levanter_cache_test"
 UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
 
@@ -86,7 +86,7 @@ def _merge_xla_flags(existing: str, required_flags: list[str]) -> str:
 
 
 def _with_vlm_hlo_dump_env(step):
-    """Attach one-shot VLM HLO dump flags to the remote worker runtime env."""
+    """Attach XLA HLO dump flags to the remote worker runtime env for this step."""
     env_vars = dict(step.env_vars or {})
     env_vars["XLA_FLAGS"] = _merge_xla_flags(env_vars.get("XLA_FLAGS", ""), _VLM_HLO_DUMP_XLA_FLAGS)
     logger.warning("Configured step env XLA_FLAGS for one-shot VLM HLO dump: %s", env_vars["XLA_FLAGS"])
@@ -242,7 +242,7 @@ def unified_data_config(
 
 # 1 epoch ≈ 1,582,102 records / 256 batch_size ≈ 6,180 steps
 DEMO_TRAIN_STEPS = 6_180
-TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
+TPU_TYPE = os.environ.get("TPU_TYPE", "v5e-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
 
 
