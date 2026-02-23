@@ -39,6 +39,15 @@ def test_build_worker_bootstrap_script_includes_controller_address() -> None:
     assert "IRIS_VM_ADDRESS=10.0.0.2" in script
 
 
+def test_build_worker_bootstrap_script_configures_ar_auth() -> None:
+    cfg = _bootstrap_config(docker_image="us-central1-docker.pkg.dev/test-project/marin/iris-worker:latest")
+
+    script = build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
+
+    assert 'if echo "us-central1-docker.pkg.dev/test-project/marin/iris-worker:latest" | grep -q -- "-docker.pkg.dev/"' in script
+    assert 'gcloud auth configure-docker "$AR_HOST" -q || true' in script
+
+
 def test_build_worker_bootstrap_script_requires_controller_address() -> None:
     cfg = _bootstrap_config()
     cfg.controller_address = ""
@@ -135,3 +144,4 @@ def test_build_controller_bootstrap_script_from_config_rewrites_ar_region() -> N
     script = build_controller_bootstrap_script_from_config(config)
 
     assert "Pulling image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest" in script
+    assert 'gcloud auth configure-docker "$AR_HOST" -q || true' in script
