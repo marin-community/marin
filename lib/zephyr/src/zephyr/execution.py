@@ -334,9 +334,11 @@ class ZephyrCoordinator:
         last_log_time = 0.0
 
         while not self._shutdown:
-            # Check heartbeats, re-queue stale tasks
-            with self._lock:
-                self._check_worker_heartbeats()
+            # Check heartbeats, re-queue stale tasks.
+            # NOTE: we could use self._self_handle.check_heartbeats.remote() to
+            # serialize this with worker RPCs (pull_task, report_result) via the
+            # concurrency queue instead of running it inline.
+            self.check_heartbeats()
 
             # Log status periodically during active execution
             now = time.monotonic()
@@ -459,8 +461,9 @@ class ZephyrCoordinator:
             self._worker_states[worker_id] = WorkerState.DEAD
 
     def heartbeat(self, worker_id: str) -> None:
-        with self._lock:
-            self._last_seen[worker_id] = time.monotonic()
+        # No lock needed: _last_seen is only read by _check_worker_heartbeats
+        # (which holds the lock), and monotonic float writes are atomic on CPython.
+        self._last_seen[worker_id] = time.monotonic()
 
     def get_status(self) -> JobStatus:
         with self._lock:
@@ -760,7 +763,9 @@ class ZephyrWorker:
         heartbeat_count = 0
         while not self._shutdown_event.is_set():
             try:
-                coordinator.heartbeat.remote(self._worker_id)
+                # Block on result to avoid congesting the coordinator RPC pipe
+                # with fire-and-forget heartbeats.
+                coordinator.heartbeat.remote(self._worker_id).result()
                 heartbeat_count += 1
                 if heartbeat_count % 10 == 1:
                     logger.debug("[%s] Sent heartbeat #%d", self._worker_id, heartbeat_count)
