@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import fsspec
-from fray.v2 import ActorHandle, Client, ResourceConfig
+from fray.v2 import ActorConfig, ActorHandle, Client, ResourceConfig
 from iris.temp_buckets import get_temp_bucket_path
 from iris.time_utils import ExponentialBackoff
 
@@ -1031,12 +1031,14 @@ class ZephyrContext:
         # Create coordinator actor with high max_concurrency to allow
         # workers to call pull_task/report_result while run_pipeline blocks
         logger.info("Starting coordinator for %s", self.name)
-        coordinator_resources = ResourceConfig(cpu=1, ram="2g", max_concurrency=100)
+        coordinator_resources = ResourceConfig(cpu=1, ram="2g")
+        coordinator_actor_config = ActorConfig(max_concurrency=100)
         self._coordinator_group = self.client.create_actor_group(
             ZephyrCoordinator,
             name=f"zephyr-{self.name}-coord",
             count=1,
             resources=coordinator_resources,
+            actor_config=coordinator_actor_config,
         )
         self._coordinator = self._coordinator_group.wait_ready()[0]
 

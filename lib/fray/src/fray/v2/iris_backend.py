@@ -31,6 +31,7 @@ from iris.rpc import cluster_pb2
 from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
 from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
+    ActorConfig,
     CpuConfig,
     DeviceConfig,
     EnvironmentConfig,
@@ -463,6 +464,7 @@ class FrayIrisClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorHandle:
         group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
@@ -475,6 +477,7 @@ class FrayIrisClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> IrisActorGroup:
         """Submit a single Iris job with N replicas, each hosting an instance of actor_class.
