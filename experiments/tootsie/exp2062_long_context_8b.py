@@ -17,12 +17,13 @@ UI shows the intended target (field is new; "roll with it").
 import dataclasses
 
 from experiments.marin_models import marin_tokenizer
+from marin.training import default_train
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS
 from fray import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 
-from experiments.defaults import default_tokenize, default_train
+from experiments.defaults import default_tokenize
 from experiments.llama import llama_8b
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.posttrain.long_context_datasets import (

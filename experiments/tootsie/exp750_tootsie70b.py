@@ -18,8 +18,8 @@ Mix is still DCLM+Math+Code
 import dataclasses
 
 from levanter.schedule import ScheduleStep
+from marin.training import default_train
 
-from experiments.defaults import default_train
 from experiments.llama import llama_70b
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.simple_train_config import SimpleTrainConfig

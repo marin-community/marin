@@ -9,8 +9,8 @@ import math
 import os
 import sys
 from collections.abc import Sequence
+from marin.training import default_train
 
-from experiments.defaults import default_train
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.llama import llama3_tokenizer
@@ -128,7 +128,7 @@ def nemotron_only_speedrun(
     run_tags = ["speedrun"] + (tags or [])
     train_config = dataclasses.replace(config.train_config, data_seed=42)
 
-    if isinstance(config.tokenized_dataset, (InputName, ExecutorStep)):
+    if isinstance(config.tokenized_dataset, InputName | ExecutorStep):
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
             validation_sets=[],

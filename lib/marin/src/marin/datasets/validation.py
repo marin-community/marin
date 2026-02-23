@@ -1,4 +1,5 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,15 +16,18 @@
 """
 Validation dataset configurations for Marin.
 
-This module provides configurations for standard validation sets like Paloma,
-without dependencies on experiments/.
+This module provides library-owned helpers for standard validation sets used by
+default training flows (Paloma and Uncheatable Eval), without dependencies on
+experiments/.
 """
 
 import os
+from functools import lru_cache
 
 from levanter.data.text import TextLmDatasetFormat
+from marin.download.uncheatable_eval.download import make_uncheatable_eval_step
 from marin.execution.executor import ExecutorStep, ensure_versioned, this_output_path
-from marin.processing.tokenize import TokenizeConfig, TokenizerStep
+from marin.processing.tokenize import TokenizeConfig, TokenizerStep, tokenize
 
 # The datasets in the Paloma eval set and their paths within the HF dataset
 # https://huggingface.co/datasets/allenai/paloma
@@ -46,6 +50,37 @@ PALOMA_DATASETS_TO_DIR = {
     "wikitext_103": "wikitext_103",
 }
 
+# Complete mapping of available Uncheatable Eval datasets.
+# Reference: https://github.com/Jellyfish042/uncheatable_eval
+ALL_UNCHEATABLE_EVAL_DATASETS = {
+    "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
+    "wikipedia_english": "wikipedia_english_*.jsonl.gz",
+    "wikipedia_french": "wikipedia_french_*.jsonl.gz",
+    "wikipedia_german": "wikipedia_german_*.jsonl.gz",
+    "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
+    "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
+    "github_python": "github_python_*.jsonl.gz",
+    "github_cpp": "github_cpp_*.jsonl.gz",
+    "bbc_news": "bbc_news_*.jsonl.gz",
+    "arxiv_physics": "arxiv_physics_*.jsonl.gz",
+    "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
+    "ao3_chinese": "ao3_chinese_*.jsonl.gz",
+    "ao3_english": "ao3_english_*.jsonl.gz",
+}
+
+# Keep parity with experiments defaults: only English + code-oriented subsets.
+ACTIVE_UNCHEATABLE_EVAL_DATASETS = (
+    "wikipedia_english",
+    "github_python",
+    "github_cpp",
+    "bbc_news",
+    "arxiv_physics",
+    "arxiv_computer_science",
+    "ao3_english",
+)
+
+UNCHEATABLE_EVAL_RAW = make_uncheatable_eval_step()
+
 
 def paloma_tokenized(
     *,
@@ -67,8 +102,6 @@ def paloma_tokenized(
     Returns:
         Dictionary mapping "paloma/{dataset}" keys to TokenizerStep instances.
     """
-    from marin.processing.tokenize import tokenize
-
     paloma_steps: dict[str, TokenizerStep] = {}
 
     for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
@@ -97,3 +130,58 @@ def paloma_tokenized(
         paloma_steps[name] = step
 
     return paloma_steps
+
+
+def uncheatable_eval_tokenized(
+    *,
+    base_path: str = "tokenized/",
+    tokenizer: str = "meta-llama/Meta-Llama-3.1-8B",
+    uncheatable_eval_raw: ExecutorStep | None = None,
+) -> dict[str, TokenizerStep]:
+    """
+    Return tokenization steps for active Uncheatable Eval datasets.
+
+    Args:
+        base_path: Base path prefix for output (prepended to "uncheatable_eval/{dataset}").
+        tokenizer: HuggingFace tokenizer name to use.
+        uncheatable_eval_raw: Optional ExecutorStep pointing to raw Uncheatable Eval data.
+            If None, a default download step is used.
+
+    Returns:
+        Dictionary mapping "uncheatable_eval/{dataset}" keys to TokenizerStep instances.
+    """
+    if uncheatable_eval_raw is None:
+        uncheatable_eval_raw = UNCHEATABLE_EVAL_RAW
+
+    uncheatable_eval_steps: dict[str, TokenizerStep] = {}
+    for dataset in ACTIVE_UNCHEATABLE_EVAL_DATASETS:
+        path_part = ALL_UNCHEATABLE_EVAL_DATASETS[dataset]
+        name = os.path.join("uncheatable_eval", dataset)
+        step = ExecutorStep(
+            name=os.path.join(base_path, name),
+            description=f"Tokenize Uncheatable Eval {dataset} using the {tokenizer} tokenizer.",
+            fn=tokenize,
+            config=TokenizeConfig(
+                train_paths=[],
+                validation_paths=[uncheatable_eval_raw.cd(path_part)],
+                cache_path=this_output_path(),
+                tokenizer=ensure_versioned(tokenizer),
+                format=TextLmDatasetFormat(),
+                sample_count=None,
+            ),
+        )
+        uncheatable_eval_steps[name] = step
+
+    return uncheatable_eval_steps
+
+
+@lru_cache
+def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
+    """
+    Return the default validation suites used by default training flows.
+
+    This matches experiments parity: Paloma + active Uncheatable Eval datasets.
+    """
+    validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
+    validation_sets.update(uncheatable_eval_tokenized(base_path=base_path, tokenizer=tokenizer))
+    return validation_sets

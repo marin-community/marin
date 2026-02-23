@@ -8,9 +8,9 @@ while training a tiny model on the TinyStories dataset using TPU hardware.
 import dataclasses
 
 from fray.cluster import ResourceConfig
+from marin.training import default_train
 from marin.execution.executor import executor_main, versioned
 
-from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized

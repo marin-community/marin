@@ -1,4 +1,5 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,9 +15,20 @@
 
 """Dataset configurations and utilities for Marin."""
 
-from .validation import PALOMA_DATASETS_TO_DIR, paloma_tokenized
+from .validation import (
+    ACTIVE_UNCHEATABLE_EVAL_DATASETS,
+    ALL_UNCHEATABLE_EVAL_DATASETS,
+    PALOMA_DATASETS_TO_DIR,
+    default_validation_sets,
+    paloma_tokenized,
+    uncheatable_eval_tokenized,
+)
 
 __all__ = [
+    "ACTIVE_UNCHEATABLE_EVAL_DATASETS",
+    "ALL_UNCHEATABLE_EVAL_DATASETS",
     "PALOMA_DATASETS_TO_DIR",
+    "default_validation_sets",
     "paloma_tokenized",
+    "uncheatable_eval_tokenized",
 ]

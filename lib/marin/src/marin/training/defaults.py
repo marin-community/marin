@@ -1,4 +1,5 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,8 +17,7 @@
 Default training configuration utilities for language model training.
 
 This module provides `default_train()`, which creates an ExecutorStep for training
-a language model with Levanter. Unlike the experiments version, this module requires
-explicit parameters for validation sets and eval harness tasks - no defaults are assumed.
+a language model with Levanter.
 """
 
 import logging
@@ -41,8 +41,9 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
+from marin.datasets.validation import default_validation_sets
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.tasks import convert_to_levanter_task_config
+from marin.evaluation.tasks import CORE_TASKS, convert_to_levanter_task_config
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -124,6 +125,7 @@ def get_tokenizer_for_train(
 
 def _prepare_data_config(
     tokenized: str | InputName | ExecutorStep | LMMixtureDatasetConfig,
+    use_default_validation: bool,
     validation_sets: dict[str, TokenizerStep] | None,
     tokenizer: str | None = None,
 ) -> LMMixtureDatasetConfig:
@@ -140,8 +142,15 @@ def _prepare_data_config(
     Returns:
         The data config to use for training with any validation sets added.
     """
-    if validation_sets is None:
-        validation_sets = {}
+    resolved_validation_sets: dict[str, TokenizerStep]
+    if use_default_validation:
+        train_tokenizer = get_tokenizer_for_train(tokenized, tokenizer)
+        resolved_validation_sets = dict(default_validation_sets(tokenizer=train_tokenizer))
+    else:
+        resolved_validation_sets = {}
+
+    if validation_sets:
+        resolved_validation_sets.update(validation_sets)
 
     if isinstance(tokenized, str):
         if tokenizer is None:
@@ -161,18 +170,18 @@ def _prepare_data_config(
             shuffle=True,
             permutation_type="feistel",
         )
-        if validation_sets:
-            pretraining_data = add_validation_sets_to_mixture(pretraining_data, validation_sets)
+        if resolved_validation_sets:
+            pretraining_data = add_validation_sets_to_mixture(pretraining_data, resolved_validation_sets)
     elif isinstance(tokenized, InputName | ExecutorStep):
         pretraining_data = lm_data_config(
             training_set=tokenized,
-            validation_sets=validation_sets,
+            validation_sets=resolved_validation_sets,
             permutation_type="feistel",
         )
     else:
         pretraining_data = tokenized
-        if validation_sets:
-            pretraining_data = add_validation_sets_to_mixture(pretraining_data, validation_sets)
+        if resolved_validation_sets:
+            pretraining_data = add_validation_sets_to_mixture(pretraining_data, resolved_validation_sets)
     return pretraining_data
 
 
@@ -184,8 +193,9 @@ def default_train(
     *,
     tokenizer: str | None = None,
     tags: Sequence[str] = (),
+    use_default_validation: bool = True,
+    eval_harness_tasks: Sequence[EvalTaskConfig] | None = CORE_TASKS,
     validation_sets: dict[str, TokenizerStep] | None = None,
-    eval_harness_tasks: Sequence[EvalTaskConfig] | None = None,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
     wandb_project: str = "marin",
@@ -194,9 +204,9 @@ def default_train(
     """
     Create an ExecutorStep for training a language model using Levanter.
 
-    This function creates a training step with explicit configuration. Unlike the experiments
-    version, it does not provide default validation sets or eval harness tasks - callers must
-    explicitly provide these or pass None/{} to disable.
+    By default, this function mirrors experiments behavior and enables default
+    validation suites and CORE eval tasks. Callers can disable these defaults by
+    setting `use_default_validation=False` and/or `eval_harness_tasks=[]`.
 
     Args:
         name: The name of the training run. Will form the basis of the output path for the executor step.
@@ -210,9 +220,12 @@ def default_train(
             tokenized is a string path. When tokenized is an ExecutorStep or LMMixtureDatasetConfig,
             the tokenizer is inferred automatically.
         tags: Additional tags to add to the Wandb tracker.
+        use_default_validation: Whether to include default validation suites
+            (Paloma + Uncheatable Eval).
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to CORE tasks.
+            Pass None or [] to disable eval harness.
         validation_sets: Dictionary mapping validation set names to TokenizerStep instances.
-            Pass None or {} to disable validation.
-        eval_harness_tasks: List of evaluation harness tasks. Pass None or [] to disable eval harness.
+            These are merged on top of default validation sets when enabled.
         wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
         wandb_project: W&B project name. Defaults to "marin".
@@ -221,7 +234,12 @@ def default_train(
     Returns:
         An ExecutorStep configured for language model training.
     """
-    pretraining_data = _prepare_data_config(tokenized, validation_sets, tokenizer)
+    pretraining_data = _prepare_data_config(
+        tokenized=tokenized,
+        use_default_validation=use_default_validation,
+        validation_sets=validation_sets,
+        tokenizer=tokenizer,
+    )
 
     vocab_size = _get_vocab_size(pretraining_data)
 
@@ -292,9 +310,11 @@ def default_train(
                 name=wandb_name,
                 tags=[*tags],
                 group=wandb_group,
+                replicate_path=this_output_path(),
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
+            per_device_parallelism=train_config.per_device_parallelism,
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
@@ -324,6 +344,7 @@ def default_train(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
         ),
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
+        pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
         z_loss_weight=train_config.z_loss_weight,
         train_seq_len=train_length,
         model=model_config,

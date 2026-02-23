@@ -19,10 +19,10 @@ import datetime
 import os
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from marin.training import default_train
 from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamHConfig
 
-from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig

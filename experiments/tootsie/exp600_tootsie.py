@@ -21,13 +21,13 @@ For now, we're training on DCLM's best mix, but that will change.
 import dataclasses
 
 from levanter.schedule import ScheduleStep
+from marin.training import default_train
 
 from experiments.pretraining_datasets.dclm import (
     DCLM_MIXTURE_WEIGHTS,
     dclm_components_llama3,
     dclm_mixture_config_llama3,
 )
-from experiments.defaults import default_train
 from experiments.pretraining_datasets import tokenize_dolma
 from experiments.pretraining_datasets import tokenize_dolmino_math, tokenize_dolmino_subset
 from experiments.evals.evals import default_base_eval

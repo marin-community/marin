@@ -16,6 +16,7 @@ import json
 import fsspec
 
 from collections.abc import Iterator, Sequence
+from marin.training import default_train
 from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
@@ -27,7 +28,7 @@ from levanter.optim.cautious import CautiousConfig
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import EvalTaskConfig
 from experiments.common_pile.tokenize_common_pile import comma_main_mixture
-from experiments.defaults import default_tokenize, default_train
+from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import downloads
 from experiments.simple_train_config import SimpleTrainConfig

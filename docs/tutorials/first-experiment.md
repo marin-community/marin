@@ -137,12 +137,12 @@ The `CpuOnlyConfig` is a [resource configuration](../references/resource-config.
 
 ### 4. Train the Model
 
-To train the model, we use the `default_train` function from `experiments.defaults`.
+To train the model, we use the `default_train` function from `marin.training`.
 This function takes a tokenized dataset, a model configuration, and a training configuration and returns (a step that trains) the model.
 
 ```python
 from experiments.llama import llama_nano
-from experiments.defaults import default_train
+from marin.training import default_train
 
 nano_tinystories_model = default_train(
     name="marin-nano-tinystories",

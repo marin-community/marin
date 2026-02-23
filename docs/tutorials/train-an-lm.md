@@ -20,7 +20,7 @@ Start by importing the necessary modules:
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 
 # Import training utilities and configuration classes
-from experiments.defaults import SimpleTrainConfig, default_train
+from marin.training import SimpleTrainConfig, default_train
 
 # Import model architecture definitions
 from levanter.models.llama import LlamaConfig
@@ -34,7 +34,7 @@ import logging
 
 - [`dclm_mixture_config_llama3`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/dclm.py): A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/dolma.py) or [Nemotron](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py))
 - [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
-- [`default_train`][experiments.defaults.default_train]: A utility function that creates a training pipeline
+- [`default_train`][marin.training.default_train]: A utility function that creates a training pipeline
 - [`LlamaConfig`][levanter.models.llama.LlamaConfig]: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
 - [`executor_main`][marin.execution.executor.executor_main]: The main entry point for the Marin executor framework
 

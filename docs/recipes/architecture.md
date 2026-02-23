@@ -34,7 +34,7 @@ marin/
 │   └── utilities/, validation/, cluster/, infra/, speedrun/, scaling_laws/, schemas/, web/
 │
 ├── experiments/                # Experiment scripts
-│   ├── defaults.py             # default_download, default_tokenize, default_train, default_eval
+│   ├── defaults.py             # default_download, default_tokenize, default_eval
 │   ├── models.py, llama.py     # Model configs
 │   ├── simple_train_config.py, simple_sft_config.py
 │   ├── pretraining_datasets/, midtraining_datasets.py, paloma.py
@@ -70,7 +70,7 @@ marin/
 
 **Cluster Infrastructure** (`infra/README.md`): Ray on GCP, on-demand head + preemptible TPU workers (v4/v5e/v6e), autoscaling 4-1024 workers, managed via `scripts/ray/cluster.py`
 
-**Default Helpers** (`experiments/defaults.py`): `default_download()`, `default_tokenize()`, `default_train()`, `default_eval()`
+**Default Helpers**: `default_train()` in `lib/marin/src/marin/training/defaults.py`; `default_download()`, `default_tokenize()`, `default_eval()` in `experiments/defaults.py`.
 
 ## Quick Reference
 
@@ -78,6 +78,6 @@ marin/
 
 **For Agents**: [Add Dataset](add_dataset.md) • [Fix Issue](fix_issue.md) • See `AGENTS.md` in repository root
 
-**Core APIs**: See `lib/marin/src/marin/execution/executor.py` for executor API, `experiments/defaults.py` for default steps
+**Core APIs**: See `lib/marin/src/marin/execution/executor.py` for executor API, `lib/marin/src/marin/training/defaults.py` for `default_train`, and `experiments/defaults.py` for other default helpers.
 
 **Infrastructure**: See `infra/README.md` for cluster setup and infrastructure overview

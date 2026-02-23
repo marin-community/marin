@@ -8,10 +8,11 @@ PlantCAD training experiment: A single 600M model pretrained on 16 Angiosperm ge
 import jax
 import logging
 from fray.cluster import ResourceConfig
+from marin.training import default_train
 from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main, versioned
 from levanter.models.llama import LlamaConfig
-from experiments.defaults import default_train, default_tokenize
+from experiments.defaults import default_tokenize
 from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger("ray")

@@ -5,8 +5,8 @@ from .evaluation_config import EvalTaskConfig, EvaluationConfig
 from .tasks import CORE_TASKS, convert_to_levanter_task_config
 
 __all__ = [
+    "CORE_TASKS",
     "EvalTaskConfig",
     "EvaluationConfig",
-    "CORE_TASKS",
     "convert_to_levanter_task_config",
 ]

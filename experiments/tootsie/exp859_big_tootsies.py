@@ -21,6 +21,7 @@ Also buried in here is a 56B model that I thought was a 70B model. Always double
 import dataclasses
 
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
+from marin.training import default_train
 from levanter.schedule import ScheduleStep
 
 from experiments.pretraining_datasets.dclm import (
@@ -28,7 +29,6 @@ from experiments.pretraining_datasets.dclm import (
     dclm_components_llama3,
     dclm_mixture_config_llama3,
 )
-from experiments.defaults import default_train
 from experiments.llama import llama_13b, llama_24b, llama_56b
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig

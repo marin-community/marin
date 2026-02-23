@@ -1,3 +1,6 @@
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Well-known tokenizer identifiers and equivalence relationships."""
 
 LLAMA3_TOKENIZER = "meta-llama/Meta-Llama-3.1-8B"
