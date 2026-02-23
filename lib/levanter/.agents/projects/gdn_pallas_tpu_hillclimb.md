@@ -1853,3 +1853,81 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - Re-attempt Macro Move G once TPU infra is stable (reserved dev TPU or healthy Ray queue), then immediately capture forward/backward `shard_map/pallas_call` deltas and exp-op reduction evidence.
   - If infra remains unstable, pivot next validated kernel iteration to **Macro Move H** with stacked shared-RHS matmuls after securing a stable execution lane.
+
+### Iteration 36 - Macro Move G / exp-diff centered outer-product (infra-blocked, reverted)
+
+- Date: 2026-02-23T04:02:53Z
+- Commit: none (failed attempt)
+- Loop session/local index: `4/10`
+- Starting commit: `797fb4756bfb9a34503a1f2fd97ce22de96dd331`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`):
+  - train-path `shard_map/custom-call` bucket remained dominant (`~78 ms` on TPU:0 XLA Ops thread).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` in prepare/recurrent/backward to remove Ct x Ct exponential-heavy work (`+10-20%`, medium numerical/gradient risk).
+  2. **Macro Move H**: stack shared-RHS matmuls (`QK/KKT`, `inter/v_prime`) in recurrent kernels (`+8-18%`, medium integration/VMEM risk).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) for recurrent/backward state footprint (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: add `_exp_diff_and_mask_from_g` and wire it into train-path chunk prepare/recurrent/backward kernels so hot chunks use vector exponentials plus outer-product/clamp.
+
+- Change attempt summary:
+  - Implemented `_exp_diff_and_mask_from_g` in `lib/levanter/src/levanter/layers/gated_deltanet.py` and replaced train-path `exp_diff` construction in:
+    - segmented/full-sequence prepare kernels,
+    - segmented/full-sequence recurrent forward kernels,
+    - fused segmented forward kernel,
+    - segmented backward chunk helper.
+  - Reverted all speculative kernel edits after TPU infra blocked required validation/profile gates.
+
+- Correctness checks:
+  - Local smoke (success):
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU validation attempt (failed/unreachable):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - failure: `ssh: connect to host 136.112.108.150 port 22: Operation timed out`.
+  - Ray fallback validation attempt #1 (failed):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+    - job: `ray-run-calvinxu-levanter-20260223-033854`
+    - status: `Job supervisor actor failed to start within 900.0 seconds`.
+  - Ray fallback validation attempt #2 (failed):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - job: `ray-run-calvinxu-levanter-20260223-034615`
+    - status: `Job supervisor actor failed to start within 900.0 seconds`.
+  - Additional dev TPU fallback attempt (failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both --no-sync`
+    - failure: `ssh: connect to host 136.112.108.150 port 22: Operation timed out`.
+  - Allocation recovery attempt (non-productive in this window):
+    - `uv run scripts/ray/dev_tpu.py --cluster us-east5-a --tpu-name calvinxu-gdn allocate --tpu-type v5p-8`
+    - failed with `ray.exceptions.GetTimeoutError: Get timed out: some object(s) not ready`.
+    - follow-up probe `ssh dev-tpu-calvinxu-gdn 'echo ok'` continued to time out; no usable dev TPU lane became available.
+
+- Profile run:
+  - Not started because TPU correctness gate could not be completed on any lane.
+  - Trace artifact: N/A.
+
+- Hotspots observed:
+  - No new before/after hotspot comparison available (no completed profile run).
+  - Carry-in dominant hotspot remains train-path `shard_map/custom-call` bucket.
+
+- MFU/throughput delta:
+  - Unavailable (no completed profiled run).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command attempted: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`.
+    - Result: blocked (dev TPU unreachable), with Ray fallback jobs failing to start (`ray-run-calvinxu-levanter-20260223-033854`, `ray-run-calvinxu-levanter-20260223-034615`).
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: unavailable.
+    - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration` deltas: unavailable.
+    - Macro G exp-op reduction note: unavailable (no completed profile/IR capture).
+  - Governance:
+    - Infra-blocked iteration; speculative kernel edits reverted and attempt marked failed (`Commit: none (failed attempt)`).
+
+- Assessment: **infra-blocked failed attempt**. Required TPU validation + profiling could not be completed because the dev TPU endpoint was unreachable and both Ray fallback validation jobs failed before actor startup.
+- Governance/escalation action:
+  - Reverted speculative kernel edits; working tree restored to baseline kernel code.
+  - Confirmed failed Ray jobs and issued cleanup stop for the us-central fallback job.
+- Next bold hypothesis:
+  - Re-attempt Macro G once a stable TPU lane is confirmed (reachable dev TPU or Ray job that actually starts), then capture forward/backward closed-call deltas and exp-op reduction evidence in the same run.
+  - If TPU instability persists, pivot the next validated iteration to **Macro Move H** after first securing capacity.
