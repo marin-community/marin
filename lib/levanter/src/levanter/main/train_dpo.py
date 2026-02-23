@@ -23,8 +23,8 @@ from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import (
     DpoExample,
-    LmDataConfig,
     PreferenceChatLmDatasetFormat,
+    PreferenceLmDataConfig,
     dataset_for_preference_format,
 )
 from levanter.models.llama import LlamaConfig
@@ -69,26 +69,6 @@ def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
     return -nll
 
 
-def _validate_preference_chat_formats(config: LmDataConfig) -> None:
-    formats = {name: comp.format for name, comp in config.components.items()}
-
-    # TODO: remove this once we support other formats
-    non_preference = {name: fmt for name, fmt in formats.items() if not isinstance(fmt, PreferenceChatLmDatasetFormat)}
-    if non_preference:
-        bad = ", ".join(sorted(non_preference.keys()))
-        raise ValueError(f"DPO training requires preference_chat datasets. Non-preference datasets: {bad}")
-
-    packed = {name: fmt for name, fmt in formats.items() if fmt.pack}
-    if packed:
-        bad = ", ".join(sorted(packed.keys()))
-        raise ValueError(f"Packed preference_chat datasets are not supported yet. Packed datasets: {bad}")
-
-    non_raise = {name: fmt for name, fmt in formats.items() if fmt.slice_strategy != "raise"}
-    if non_raise:
-        bad = ", ".join(sorted(non_raise.keys()))
-        raise ValueError(f"preference_chat slice_strategy must be 'raise' for now. Invalid datasets: {bad}")
-
-
 def _num_validation_sequences(total_sequences: int, fraction: float) -> int:
     if total_sequences <= 1:
         return 0
@@ -102,7 +82,7 @@ def _num_validation_sequences(total_sequences: int, fraction: float) -> int:
     return num_val
 
 
-def _get_training_components(config: LmDataConfig) -> dict[str, Any]:
+def _get_training_components(config: PreferenceLmDataConfig) -> dict[str, Any]:
     """Get components with non-zero training weight."""
     weights = config.train_weights
     if weights is None:
@@ -119,7 +99,7 @@ def _get_training_components(config: LmDataConfig) -> dict[str, Any]:
 
 
 def _build_dpo_dataset(
-    config: LmDataConfig,
+    config: PreferenceLmDataConfig,
     Pos: Axis,
     *,
     key: jrandom.PRNGKey,
@@ -142,10 +122,7 @@ def _build_dpo_dataset(
     if cache is None:
         raise ValueError(f"No training cache available for component {name}.")
 
-    if not isinstance(component.format, PreferenceChatLmDatasetFormat):
-        raise ValueError(f"DPO requires preference_chat format, got {type(component.format)}")
-
-    base_dataset = dataset_for_preference_format(component.format, Pos, cache)
+    base_dataset = dataset_for_preference_format(cast(PreferenceChatLmDatasetFormat, component.format), Pos, cache)
 
     perm_type = config.permutation_type
     if perm_type == "linear":
@@ -172,7 +149,7 @@ def _build_dpo_dataset(
 
 
 def _build_validation_split(
-    config: LmDataConfig,
+    config: PreferenceLmDataConfig,
     Pos: Axis,
     *,
     key: jrandom.PRNGKey,
@@ -195,10 +172,7 @@ def _build_validation_split(
     if cache is None:
         raise ValueError(f"No training cache available for component {name}.")
 
-    if not isinstance(component.format, PreferenceChatLmDatasetFormat):
-        raise ValueError(f"DPO requires preference_chat format, got {type(component.format)}")
-
-    base_dataset = dataset_for_preference_format(component.format, Pos, cache)
+    base_dataset = dataset_for_preference_format(cast(PreferenceChatLmDatasetFormat, component.format), Pos, cache)
 
     total_len = len(base_dataset.as_sync_dataset())
     num_val = _num_validation_sequences(total_len, fraction)
@@ -237,7 +211,7 @@ def _build_validation_split(
 
 @dataclass
 class TrainDpoConfig:
-    data: LmDataConfig = field(default_factory=LmDataConfig)
+    data: PreferenceLmDataConfig = field(default_factory=PreferenceLmDataConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     model: LmConfig = field(default_factory=LlamaConfig)
     train_seq_len: int | None = None
@@ -265,8 +239,6 @@ class TrainDpoConfig:
 def main(config: TrainDpoConfig):
     if not config.reference_model_path:
         raise ValueError("reference_model_path must be provided for DPO training.")
-
-    _validate_preference_chat_formats(config.data)
 
     tokenizer = config.data.the_tokenizer
 
@@ -374,10 +346,9 @@ def main(config: TrainDpoConfig):
                 cache = val_caches.get(name)
                 if cache is None:
                     continue
-                if not isinstance(component.format, PreferenceChatLmDatasetFormat):
-                    continue
                 validation_sets[name] = cast(
-                    AsyncDataset[DpoExample], dataset_for_preference_format(component.format, Pos, cache)
+                    AsyncDataset[DpoExample],
+                    dataset_for_preference_format(cast(PreferenceChatLmDatasetFormat, component.format), Pos, cache),
                 )
 
         init_policy_key, init_reference_key = jrandom.split(model_key)

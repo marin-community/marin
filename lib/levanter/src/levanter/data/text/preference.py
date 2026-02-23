@@ -12,6 +12,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Dict, Literal, TypedDict
+import dataclasses
 
 import equinox as eqx
 import haliax as hax
@@ -26,6 +27,7 @@ from levanter.models.lm_model import LmExample
 from levanter.store.cache import TreeCache
 from levanter.utils.hf_utils import HfTokenizer
 
+from .datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from .formats import ChatProcessor, LmDatasetFormatBase
 
 logger = logging.getLogger("levanter.data.text.preference")
@@ -38,6 +40,45 @@ class ProcessedPreferenceChatDict(TypedDict):
     chosen_assistant_masks: np.ndarray
     rejected_input_ids: np.ndarray
     rejected_assistant_masks: np.ndarray
+
+
+@dataclass(frozen=True)
+class PreferenceLmDataConfig(LmDataConfig):
+    """Strict data config for preference-only DPO training."""
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        for name, component in self.components.items():
+            if isinstance(component, DirectDatasetComponent):
+                raise ValueError(
+                    "DPO preference data config only supports cache-backed DatasetComponent entries. "
+                    f"Component {name} is a DirectDatasetComponent."
+                )
+            if not isinstance(component, DatasetComponent):
+                raise ValueError(f"Unsupported component type for {name}: {type(component)}")
+
+            format = component.format
+            if not isinstance(format, PreferenceChatLmDatasetFormat):
+                raise ValueError(
+                    "DPO training requires preference_chat datasets. "
+                    f"Component {name} uses format {type(format).__name__}."
+                )
+            if format.pack:
+                raise ValueError(
+                    "Packed preference_chat datasets are not supported yet. "
+                    f"Component {name} has pack={format.pack!r}."
+                )
+            if format.slice_strategy != "raise":
+                raise ValueError(
+                    "preference_chat slice_strategy must be 'raise' for now. "
+                    f"Component {name} has slice_strategy={format.slice_strategy!r}."
+                )
+
+    @classmethod
+    def from_lm_data_config(cls, config: LmDataConfig) -> "PreferenceLmDataConfig":
+        values = {field.name: getattr(config, field.name) for field in dataclasses.fields(LmDataConfig)}
+        return cls(**values)
 
 
 @LmDatasetFormatBase.register_subclass("preference_chat")

@@ -21,8 +21,18 @@ import haliax as hax
 from haliax.quantization import apply_updates, partition_for_grad_overwrite
 from haliax.jax_utils import is_jax_array_like
 
-from levanter.data.text import DpoExample, PreferenceChatProcessor, PreferencePairDataset
-from levanter.main.train_dpo import DpoModel, _logp_sum, dpo_loss_from_logps
+from levanter.data.dataset import ListAsyncDataset
+from levanter.data.mixture import MixtureDataset
+from levanter.data.text import (
+    DatasetComponent,
+    DpoExample,
+    PreferenceChatLmDatasetFormat,
+    PreferenceChatProcessor,
+    PreferenceLmDataConfig,
+    PreferencePairDataset,
+    TextLmDatasetFormat,
+)
+from levanter.main.train_dpo import DpoModel, _build_dpo_dataset, _logp_sum, dpo_loss_from_logps
 from levanter.metrics import Metric
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.lm_model import LmExample
@@ -162,6 +172,53 @@ def test_preference_chat_processor_skips_invalid_rows(tokenizer_path: Path):
 
     result = processor(batch)
     assert len(result) == 1
+
+
+def test_preference_lm_data_config_rejects_non_preference_format():
+    with pytest.raises(ValueError, match="requires preference_chat"):
+        PreferenceLmDataConfig(components={"train": DatasetComponent(format=TextLmDatasetFormat())})
+
+
+def test_preference_lm_data_config_rejects_packed_preference_format():
+    with pytest.raises(ValueError, match="Packed preference_chat datasets are not supported"):
+        PreferenceLmDataConfig(
+            components={
+                "train": DatasetComponent(format=PreferenceChatLmDatasetFormat(pack=True)),
+            }
+        )
+
+
+def test_preference_lm_data_config_rejects_non_raise_slice_strategy():
+    with pytest.raises(ValueError, match="slice_strategy must be 'raise'"):
+        PreferenceLmDataConfig(
+            components={
+                "train": DatasetComponent(format=PreferenceChatLmDatasetFormat(slice_strategy="left")),
+            }
+        )
+
+
+def test_build_dpo_dataset_with_strict_preference_config(monkeypatch):
+    config = PreferenceLmDataConfig(
+        components={
+            "pref": DatasetComponent(format=PreferenceChatLmDatasetFormat()),
+        },
+        shuffle=False,
+    )
+
+    monkeypatch.setattr(
+        PreferenceLmDataConfig,
+        "build_caches",
+        lambda self, split: {"pref": object()},
+    )
+
+    monkeypatch.setattr(
+        "levanter.main.train_dpo.dataset_for_preference_format",
+        lambda format, Pos, cache: ListAsyncDataset([0]),
+    )
+
+    dataset = _build_dpo_dataset(config, hax.Axis("position", 8), key=jrandom.PRNGKey(0))
+    assert isinstance(dataset, MixtureDataset)
+    assert set(dataset.datasets.keys()) == {"pref"}
 
 
 def test_dpo_loss_decreases_with_margin():

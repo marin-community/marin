@@ -18,7 +18,7 @@ from fray.v2 import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, TextLmDatasetFormat
+from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, PreferenceLmDataConfig, TextLmDatasetFormat
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
@@ -558,8 +558,9 @@ def default_dpo(
         raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation=False)
-    pretraining_data = dataclasses.replace(pretraining_data, permutation_type="feistel")
-    vocab_size = _get_vocab_size(pretraining_data)
+    preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
+    preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
+    vocab_size = _get_vocab_size(preference_data)
 
     name = _truncate_wandb_name(name)
 
@@ -576,7 +577,7 @@ def default_dpo(
         raise ValueError("reference_model_path must be set for DPO training.")
 
     inner_config = TrainDpoConfig(
-        data=pretraining_data,
+        data=preference_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project=dpo_config.wandb_project or "marin",
