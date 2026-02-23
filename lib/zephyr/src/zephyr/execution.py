@@ -506,7 +506,7 @@ class ZephyrCoordinator:
         backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
         last_log_completed = -1
         start_time = time.monotonic()
-        warned_no_workers = False
+        all_dead_since: float | None = None
         no_workers_timeout = self._no_workers_timeout
 
         while True:
@@ -514,27 +514,37 @@ class ZephyrCoordinator:
                 if self._fatal_error:
                     raise ZephyrWorkerError(self._fatal_error)
 
-                num_workers = len(self._worker_handles)
                 completed = self._completed_shards
                 total = self._total_shards
 
                 if completed >= total:
                     return
 
-                # Fail fast if no workers appear within timeout
-                if num_workers == 0:
-                    elapsed = time.monotonic() - start_time
-                    if elapsed > no_workers_timeout:
+                # Count alive workers (READY or BUSY), not just total registered.
+                # Dead/failed workers stay in _worker_handles but can't make progress.
+                alive_workers = sum(
+                    1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY}
+                )
+
+                if alive_workers == 0:
+                    now = time.monotonic()
+                    elapsed = now - start_time
+
+                    if all_dead_since is None:
+                        all_dead_since = now
+                        logger.warning("All workers are dead/failed. Waiting for workers to recover...")
+
+                    dead_duration = now - all_dead_since
+                    if dead_duration > no_workers_timeout:
                         raise ZephyrWorkerError(
-                            f"No workers available after {elapsed:.1f}s. "
+                            f"No alive workers for {dead_duration:.1f}s "
+                            f"(total elapsed {elapsed:.1f}s). "
+                            f"All {len(self._worker_handles)} registered workers are dead/failed. "
                             "Check cluster resources and worker group configuration."
                         )
-                    if not warned_no_workers and elapsed > 5.0:
-                        logger.warning(
-                            "No workers available yet after %.1fs, waiting for discovery...",
-                            elapsed,
-                        )
-                        warned_no_workers = True
+                else:
+                    # Workers are alive — reset the dead timer
+                    all_dead_since = None
 
             if completed != last_log_completed:
                 logger.info("[%s] %d/%d tasks completed", self._stage_name, completed, total)
