@@ -52,6 +52,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pyarrow.parquet as pq
+from jax.sharding import PartitionSpec
 from tqdm_loggable.auto import tqdm
 
 import haliax as hax
@@ -61,7 +62,7 @@ from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completio
 from levanter.eval_harness import get_padding_count_from_batch, get_segment_ids_from_batch
 from levanter.models.loss import next_token_loss
 from levanter.models.lm_model import LmExample
-from levanter.utils.jax_utils import barrier_sync, broadcast_shard, multihost_broadcast_sync
+from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -328,7 +329,6 @@ def _run_batch_loop(
         num_batches,
         padded_or_truncated_count,
     )
-    barrier_sync()
 
     result_probs = np.zeros(total_points)
     covered_points = np.zeros(total_points, dtype=bool)
@@ -336,8 +336,25 @@ def _run_batch_loop(
     pbar = tqdm(total=total_tokens, desc="vlm_eval", unit="tok") if is_source else None
     dummy_batch = _make_dummy_eval_batch(EvalBatch, EvalPos)
     out_specs = hax.partitioning.infer_resource_partitions(dummy_batch, axis_resources)
+    message_pspec = PartitionSpec()
+    MSG_STOP = 0
+    MSG_BATCH = 1
 
-    for batch_idx in range(num_batches):
+    source_batch_idx = 0
+    loop_batch_idx = 0
+    while True:
+        local_message = MSG_BATCH if (is_source and source_batch_idx < num_batches) else MSG_STOP
+        message_arr = broadcast_shard(jnp.array(local_message, dtype=jnp.int32), message_pspec, source=0)
+        message = int(np.asarray(message_arr).item())
+
+        if message == MSG_STOP:
+            break
+        if message != MSG_BATCH:
+            raise RuntimeError(f"[{eval_run_uuid}] Unknown VLM eval loop message: {message}")
+
+        batch_idx = loop_batch_idx
+        loop_batch_idx += 1
+
         logger.warning(
             "VLM_EVAL_BATCH_ENTER eval_run_uuid=%s host=%d batch_idx=%d leader_num_batches=%d",
             eval_run_uuid,
@@ -345,7 +362,16 @@ def _run_batch_loop(
             batch_idx,
             num_batches,
         )
-        batch_orig = all_batches[batch_idx] if is_source else dummy_batch
+
+        if is_source:
+            if batch_idx >= num_batches:
+                raise RuntimeError(
+                    f"[{eval_run_uuid}] Source batch index out of range: batch_idx={batch_idx}, num_batches={num_batches}"
+                )
+            batch_orig = all_batches[batch_idx]
+            source_batch_idx += 1
+        else:
+            batch_orig = dummy_batch
 
         if is_source:
             # Hard host-side guardrail: catch out-of-vocab ids before launching
@@ -416,6 +442,10 @@ def _run_batch_loop(
             raise
 
         out_ids, out_lls = jit_fn(model, batch)
+        # Ensure all hosts complete this step's device work before either
+        # source-side host parsing or the next control-message broadcast.
+        jax.block_until_ready(out_ids.array)
+        jax.block_until_ready(out_lls.array)
 
         valid_points = 0
         if is_source:
@@ -454,7 +484,12 @@ def _run_batch_loop(
 
     if pbar is not None:
         pbar.close()
-    barrier_sync()
+
+    if is_source and source_batch_idx != num_batches:
+        raise RuntimeError(
+            f"[{eval_run_uuid}] Source loop consumed {source_batch_idx} batches but expected {num_batches} batches."
+        )
+
     logger.info("[%s][host=%d] vlm_eval batch loop complete", eval_run_uuid, jax.process_index())
 
     if is_source:
@@ -1439,77 +1474,56 @@ def vlm_mc_eval_callback(
                 len(tokenizer),
                 eval_run_uuid=eval_run_uuid,
             )
-            post_eval_exception: Exception | None = None
             if jax.process_index() == 0:
-                try:
-                    for bench_name, result in results.items():
-                        task_type = prepared[bench_name][0]
-                        if task_type == "multiple_choice":
-                            accuracy = result["accuracy"]
-                            loss = result["loss"]
-                            logger.info(
-                                "%s: accuracy=%.4f (%d/%d), loss=%.4f",
-                                bench_name,
-                                accuracy,
-                                result["num_correct"],
-                                result["num_questions"],
-                                loss,
-                            )
-                            levanter.tracker.log(
-                                {
-                                    f"eval/{bench_name}/accuracy": accuracy,
-                                    f"eval/{bench_name}/loss": loss,
-                                },
-                                step=None,
-                                commit=True,
-                            )
-                            logger.warning(
-                                "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=multiple_choice "
-                                "accuracy=%.6f loss=%.6f num_correct=%d num_questions=%d",
-                                eval_run_uuid,
-                                jax.process_index(),
-                                bench_name,
-                                accuracy,
-                                loss,
-                                result["num_correct"],
-                                result["num_questions"],
-                            )
-                        elif task_type == "open_ended":
-                            mean_ll = result["mean_ll"]
-                            logger.info(
-                                "%s: mean_ll=%.4f (%d questions)",
-                                bench_name,
-                                mean_ll,
-                                result["num_questions"],
-                            )
-                            levanter.tracker.log(
-                                {f"eval/{bench_name}/mean_ll": mean_ll},
-                                step=None,
-                                commit=True,
-                            )
-                            logger.warning(
-                                "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=open_ended "
-                                "mean_ll=%.6f num_questions=%d",
-                                eval_run_uuid,
-                                jax.process_index(),
-                                bench_name,
-                                mean_ll,
-                                result["num_questions"],
-                            )
-                except Exception as e:
-                    post_eval_exception = e
-
-            logger.warning(
-                "VLM_EVAL_CALLBACK_EXIT_BARRIER eval_run_uuid=%s host=%d",
-                eval_run_uuid,
-                jax.process_index(),
-            )
-            barrier_sync()
-            leader_post_eval_error = bool(multihost_broadcast_sync(post_eval_exception is not None))
-            if leader_post_eval_error:
-                if post_eval_exception is not None:
-                    raise post_eval_exception
-                raise RuntimeError(f"[{eval_run_uuid}] host0 failed while post-eval logging; aborting all hosts.")
+                metrics_to_log: dict[str, float] = {}
+                for bench_name, result in results.items():
+                    task_type = prepared[bench_name][0]
+                    if task_type == "multiple_choice":
+                        accuracy = result["accuracy"]
+                        loss = result["loss"]
+                        logger.info(
+                            "%s: accuracy=%.4f (%d/%d), loss=%.4f",
+                            bench_name,
+                            accuracy,
+                            result["num_correct"],
+                            result["num_questions"],
+                            loss,
+                        )
+                        metrics_to_log[f"eval/{bench_name}/accuracy"] = accuracy
+                        metrics_to_log[f"eval/{bench_name}/loss"] = loss
+                        logger.warning(
+                            "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=multiple_choice "
+                            "accuracy=%.6f loss=%.6f num_correct=%d num_questions=%d",
+                            eval_run_uuid,
+                            jax.process_index(),
+                            bench_name,
+                            accuracy,
+                            loss,
+                            result["num_correct"],
+                            result["num_questions"],
+                        )
+                    elif task_type == "open_ended":
+                        mean_ll = result["mean_ll"]
+                        logger.info(
+                            "%s: mean_ll=%.4f (%d questions)",
+                            bench_name,
+                            mean_ll,
+                            result["num_questions"],
+                        )
+                        metrics_to_log[f"eval/{bench_name}/mean_ll"] = mean_ll
+                        logger.warning(
+                            "VLM_EVAL_RESULTS eval_run_uuid=%s host=%d benchmark=%s task=open_ended "
+                            "mean_ll=%.6f num_questions=%d",
+                            eval_run_uuid,
+                            jax.process_index(),
+                            bench_name,
+                            mean_ll,
+                            result["num_questions"],
+                        )
+                if metrics_to_log:
+                    # Match text-mc/eval-harness behavior: avoid host0-only reads
+                    # of step/state inside this callback.
+                    levanter.tracker.log(metrics_to_log, step=None)
         except Exception:
             logger.exception("vlm_mc_eval crashed")
             raise
@@ -1520,6 +1534,14 @@ def vlm_mc_eval_callback(
                 eval_run_uuid,
                 jax.process_index(),
             )
+
+        # Keep callback exit ordering deterministic across hosts. Without a
+        # final host-sync here, worker hosts can return to the next train-step
+        # launch while host0 is still finishing eval-side bookkeeping/logging,
+        # which is a common trigger for TPU "different launch id" failures.
+        _exit_sync = multihost_broadcast_sync(1 if jax.process_index() == 0 else 0)
+        if int(_exit_sync) != 1:
+            raise RuntimeError(f"[{eval_run_uuid}] unexpected callback-exit sync value: {_exit_sync}")
 
         logger.info("VLM eval done.")
 
