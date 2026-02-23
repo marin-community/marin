@@ -61,7 +61,7 @@ from levanter.data.packing import PromptCompletion, greedy_pack_prompt_completio
 from levanter.eval_harness import get_padding_count_from_batch, get_segment_ids_from_batch
 from levanter.models.loss import next_token_loss
 from levanter.models.lm_model import LmExample
-from levanter.utils.jax_utils import broadcast_shard, multihost_broadcast_sync, sync_global_devices
+from levanter.utils.jax_utils import barrier_sync, broadcast_shard, multihost_broadcast_sync
 
 from experiments.unified.vlm_tokenize_captions import (
     VISION_END_ID,
@@ -328,7 +328,7 @@ def _run_batch_loop(
         num_batches,
         padded_or_truncated_count,
     )
-    sync_global_devices(f"vlm_eval_batch_loop_enter_{eval_run_uuid}")
+    barrier_sync()
 
     result_probs = np.zeros(total_points)
     covered_points = np.zeros(total_points, dtype=bool)
@@ -454,7 +454,7 @@ def _run_batch_loop(
 
     if pbar is not None:
         pbar.close()
-    sync_global_devices(f"vlm_eval_batch_loop_exit_{eval_run_uuid}")
+    barrier_sync()
     logger.info("[%s][host=%d] vlm_eval batch loop complete", eval_run_uuid, jax.process_index())
 
     if is_source:
@@ -1499,7 +1499,12 @@ def vlm_mc_eval_callback(
                 except Exception as e:
                     post_eval_exception = e
 
-            sync_global_devices(f"vlm_eval_callback_exit_{eval_run_uuid}")
+            logger.warning(
+                "VLM_EVAL_CALLBACK_EXIT_BARRIER eval_run_uuid=%s host=%d",
+                eval_run_uuid,
+                jax.process_index(),
+            )
+            barrier_sync()
             leader_post_eval_error = bool(multihost_broadcast_sync(post_eval_exception is not None))
             if leader_post_eval_error:
                 if post_eval_exception is not None:
