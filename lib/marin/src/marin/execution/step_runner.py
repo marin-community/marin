@@ -262,7 +262,7 @@ class StepRunner:
     def _launch_step(self, step: StepSpec, *, force_run_failed: bool, dry_run: bool) -> JobHandle | None:
         """Launch a single step as a fray job. Returns None if skipped."""
         from marin.execution.artifact import Artifact
-        from marin.execution.disk_cache import disk_cached
+        from marin.execution.disk_cache import disk_cache
         from marin.execution.distributed_lock import distributed_lock
 
         output_path = step.output_path
@@ -291,14 +291,15 @@ class StepRunner:
         # All caching, locking, heartbeat, artifact saving, and status writes
         # happen on the worker.
         step_fn = step.fn
+        cached_step = disk_cache(
+            distributed_lock(step_fn, force_run_failed=force_run_failed),
+            output_path=output_path,
+            save_fn=Artifact.save,
+            load_fn=Artifact.load,
+        )
 
         def worker_fn():
-            disk_cached(
-                distributed_lock(step_fn, force_run_failed=force_run_failed),
-                output_path,
-                save=Artifact.save,
-                load=Artifact.load,
-            )
+            cached_step(output_path)
 
         worker_fn.__qualname__ = step_name
         worker_fn.__name__ = step_name
