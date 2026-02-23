@@ -77,6 +77,7 @@ daily_ferry = default_train(
     tokenized=nemotron_mix,
     model_config=replace(llama_150m, max_seq_len=TRAIN_SEQ_LEN),
     train_config=train_config,
+    eval_harness_tasks=[],
     tags=["ferry", "daily", "integration", "125m", "nemotron", "seq4096"],
 )
 

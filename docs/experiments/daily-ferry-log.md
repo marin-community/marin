@@ -9,6 +9,7 @@ Sealing policy (for new runs):
 - open a PR that updates only this file (`docs/experiments/daily-ferry-log.md`)
 - extract canonical metric keys with:
   - `uv run python scripts/ferries/daily_analysis.py --run <wandb_run_url_or_path> --format markdown`
+- if interesting, include optional analysis observations from the script output comparing this run against recent completed daily ferries
 
 ## Runs
 

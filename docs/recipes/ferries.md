@@ -165,6 +165,12 @@ uv run python scripts/ferries/daily_analysis.py \
   --format markdown
 ```
 
+Add a specific analysis section from the same script output that compares the current run against recent completed daily ferries:
+- final-loss deltas on the canonical eval keys
+- run-behavior differences from history (train-loss trajectory, step-to-threshold timing, early vs late averages, late-stage volatility)
+
+These analysis outputs are optional context ("if interesting"), not hard requirements for run closure.
+
 Required terminal issue comment template:
 
 ```markdown
