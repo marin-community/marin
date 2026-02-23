@@ -184,7 +184,7 @@ def push_to_gcp_registries(
         result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
         if result.returncode != 0:
             click.echo(f"Failed to tag image for {r}", err=True)
-            continue
+            raise SystemExit(1)
 
         click.echo(f"Pushing to {r}...")
         push_cmd = ["docker", "push", dest_tag]
@@ -201,7 +201,7 @@ def push_to_gcp_registries(
                     click.echo(result.stdout, err=True)
                 if result.stderr:
                     click.echo(result.stderr, err=True)
-            continue
+            raise SystemExit(1)
 
         click.echo(f"Successfully pushed to {dest_tag}")
 
