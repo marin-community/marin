@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "8041e29f69bc",
+  "strategy": "manual-commit",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "entire_haiku2.txt"
+  ],
+  "sessions": [
+    {
+      "metadata": "/80/41e29f69bc/0/metadata.json",
+      "transcript": "/80/41e29f69bc/0/full.jsonl",
+      "context": "/80/41e29f69bc/0/context.md",
+      "content_hash": "/80/41e29f69bc/0/content_hash.txt",
+      "prompt": "/80/41e29f69bc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 5051,
+    "cache_read_tokens": 85917,
+    "output_tokens": 65,
+    "api_call_count": 4
+  }
+}
