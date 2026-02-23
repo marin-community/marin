@@ -9,7 +9,7 @@ import threading
 from unittest.mock import patch
 
 from iris.cluster.manager import stop_all
-from iris.cluster.platform.base import default_stop_all
+from iris.cluster.platform.base import Labels, default_stop_all
 from iris.rpc import config_pb2
 
 
@@ -35,7 +35,8 @@ class FakeSliceHandle:
 
     @property
     def scale_group(self) -> str:
-        return self._labels.get("iris-scale-group", "")
+        labels = Labels("iris")
+        return self._labels.get(labels.iris_scale_group, "")
 
     @property
     def labels(self) -> dict[str, str]:
@@ -88,7 +89,8 @@ def _make_manager_config() -> config_pb2.IrisClusterConfig:
 
 def test_stop_all_dry_run_discovers_without_terminating():
     """stop_all(dry_run=True) returns resource names but does not terminate anything."""
-    managed = FakeSliceHandle("slice-1", labels={"iris-managed": "true"})
+    iris_labels = Labels("iris")
+    managed = FakeSliceHandle("slice-1", labels={iris_labels.iris_managed: "true"})
     unmanaged = FakeSliceHandle("slice-2", labels={})
     platform = FakeManagerPlatform(slices=[managed, unmanaged])
     config = _make_manager_config()
@@ -107,7 +109,8 @@ def test_stop_all_dry_run_discovers_without_terminating():
 
 def test_stop_all_terminates_all_slices():
     """stop_all discovers and terminates all managed slices."""
-    slices = [FakeSliceHandle(f"slice-{i}", labels={"iris-managed": "true"}) for i in range(3)]
+    iris_labels = Labels("iris")
+    slices = [FakeSliceHandle(f"slice-{i}", labels={iris_labels.iris_managed: "true"}) for i in range(3)]
     platform = FakeManagerPlatform(slices=slices)
     config = _make_manager_config()
 
@@ -121,8 +124,10 @@ def test_stop_all_terminates_all_slices():
 
 def test_stop_all_custom_label_prefix():
     """stop_all with custom label_prefix uses that prefix for discovery."""
-    managed = FakeSliceHandle("slice-a", labels={"custom-managed": "true"})
-    wrong_prefix = FakeSliceHandle("slice-b", labels={"iris-managed": "true"})
+    custom_labels = Labels("custom")
+    iris_labels = Labels("iris")
+    managed = FakeSliceHandle("slice-a", labels={custom_labels.iris_managed: "true"})
+    wrong_prefix = FakeSliceHandle("slice-b", labels={iris_labels.iris_managed: "true"})
     platform = FakeManagerPlatform(slices=[managed, wrong_prefix])
     config = _make_manager_config()
 

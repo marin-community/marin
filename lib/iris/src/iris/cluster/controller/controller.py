@@ -692,11 +692,12 @@ class Controller:
     @property
     def port(self) -> int:
         """Actual bound port (may differ from config if port=0 was specified)."""
-        if self._server and self._server.servers:
-            # Get actual port from the first server socket
-            sockets = self._server.servers[0].sockets
-            if sockets:
-                return sockets[0].getsockname()[1]
+        # uvicorn 0.40+ sets .servers dynamically during startup(), not in __init__.
+        # Use getattr since this is an unstable internal API at a system boundary.
+        if self._server and self._server.started:
+            servers = getattr(self._server, "servers", [])
+            if servers and servers[0].sockets:
+                return servers[0].sockets[0].getsockname()[1]
         return self._config.port
 
     @property
