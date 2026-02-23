@@ -573,6 +573,55 @@ def test_pipeline_id_increments(fray_client, tmp_path):
     assert ctx._pipeline_id == 1
 
 
+def test_pull_task_returns_shutdown_on_last_stage_empty_queue(tmp_path):
+    """When the last stage's tasks are all in-flight or done, pull_task returns SHUTDOWN."""
+
+    from zephyr.execution import Shard, ShardTask, TaskResult, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord.set_shared_data({})
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test",
+    )
+
+    # Non-last stage: empty queue returns None
+    coord.start_stage("stage-0", [task], is_last_stage=False)
+    pulled = coord.pull_task("worker-A")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    _task, attempt, _config = pulled
+    coord.report_result("worker-A", 0, attempt, TaskResult(chunks=[]))
+
+    # Queue empty, but not last stage -> None
+    result = coord.pull_task("worker-A")
+    assert result is None
+
+    # Last stage: empty queue returns SHUTDOWN
+    task2 = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test-last",
+    )
+    coord.start_stage("stage-1", [task2], is_last_stage=True)
+    pulled = coord.pull_task("worker-A")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    _task, attempt, _config = pulled
+    coord.report_result("worker-A", 0, attempt, TaskResult(chunks=[]))
+
+    # Queue empty on last stage -> SHUTDOWN
+    result = coord.pull_task("worker-A")
+    assert result == "SHUTDOWN"
+
+
 def test_execute_retries_on_coordinator_death(tmp_path):
     """When the coordinator dies mid-execution, execute() retries with a fresh
     coordinator and worker pool and eventually succeeds.
