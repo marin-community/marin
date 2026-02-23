@@ -3,8 +3,15 @@
   "checkpoint_id": "dfc81120750b",
   "strategy": "manual-commit",
   "branch": "rav-requeue-on-re-register",
-  "checkpoints_count": 2,
+  "checkpoints_count": 5,
   "files_touched": [
+    "lib/fray/src/fray/v2/__init__.py",
+    "lib/fray/src/fray/v2/client.py",
+    "lib/fray/src/fray/v2/iris_backend.py",
+    "lib/fray/src/fray/v2/local_backend.py",
+    "lib/fray/src/fray/v2/ray_backend/backend.py",
+    "lib/fray/src/fray/v2/types.py",
+    "lib/fray/tests/test_v2_ray.py",
     "lib/zephyr/src/zephyr/execution.py",
     "lib/zephyr/tests/test_execution.py"
   ],
@@ -15,13 +22,20 @@
       "context": "/df/c81120750b/0/context.md",
       "content_hash": "/df/c81120750b/0/content_hash.txt",
       "prompt": "/df/c81120750b/0/prompt.txt"
+    },
+    {
+      "metadata": "/df/c81120750b/1/metadata.json",
+      "transcript": "/df/c81120750b/1/full.jsonl",
+      "context": "/df/c81120750b/1/context.md",
+      "content_hash": "/df/c81120750b/1/content_hash.txt",
+      "prompt": "/df/c81120750b/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 21,
-    "cache_creation_tokens": 37005,
-    "cache_read_tokens": 799442,
-    "output_tokens": 853,
-    "api_call_count": 15
+    "input_tokens": 72,
+    "cache_creation_tokens": 110137,
+    "cache_read_tokens": 3742161,
+    "output_tokens": 4252,
+    "api_call_count": 58
   }
 }
