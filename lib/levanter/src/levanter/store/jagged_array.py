@@ -6,12 +6,11 @@ import os
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-import fsspec.core
-import jax.experimental.array_serialization.serialization as ser
 import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 
+from levanter.tensorstore_serialization import build_kvstore_spec
 from levanter.utils import fsspec_utils
 from levanter.utils.thread_utils import future_from_value
 
@@ -609,13 +608,8 @@ def _get_spec(path, shape):
         random_name = str(uuid.uuid4())
         spec = ts.Spec({"driver": "zarr", "kvstore": f"memory://{random_name}"})
     else:
-        # make path absolute if it's not already
-        protocol, _ = fsspec.core.split_protocol(path)
-        if protocol is None:
-            path = os.path.abspath(path)
-        spec = ser.get_tensorstore_spec(path, ocdbt=False)
-        store = spec.get("kvstore")
-        spec = {"driver": "zarr3", "kvstore": store}
+        kvstore = build_kvstore_spec(path)
+        spec = {"driver": "zarr3", "kvstore": kvstore}
         fsspec_utils.mkdirs(os.path.dirname(path))
         spec["metadata"] = {
             "chunk_grid": {

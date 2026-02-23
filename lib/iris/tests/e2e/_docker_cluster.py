@@ -52,7 +52,7 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     config = config_pb2.IrisClusterConfig()
 
     config.controller.local.port = 0
-    config.controller.bundle_prefix = ""
+    config.storage.bundle_prefix = ""
     config.platform.local.SetInParent()
 
     sg = config_pb2.ScaleGroupConfig(
@@ -171,6 +171,7 @@ class E2ECluster:
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
                 poll_interval=Duration.from_seconds(0.1),
+                default_task_image="iris-task:latest",
                 log_prefix=f"file://{(cache_path / 'iris-logs').as_posix()}",
             )
             env_provider = None

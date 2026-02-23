@@ -24,7 +24,7 @@ from iris.cluster.controller.controller import (
     ControllerConfig as _InnerControllerConfig,
     RpcWorkerStubFactory,
 )
-from iris.cluster.controller.lifecycle import ControllerStatus
+from iris.cluster.controller.vm_lifecycle import ControllerStatus
 from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.cluster.platform.local import LocalPlatform, find_free_port
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -64,13 +64,15 @@ def create_local_autoscaler(
 
     port_allocator = PortAllocator()
 
-    # Extract worker attributes from each scale group config so that LocalPlatform
-    # can propagate them to local workers (mirroring what IRIS_WORKER_ATTRIBUTES
-    # does in the real bootstrap path).
+    # Extract worker attributes and GPU counts from each scale group config so
+    # that LocalPlatform can propagate them to local workers.
     worker_attributes_by_group: dict[str, dict[str, str | int | float]] = {}
+    gpu_count_by_group: dict[str, int] = {}
     for name, sg_config in config.scale_groups.items():
         if sg_config.HasField("worker") and sg_config.worker.attributes:
             worker_attributes_by_group[name] = dict(sg_config.worker.attributes)
+        if sg_config.resources.gpu_count > 0:
+            gpu_count_by_group[name] = sg_config.resources.gpu_count
 
     platform = LocalPlatform(
         label_prefix=label_prefix,
@@ -80,6 +82,7 @@ def create_local_autoscaler(
         fake_bundle=fake_bundle,
         port_allocator=port_allocator,
         worker_attributes_by_group=worker_attributes_by_group,
+        gpu_count_by_group=gpu_count_by_group,
     )
 
     scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
@@ -162,7 +165,7 @@ class LocalController:
             config=_InnerControllerConfig(
                 host="127.0.0.1",
                 port=port,
-                bundle_prefix=self._config.controller.bundle_prefix or f"file://{bundle_dir}",
+                bundle_prefix=self._config.storage.bundle_prefix or f"file://{bundle_dir}",
                 heartbeat_interval=Duration.from_seconds(0.5),
                 heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
             ),
