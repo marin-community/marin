@@ -107,6 +107,24 @@ class AsyncDataset(DatasetBase[T_co]):
 
         return permutation.EraShufflingDataset(self, era_length, key=key, perm_type=perm_type)
 
+    def block_shuffle(
+        self,
+        *,
+        io_block_size: int,
+        window_blocks: int,
+        key: PRNGKeyArray,
+        perm_type: PermType = "feistel",
+    ):
+        import levanter.data.permutation as permutation
+
+        return permutation.BlockShufflingDataset(
+            self,
+            io_block_size,
+            window_blocks=window_blocks,
+            key=key,
+            perm_type=perm_type,
+        )
+
 
 class SyncDataset(DatasetBase[T_co]):
     """
