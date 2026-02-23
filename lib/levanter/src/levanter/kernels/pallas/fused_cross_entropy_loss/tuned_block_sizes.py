@@ -409,8 +409,13 @@ def infer_xla_v_block_size(
     device_kind: Optional[str] = None,
 ) -> int:
     """Heuristic v-block size for the XLA streaming path."""
-    del b, h, dtype, device_kind  # currently unused
-    target = min(v, 32768)
+    del b, h, dtype
+    # Larger v-tiles improve throughput, but very large blocks can trigger OOM
+    # in full training runs because backward materializes [B, v_block] temporaries.
+    # Keep TPU v5p a bit larger (16384) and use 8192 elsewhere for safer memory.
+    device_key = _device_key(device_kind)
+    max_v_block_size = 16384 if device_key == "TPU v5p" else 8192
+    target = min(v, max_v_block_size)
     if target <= 0:
         return 1
     # Keep the block size <= v to avoid excess padding work.
