@@ -195,7 +195,6 @@ def _partition_trainable_params(model, filter):
     Returns:
         trainable, non-trainable
     """
-
     filter = make_floating_point_trainable_filter(filter)
     return eqx.partition(model, filter, is_leaf=lambda x: isinstance(x, haliax.NamedArray))
 
@@ -214,7 +213,6 @@ def cast_params_by_trainability(model, mp, is_trainable):
     Casts the parameters of a model to the appropriate precision based on the is_trainable filter spec.
     Trainable parameters are cast to param precision, non-trainable parameters are cast to compute precision.
     """
-
     trainable, non_trainable = _partition_trainable_params(model, is_trainable)
     trainable = mp.cast_to_param(trainable)
     non_trainable = mp.cast_to_compute(non_trainable)
