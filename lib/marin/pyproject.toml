@@ -173,6 +173,10 @@ harbor = [
     "harbor>=0.1.42",
 ]
 
+dedup = [
+    "dupekit",
+]
+
 math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]
