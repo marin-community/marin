@@ -47,13 +47,30 @@ class SliceLifecycleState(StrEnum):
 
 
 class GroupAvailability(Enum):
-    """Availability state for a scale group in waterfall routing."""
+    """Availability state for a scale group in waterfall routing.
+
+    Determines whether demand is routed to this group or falls through
+    to lower-priority groups. States are checked in priority order by
+    availability() — the first matching state wins.
+    """
 
     AVAILABLE = "available"
+    """Group can accept demand and create new slices."""
+
     BACKOFF = "backoff"
+    """Recent slice creation failed; group is waiting before retrying.
+    Demand falls through to lower-priority groups during backoff."""
+
     AT_CAPACITY = "at_capacity"
+    """Group is at max_slices. Existing ready/inflight slices can still
+    serve demand, but no new slices will be created. Excess demand
+    falls through to lower-priority groups."""
+
     QUOTA_EXCEEDED = "quota_exceeded"
+    """Cloud quota exhausted. Demand falls through to lower-priority groups."""
+
     REQUESTING = "requesting"
+    """Scale-up in progress. Group accepts demand since new capacity is incoming."""
 
 
 @dataclass(frozen=True)
@@ -67,8 +84,8 @@ class AvailabilityState:
 
 DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
 DEFAULT_SCALE_DOWN_COOLDOWN = Duration.from_minutes(5)
-DEFAULT_BACKOFF_INITIAL = Duration.from_seconds(5.0)
-DEFAULT_BACKOFF_MAX = Duration.from_minutes(5)
+DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
+DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
 DEFAULT_BACKOFF_FACTOR = 2.0
 DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(5)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
@@ -729,14 +746,14 @@ class ScalingGroup:
     def can_accept_demand(self, timestamp: Timestamp | None = None) -> bool:
         """Whether this group can accept demand for waterfall routing.
 
-        AT_CAPACITY groups are included because they have existing ready
-        slices that can serve demand. Routing demand to them keeps
-        current_demand accurate, preventing premature scale-down.
+        BACKOFF and QUOTA_EXCEEDED groups reject demand so it falls through
+        to lower-priority groups. AT_CAPACITY groups accept demand because
+        their existing ready/inflight slices can still serve it — this keeps
+        current_demand accurate and prevents premature scale-down.
         """
         return self.availability(timestamp).status in {
             GroupAvailability.AVAILABLE,
             GroupAvailability.REQUESTING,
-            GroupAvailability.BACKOFF,
             GroupAvailability.AT_CAPACITY,
         }
 

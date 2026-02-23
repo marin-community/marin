@@ -878,6 +878,70 @@ class TestWaterfallRouting:
         assert "v5p-group" in groups_in_decisions
         assert "v5lite-group" in groups_in_decisions
 
+    def test_backoff_group_falls_through_to_fallback(self):
+        """When primary group is in BACKOFF, demand falls through to fallback."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
+        config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20)
+
+        group_primary = ScalingGroup(
+            config_primary,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+            backoff_initial=Duration.from_seconds(60),
+        )
+        group_fallback = ScalingGroup(
+            config_fallback,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+
+        ts = Timestamp.from_ms(1000)
+        group_primary.record_failure(timestamp=ts)
+        assert group_primary.availability(ts).status == GroupAvailability.BACKOFF
+
+        autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback})
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        decisions = autoscaler.evaluate(demand, timestamp=ts)
+
+        assert len(decisions) == 1
+        assert decisions[0].scale_group == "fallback"
+
+    def test_backoff_group_with_ready_slices_still_falls_through(self):
+        """Even with ready slices, a BACKOFF group rejects demand so it falls through."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
+        config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
+        config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20)
+
+        group_primary = ScalingGroup(
+            config_primary,
+            make_mock_platform(slices_to_discover=discovered),
+            scale_up_cooldown=Duration.from_ms(0),
+            backoff_initial=Duration.from_seconds(60),
+        )
+        group_primary.reconcile()
+        group_fallback = ScalingGroup(
+            config_fallback,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+
+        ts = Timestamp.from_ms(1000)
+        group_primary.record_failure(timestamp=ts)
+        assert group_primary.availability(ts).status == GroupAvailability.BACKOFF
+        assert group_primary.slice_count() == 1
+
+        autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback})
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        decisions = autoscaler.evaluate(demand, timestamp=ts)
+
+        assert len(decisions) == 1
+        assert decisions[0].scale_group == "fallback"
+        assert group_primary.current_demand == 0
+
 
 class TestPreemptibleRouting:
     """Tests for preemptible demand routing."""
@@ -1209,6 +1273,48 @@ class TestAutoscalerWaterfallEndToEnd:
 
         total = group_primary.slice_count() + group_fallback.slice_count()
         assert total >= 4
+
+    def test_demand_cascades_through_priority_groups_on_backoff(self):
+        """E2E: primary create fails → BACKOFF, second run cascades to fallback."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10, zones=["us-central1-a"])
+        config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20, zones=["us-central1-a"])
+
+        platform_primary = FakePlatform(FakePlatformConfig(config=config_primary, failure_mode=FailureMode.CREATE_FAILS))
+        platform_fallback = FakePlatform(FakePlatformConfig(config=config_fallback))
+
+        group_primary = ScalingGroup(
+            config_primary,
+            platform_primary,
+            scale_up_cooldown=Duration.from_ms(0),
+            backoff_initial=Duration.from_seconds(60),
+        )
+        group_fallback = ScalingGroup(
+            config_fallback,
+            platform_fallback,
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+
+        config = config_pb2.AutoscalerConfig()
+        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        autoscaler = make_autoscaler(
+            scale_groups={"primary": group_primary, "fallback": group_fallback},
+            config=config,
+        )
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+
+        # First run: primary attempts scale-up, fails → enters BACKOFF
+        autoscaler.run_once(demand, {})
+        autoscaler._wait_for_inflight()
+        assert group_primary.availability().status == GroupAvailability.BACKOFF
+        assert group_primary.slice_count() == 0
+
+        # Second run: primary in BACKOFF → demand cascades to fallback
+        autoscaler.run_once(demand, {})
+        autoscaler._wait_for_inflight()
+        assert group_fallback.slice_count() >= 1
 
 
 class TestAutoscalerQuotaHandling:
