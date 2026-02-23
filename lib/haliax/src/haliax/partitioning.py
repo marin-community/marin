@@ -248,7 +248,6 @@ def shard(x: T, mapping: ResourceMapping | None = None, mesh: Mesh | None = None
             # this happens when we filter out params for things like lora.
             # could use eqx.partition to avoid this, but eh
             return named
-
         pspec = pspec_for(named, mapping)
         assert isinstance(pspec, PartitionSpec)
         if _is_jit_tracer(named.array):
