@@ -13,8 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import dataclasses
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.watch import WatchConfig
@@ -94,7 +93,7 @@ class SimpleTrainConfig:
     optimizer_config: OptimizerConfig | None = None
     """Optimizer configuration to use. If not set, Adam will be used."""
 
-    watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
+    watch: WatchConfig = field(default_factory=WatchConfig)
     """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""
 
     # profiler-related configuration

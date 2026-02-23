@@ -3,6 +3,7 @@
 
 """Configuration management for cluster operations."""
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,8 +11,9 @@ from typing import Any
 
 import jinja2
 import yaml
-
 from fray.v2.types import get_tpu_topology
+
+logger = logging.getLogger(__name__)
 
 # Cluster configuration constants and templates
 LATEST = "20260129"  # The latest docker tag used for the clusters
@@ -76,7 +78,7 @@ def _load_local_marin_config() -> dict[str, Any]:
         if isinstance(config, dict):
             return config
     except Exception:
-        pass
+        logger.warning("Failed to parse .marin.yaml", exc_info=True)
     return {}
 
 

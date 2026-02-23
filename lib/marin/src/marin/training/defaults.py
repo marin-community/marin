@@ -176,7 +176,6 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=resolved_validation_sets,
-            permutation_type="feistel",
         )
     else:
         pretraining_data = tokenized
@@ -248,7 +247,7 @@ def default_train(
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
 
-    # Max length of 64 characters for WANDB run is 64 characters
+    # WANDB run name is limited to 64 characters
     # we don't want to use the first 64 because the UID bit goes at the end. instead, grab the trailing -XXX
     # and add whatever we can fit in the remaining space.
     if len(name) > 64:
@@ -391,7 +390,6 @@ def default_train(
         output_path=this_output_path(),
     )
 
-    actual_model_config = unwrap_versioned_value(model_config)
     num_params = actual_model_config.total_trainable_params(vocab_size)
 
     return ExecutorStep(

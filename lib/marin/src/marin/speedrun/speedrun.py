@@ -63,7 +63,7 @@ class SpeedrunConfig:
 
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
-    tokenized_dataset: InputName | LMMixtureDatasetConfig
+    tokenized_dataset: InputName | LMMixtureDatasetConfig | None = None
     vocab_size: int = LLAMA3_VOCAB_SIZE
 
     def as_json_dict(self) -> dict:
@@ -360,17 +360,26 @@ def default_speedrun(
 
     run_tags = ["speedrun"] + (tags or [])
 
+    tokenized_dataset = config.tokenized_dataset
+    if tokenized_dataset is None:
+        from marin.processing.tokenize.download_pretokenized import download_pretokenized_cache
+        from marin.processing.tokenize.known_tokenizers import MARIN_TOKENIZER
+
+        tokenized_dataset = download_pretokenized_cache(
+            "fineweb-edu-10B", "marin-community/fineweb-edu-pretokenized-10B", MARIN_TOKENIZER
+        )
+
     train_config = dataclasses.replace(config.train_config, data_seed=42)
-    if isinstance(config.tokenized_dataset, InputName | ExecutorStep):
+    if isinstance(tokenized_dataset, InputName | ExecutorStep):
         pretraining_data = lm_data_config(
-            training_set=config.tokenized_dataset,
-            validation_sets=speedrun_paloma_tokenized(tokenizer=(get_tokenizer_for_train(config.tokenized_dataset))),
+            training_set=tokenized_dataset,
+            validation_sets=speedrun_paloma_tokenized(tokenizer=(get_tokenizer_for_train(tokenized_dataset))),
             # TODO: when should we update this
         )
     else:
         pretraining_data = add_validation_sets_to_mixture(
-            config.tokenized_dataset,
-            speedrun_paloma_tokenized(tokenizer=(get_tokenizer_for_train(config.tokenized_dataset))),
+            tokenized_dataset,
+            speedrun_paloma_tokenized(tokenizer=(get_tokenizer_for_train(tokenized_dataset))),
         )
 
     train_step = default_train(
@@ -381,6 +390,7 @@ def default_speedrun(
         tags=run_tags,
         eval_harness_tasks=None,
         override_output_path=override_output_path,
+        use_default_validation=False,
     )
 
     # Extract wandb info from train step
