@@ -10,7 +10,7 @@ import hashlib
 import logging
 import os
 from collections.abc import Callable
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, ParamSpec
 
 import cloudpickle
 import fsspec
@@ -27,9 +27,10 @@ from marin.execution.executor_step_status import (
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+P = ParamSpec("P")
 
 
-class disk_cache(Generic[T]):
+class disk_cache(Generic[P, T]):
     """Decorator that caches function results to disk via a status file.
 
     Supports bare decoration, decoration with arguments, and direct wrapping::
@@ -58,7 +59,7 @@ class disk_cache(Generic[T]):
 
     def __init__(
         self,
-        fn: Callable[..., T] | None = None,
+        fn: Callable[P, T] | None = None,
         *,
         output_path: str | None = None,
         save_fn: Callable[[T, str], None] | None = None,
@@ -67,25 +68,26 @@ class disk_cache(Generic[T]):
         self._output_path = output_path
         self._save_fn = save_fn
         self._load_fn = load_fn
-        self._fn: Callable[..., T] | None = None
+        self._fn: Callable[P, T] | None = None
 
+        # When used as a bare decorator (@disk_cache without parentheses), Python passes
+        # the decorated function as `fn` directly to __init__. Bind it immediately.
         if callable(fn):
             self._fn = fn
             functools.update_wrapper(self, fn)
 
-    # TODO: add ParamSpec
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T:
         if self._fn is None:
             # @disk_cache(...) — receiving the function to wrap
-            if len(args) == 1 and callable(args[0]) and not kwargs:
-                self._fn = args[0]  # type: ignore[bad-assignment]
+            if len(args) == 1 and callable(args[0]) and not kwargs:  # pyrefly: ignore[unsupported-operation]
+                self._fn = args[0]  # type: ignore[assignment]
                 functools.update_wrapper(self, self._fn)
-                return self
+                return self  # type: ignore[return-value]
             raise TypeError("disk_cache() expected a callable")
 
         return self._execute(*args, **kwargs)
 
-    def _execute(self, *args, **kwargs):
+    def _execute(self, *args: P.args, **kwargs: P.kwargs) -> T:
         def fingerprint_args(*args, **kwargs) -> str:
             """Create a deterministic fingerprint for args and kwargs."""
             # Include the function name to avoid collisions across different functions.
@@ -100,7 +102,7 @@ class disk_cache(Generic[T]):
             if output_path is None:
                 output_path = os.environ["MARIN_PREFIX"] + f"/disk_cache_{args_fingerprint}"
 
-        def load_result():
+        def load_result() -> T:
             assert output_path is not None
             if self._load_fn is not None:
                 return self._load_fn(output_path)
