@@ -33,7 +33,6 @@ the ThreadContainer.
 from __future__ import annotations
 
 import logging
-import socket
 import subprocess
 import uuid
 from collections.abc import Callable
@@ -45,9 +44,11 @@ from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
     CommandResult,
+    Labels,
     SliceStatus,
     WorkerStatus,
     default_stop_all,
+    find_free_port,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
@@ -60,13 +61,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Local Providers (in-process implementations for testing)
 # ============================================================================
-
-
-def find_free_port() -> int:
-    """Find an available port."""
-    with socket.socket() as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
 
 class _LocalBundleProvider:
@@ -335,7 +329,7 @@ class LocalSliceHandle:
 
     @property
     def scale_group(self) -> str:
-        return self._labels.get(f"{self._label_prefix}-scale-group", "")
+        return self._labels.get(Labels(self._label_prefix).iris_scale_group, "")
 
     @property
     def labels(self) -> dict[str, str]:
@@ -398,6 +392,7 @@ class LocalPlatform:
         gpu_count_by_group: dict[str, int] | None = None,
     ):
         self._label_prefix = label_prefix
+        self._iris_labels = Labels(label_prefix)
         self._threads = threads or ThreadContainer(name="local-platform")
         self._slices: dict[str, LocalSliceHandle] = {}
         self._vms: dict[str, _LocalStandaloneWorkerHandle] = {}
@@ -495,13 +490,13 @@ class LocalPlatform:
                 topo = get_tpu_topology(config.accelerator_variant)
                 device = tpu_device(config.accelerator_variant, count=topo.chips_per_vm)
             elif is_gpu and config.accelerator_variant:
-                sg_name = config.labels.get(f"{self._label_prefix}-scale-group", "")
+                sg_name = config.labels.get(self._iris_labels.iris_scale_group, "")
                 gpu_count = self._gpu_count_by_group.get(sg_name, 1)
                 device = gpu_device(config.accelerator_variant, count=gpu_count)
 
             # Merge worker attributes from scale group config (e.g. region, preemptible).
             # The scale group name is embedded in slice labels by prepare_slice_config().
-            sg_name = config.labels.get(f"{self._label_prefix}-scale-group", "")
+            sg_name = config.labels.get(self._iris_labels.iris_scale_group, "")
             if sg_name and sg_name in self._worker_attributes_by_group:
                 for k, v in self._worker_attributes_by_group[sg_name].items():
                     attributes.setdefault(k, v)

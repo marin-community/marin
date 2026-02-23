@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 
-from iris.cluster.platform.base import Platform, SliceHandle
+from iris.cluster.platform.base import Labels, Platform, SliceHandle
 from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
 from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
@@ -47,13 +47,30 @@ class SliceLifecycleState(StrEnum):
 
 
 class GroupAvailability(Enum):
-    """Availability state for a scale group in waterfall routing."""
+    """Availability state for a scale group in waterfall routing.
+
+    Determines whether demand is routed to this group or falls through
+    to lower-priority groups. States are checked in priority order by
+    availability() — the first matching state wins.
+    """
 
     AVAILABLE = "available"
+    """Group can accept demand and create new slices."""
+
     BACKOFF = "backoff"
+    """Recent slice creation failed; group is waiting before retrying.
+    Demand falls through to lower-priority groups during backoff."""
+
     AT_CAPACITY = "at_capacity"
+    """Group is at max_slices. Existing ready/inflight slices can still
+    serve demand, but no new slices will be created. Excess demand
+    falls through to lower-priority groups."""
+
     QUOTA_EXCEEDED = "quota_exceeded"
+    """Cloud quota exhausted. Demand falls through to lower-priority groups."""
+
     REQUESTING = "requesting"
+    """Scale-up in progress. Group accepts demand since new capacity is incoming."""
 
 
 @dataclass(frozen=True)
@@ -67,8 +84,8 @@ class AvailabilityState:
 
 DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
 DEFAULT_SCALE_DOWN_COOLDOWN = Duration.from_minutes(5)
-DEFAULT_BACKOFF_INITIAL = Duration.from_seconds(5.0)
-DEFAULT_BACKOFF_MAX = Duration.from_minutes(5)
+DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
+DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
 DEFAULT_BACKOFF_FACTOR = 2.0
 DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(5)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
@@ -101,11 +118,12 @@ def prepare_slice_config(
     The template must already have accelerator_type, accelerator_variant, and
     num_vms set directly.
     """
+    labels = Labels(label_prefix)
     config = config_pb2.SliceConfig()
     config.CopyFrom(template)
     config.name_prefix = f"{label_prefix}-{parent_config.name}"
-    config.labels[f"{label_prefix}-managed"] = "true"
-    config.labels[f"{label_prefix}-scale-group"] = parent_config.name
+    config.labels[labels.iris_managed] = "true"
+    config.labels[labels.iris_scale_group] = parent_config.name
 
     if parent_config.HasField("resources"):
         config.gpu_count = parent_config.resources.gpu_count
@@ -190,6 +208,7 @@ class ScalingGroup:
         self._config = config
         self._platform = platform
         self._label_prefix = label_prefix
+        self._labels = Labels(label_prefix)
         self._slices: dict[str, SliceState] = {}
         self._pending_scale_ups: int = 0
         self._slices_lock = threading.Lock()
@@ -320,7 +339,7 @@ class ScalingGroup:
         Uses platform.list_slices() with the managed label to find our slices.
         """
         zones = _zones_from_config(self._config)
-        labels = {f"{self._label_prefix}-scale-group": self._config.name}
+        labels = {self._labels.iris_scale_group: self._config.name}
         slice_handles = self._platform.list_slices(zones, labels)
         with self._slices_lock:
             for handle in slice_handles:
@@ -729,14 +748,14 @@ class ScalingGroup:
     def can_accept_demand(self, timestamp: Timestamp | None = None) -> bool:
         """Whether this group can accept demand for waterfall routing.
 
-        AT_CAPACITY groups are included because they have existing ready
-        slices that can serve demand. Routing demand to them keeps
-        current_demand accurate, preventing premature scale-down.
+        BACKOFF and QUOTA_EXCEEDED groups reject demand so it falls through
+        to lower-priority groups. AT_CAPACITY groups accept demand because
+        their existing ready/inflight slices can still serve it — this keeps
+        current_demand accurate and prevents premature scale-down.
         """
         return self.availability(timestamp).status in {
             GroupAvailability.AVAILABLE,
             GroupAvailability.REQUESTING,
-            GroupAvailability.BACKOFF,
             GroupAvailability.AT_CAPACITY,
         }
 
