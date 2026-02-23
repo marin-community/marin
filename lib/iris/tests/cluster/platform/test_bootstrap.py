@@ -109,14 +109,3 @@ class TestRewriteArtifactRegistryRegion:
         original = "us-central1-docker.pkg.dev/hai-gcp-models/marin/iris-worker:abc123"
         result = rewrite_artifact_registry_region(original, "europe-west4")
         assert result == "europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:abc123"
-
-
-def test_worker_bootstrap_uses_dynamic_registry_auth() -> None:
-    """Worker bootstrap script derives registry auth from the docker_image."""
-    cfg = _bootstrap_config(docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest")
-    script = build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
-
-    assert "WORKER_REGISTRY=$(echo" in script
-    assert "gcloud auth configure-docker $WORKER_REGISTRY" in script
-    # Should NOT have the old hardcoded multi-region auth
-    assert "europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev" not in script

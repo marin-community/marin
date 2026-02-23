@@ -5,6 +5,7 @@
 
 import os.path
 
+
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -62,7 +63,9 @@ def _get_nemotron_split_paths(split: str):
     return [_nemotron_cc_path / pattern for pattern in patterns]
 
 
-def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
+def tokenize_nemotron(
+    *, tokenizer: str | None = None, window_size_bytes: int = 10_000_000_000
+) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Nemotron CC dataset splits."""
     if tokenizer is None:
         from experiments.llama import llama3_tokenizer
@@ -81,6 +84,7 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
+                window_size_bytes=window_size_bytes,
             ),
         )
 

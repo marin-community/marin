@@ -167,9 +167,10 @@ def build_resources(
     gpu: int | None,
     cpu: int | None,
     memory: str | None,
+    disk: str | None = None,
 ) -> ResourceSpec:
     """Build ResourceSpec from CLI arguments."""
-    spec = ResourceSpec(cpu=cpu or 1, memory=memory or "8GB", disk="10GB")
+    spec = ResourceSpec(cpu=cpu or 1, memory=memory or "8GB", disk=disk or "10GB")
 
     if tpu:
         spec.device = tpu_device(tpu)
@@ -201,6 +202,7 @@ def run_iris_job(
     gpu: int | None = None,
     cpu: int | None = None,
     memory: str | None = None,
+    disk: str | None = None,
     wait: bool = True,
     job_name: str | None = None,
     replicas: int = 1,
@@ -221,13 +223,13 @@ def run_iris_job(
         Exit code: 0 for success, 1 for failure
     """
     env_vars = add_standard_env_vars(env_vars)
-    resources = build_resources(tpu, gpu, cpu, memory)
+    resources = build_resources(tpu, gpu, cpu, memory, disk)
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
-    logger.info(f"Resources: cpu={resources.cpu}, memory={resources.memory}")
+    logger.info(f"Resources: cpu={resources.cpu}, memory={resources.memory}, disk={resources.disk}")
     if resources.device and resources.device.HasField("tpu"):
         logger.info(f"TPU: {resources.device.tpu.variant}")
 
@@ -294,7 +296,7 @@ def _submit_and_wait_job(
             logger.info(f"Job completed with state: {status.state}")
             return 0 if status.state == cluster_pb2.JOB_STATE_SUCCEEDED else 1
         except JobFailedError as e:
-            logger.info(f"Job failed with state: {e.status.state}")
+            logger.error(f"Job failed: {e}")
             return 1
     except BaseException:
         if terminate_on_exit:
@@ -345,6 +347,7 @@ Examples:
 @click.option("--gpu", type=int, help="Number of GPUs to request")
 @click.option("--cpu", type=int, help="Number of CPUs to request (default: 1)")
 @click.option("--memory", type=str, help="Memory size to request (e.g., 8GB, 512MB; default: 8GB)")
+@click.option("--disk", type=str, help="Ephemeral disk size to request (e.g., 64GB, 1TB; default: 10GB)")
 @click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
 @click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
 @click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
@@ -370,6 +373,7 @@ def run(
     gpu: int | None,
     cpu: int | None,
     memory: str | None,
+    disk: str | None,
     no_wait: bool,
     job_name: str | None,
     replicas: int,
@@ -397,6 +401,7 @@ def run(
         gpu=gpu,
         cpu=cpu,
         memory=memory,
+        disk=disk,
         wait=not no_wait,
         job_name=job_name,
         replicas=replicas,

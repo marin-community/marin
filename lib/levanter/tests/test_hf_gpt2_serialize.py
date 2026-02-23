@@ -27,21 +27,25 @@ from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.optim import AdamConfig
 from levanter.utils.tree_utils import inference_mode
-from test_utils import arrays_only, skip_if_no_torch
+from test_utils import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
 from tests.test_utils import use_test_mesh
 
+TEST_GPT2_MODEL_ID = "sshleifer/tiny-gpt2"
+
 
 @skip_if_no_torch
+@skip_if_hf_model_not_accessible(TEST_GPT2_MODEL_ID)
 def test_hf_gpt2_roundtrip():
-    _roundtrip_compare_gpt2_checkpoint("gpt2", None)
+    _roundtrip_compare_gpt2_checkpoint(TEST_GPT2_MODEL_ID, None)
 
 
 @skip_if_no_torch
+@skip_if_hf_model_not_accessible(TEST_GPT2_MODEL_ID)
 def test_hf_gpt2_roundtrip_fa():
-    hf_config = HfGpt2Config.from_pretrained("gpt2")
+    hf_config = HfGpt2Config.from_pretrained(TEST_GPT2_MODEL_ID)
     config = Gpt2Config.from_hf_config(hf_config)
     config = dataclasses.replace(config, use_flash_attention=True, flash_attention_block_size=128)
-    _roundtrip_compare_gpt2_checkpoint("gpt2", None, config=config)
+    _roundtrip_compare_gpt2_checkpoint(TEST_GPT2_MODEL_ID, None, config=config)
 
 
 # TODO: gotta figure out why this regressed
@@ -111,23 +115,27 @@ def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2
 
 
 @skip_if_no_torch
+@skip_if_hf_model_not_accessible(TEST_GPT2_MODEL_ID)
 def test_hf_gradient():
-    _compare_gpt2_checkpoint_gradients("gpt2", None)
+    _compare_gpt2_checkpoint_gradients(TEST_GPT2_MODEL_ID, None)
 
 
 @skip_if_no_torch
+@skip_if_hf_model_not_accessible(TEST_GPT2_MODEL_ID)
 def test_hf_gradient_fa():
-    hf_config = HfGpt2Config.from_pretrained("gpt2")
+    hf_config = HfGpt2Config.from_pretrained(TEST_GPT2_MODEL_ID)
     config = Gpt2Config.from_hf_config(hf_config)
     # keep block size small to make sure we test the tiling behavior
     config = dataclasses.replace(config, use_flash_attention=True, flash_attention_block_size=128)
-    _compare_gpt2_checkpoint_gradients("gpt2", None, config=config)
+    _compare_gpt2_checkpoint_gradients(TEST_GPT2_MODEL_ID, None, config=config)
 
 
 def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2Config] = None):
     import torch
 
-    config = config or Gpt2Config()
+    if config is None:
+        hf_config = HfGpt2Config.from_pretrained(model_id, revision=revision)
+        config = Gpt2Config.from_hf_config(hf_config)
     converter = config.hf_checkpoint_converter()
     torch_model: HfGpt2LMHeadModel = AutoModelForCausalLM.from_pretrained(model_id, revision=revision)
     torch_model.eval()
@@ -203,7 +211,7 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
 
 
 def test_hf_save_to_fs_spec():
-    config = Gpt2Config(hidden_dim=32, num_heads=2, num_layers=2)
+    config = Gpt2Config(hidden_dim=16, num_heads=1, num_layers=1)
     converter = HFCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
 
     with use_test_mesh():

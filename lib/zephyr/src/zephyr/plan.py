@@ -86,7 +86,7 @@ class Write:
     # Writer-specific parameters
     levanter_metadata: dict | None = None
     schema: Any = None  # For parquet
-    batch_size: int = 1000  # For parquet
+    batch_size: int = 1000  # For parquet and levanter_cache
 
 
 @dataclass
@@ -776,7 +776,7 @@ def run_stage(
                 result = write_parquet_file(stream, output_path, op.schema, op.batch_size)["path"]
             elif op.writer_type == "levanter_cache":
                 metadata = op.levanter_metadata if op.levanter_metadata is not None else {}
-                result = write_levanter_cache(stream, output_path, metadata)["path"]
+                result = write_levanter_cache(stream, output_path, metadata, op.batch_size)["path"]
             elif op.writer_type == "binary":
                 result = write_binary_file(stream, output_path)["path"]
             elif op.writer_type == "vortex":

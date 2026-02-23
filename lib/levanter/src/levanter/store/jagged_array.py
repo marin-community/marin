@@ -3,25 +3,56 @@
 
 import asyncio
 import os
+import threading
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-import fsspec.core
-import jax.experimental.array_serialization.serialization as ser
 import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 
+from levanter.tensorstore_serialization import build_kvstore_spec
 from levanter.utils import fsspec_utils
 from levanter.utils.thread_utils import future_from_value
 
 
 CACHE_BYTES_LIMIT = int(os.getenv("LEVANTER_TS_CACHE_LIMIT", "1000000000"))
 
+
+def _parse_recheck_cached_data(value: str) -> ts.RecheckCacheOption:
+    normalized = value.strip().lower()
+    if normalized in {"true", "false"}:
+        return normalized == "true"
+    if normalized == "open":
+        return "open"
+    try:
+        return float(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            "LEVANTER_TS_RECHECK_CACHED_DATA must be true, false, open, or a float value in seconds"
+        ) from exc
+
+
+RECHECK_CACHED_DATA = _parse_recheck_cached_data(os.getenv("LEVANTER_TS_RECHECK_CACHED_DATA", "open"))
+
 # zarr suggests 1MB chunk size
 # at 4 bytes this is 256k elements
 DEFAULT_CHUNK_SIZE = 256 * 1024
 DEFAULT_WRITE_CHUNK_SIZE = DEFAULT_CHUNK_SIZE * 512
+
+
+_READ_CONTEXT: ts.Context | None = None
+_READ_CONTEXT_LOCK = threading.Lock()
+_READ_CACHE_SETTINGS = {"total_bytes_limit": CACHE_BYTES_LIMIT}
+
+
+def _read_context() -> ts.Context:
+    global _READ_CONTEXT
+    with _READ_CONTEXT_LOCK:
+        if _READ_CONTEXT is None:
+            # TensorStore only shares cache_pool entries across stores that share a Context.
+            _READ_CONTEXT = ts.Context({"cache_pool": _READ_CACHE_SETTINGS})
+    return _READ_CONTEXT
 
 
 @dataclass
@@ -110,18 +141,14 @@ class JaggedArrayStore:
         path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False
     ) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
-        cache_settings = {"total_bytes_limit": CACHE_BYTES_LIMIT} if cache_metadata and mode == "r" else {}
-        offsets = _ts_open_async(offset_path, jnp.int64, [1], mode=mode, cache_settings=cache_settings)
+        offsets = _ts_open_async(offset_path, jnp.int64, [1], mode=mode)
 
         data_path = _extend_path(path, "data")
-        # not generally worth this
-        data = _ts_open_async(data_path, dtype, [0], mode=mode, cache_settings={})
+        data = _ts_open_async(data_path, dtype, [0], mode=mode)
 
         if item_rank > 1:
             shape_path = _extend_path(path, "shapes")
-            shapes = _ts_open_async(
-                shape_path, jnp.int64, [0, item_rank - 1], mode=mode, cache_settings=cache_settings
-            )
+            shapes = _ts_open_async(shape_path, jnp.int64, [0, item_rank - 1], mode=mode)
         else:
             shapes = None
 
@@ -132,15 +159,14 @@ class JaggedArrayStore:
     @staticmethod
     def open(path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
-        cache_settings = {"total_bytes_limit": CACHE_BYTES_LIMIT} if cache_metadata and mode == "r" else {}
-        offsets = _ts_open_sync(offset_path, jnp.int64, [1], mode=mode, cache_settings=cache_settings)
+        offsets = _ts_open_sync(offset_path, jnp.int64, [1], mode=mode)
 
         data_path = _extend_path(path, "data")
-        data = _ts_open_sync(data_path, dtype, [0], mode=mode, cache_settings=cache_settings)
+        data = _ts_open_sync(data_path, dtype, [0], mode=mode)
 
         if item_rank > 1:
             shape_path = _extend_path(path, "shapes")
-            shapes = _ts_open_sync(shape_path, jnp.int64, [0, item_rank - 1], mode=mode, cache_settings=cache_settings)
+            shapes = _ts_open_sync(shape_path, jnp.int64, [0, item_rank - 1], mode=mode)
         else:
             shapes = None
 
@@ -536,14 +562,24 @@ def _unshaped_spec(store: ts.TensorStore) -> ts.Spec:
     return spec
 
 
-def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_settings: dict):
+def _ts_open_kwargs(mode: str) -> dict:
+    if mode == "r":
+        return {
+            "context": _read_context(),
+            "recheck_cached_data": RECHECK_CACHED_DATA,
+        }
+    return {"context": ts.Context({"cache_pool": {}})}
+
+
+def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     spec = _get_spec(path, shape)
-    mode = _mode_to_open_mode(mode)
+    mode_config = _mode_to_open_mode(mode)
+    open_kwargs = _ts_open_kwargs(mode)
 
     # Basically, we want to load the existing shape metadata if it exists
-    if not mode.get("delete_existing", False):
+    if not mode_config.get("delete_existing", False):
         try:
-            return ts.open(spec, context=ts.Context({"cache_pool": cache_settings}), **mode).result()
+            return ts.open(spec, **open_kwargs, **mode_config).result()
         except FileNotFoundError:
             pass
         except ValueError:
@@ -558,13 +594,13 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_s
             spec,
             dtype=jnp.dtype(dtype).name,
             shape=[2**54, *shape[1:]],
-            context=ts.Context({"cache_pool": cache_settings}),
+            **open_kwargs,
             # chunk_layout=ts.ChunkLayout(
             #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
             #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
             # ),
             # compression={"codec": "zstd", "compression_level": 5},
-            **mode,
+            **mode_config,
         ).result()
     except ValueError as e:
         if "NOT_FOUND" in str(e):
@@ -573,14 +609,15 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_s
             raise e
 
 
-async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_settings: dict):
+async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     spec = _get_spec(path, shape)
-    mode = _mode_to_open_mode(mode)
+    mode_config = _mode_to_open_mode(mode)
+    open_kwargs = _ts_open_kwargs(mode)
 
     # Basically, we want to load the existing shape metadata if it exists
-    if not mode.get("delete_existing", False):
+    if not mode_config.get("delete_existing", False):
         try:
-            return await ts.open(spec, context=ts.Context({"cache_pool": cache_settings}), **mode)
+            return await ts.open(spec, **open_kwargs, **mode_config)
         except FileNotFoundError:
             pass
         except ValueError:
@@ -592,13 +629,13 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode, 
         spec,
         dtype=jnp.dtype(dtype).name,
         shape=[2**54, *shape[1:]],
-        context=ts.Context({"cache_pool": cache_settings}),
+        **open_kwargs,
         # chunk_layout=ts.ChunkLayout(
         #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
         #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
         # ),
         # compression={"codec": "zstd", "compression_level": 5},
-        **mode,
+        **mode_config,
     )
 
 
@@ -609,13 +646,8 @@ def _get_spec(path, shape):
         random_name = str(uuid.uuid4())
         spec = ts.Spec({"driver": "zarr", "kvstore": f"memory://{random_name}"})
     else:
-        # make path absolute if it's not already
-        protocol, _ = fsspec.core.split_protocol(path)
-        if protocol is None:
-            path = os.path.abspath(path)
-        spec = ser.get_tensorstore_spec(path, ocdbt=False)
-        store = spec.get("kvstore")
-        spec = {"driver": "zarr3", "kvstore": store}
+        kvstore = build_kvstore_spec(path)
+        spec = {"driver": "zarr3", "kvstore": kvstore}
         fsspec_utils.mkdirs(os.path.dirname(path))
         spec["metadata"] = {
             "chunk_grid": {

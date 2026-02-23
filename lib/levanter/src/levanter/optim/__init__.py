@@ -24,6 +24,7 @@ __all__ = [
     "MuonConfig",
     "MuonHConfig",
     "ScaleByMuonState",
+    "GrugMuonConfig",
     # rmsprop
     "RMSPropMomentumConfig",
     "ScaleByRMSPropMomState",
@@ -47,6 +48,7 @@ from .adamh import AdamHConfig
 from .kron import KronConfig
 from .mars import MarsConfig, ScaleByMarsState
 from .muon import MuonConfig, ScaleByMuonState
+from .grugmuon import GrugMuonConfig
 from .muonh import MuonHConfig
 from .rmsprop import RMSPropMomentumConfig, ScaleByRMSPropMomState
 from .scion import ScaleByScionState, ScionConfig

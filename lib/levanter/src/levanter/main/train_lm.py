@@ -19,6 +19,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
 from levanter.data.mixture import MixtureDataset
@@ -164,6 +165,7 @@ def main(config: TrainLmConfig):
             config.trainer.batch_schedule,
             key=data_key,
         )
+        install_tensorstore_metrics_hook_if_enabled(trainer)
 
         # Get the tagged evaluation datasets
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)

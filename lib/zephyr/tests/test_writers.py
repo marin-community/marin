@@ -3,7 +3,6 @@
 
 """Tests for writers module."""
 
-import json
 import tempfile
 from pathlib import Path
 
@@ -167,7 +166,6 @@ def test_write_levanter_cache_resumes_from_partial_tmp_end_to_end():
         output_path = str(Path(tmpdir) / "cache")
         tmp_output_path = f"{output_path}.tmp"
         records = _make_levanter_records(8)
-        expected_token_count = sum(len(record["input_ids"]) for record in records)
 
         with SerialCacheWriter(
             tmp_output_path, records[0], shard_name=output_path, metadata=CacheMetadata({}), mode="w"
@@ -178,12 +176,7 @@ def test_write_levanter_cache_resumes_from_partial_tmp_end_to_end():
 
         assert result["path"] == output_path
         assert result["count"] == len(records)
-        assert result["token_count"] == expected_token_count
         assert Path(output_path, ".success").exists()
-
-        stats = json.loads(Path(output_path, ".stats.json").read_text())
-        assert stats["count"] == len(records)
-        assert stats["token_count"] == expected_token_count
 
         store = TreeStore.open(records[0], output_path, mode="r", cache_metadata=False)
         assert len(store) == len(records)

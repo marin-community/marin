@@ -309,9 +309,6 @@ class ResourceConfig:
     convenience builders like `with_tpu(..., slice_count=4)` can carry the
     replica count alongside the resource spec.
 
-    `max_concurrency` controls how many method calls can run in parallel on
-    the actor (Ray's max_concurrency). Use >1 for actors that need to handle
-    concurrent calls, e.g. coordinators that block while workers call back.
     """
 
     cpu: int = 1
@@ -321,7 +318,6 @@ class ResourceConfig:
     preemptible: bool = True
     regions: Sequence[str] | None = None
     replicas: int = 1
-    max_concurrency: int = 1
 
     def chip_count(self) -> int:
         """Total accelerator chips across all replicas."""
@@ -354,6 +350,25 @@ class ResourceConfig:
     @staticmethod
     def with_cpu(**kwargs: Any) -> ResourceConfig:
         return ResourceConfig(device=CpuConfig(), **kwargs)
+
+
+@dataclass
+class ActorConfig:
+    """Actor lifecycle and scheduling policy (not physical resources).
+
+    `max_concurrency` controls how many method calls can run in parallel on
+    the actor (Ray's max_concurrency). Use >1 for actors that need to handle
+    concurrent calls, e.g. coordinators that block while workers call back.
+
+    `max_restarts` overrides the backend default for automatic actor restarts.
+    Set to 0 for actors that must NOT auto-restart on preemption because they
+    require remote initialization beyond __init__.
+    """
+
+    max_concurrency: int = 1
+    # TODO: max_restarts is conceptually a job-level property, revisit when we
+    # drop Ray support.
+    max_restarts: int | None = None
 
 
 # ---------------------------------------------------------------------------

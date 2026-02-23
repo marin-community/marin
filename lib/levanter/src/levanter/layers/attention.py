@@ -14,7 +14,6 @@ from typing import Literal, Optional, Union, cast, overload
 import equinox as eqx
 import jax
 import jax.random as jrandom
-from equinox import Partial
 from jax import numpy as jnp
 
 from ..inference.utils import is_valid
@@ -63,6 +62,14 @@ class AttentionBackend(StrEnum):
 
 
 DEFAULT_SPLASH_BLOCK_SIZE = 512
+_SPLASH_FALLBACK_WARNINGS_EMITTED: set[str] = set()
+
+
+def _warn_splash_fallback_once(message: str) -> None:
+    if message in _SPLASH_FALLBACK_WARNINGS_EMITTED:
+        return
+    _SPLASH_FALLBACK_WARNINGS_EMITTED.add(message)
+    warnings.warn(message, stacklevel=3)
 
 
 def default_attention_type() -> AttentionBackend:
@@ -1186,13 +1193,13 @@ def _try_tpu_splash_attention(
     if dropout != 0.0:
         if force_flash:
             raise NotImplementedError("Splash attention does not support dropout.")
-        warnings.warn("Splash attention does not support. Falling back to the reference implementation.")
+        _warn_splash_fallback_once("Splash attention does not support dropout. Falling back to the reference.")
         return None
 
     if bias is not None:
         if force_flash:
             raise NotImplementedError("Splash attention does not support bias.")
-        warnings.warn("Splash attention does not support bias. Falling back to the reference implementation.")
+        _warn_splash_fallback_once("Splash attention does not support bias. Falling back to the reference.")
         return None
 
     try:
@@ -1220,16 +1227,17 @@ def _try_tpu_splash_attention(
             raise
         if force_flash:
             raise ImportError("Could not import splash attention. You need to update your JAX to at least 0.7.2.")
-        warnings.warn(
+        _warn_splash_fallback_once(
             "Could not import splash attention. You need to update your JAX to at least 0.7.2. "
-            "Falling back to the reference implementation."
+            "Falling back to the reference implementation.",
         )
         return None
     except NotImplementedError as e:
         message = str(e)
         if force_flash:
             raise NotImplementedError(f"Could not use splash attention: {message}")
-        warnings.warn(f"Could not use splash attention: {message}. Falling back to the reference")
+        logger.info("Could not use splash attention. Falling back to the reference implementation: %s", message)
+        _warn_splash_fallback_once("Could not use splash attention. Falling back to the reference implementation.")
         return None
 
 
@@ -2049,6 +2057,11 @@ def _do_tpu_ragged_paged_attention(
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
 ) -> NamedArray:
+    if tpu_ragged_paged_attention is None:
+        msg = "TPU ragged paged attention kernel is unavailable."
+        raise RuntimeError(msg)
+    kernel = tpu_ragged_paged_attention
+
     # Usual shardmap dance
     # Ensure last dimension (head_size) is a multiple of 128 for Pallas kernels
     orig_head_size = q.axis_size("head_size")
@@ -2082,8 +2095,30 @@ def _do_tpu_ragged_paged_attention(
     page_indices = hax.where(~is_valid(page_indices), 0, page_indices)
     kv_lens = hax.where(~is_valid(kv_lens), 0, kv_lens)
 
+    sm_scale_array = jnp.asarray(sm_scale, dtype=q_flat.array.dtype)
+
+    def _rpa_with_runtime_scale(
+        q_arg: jax.Array,
+        kv_pages_arg: jax.Array,
+        kv_lens_arg: jax.Array,
+        page_indices_arg: jax.Array,
+        cu_q_lens_arg: jax.Array,
+        num_seqs_arg: jax.Array,
+        sm_scale_arg: jax.Array,
+    ) -> jax.Array:
+        return kernel(
+            q_arg,
+            kv_pages_arg,
+            kv_lens_arg,
+            page_indices_arg,
+            cu_q_lens_arg,
+            num_seqs_arg,
+            sm_scale=sm_scale_arg,
+            soft_cap=soft_cap,
+        )
+
     o = shard_map(
-        Partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
+        _rpa_with_runtime_scale,
         mesh=jax.sharding.get_abstract_mesh(),
         in_specs=(
             haliax.partitioning.pspec_for_axis(q_flat.axes),
@@ -2091,8 +2126,8 @@ def _do_tpu_ragged_paged_attention(
             haliax.partitioning.pspec_for_axis(kv_lens.axes),
             haliax.partitioning.pspec_for_axis(page_indices.axes),
             haliax.partitioning.pspec_for_axis(cu_q_lens.axes),
-            # haliax.partitioning.pspec_for_axis(num_seqs)
             PartitionSpec(),  # num_seqs
+            PartitionSpec(),  # sm_scale
         ),
         out_specs=pspec_for_axis(
             (
@@ -2109,6 +2144,7 @@ def _do_tpu_ragged_paged_attention(
         page_indices.array,
         cu_q_lens.array,
         this_num_seqs,
+        sm_scale_array,
     )
 
     out = hax.named(
