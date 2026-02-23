@@ -520,7 +520,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     ),
     "AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories": InstructionDatasetConfig(
         hf_dataset_id="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
-        revision="de3bb10",
+        revision="d4c902a",
         adapter=multi_turn_adapter(),
         metadata_columns=["instance_id", "resolved", "model", "traj_id"],
         name="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
