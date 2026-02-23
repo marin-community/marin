@@ -3,10 +3,14 @@
   "checkpoint_id": "3745e053c711",
   "strategy": "manual-commit",
   "branch": "rav-shrink-pool",
-  "checkpoints_count": 3,
+  "checkpoints_count": 8,
   "files_touched": [
+    "experiments/train_test_overlap/aggregate_total.py",
+    "lib/levanter/src/levanter/store/cache.py",
+    "lib/zephyr/src/zephyr/cli.py",
     "lib/zephyr/src/zephyr/execution.py",
-    "lib/zephyr/tests/test_execution.py"
+    "lib/zephyr/tests/test_execution.py",
+    "tests/processing/classification/deduplication/test_connected_components.py"
   ],
   "sessions": [
     {
@@ -22,13 +26,20 @@
       "context": "/37/45e053c711/1/context.md",
       "content_hash": "/37/45e053c711/1/content_hash.txt",
       "prompt": "/37/45e053c711/1/prompt.txt"
+    },
+    {
+      "metadata": "/37/45e053c711/2/metadata.json",
+      "transcript": "/37/45e053c711/2/full.jsonl",
+      "context": "/37/45e053c711/2/context.md",
+      "content_hash": "/37/45e053c711/2/content_hash.txt",
+      "prompt": "/37/45e053c711/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 45,
-    "cache_creation_tokens": 108693,
-    "cache_read_tokens": 2177414,
-    "output_tokens": 2292,
-    "api_call_count": 33
+    "input_tokens": 171,
+    "cache_creation_tokens": 323937,
+    "cache_read_tokens": 12902911,
+    "output_tokens": 10428,
+    "api_call_count": 125
   }
 }
