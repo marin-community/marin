@@ -1853,3 +1853,85 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - Re-attempt Macro Move G once TPU infra is stable (reserved dev TPU or healthy Ray queue), then immediately capture forward/backward `shard_map/pallas_call` deltas and exp-op reduction evidence.
   - If infra remains unstable, pivot next validated kernel iteration to **Macro Move H** with stacked shared-RHS matmuls after securing a stable execution lane.
+
+### Iteration 36 - Macro Move G / exp-diff centered outer-product (reverted, low-impact)
+
+- Date: 2026-02-23T07:09:37Z
+- Commit: none (failed attempt)
+- Loop session/local index: `6/10`
+- Starting commit: `5015bcbb9f5ac1f16f95f68c5b4eed1de592baff`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map`/custom-call-equivalent bucket: `78.098 ms` (dominant).
+  - secondary buckets: `fusion 45.618 ms`, `all-gather 20.158 ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` (`+10-20%`, medium numerical/compile risk).
+  2. **Macro Move H**: shared-RHS matmul batching (`+8-18%`, medium integration/VMEM risk).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) in recurrent/backward (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: add `_exp_diff_and_mask_from_g` and apply it across train-path chunk prepare/recurrent/backward so fast path uses O(Ct) vector exponentials.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Implemented `_exp_diff_and_mask_from_g` and replaced train-path `exp_diff` construction in prepare/recurrent/fused-forward/backward chunk helpers.
+  - Initial TPU compile failed (`Mosaic failed to legalize scf.if` from conditionalized fallback).
+  - Follow-up branch-free/mode-gated variants produced TPU correctness regressions (`use_flash=True` parity failures / NaNs).
+  - Reverted all speculative kernel edits; tree returned to `5015bcbb9f5ac1f16f95f68c5b4eed1de592baff`.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (successful run on reverted tree):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+  - Later re-validation attempt after profiling (non-blocking to this iteration result) hit infra contention:
+    - same `dev-tpu-test` command failed with `ABORTED: The TPU is already in use...` and stale `/tmp/libtpu_lockfile` not removable (`Operation not permitted`).
+    - Ray fallback submission `ray-run-calvinxu-levanter-20260223-070225` stayed `PENDING`; stop attempt timed out:
+      - `uv run scripts/ray/cluster.py --cluster us-east5-a stop-job ray-run-calvinxu-levanter-20260223-070225`
+      - `subprocess.TimeoutExpired ... ray job stop ... after 60 seconds`.
+
+- Profile runs:
+  - Dev TPU profile attempt (failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter6_macroG_failcheck --no-sync`
+    - failure: `FileNotFoundError` writing executor info under `gs://marin-us-east5-a/...`.
+  - Ray fallback profile (completed):
+    - submit: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter6_macroG_failcheck_ray --no-wait`
+    - job: `ray-run-calvinxu-bash-20260223-065128`
+    - wait: `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-east5-a ray-run-calvinxu-bash-20260223-065128 --show-logs --tail 400`
+    - status: `SUCCEEDED`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter6_macroG_failcheck_ray_130m_ch128_seg16_20-bf859f`
+  - W&B artifact: `run-gdn_loop_iter6_macroG_failcheck_ray_130m_ch128_seg16_20-bf859f-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_loop_iter6_macroG_failcheck_ray_130m_ch128_seg16_20-bf859f/plugins/profile/2026_02_22_22_59_10/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`):
+  - Dominant train-path bucket unchanged:
+    - `shard_map`: `78.098 ms -> 78.094 ms` (`-0.01%`).
+  - Other top buckets effectively flat:
+    - `fusion`: `45.618 ms -> 45.585 ms` (`-0.07%`).
+    - `all-gather`: `20.158 ms -> 20.097 ms` (`-0.30%`).
+  - Event volume unchanged (`11761 -> 11762` on TPU:0 XLA Ops thread).
+  - Forward/backward closed-call `shard_map/pallas_call` separation is unavailable in this trace export (only numeric `shard_map.*` labels, no stable source-level `closed_call` tags).
+
+- MFU/throughput delta (vs baseline `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.787594 -> 5.751907` (`-0.62%`).
+  - `throughput/tokens_per_second`: `187227.57 -> 186073.10` (`-0.62%`).
+  - `throughput/duration`: `0.175017s -> 0.176103s` (`+0.62%`).
+  - Vs governance champion (`5.748507`): `+0.06%` (below promotion gate `+0.250%`).
+
+- Macro G exp-op reduction note:
+  - No exp-op reduction measured on the completed profiled run; Macro G kernel edits were reverted before final profiling, and the resulting trace remained baseline-equivalent in dominant buckets.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: unavailable from this Perfetto export due missing source-level closed-call labels.
+    - Train-path bucket deltas: `shard_map -0.01%`, `fusion -0.07%`, `all-gather -0.30%`.
+    - `throughput/mfu -0.62%`, `throughput/tokens_per_second -0.62%`, `throughput/duration +0.62%`.
+    - Macro G exp-op reduction: not observed on final profiled run because candidate edits were reverted.
+  - Governance:
+    - MFU gain `<3%` with unchanged dominant hotspot family (`shard_map/custom-call`), and end-to-end regression vs baseline; attempt marked **low-impact failed** and kernel changes reverted.
+
+- Assessment: **failed attempt / low impact**. Macro G implementation attempts were not robust (compile + correctness regressions), and the completed profile on reverted state showed no dominant-hotspot movement with slight end-to-end regression.
+- Next bold hypothesis: escalate to **Macro Move H** (shared-RHS matmul batching for `QK/KKT` and `inter/v_prime`) with explicit BF16-input/FP32-accum `dot_general` policy and train-path-only focus; if that still leaves `shard_map` unchanged, jump to **Macro Move E** V-tiling.
