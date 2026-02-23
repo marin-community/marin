@@ -220,7 +220,6 @@ unified_0_6b_train = SimpleTrainConfig(
     lr_schedule="cosine",
     weight_decay=0.1,
     max_grad_norm=1.0,
-    vlm_mc_eval_benchmarks=VLM_EVAL_BENCHMARKS,
 )
 
 unified_1_7b_train = SimpleTrainConfig(
@@ -232,7 +231,6 @@ unified_1_7b_train = SimpleTrainConfig(
     lr_schedule="cosine",
     weight_decay=0.1,
     max_grad_norm=1.0,
-    vlm_mc_eval_benchmarks=VLM_EVAL_BENCHMARKS,
 )
 
 unified_4b_train = SimpleTrainConfig(
@@ -244,7 +242,6 @@ unified_4b_train = SimpleTrainConfig(
     lr_schedule="cosine",
     weight_decay=0.1,
     max_grad_norm=1.0,
-    vlm_mc_eval_benchmarks=VLM_EVAL_BENCHMARKS,
 )
 
 

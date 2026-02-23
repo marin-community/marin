@@ -258,8 +258,6 @@ def _demo_train_config(learning_rate: float = 3e-4) -> SimpleTrainConfig:
         max_grad_norm=1.0,
         per_device_parallelism=4,
         steps_per_eval=500,
-        vlm_mc_eval_benchmarks=VLM_EVAL_BENCHMARKS,
-        vlm_mc_eval_steps=500,
     )
 
 
