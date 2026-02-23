@@ -366,6 +366,95 @@ def test_chunk_streaming_low_memory(tmp_path):
     assert list(shard) == [0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24]
 
 
+def test_wait_for_stage_fails_when_all_workers_die(tmp_path):
+    """When all registered workers become dead/failed, _wait_for_stage raises
+    after the no_workers_timeout instead of waiting forever."""
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import Shard, ShardTask, WorkerState, ZephyrCoordinator, ZephyrWorkerError
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord.set_shared_data({})
+    coord._no_workers_timeout = 0.5  # short timeout for test
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+
+    # Register 2 workers
+    coord.register_worker("worker-0", MagicMock())
+    coord.register_worker("worker-1", MagicMock())
+
+    # Kill all workers via heartbeat timeout
+    coord._last_seen["worker-0"] = 0.0
+    coord._last_seen["worker-1"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+
+    assert coord._worker_states["worker-0"] == WorkerState.FAILED
+    assert coord._worker_states["worker-1"] == WorkerState.FAILED
+
+    # _wait_for_stage should raise after the dead timer expires
+    with pytest.raises(ZephyrWorkerError, match="No alive workers"):
+        coord._wait_for_stage()
+
+
+def test_wait_for_stage_resets_dead_timer_on_recovery(tmp_path):
+    """When a worker recovers (re-registers) after all workers died,
+    the dead timer resets and execution can continue."""
+    import threading
+
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import Shard, ShardTask, TaskResult, WorkerState, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord.set_shared_data({})
+    coord._no_workers_timeout = 2.0
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+
+    # Register and kill a worker
+    coord.register_worker("worker-0", MagicMock())
+    coord._last_seen["worker-0"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+    assert coord._worker_states["worker-0"] == WorkerState.FAILED
+
+    # In a background thread, re-register the worker and complete the task
+    # after a short delay (simulating recovery before timeout expires)
+    def recover_and_complete():
+        time.sleep(0.3)
+        coord.register_worker("worker-0", MagicMock())
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        _task, attempt, _config = pulled
+        coord.report_result("worker-0", 0, attempt, TaskResult(chunks=[]))
+
+    t = threading.Thread(target=recover_and_complete)
+    t.start()
+
+    # _wait_for_stage should succeed (worker recovers before timeout)
+    coord._wait_for_stage()
+    t.join(timeout=5.0)
+
+    assert coord._completed_shards == 1
+
+
 def test_fresh_actors_per_execute(fray_client, tmp_path):
     """Each execute() creates and tears down its own coordinator and workers."""
     chunk_prefix = str(tmp_path / "chunks")
