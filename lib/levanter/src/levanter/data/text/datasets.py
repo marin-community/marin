@@ -540,6 +540,15 @@ def _split_into_trainval_sets(
 
 
 @dataclass(frozen=True)
+class BlockShuffleConfig:
+    """Configuration for hierarchical block shuffling."""
+
+    io_block_size: int
+    window_blocks: int
+    perm_type: Literal["feistel", "linear"] = "feistel"
+
+
+@dataclass(frozen=True)
 class LmDataConfig:
     """Unified LM data config built from components."""
 
@@ -559,9 +568,14 @@ class LmDataConfig:
 
     chat_template: str | None = None  # If set, use this template for chat datasets. Otherwise, use the tokenizer's.
 
-    shuffle: bool | int = False
-    """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
-    If you want to shuffle in eras, set this to the era length"""
+    shuffle: bool | int | BlockShuffleConfig = False
+    """Shuffle policy.
+
+    - `True`: full permutation shuffle
+    - `False`: no shuffle
+    - positive `int`: era shuffle with this era length
+    - `BlockShuffleConfig`: hierarchical block shuffle
+    """
     permutation_type: Literal["feistel", "linear"] | None = None
     """
     Type of permutation to use for shuffle.
@@ -709,21 +723,29 @@ class LmDataConfig:
         if key is None:
             key = jax.random.PRNGKey(0)
 
+        shuffle_cfg = self.shuffle
         perm_type = self.permutation_type
-        if perm_type is None and self.shuffle is not False:
+        if perm_type is None and shuffle_cfg is not False and not isinstance(shuffle_cfg, BlockShuffleConfig):
             logger.warning(
                 "Defaulting to linear permutation for shuffling. This will change to Feistel in the future."
             )
             perm_type = "linear"
 
         def shuffle_ds(ds, k):
-            if self.shuffle is True:
+            if isinstance(shuffle_cfg, BlockShuffleConfig):
+                ds = ds.block_shuffle(
+                    io_block_size=shuffle_cfg.io_block_size,
+                    window_blocks=shuffle_cfg.window_blocks,
+                    key=k,
+                    perm_type=shuffle_cfg.perm_type,
+                )
+            elif shuffle_cfg is True:
                 ds = ds.shuffle(k, perm_type=perm_type)
-            elif isinstance(self.shuffle, int) and self.shuffle > 0:
-                ds = ds.era_shuffle(self.shuffle, key=k, perm_type=perm_type)
+            elif isinstance(shuffle_cfg, int) and not isinstance(shuffle_cfg, bool) and shuffle_cfg > 0:
+                ds = ds.era_shuffle(shuffle_cfg, key=k, perm_type=perm_type)
             return ds
 
-        if self.shuffle:
+        if shuffle_cfg:
             key_iter = key_iterator(key)
             datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
 

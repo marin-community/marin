@@ -96,5 +96,3 @@ def silence_transformer_nag():
     # Often we won't call this early enough, but it helps with multiprocessing stuff
     if os.getenv("TRANSFORMERS_VERBOSITY") is None:
         os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-
-    import transformers  # noqa: F401

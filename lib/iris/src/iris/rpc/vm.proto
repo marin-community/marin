@@ -79,6 +79,7 @@ message SliceInfo {
   string scale_group = 2;
   iris.time.Timestamp created_at = 3;
   repeated VmInfo vms = 4;
+  string error_message = 5;
 }
 
 // A scaling decision

@@ -8,6 +8,8 @@ FROM python:3.11-slim
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
 LABEL org.opencontainers.image.description="Iris controller image"
 
+ARG KUBECTL_VERSION=v1.32.2
+
 # Install system dependencies (openssh-client required for gcloud TPU SSH)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -25,6 +27,12 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
     apt-get update && apt-get install -y --no-install-recommends \
     google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
+
+# Install kubectl (required for CoreWeave / Kubernetes-native deployments)
+RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+        -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && kubectl version --client
 
 # Install uv from official image
 COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
@@ -45,6 +53,9 @@ RUN mkdir -p /var/cache/iris
 # Health check endpoint - controller runs on port 10000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:10000/health || exit 1
+
+ARG IRIS_GIT_HASH=unknown
+ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 
 # Controller entrypoint
 CMD [".venv/bin/python", "-m", "iris.cluster.controller.main", "serve", "--host", "0.0.0.0", "--port", "10000"]

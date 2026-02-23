@@ -28,6 +28,8 @@ provider's view of resources, distinct from the Iris lifecycle states in vm.prot
 
 from __future__ import annotations
 
+import logging
+import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
@@ -35,7 +37,9 @@ from enum import StrEnum
 from typing import Protocol
 
 from iris.rpc import config_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_utils import Deadline, Duration, Timestamp
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Exception Types
@@ -91,6 +95,7 @@ class SliceStatus:
     state: CloudSliceState
     worker_count: int
     workers: list[RemoteWorkerHandle] = field(default_factory=list)
+    error_message: str = ""
 
 
 @dataclass
@@ -348,3 +353,143 @@ class Platform(Protocol):
         - Local: returns configured address or localhost
         """
         ...
+
+    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Start or discover existing controller. Returns address (host:port).
+
+        Each platform implements its own controller lifecycle:
+        - GCP: creates GCE VM, SSHes in, bootstraps container
+        - Manual: SSHes to configured host, bootstraps container
+        - CoreWeave: kubectl apply ConfigMap + NodePool + Deployment + Service
+        - Local: starts in-process LocalController
+        """
+        ...
+
+    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
+        """Stop the controller.
+
+        Each platform tears down its own controller resources:
+        - GCP: terminates GCE VM
+        - Manual: terminates bootstrap on host
+        - CoreWeave: kubectl delete Deployment + Service + NodePool
+        - Local: stops in-process LocalController
+        """
+        ...
+
+    def stop_all(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        dry_run: bool = False,
+        label_prefix: str | None = None,
+    ) -> list[str]:
+        """Stop controller and all managed slices.
+
+        When dry_run=True, discovers resources but does not terminate them.
+        Returns list of resource names that were (or would be) terminated.
+
+        Each platform implements its own teardown strategy:
+        - GCP/Manual: list_all_slices + terminate each + stop_controller (parallel)
+        - CoreWeave: kubectl delete NodePools + controller resources
+        - Local: terminate slices + stop controller
+        """
+        ...
+
+    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Reload controller and workers with updated images/config.
+
+        Each platform implements its own reload strategy:
+        - GCP/Manual: full stop + start (terminate all worker slices, then controller)
+        - CoreWeave: update ConfigMap, reload worker Pods in parallel, then
+          rolling update controller Deployment
+        - Local: restart in-process controller
+
+        Returns the controller address after reload.
+        """
+        ...
+
+
+# ============================================================================
+# Default stop_all implementation
+# ============================================================================
+
+TERMINATE_TIMEOUT_SECONDS = 60
+
+
+def default_stop_all(
+    platform: Platform,
+    config: config_pb2.IrisClusterConfig,
+    dry_run: bool = False,
+    label_prefix: str | None = None,
+) -> list[str]:
+    """Default stop_all: discover via list_all_slices, terminate in parallel.
+
+    Shared by GCP, Manual, and Local platforms. Enumerates all managed slices
+    plus the controller, then runs all terminates concurrently via daemon threads
+    with a hard timeout. Daemon threads are used instead of ThreadPoolExecutor so
+    that timed-out threads don't block interpreter shutdown.
+    """
+    prefix = label_prefix or config.platform.label_prefix or "iris"
+
+    target_names: list[str] = ["controller"]
+    all_slices = platform.list_all_slices(labels={f"{prefix}-managed": "true"})
+    for s in all_slices:
+        logger.info("Found managed slice %s", s.slice_id)
+        target_names.append(f"slice:{s.slice_id}")
+
+    if dry_run:
+        return target_names
+
+    targets: list[tuple[str, Callable[[], None]]] = [
+        ("controller", lambda: platform.stop_controller(config)),
+    ]
+    for s in all_slices:
+        targets.append((f"slice:{s.slice_id}", s.terminate))
+
+    if not targets:
+        logger.info("No resources to terminate")
+        return target_names
+
+    logger.info("Terminating %d resource(s) in parallel", len(targets))
+
+    errors: list[str] = []
+    results: dict[str, Exception | None] = {}
+    lock = threading.Lock()
+
+    def _run(name: str, fn: Callable[[], None]) -> None:
+        try:
+            fn()
+        except Exception as exc:
+            with lock:
+                results[name] = exc
+            return
+        with lock:
+            results[name] = None
+
+    threads: dict[str, threading.Thread] = {}
+    for name, fn in targets:
+        t = threading.Thread(target=_run, args=(name, fn), daemon=True)
+        t.start()
+        threads[name] = t
+
+    dl = Deadline.from_seconds(TERMINATE_TIMEOUT_SECONDS)
+    for _name, t in threads.items():
+        t.join(timeout=dl.remaining_seconds())
+
+    for name, t in threads.items():
+        if t.is_alive():
+            logger.warning(
+                "Termination of %s still running after %ds, giving up",
+                name,
+                TERMINATE_TIMEOUT_SECONDS,
+            )
+            errors.append(f"timeout:{name}")
+        else:
+            exc = results.get(name)
+            if exc is not None:
+                logger.exception("Failed to terminate %s", name, exc_info=exc)
+                errors.append(name)
+
+    if errors:
+        logger.error("Errors when stopping cluster: %s", errors)
+
+    return target_names
