@@ -3,7 +3,7 @@
   "checkpoint_id": "3745e053c711",
   "strategy": "manual-commit",
   "branch": "rav-shrink-pool",
-  "checkpoints_count": 8,
+  "checkpoints_count": 14,
   "files_touched": [
     "experiments/train_test_overlap/aggregate_total.py",
     "lib/levanter/src/levanter/store/cache.py",
@@ -33,13 +33,20 @@
       "context": "/37/45e053c711/2/context.md",
       "content_hash": "/37/45e053c711/2/content_hash.txt",
       "prompt": "/37/45e053c711/2/prompt.txt"
+    },
+    {
+      "metadata": "/37/45e053c711/3/metadata.json",
+      "transcript": "/37/45e053c711/3/full.jsonl",
+      "context": "/37/45e053c711/3/context.md",
+      "content_hash": "/37/45e053c711/3/content_hash.txt",
+      "prompt": "/37/45e053c711/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 171,
-    "cache_creation_tokens": 323937,
-    "cache_read_tokens": 12902911,
-    "output_tokens": 10428,
-    "api_call_count": 125
+    "input_tokens": 206,
+    "cache_creation_tokens": 355985,
+    "cache_read_tokens": 13879418,
+    "output_tokens": 11725,
+    "api_call_count": 144
   }
 }
