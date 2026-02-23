@@ -56,7 +56,7 @@ class Embedding(eqx.Module, ReparamEnabled):
         """
         if initializer_range is not None:
             warnings.warn(
-                "initializer_range is deprecated. Use init_std instead.",
+                "initializer_range is deprecated. Use init_scale instead.",
                 DeprecationWarning,
             )
             init_scale = initializer_range

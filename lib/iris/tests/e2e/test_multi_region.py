@@ -95,7 +95,7 @@ def test_region_constrained_job_routes_correctly(multi_region_cluster):
     job = cluster.submit(
         _noop,
         "region-a-job",
-        constraints=[region_constraint(REGION_A)],
+        constraints=[region_constraint([REGION_A])],
     )
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
@@ -132,7 +132,7 @@ def test_child_inherits_parent_region_constraint(multi_region_cluster):
     parent_job = cluster.submit(
         _submit_child_no_constraints,
         "parent-with-region",
-        constraints=[region_constraint(REGION_A)],
+        constraints=[region_constraint([REGION_A])],
     )
     parent_status = cluster.wait(parent_job, timeout=60)
     assert parent_status.state == cluster_pb2.JOB_STATE_SUCCEEDED
@@ -176,7 +176,7 @@ def _submit_child_with_region_override():
         name="overridden-child",
         resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),
-        constraints=[region_constraint("europe-west4")],
+        constraints=[region_constraint(["europe-west4"])],
     )
     child.wait(timeout=60, raise_on_failure=True)
 
@@ -188,7 +188,7 @@ def test_child_overrides_parent_region_constraint(multi_region_cluster):
     parent_job = cluster.submit(
         _submit_child_with_region_override,
         "parent-region-a-child-overrides",
-        constraints=[region_constraint(REGION_A)],
+        constraints=[region_constraint([REGION_A])],
     )
     parent_status = cluster.wait(parent_job, timeout=60)
     assert parent_status.state == cluster_pb2.JOB_STATE_SUCCEEDED

@@ -565,7 +565,11 @@ class Trainer:
         self.add_hook(levanter.callbacks.log_step_info(self.config.num_train_steps), every=1)
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
-        self.add_hook(checkpointer.on_step, every=1)  # checkpointer manages its own frequency
+
+        def checkpoint_hook(info):
+            checkpointer.on_step(tree=info.state.saveable_state, step=info.step)
+
+        self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
         # Add watch callback if configured
         if self.config.watch.is_enabled:

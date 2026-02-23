@@ -27,14 +27,27 @@ IMPLEMENTATIONS: dict[str, ArrayImpl] = {
     "xla": linear_softmax_cross_entropy_loss_xla,
 }
 _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
+_PALLAS_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 try:
     from .pallas_tpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas
 
     IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
-    _DEFAULT_IMPLEMENTATION = ("pallas_tpu",) + _DEFAULT_IMPLEMENTATION
 except ImportError:
     PallasUnsupportedError = NotImplementedError  # type: ignore[assignment]
+
+
+def _warn_pallas_fallback_once(exc: Exception) -> None:
+    message = str(exc)
+    if "requires TPU backend" in message:
+        return
+    if message in _PALLAS_FALLBACK_WARNINGS_EMITTED:
+        return
+    _PALLAS_FALLBACK_WARNINGS_EMITTED.add(message)
+    warnings.warn(
+        f"Pallas fused cross-entropy unavailable, falling back to XLA: {message}",
+        RuntimeWarning,
+    )
 
 
 def _validate_inputs(x: jax.Array, labels: jax.Array, w: jax.Array) -> None:
@@ -161,19 +174,13 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             except PallasUnsupportedError as e:
                 if explicit:
                     raise
-                warnings.warn(
-                    f"Pallas fused cross-entropy unavailable, falling back to XLA: {e}",
-                    RuntimeWarning,
-                )
+                _warn_pallas_fallback_once(e)
                 errors.append(e)
                 continue
             except NotImplementedError as e:
                 if explicit:
                     raise
-                warnings.warn(
-                    f"Pallas fused cross-entropy unavailable, falling back to XLA: {e}",
-                    RuntimeWarning,
-                )
+                _warn_pallas_fallback_once(e)
                 errors.append(e)
                 continue
         else:
@@ -193,19 +200,13 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             except PallasUnsupportedError as e:
                 if explicit:
                     raise
-                warnings.warn(
-                    f"Pallas fused cross-entropy unavailable, falling back to XLA: {e}",
-                    RuntimeWarning,
-                )
+                _warn_pallas_fallback_once(e)
                 errors.append(e)
                 continue
             except NotImplementedError as e:
                 if explicit:
                     raise
-                warnings.warn(
-                    f"Pallas fused cross-entropy unavailable, falling back to XLA: {e}",
-                    RuntimeWarning,
-                )
+                _warn_pallas_fallback_once(e)
                 errors.append(e)
                 continue
 

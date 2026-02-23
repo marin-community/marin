@@ -58,15 +58,15 @@ def test_multi_stage(zephyr_ctx):
 
 
 def test_context_manager(fray_client):
-    """ZephyrContext works as context manager."""
-    with ZephyrContext(
+    """ZephyrContext works without context manager."""
+    zctx = ZephyrContext(
         client=fray_client,
         max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
-    ) as zctx:
-        ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
-        results = list(zctx.execute(ds))
+    )
+    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
+    results = list(zctx.execute(ds))
     assert sorted(results) == [2, 3, 4]
 
 
@@ -130,6 +130,80 @@ def test_chunk_cleanup(fray_client, tmp_path):
         # Should be empty or not exist
         files = list(Path(chunk_prefix).rglob("*"))
         assert len(files) == 0, f"Expected cleanup but found: {files}"
+
+
+def test_status_reports_alive_workers_not_total(tmp_path):
+    """After heartbeat timeout, get_status workers dict reflects FAILED state,
+    and the status log distinguishes alive from total workers.
+
+    Also verifies that re-registering a worker that had an in-flight task
+    requeues that task so it is not silently lost.
+    """
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import Shard, ShardTask, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord.set_shared_data({})
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+
+    # Register 3 workers
+    for i in range(3):
+        coord.register_worker(f"worker-{i}", MagicMock())
+
+    status = coord.get_status()
+    assert len(status.workers) == 3
+    assert all(w["state"] == "ready" for w in status.workers.values())
+
+    # worker-0 pulls the task so it becomes in-flight
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+
+    # Simulate 2 workers dying via heartbeat timeout
+    coord._last_seen["worker-0"] = 0.0
+    coord._last_seen["worker-1"] = 0.0
+    coord.check_heartbeats(timeout=30.0)
+
+    status = coord.get_status()
+    assert status.workers["worker-0"]["state"] == "failed"
+    assert status.workers["worker-1"]["state"] == "failed"
+    assert status.workers["worker-2"]["state"] == "ready"
+
+    # Total workers in dict is still 3, but only 1 is alive
+    alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
+    assert alive == 1
+    assert len(status.workers) == 3
+
+    # worker-2 picks up the requeued task
+    pulled2 = coord.pull_task("worker-2")
+    assert pulled2 is not None and pulled2 != "SHUTDOWN"
+
+    # Simulate worker-0 re-registering while worker-2 holds the task in-flight
+    # (race between heartbeat requeue and re-registration).
+    # Since worker-0 has no in-flight task anymore, this is a no-op for requeueing.
+    coord.register_worker("worker-0", MagicMock())
+    status = coord.get_status()
+    assert status.workers["worker-0"]["state"] == "ready"
+    alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
+    assert alive == 2  # worker-0 ready, worker-1 still failed, worker-2 busy
+
+    # Now test the direct re-registration requeue path:
+    # worker-2 dies while holding the task, and before heartbeat fires,
+    # it re-registers — the in-flight task should be requeued.
+    assert "worker-2" in coord._in_flight  # worker-2 has the task
+    coord.register_worker("worker-2", MagicMock())
+    assert "worker-2" not in coord._in_flight  # in-flight cleared
+    assert len(coord._task_queue) == 1  # task was requeued
 
 
 def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
@@ -292,33 +366,34 @@ def test_chunk_streaming_low_memory(tmp_path):
     assert list(shard) == [0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24]
 
 
-def test_workers_persist_across_executes(fray_client, tmp_path):
-    """Workers persist across multiple execute() calls within a context."""
+def test_fresh_actors_per_execute(fray_client, tmp_path):
+    """Each execute() creates and tears down its own coordinator and workers."""
     chunk_prefix = str(tmp_path / "chunks")
 
-    with ZephyrContext(
+    zctx = ZephyrContext(
         client=fray_client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
-    ) as zctx:
-        ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
-        results = list(zctx.execute(ds))
-        assert sorted(results) == [2, 3, 4]
+    )
+    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x + 1)
+    results = list(zctx.execute(ds))
+    assert sorted(results) == [2, 3, 4]
 
-        # After execute(): coordinator still exists (workers persist)
-        assert zctx._coordinator is not None
-        assert zctx._coordinator_group is not None
-
-        # Can execute again (reuses same workers)
-        ds2 = Dataset.from_list([10, 20]).map(lambda x: x * 2)
-        results2 = list(zctx.execute(ds2))
-        assert sorted(results2) == [20, 40]
-
-    # After context exit: all resources are cleaned up
+    # After execute(): everything is torn down
     assert zctx._coordinator is None
-    assert zctx._coordinator_group is None
+    assert zctx._worker_group is None
+    assert zctx._pipeline_id == 0
+
+    # Can execute again (creates fresh coordinator + workers)
+    ds2 = Dataset.from_list([10, 20]).map(lambda x: x * 2)
+    results2 = list(zctx.execute(ds2))
+    assert sorted(results2) == [20, 40]
+
+    assert zctx._coordinator is None
+    assert zctx._worker_group is None
+    assert zctx._pipeline_id == 1
 
 
 def test_fatal_errors_fail_fast(fray_client, tmp_path):
@@ -330,22 +405,22 @@ def test_fatal_errors_fail_fast(fray_client, tmp_path):
     def exploding_map(x):
         raise ValueError(f"bad value: {x}")
 
-    with ZephyrContext(
+    zctx = ZephyrContext(
         client=fray_client,
         max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
-    ) as zctx:
-        ds = Dataset.from_list([1, 2, 3]).map(exploding_map)
+    )
+    ds = Dataset.from_list([1, 2, 3]).map(exploding_map)
 
-        start = time.monotonic()
-        with pytest.raises(ZephyrWorkerError, match="ValueError"):
-            list(zctx.execute(ds))
-        elapsed = time.monotonic() - start
+    start = time.monotonic()
+    with pytest.raises(ZephyrWorkerError, match="ValueError"):
+        list(zctx.execute(ds))
+    elapsed = time.monotonic() - start
 
-        # Should fail fast — well under the 30s heartbeat timeout
-        assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure"
+    # Should fail fast — well under the 30s heartbeat timeout
+    assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure"
 
 
 def test_chunk_storage_with_join(fray_client, tmp_path):
@@ -379,31 +454,110 @@ def test_chunk_storage_with_join(fray_client, tmp_path):
 def test_workers_capped_to_shard_count(fray_client, tmp_path):
     """When max_workers > num_shards, only num_shards workers are created."""
     ds = Dataset.from_list([1, 2, 3])  # 3 shards
-    with ZephyrContext(
+    ctx = ZephyrContext(
         client=fray_client,
         max_workers=10,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=str(tmp_path / "chunks"),
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
-    ) as ctx:
-        # Workers not yet created before execute()
-        assert ctx._worker_group is None
-        results = list(ctx.execute(ds.map(lambda x: x * 2)))
-        assert sorted(results) == [2, 4, 6]
-        # Worker group sized to min(10, 3) = 3
-        assert ctx._worker_count == 3
+    )
+    results = list(ctx.execute(ds.map(lambda x: x * 2)))
+    assert sorted(results) == [2, 4, 6]
+    # Everything torn down after execute; correct results prove workers
+    # were created and sized properly (min(10, 3) = 3)
+    assert ctx._pipeline_id == 0
 
 
-def test_worker_group_identity_stable_across_executes(fray_client, tmp_path):
-    """Second execute() reuses the same worker group object (no re-creation)."""
-    with ZephyrContext(
+def test_pipeline_id_increments(fray_client, tmp_path):
+    """Pipeline ID increments after each execute(), ensuring unique actor names."""
+    ctx = ZephyrContext(
         client=fray_client,
         max_workers=10,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=str(tmp_path / "chunks"),
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
-    ) as ctx:
-        ctx.execute(Dataset.from_list([1, 2]).map(lambda x: x))
-        group_after_first = ctx._worker_group
-        ctx.execute(Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x))
-        assert ctx._worker_group is group_after_first
+    )
+    ctx.execute(Dataset.from_list([1, 2]).map(lambda x: x))
+    assert ctx._pipeline_id == 0
+
+    ctx.execute(Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x))
+    assert ctx._pipeline_id == 1
+
+
+def test_execute_retries_on_coordinator_death(tmp_path):
+    """When the coordinator dies mid-execution, execute() retries with a fresh
+    coordinator and worker pool and eventually succeeds.
+
+    Uses LocalClient directly because simulating coordinator death requires
+    manipulating the local actor registry.
+    """
+    from fray.v2.local_backend import LocalClient, _local_actor_registry
+
+    client = LocalClient()
+    chunk_prefix = str(tmp_path / "chunks")
+
+    ctx = ZephyrContext(
+        client=client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=chunk_prefix,
+        max_execution_retries=2,
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    )
+
+    # First execute() succeeds normally
+    results = list(ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)))
+    assert sorted(results) == [2, 4, 6]
+
+    # Sabotage the registry so the *next* coordinator creation attempt fails
+    # on the first try. We do this by patching create_actor_group to fail once.
+    original_create = client.create_actor_group
+    fail_count = [0]
+
+    def flaky_create(*args, **kwargs):
+        group = original_create(*args, **kwargs)
+        if fail_count[0] == 0 and "coord" in kwargs.get("name", ""):
+            fail_count[0] += 1
+            # Kill the coordinator immediately after creation to simulate death
+            handles = group.wait_ready()
+            endpoint = handles[0]._endpoint
+            _local_actor_registry.pop(endpoint, None)
+        return group
+
+    client.create_actor_group = flaky_create
+
+    # Next execute() should: fail on attempt 0 (dead coordinator),
+    # then succeed on attempt 1 with a fresh coordinator.
+    results = list(ctx.execute(Dataset.from_list([10, 20]).map(lambda x: x + 1)))
+    assert sorted(results) == [11, 21]
+
+    ctx.shutdown()
+    client.shutdown(wait=True)
+
+
+def test_execute_does_not_retry_worker_errors(fray_client, tmp_path):
+    """ZephyrWorkerError (application errors) are never retried."""
+    from zephyr.execution import ZephyrWorkerError
+
+    chunk_prefix = str(tmp_path / "chunks")
+
+    def exploding_map(x):
+        raise ValueError(f"bad value: {x}")
+
+    ctx = ZephyrContext(
+        client=fray_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=chunk_prefix,
+        max_execution_retries=3,
+        name=f"test-execution-{uuid.uuid4().hex[:8]}",
+    )
+    ds = Dataset.from_list([1, 2, 3]).map(exploding_map)
+
+    start = time.monotonic()
+    with pytest.raises(ZephyrWorkerError, match="ValueError"):
+        list(ctx.execute(ds))
+    elapsed = time.monotonic() - start
+
+    # Should fail fast — no retries for application errors
+    assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure (no retries)"

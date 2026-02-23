@@ -63,11 +63,6 @@ class TaskInfo(Protocol):
         """Current task state (PENDING, RUNNING, SUCCEEDED, etc.)."""
         ...
 
-    @property
-    def result(self) -> bytes | None:
-        """Serialized task result (cloudpickle), if available."""
-        ...
-
     def to_proto(self) -> cluster_pb2.TaskStatus:
         """Convert to protobuf TaskStatus message."""
         ...

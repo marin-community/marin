@@ -35,6 +35,7 @@ class CliConfig:
     cluster_config: str | None = None
     entry_point: str = "main"
     dry_run: bool = False
+    worker_start_timeout: float | None = None
 
     ray_options: dict = field(default_factory=dict)
 
@@ -133,13 +134,14 @@ def run_local(
     main_fn = _load_entry_point(script_path, entry_point)
     sys.argv = [script_path, *script_args]
 
-    with ZephyrContext(
+    ZephyrContext(
         client=client,
         max_workers=config.max_parallelism,
         resources=resources,
         name="cli",
-    ):
-        main_fn()
+        no_workers_timeout=config.worker_start_timeout,
+    )
+    main_fn()
 
 
 def run_ray_cluster(
@@ -188,6 +190,8 @@ def run_ray_cluster(
         entrypoint += ["--num-cpus", str(config.num_cpus)]
     if config.num_gpus:
         entrypoint += ["--num-gpus", str(config.num_gpus)]
+    if config.worker_start_timeout is not None:
+        entrypoint += ["--worker-start-timeout", str(config.worker_start_timeout)]
     if entry_point != "main":
         entrypoint += ["--entry-point", entry_point]
 
@@ -256,6 +260,8 @@ def run_iris_cluster(
         entrypoint += ["--num-cpus", str(config.num_cpus)]
     if config.num_gpus:
         entrypoint += ["--num-gpus", str(config.num_gpus)]
+    if config.worker_start_timeout is not None:
+        entrypoint += ["--worker-start-timeout", str(config.worker_start_timeout)]
     if entry_point != "main":
         entrypoint += ["--entry-point", entry_point]
 
@@ -306,6 +312,12 @@ Examples:
 @click.option("--num-gpus", type=float, help="Number of GPUs per task")
 @click.option("--entry-point", type=str, default="main", help="Entry point function name (default: 'main')")
 @click.option("--dry-run", is_flag=True, help="Show optimization plan without executing")
+@click.option(
+    "--worker-start-timeout",
+    type=float,
+    default=None,
+    help="Seconds to wait for at least one worker before failing (default: 600s)",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -318,6 +330,7 @@ def main(
     num_gpus: float | None,
     entry_point: str,
     dry_run: bool,
+    worker_start_timeout: float,
 ) -> None:
     """Execute data processing pipeline script with configurable backend."""
     script_args = ctx.args
@@ -332,6 +345,7 @@ def main(
         cluster=cluster,
         cluster_config=cluster_config,
         entry_point=entry_point,
+        worker_start_timeout=worker_start_timeout,
     )
 
     validate_backend_config(config)

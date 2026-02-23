@@ -307,6 +307,17 @@ def fsspec_mtime(file_path: str) -> datetime:
     return fs.modified(file_path)
 
 
+def is_path_like(path: str) -> bool:
+    """Return True if path is a URL (gs://, s3://, etc.) or an existing local path.
+
+    Use this to distinguish file paths from HuggingFace dataset/model identifiers.
+    """
+    protocol, _ = fsspec.core.split_protocol(path)
+    if protocol is not None:
+        return True
+    return os.path.exists(path)
+
+
 def validate_marin_gcp_path(path: str) -> str:
     """
     Validate the given path according to the marin GCP convention.
@@ -369,7 +380,9 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
     rel_path = os.path.relpath(file_path, base_in_path)
 
     # Construct the output file path
-    # TODO: if old_extension is not None, but new_extension is None, raise an error or warning?
+    if old_extension and not new_extension:
+        raise ValueError("old_extension requires new_extension to be set")
+
     if new_extension:
         if old_extension:
             rel_path = rel_path[: rel_path.rfind(old_extension)] + new_extension

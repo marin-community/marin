@@ -55,8 +55,8 @@ def filter_dolmino(config: FilterDolminoConfig):
         .write_jsonl(f"{config.output_path}/{{shard:05d}}.jsonl.gz")
     )
 
-    with ZephyrContext(name="filter-dolmino") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="filter-dolmino")
+    ctx.execute(pipeline)
 
 
 @draccus.wrap()

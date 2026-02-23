@@ -1,13 +1,13 @@
-# Iris smoke-test configuration for europe-west4 cluster
+# Iris smoke-test configuration
 # Usage: uv run python scripts/smoke-test.py
 
 platform:
   label_prefix: smoke
   gcp:
     project_id: hai-gcp-models
-    zones: [europe-west4-b]
 
 defaults:
+  default_task_image: ghcr.io/marin-community/iris-task:latest
   timeouts:
     boot_timeout:
       milliseconds: 300000
@@ -25,12 +25,14 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   bootstrap:
-    docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+    docker_image: ghcr.io/marin-community/iris-worker:latest
     worker_port: 10001
 
-controller:
-  image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
+storage:
   bundle_prefix: gs://marin-us-central2/tmp/iris/bundles
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
   gcp:
     zone: europe-west4-b
     machine_type: e2-standard-4
@@ -38,6 +40,7 @@ controller:
 
 scale_groups:
   tpu_v5e_16:
+    zones: [europe-west4-b, us-west4-a]
     accelerator_type: tpu
     accelerator_variant: v5litepod-16
     num_vms: 4
@@ -51,18 +54,15 @@ scale_groups:
     max_slices: 4
     priority: 200
     slice_template:
-      accelerator_type: tpu
       accelerator_variant: v5litepod-16
-      num_vms: 4
       preemptible: true
       gcp:
-        zone: europe-west4-b
         runtime_version: v2-alpha-tpuv5-lite
     worker:
       attributes:
-        region: "europe-west4"
         preemptible: "true"
   tpu_v5e_32:
+    zones: [europe-west4-b, us-west4-a]
     accelerator_type: tpu
     accelerator_variant: v5litepod-32
     num_vms: 8
@@ -76,14 +76,10 @@ scale_groups:
     max_slices: 16
     priority: 100
     slice_template:
-      accelerator_type: tpu
       accelerator_variant: v5litepod-32
-      num_vms: 8
       preemptible: true
       gcp:
-        zone: europe-west4-b
         runtime_version: v2-alpha-tpuv5-lite
     worker:
       attributes:
-        region: "europe-west4"
         preemptible: "true"

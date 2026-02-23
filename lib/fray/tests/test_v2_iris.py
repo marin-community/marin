@@ -32,6 +32,28 @@ class TestConvertConstraints:
         assert c.key == "preemptible"
         assert c.value == "false"
 
+    def test_single_region_produces_eq_constraint(self):
+        resources = ResourceConfig(regions=["us-central1"])
+        constraints = convert_constraints(resources)
+        region_constraints = [c for c in constraints if c.key == "region"]
+        assert len(region_constraints) == 1
+        c = region_constraints[0]
+        from iris.cluster.types import ConstraintOp
+
+        assert c.op == ConstraintOp.EQ
+        assert c.value == "us-central1"
+
+    def test_multiple_regions_produce_in_constraint(self):
+        resources = ResourceConfig(regions=["us-central1", "us-central2"])
+        constraints = convert_constraints(resources)
+        region_constraints = [c for c in constraints if c.key == "region"]
+        assert len(region_constraints) == 1
+        c = region_constraints[0]
+        from iris.cluster.types import ConstraintOp
+
+        assert c.op == ConstraintOp.IN
+        assert c.values == ("us-central1", "us-central2")
+
 
 class TestIrisActorHandlePickle:
     def test_pickle_roundtrip_preserves_name(self):

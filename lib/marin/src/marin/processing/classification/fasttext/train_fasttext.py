@@ -95,12 +95,12 @@ def create_dataset(config: CreateDatasetConfig) -> None:
     if config.merge_dataset_shards:
         output_path = os.path.join(config.output_dataset_path, "data", "data.jsonl.gz")
 
-    with ZephyrContext(name="fasttext-prep") as ctx:
-        ctx.execute(
-            Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
-            .flat_map(processing_func)
-            .write_jsonl(output_path)
-        )
+    ctx = ZephyrContext(name="fasttext-prep")
+    ctx.execute(
+        Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
+        .flat_map(processing_func)
+        .write_jsonl(output_path)
+    )
 
 
 def create_dataset_shard(

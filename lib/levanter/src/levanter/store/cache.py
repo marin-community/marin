@@ -321,12 +321,12 @@ def build_cache(
             metadata=metadata,
         )
 
-    with ZephyrContext(
+    ctx = ZephyrContext(
         resources=ResourceConfig(ram="32g", disk="16g"),
         max_workers=min(128, len(shard_jobs)),
         name="levanter-cache-build",
-    ) as ctx:
-        shard_results = ctx.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False)
+    )
+    shard_results = ctx.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False)
     shard_results = sorted(shard_results, key=lambda r: r["index"])
 
     shard_cache_paths = [s["path"] for s in shard_results]
@@ -456,15 +456,15 @@ def consolidate_shard_caches(
             )
         )
 
-    with ZephyrContext(
+    ctx = ZephyrContext(
         resources=ResourceConfig(ram="32g", disk="16g"),
         max_workers=min(128, len(shard_info)),
         name="levanter-cache-copy",
-    ) as ctx:
-        ctx.execute(
-            Dataset.from_list(shard_info).map(_copy_shard),
-            verbose=False,
-        )
+    )
+    ctx.execute(
+        Dataset.from_list(shard_info).map(_copy_shard),
+        verbose=False,
+    )
 
     # do metadata serially b/c of write amplification concerns
     for info in shard_info:

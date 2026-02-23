@@ -424,7 +424,7 @@ def test_tpu_splash_attention():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
 
-    BLOCK_SIZE = 512
+    BLOCK_SIZE = 256
 
     Head = hax.Axis("Head", 8)
     Key = hax.Axis("Key", 128)  # splash only supports 128
@@ -459,7 +459,7 @@ def test_tpu_splash_attention_sliding_window():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
 
-    BLOCK_SIZE = 512
+    BLOCK_SIZE = 256
 
     Head = hax.Axis("Head", 8)
     Key = hax.Axis("Key", 128)  # splash only supports 128

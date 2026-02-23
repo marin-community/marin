@@ -266,5 +266,9 @@ def test_lora_works_with_checkpointer():
         info = StepInfo(trainer_state, 0.0, 0.0)
 
         checkpointer = Checkpointer(tempdir, None, [])
-        checkpointer.save_checkpoint(info, "loraized")
+        checkpointer.save_checkpoint(
+            tree=info.state.saveable_state,
+            step=info.step,
+            destination="loraized",
+        )
         checkpointer.wait_until_finished()
