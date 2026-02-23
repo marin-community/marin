@@ -452,6 +452,9 @@ def _detect_nvidia_gpu_environment() -> bool:
 
 
 def _detect_resource_type() -> Literal["tpu", "gpu", "unknown"]:
+    device_type = os.environ.get("MARIN_DEVICE_TYPE")
+    if device_type in ("tpu", "gpu"):
+        return device_type  # type: ignore[return-value]
     if _detect_tpu_environment():
         return "tpu"
     if _detect_nvidia_gpu_environment():
@@ -562,6 +565,26 @@ def _require_docker_available() -> None:
         )
 
 
+def _kill_orphaned_vllm_containers() -> None:
+    """Kill any leftover marin-vllm-* Docker containers from previous runs.
+
+    When a Ray job is stopped ungracefully, VllmEnvironment.close() may not run,
+    leaving orphaned Docker containers that hold the TPU VFIO device.
+    """
+    result = subprocess.run(
+        ["docker", "ps", "-a", "--filter", "name=marin-vllm-", "--format", "{{.Names}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return
+    containers = [name.strip() for name in result.stdout.strip().splitlines() if name.strip()]
+    for name in containers:
+        logger.info(f"Killing orphaned vLLM container: {name}")
+        subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True, text=True)
+
+
 def _redact_docker_run_command(cmd: list[str]) -> str:
     redacted = list(cmd)
     i = 0
@@ -594,6 +617,7 @@ def _start_vllm_docker_server(
     """
 
     _require_docker_available()
+    _kill_orphaned_vllm_containers()
 
     resource_type = _detect_resource_type()
     if docker_image is None:
