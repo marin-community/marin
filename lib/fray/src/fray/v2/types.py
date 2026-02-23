@@ -366,6 +366,8 @@ class ActorConfig:
     """
 
     max_concurrency: int = 1
+    # TODO: max_restarts is conceptually a job-level property, revisit when we
+    # drop Ray support.
     max_restarts: int | None = None
 
 
