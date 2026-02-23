@@ -16,7 +16,14 @@ from iris.cluster.controller.scaling_group import (
     SliceState,
     _zones_from_config,
 )
-from iris.cluster.platform.base import CloudSliceState, CloudWorkerState, QuotaExhaustedError, SliceStatus, WorkerStatus
+from iris.cluster.platform.base import (
+    CloudSliceState,
+    CloudWorkerState,
+    Labels,
+    QuotaExhaustedError,
+    SliceStatus,
+    WorkerStatus,
+)
 from iris.cluster.types import VmWorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -73,7 +80,8 @@ def make_mock_slice_handle(
     handle.slice_id = slice_id
     handle.scale_group = scale_group
     handle.zone = "us-central1-a"
-    handle.labels = {"iris-scale-group": scale_group, "iris-managed": "true"}
+    iris_labels = Labels("iris")
+    handle.labels = {iris_labels.iris_scale_group: scale_group, iris_labels.iris_managed: "true"}
     handle.created_at = Timestamp.from_ms(created_at_ms)
 
     if vm_states is None:
@@ -299,14 +307,14 @@ class TestScalingGroupScalingPolicy:
     def test_cannot_scale_up_during_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """can_scale_up() returns False during backoff period."""
         platform = make_mock_platform()
-        group = ScalingGroup(unbounded_config, platform)
+        group = ScalingGroup(unbounded_config, platform, backoff_initial=Duration.from_seconds(5.0))
 
         ts = Timestamp.from_ms(1000000)
         group.record_failure(timestamp=ts)
 
         # During backoff period
         assert not group.can_scale_up(timestamp=Timestamp.from_ms(1001000))
-        # After backoff expires (default 5s = 5000ms)
+        # After backoff expires (5s = 5000ms)
         assert group.can_scale_up(timestamp=Timestamp.from_ms(1006000))
 
     def test_cannot_scale_up_during_cooldown(self, unbounded_config: config_pb2.ScaleGroupConfig):

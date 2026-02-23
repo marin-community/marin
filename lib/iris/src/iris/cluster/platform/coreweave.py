@@ -52,11 +52,13 @@ from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
     CommandResult,
+    Labels,
     PlatformError,
     QuotaExhaustedError,
     SliceStatus,
     StandaloneWorkerHandle,
     WorkerStatus,
+    find_free_port,
 )
 from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
@@ -101,12 +103,6 @@ def _classify_kubectl_error(stderr: str) -> PlatformError:
     if "quota" in lower or "insufficient" in lower or "capacity" in lower:
         return QuotaExhaustedError(stderr)
     return PlatformError(stderr)
-
-
-def _find_free_port(host: str = "127.0.0.1") -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((host, 0))
-        return s.getsockname()[1]
 
 
 # ============================================================================
@@ -329,6 +325,7 @@ class CoreweavePlatform:
         self._namespace = config.namespace or "iris"
         self._region = config.region
         self._label_prefix = label_prefix
+        self._iris_labels = Labels(label_prefix)
         self._kubectl = Kubectl(
             namespace=self._namespace,
             kubeconfig_path=config.kubeconfig_path or None,
@@ -405,20 +402,11 @@ class CoreweavePlatform:
 
     # -- Labels ---------------------------------------------------------------
 
-    def _managed_label_key(self) -> str:
-        return f"{self._label_prefix}-managed"
-
-    def _scale_group_label_key(self) -> str:
-        return f"{self._label_prefix}-scale-group"
-
-    def _slice_id_label_key(self) -> str:
-        return f"{self._label_prefix}-slice-id"
-
     def _resource_labels(self, scale_group: str, slice_id: str) -> dict[str, str]:
         return {
-            self._managed_label_key(): "true",
-            self._scale_group_label_key(): scale_group,
-            self._slice_id_label_key(): slice_id,
+            self._iris_labels.iris_managed: "true",
+            self._iris_labels.iris_scale_group: scale_group,
+            self._iris_labels.iris_slice_id: slice_id,
         }
 
     # -- NodePool Management ----------------------------------------------------
@@ -471,7 +459,7 @@ class CoreweavePlatform:
         """
         existing = self._kubectl.list_json(
             "nodepools",
-            labels={self._managed_label_key(): "true"},
+            labels={self._iris_labels.iris_managed: "true"},
             cluster_scoped=True,
         )
         for item in existing:
@@ -510,8 +498,8 @@ class CoreweavePlatform:
             "metadata": {
                 "name": pool_name,
                 "labels": {
-                    self._managed_label_key(): "true",
-                    self._scale_group_label_key(): scale_group_name,
+                    self._iris_labels.iris_managed: "true",
+                    self._iris_labels.iris_scale_group: scale_group_name,
                 },
             },
             "spec": {
@@ -522,8 +510,8 @@ class CoreweavePlatform:
                 "maxNodes": max_nodes,
                 "targetNodes": target_nodes,
                 "nodeLabels": {
-                    self._managed_label_key(): "true",
-                    self._scale_group_label_key(): scale_group_name,
+                    self._iris_labels.iris_managed: "true",
+                    self._iris_labels.iris_scale_group: scale_group_name,
                 },
             },
         }
@@ -567,7 +555,7 @@ class CoreweavePlatform:
 
         # Resolve the actual scale-group value from merged labels (may differ from
         # name_prefix when prepare_slice_config overrides the label).
-        resolved_scale_group = labels.get(self._scale_group_label_key(), scale_group_name)
+        resolved_scale_group = labels.get(self._iris_labels.iris_scale_group, scale_group_name)
 
         handle = CoreweaveSliceHandle(
             slice_id=slice_id,
@@ -722,7 +710,7 @@ class CoreweavePlatform:
             "CoreWeave pod %s: resource_limits=%s node_selector=%s",
             pod_name,
             resource_limits or "none",
-            {self._scale_group_label_key(): handle.scale_group},
+            {self._iris_labels.iris_scale_group: handle.scale_group},
         )
 
         pod_manifest = {
@@ -738,7 +726,7 @@ class CoreweavePlatform:
                 "hostNetwork": True,
                 "dnsPolicy": "ClusterFirstWithHostNet",
                 "nodeSelector": {
-                    self._scale_group_label_key(): handle.scale_group,
+                    self._iris_labels.iris_scale_group: handle.scale_group,
                 },
                 "containers": [container_spec],
                 "volumes": [
@@ -810,14 +798,14 @@ class CoreweavePlatform:
         labels: dict[str, str] | None = None,
     ) -> list[CoreweaveSliceHandle]:
         """List iris-managed worker Pods, optionally filtered by additional labels."""
-        merged = {self._managed_label_key(): "true"}
+        merged = {self._iris_labels.iris_managed: "true"}
         if labels:
             merged.update(labels)
         return self._list_slices_by_labels(merged)
 
     def list_all_slices(self, labels: dict[str, str] | None = None) -> list[CoreweaveSliceHandle]:
         """List all iris-managed worker Pods, optionally filtered by labels."""
-        merged = {self._managed_label_key(): "true"}
+        merged = {self._iris_labels.iris_managed: "true"}
         if labels:
             merged.update(labels)
         return self._list_slices_by_labels(merged)
@@ -836,7 +824,7 @@ class CoreweavePlatform:
                 continue
 
             slice_id = pod_name.removeprefix("iris-worker-")
-            scale_group = item_labels.get(self._scale_group_label_key(), "")
+            scale_group = item_labels.get(self._iris_labels.iris_scale_group, "")
 
             creation_ts = metadata.get("creationTimestamp", "")
             created_at = Timestamp.now()
@@ -877,7 +865,7 @@ class CoreweavePlatform:
         labels: dict[str, str] | None = None,
     ) -> list[CoreweaveWorkerHandle]:
         """List worker Pods filtered by labels."""
-        merged = {self._managed_label_key(): "true"}
+        merged = {self._iris_labels.iris_managed: "true"}
         if labels:
             merged.update(labels)
         items = self._kubectl.list_json("pods", labels=merged)
@@ -980,7 +968,7 @@ class CoreweavePlatform:
             image=config.controller.image,
             port=port,
             bundle_prefix=config.storage.bundle_prefix,
-            node_selector={self._scale_group_label_key(): cw.scale_group},
+            node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             s3_env_vars=s3_env,
         )
         self._kubectl.apply_json(deploy_manifest)
@@ -1027,7 +1015,7 @@ class CoreweavePlatform:
         """Stop all managed Pods and controller. NodePools are left to scale to zero."""
         prefix = label_prefix or config.platform.label_prefix or "iris"
 
-        pods = self._kubectl.list_json("pods", labels={f"{prefix}-managed": "true"})
+        pods = self._kubectl.list_json("pods", labels={Labels(prefix).iris_managed: "true"})
         target_names: list[str] = []
         for pod in pods:
             name = pod.get("metadata", {}).get("name", "")
@@ -1367,7 +1355,7 @@ def _coreweave_tunnel(
 ) -> Iterator[str]:
     """kubectl port-forward to a K8s Service, yielding the local URL."""
     if local_port is None:
-        local_port = _find_free_port()
+        local_port = find_free_port()
 
     proc = kubectl.popen(
         ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
