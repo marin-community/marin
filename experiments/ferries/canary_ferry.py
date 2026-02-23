@@ -6,10 +6,17 @@
 Trains to 1B tokens on v5p-8 with AdamH. Designed to run daily to catch infra
 and pretraining regressions early. See #2873 for the proposal.
 
+Each run embeds today's date in the step name so the executor sees a fresh
+output path and actually trains (instead of skipping on prior SUCCESS status).
+Override via CANARY_DATE env var for testing or reruns.
+
 Optimal hyperparameters from mega-sweep-bs64-1b-hid512-v3 (trial 26, macro_loss=3.754):
   lr=0.00864, beta1=0.894, adam_lr=0.000502, beta2=0.999, eps=2.32e-07,
   max_grad_norm=0.1, z_loss_weight=1.10e-05
 """
+
+import datetime
+import os
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
@@ -20,6 +27,8 @@ from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
+
+CANARY_DATE = os.environ.get("CANARY_DATE", datetime.date.today().isoformat())
 
 # --- Model: Qwen3 ~30M (hidden_dim=512) ---
 model = Qwen3Config(
@@ -62,7 +71,7 @@ train_config = SimpleTrainConfig(
 )
 
 training_step = default_train(
-    name="canary-ferry",
+    name=f"canary-ferry-{CANARY_DATE}",
     tokenized=nemotron_mix,
     model_config=model,
     train_config=train_config,
