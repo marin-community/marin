@@ -18,7 +18,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from iris.chaos import chaos, chaos_raise
-from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, ContainerRuntime, RuntimeLogReader
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerErrorKind,
+    ContainerHandle,
+    ContainerRuntime,
+    RuntimeLogReader,
+)
 from google.protobuf import json_format
 
 from iris.cluster.types import (
@@ -534,6 +540,7 @@ class TaskAttempt:
             timeout_seconds=timeout_seconds,
             mounts=mounts,
             task_id=self.task_id.to_wire(),
+            attempt_id=self.attempt_id,
             job_id=job_id.to_wire(),
             worker_metadata=self._worker_metadata,
         )
@@ -643,11 +650,10 @@ class TaskAttempt:
 
                 # Container has stopped
                 if status.error:
-                    self.transition_to(
-                        cluster_pb2.TASK_STATE_FAILED,
-                        error=status.error,
-                        exit_code=status.exit_code or -1,
-                    )
+                    failure_state = cluster_pb2.TASK_STATE_FAILED
+                    if status.error_kind == ContainerErrorKind.INFRA_NOT_FOUND:
+                        failure_state = cluster_pb2.TASK_STATE_WORKER_FAILED
+                    self.transition_to(failure_state, error=status.error, exit_code=status.exit_code or -1)
                 elif status.exit_code == 0:
                     self.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
