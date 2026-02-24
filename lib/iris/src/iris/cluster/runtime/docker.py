@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Docker runtime with cgroups v2 resource limits and BuildKit image caching.
 
@@ -27,14 +16,26 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from iris.cluster.runtime.env import build_device_env_vars
+from iris.cluster.runtime.profile import (
+    build_memray_attach_cmd,
+    build_memray_transform_cmd,
+    build_pyspy_cmd,
+    resolve_cpu_spec,
+    resolve_memory_spec,
+)
 from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus, ImageInfo
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
+from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
@@ -70,48 +71,6 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
         logger.info("TPU device flags: %s", flags)
 
     return flags
-
-
-def _build_device_env_vars(config: ContainerConfig) -> dict[str, str]:
-    """Build device-specific environment variables for the container.
-
-    When TPU resources are requested, adds JAX/PJRT environment variables
-    and TPU metadata from the worker's environment. These environment variables
-    enable JAX to properly initialize on TPU devices inside the container.
-    """
-    env: dict[str, str] = {}
-
-    if not config.resources:
-        logger.debug("No resources on container config; skipping device env vars")
-        return env
-
-    has_device = config.resources.HasField("device")
-    has_tpu = has_device and config.resources.device.HasField("tpu")
-
-    if has_tpu:
-        env["JAX_PLATFORMS"] = "tpu,cpu"
-        env["PJRT_DEVICE"] = "TPU"
-
-        if config.worker_metadata:
-            if config.worker_metadata.tpu_name:
-                env["TPU_NAME"] = config.worker_metadata.tpu_name
-            if config.worker_metadata.tpu_worker_id:
-                env["TPU_WORKER_ID"] = config.worker_metadata.tpu_worker_id
-            if config.worker_metadata.tpu_worker_hostnames:
-                env["TPU_WORKER_HOSTNAMES"] = config.worker_metadata.tpu_worker_hostnames
-                # JAX multi-host coordination: coordinator is worker-0's IP with standard port
-                hostnames = config.worker_metadata.tpu_worker_hostnames.split(",")
-                env["JAX_COORDINATOR_ADDRESS"] = f"{hostnames[0]}:8476"
-                env["JAX_NUM_PROCESSES"] = str(len(hostnames))
-                env["JAX_PROCESS_ID"] = config.worker_metadata.tpu_worker_id or "0"
-            if config.worker_metadata.tpu_chips_per_host_bounds:
-                env["TPU_CHIPS_PER_HOST_BOUNDS"] = config.worker_metadata.tpu_chips_per_host_bounds
-            logger.info("TPU device env vars (with metadata): %s", env)
-        else:
-            logger.warning("TPU device requested but worker_metadata is None; TPU host env vars will be missing")
-            logger.info("TPU device env vars (no metadata): %s", env)
-
-    return env
 
 
 def _detect_mount_user(mounts: list[tuple[str, str, str]]) -> str | None:
@@ -172,6 +131,84 @@ def _parse_memory_size(size_str: str) -> int:
         return int(value / (1024 * 1024))
     else:
         return 0
+
+
+def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogLine]:
+    """Get container logs, optionally filtered by timestamp."""
+    logs: list[LogLine] = []
+
+    base_cmd = ["docker", "logs", "--timestamps"]
+    if since:
+        base_cmd.extend(["--since", since.as_formatted_date()])
+    base_cmd.append(container_id)
+
+    # Check if container exists
+    result = subprocess.run(
+        base_cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+
+    # Fetch stdout
+    stdout_result = subprocess.run(
+        base_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+
+    for line in stdout_result.stdout.splitlines():
+        if line:
+            timestamp, data = _parse_docker_log_line(line)
+            logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
+
+    # Fetch stderr
+    stderr_result = subprocess.run(
+        base_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+
+    for line in stderr_result.stderr.splitlines():
+        if line:
+            timestamp, data = _parse_docker_log_line(line)
+            logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
+
+    return logs
+
+
+class DockerLogReader:
+    """Incremental log reader for a Docker container using timestamp-based cursoring.
+
+    Docker's --since flag supports sub-second precision, so advancing the cursor
+    by 1ms after each read is sufficient to avoid duplicate lines.
+    """
+
+    def __init__(self, container_id: str) -> None:
+        self._container_id = container_id
+        self._last_timestamp: Timestamp | None = None
+
+    def read(self) -> list[LogLine]:
+        """Return new log lines since the last read. Advances the cursor by 1ms past the last line."""
+        if not self._container_id:
+            return []
+        lines = _docker_logs(self._container_id, since=self._last_timestamp)
+        if lines:
+            max_ts = max(line.timestamp for line in lines)
+            self._last_timestamp = Timestamp.from_seconds(max_ts.timestamp()).add_ms(1)
+        return lines
+
+    def read_all(self) -> list[LogLine]:
+        """Return all logs from the beginning."""
+        if not self._container_id:
+            return []
+        return _docker_logs(self._container_id)
 
 
 @dataclass
@@ -235,7 +272,7 @@ class DockerContainerHandle:
                 status = self._docker_inspect(build_container_id)
 
                 # Capture logs incrementally during build
-                new_logs = self._docker_logs(build_container_id, since=last_log_time)
+                new_logs = _docker_logs(build_container_id, since=last_log_time)
                 if new_logs:
                     build_logs.extend(new_logs)
                     last_log_time = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp()).add_ms(1)
@@ -245,7 +282,7 @@ class DockerContainerHandle:
                 time.sleep(0.5)
 
             # Final log fetch after container stops
-            final_logs = self._docker_logs(build_container_id, since=last_log_time)
+            final_logs = _docker_logs(build_container_id, since=last_log_time)
             build_logs.extend(final_logs)
 
             if status.exit_code != 0:
@@ -328,17 +365,104 @@ exec {quoted_cmd}
             return ContainerStatus(running=False, error="Container not started")
         return self._docker_inspect(self._run_container_id)
 
-    def logs(self, since: Timestamp | None = None) -> list[LogLine]:
-        """Get container logs since timestamp."""
-        if not self._run_container_id:
-            return []
-        return self._docker_logs(self._run_container_id, since)
+    def log_reader(self) -> DockerLogReader:
+        """Create an incremental log reader for this container."""
+        return DockerLogReader(self._run_container_id or "")
 
     def stats(self) -> ContainerStats:
         """Get resource usage statistics."""
         if not self._run_container_id:
             return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
         return self._docker_stats(self._run_container_id)
+
+    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
+        """Profile the running process using py-spy (CPU) or memray (memory)."""
+
+        container_id = self._run_container_id
+        if not container_id:
+            raise RuntimeError("Cannot profile: no running container")
+
+        profile_id = uuid.uuid4().hex[:8]
+
+        # Dispatch to CPU or memory profiling based on profile_type
+        if profile_type.HasField("cpu"):
+            return self._profile_cpu(container_id, duration_seconds, profile_type.cpu, profile_id)
+        elif profile_type.HasField("memory"):
+            return self._profile_memory(container_id, duration_seconds, profile_type.memory, profile_id)
+        else:
+            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+
+    def _docker_exec(self, container_id: str, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        return subprocess.run(["docker", "exec", container_id, *cmd], **kwargs)
+
+    def _docker_read_file(self, container_id: str, path: str) -> bytes:
+        result = self._docker_exec(container_id, ["cat", path], capture_output=True, timeout=5)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to read {path}: {result.stderr}")
+        return result.stdout
+
+    def _docker_rm_files(self, container_id: str, paths: list[str]) -> None:
+        self._docker_exec(container_id, ["rm", "-f", *paths], capture_output=True, timeout=10)
+
+    def _profile_cpu(
+        self, container_id: str, duration_seconds: int, cpu_config: "cluster_pb2.CpuProfile", profile_id: str
+    ) -> bytes:
+        """Profile CPU using py-spy."""
+        spec = resolve_cpu_spec(cpu_config, duration_seconds, pid="1")
+        output_path = f"/tmp/profile-cpu-{profile_id}.{spec.ext}"
+        cmd = build_pyspy_cmd(spec, py_spy_bin="/app/.venv/bin/py-spy", output_path=output_path)
+
+        logger.info(
+            "CPU profiling container %s for %ds (format=%s, rate=%dHz)",
+            container_id,
+            duration_seconds,
+            spec.py_spy_format,
+            spec.rate_hz,
+        )
+        try:
+            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 5)
+            if result.returncode != 0:
+                raise RuntimeError(f"py-spy failed: {result.stderr}")
+            return self._docker_read_file(container_id, output_path)
+        finally:
+            self._docker_rm_files(container_id, [output_path])
+
+    def _profile_memory(
+        self, container_id: str, duration_seconds: int, memory_config: "cluster_pb2.MemoryProfile", profile_id: str
+    ) -> bytes:
+        """Profile memory using memray."""
+        spec = resolve_memory_spec(memory_config, duration_seconds, pid="1")
+        memray_bin = "/app/.venv/bin/memray"
+        trace_path = f"/tmp/memray-trace-{profile_id}.bin"
+        output_path = f"/tmp/memray-output-{profile_id}.{spec.ext}"
+
+        attach_cmd = build_memray_attach_cmd(spec, memray_bin, trace_path)
+        transform_cmd = build_memray_transform_cmd(spec, memray_bin, trace_path, output_path)
+
+        logger.info(
+            "Memory profiling container %s for %ds (format=%s, leaks=%s)",
+            container_id,
+            duration_seconds,
+            spec.reporter,
+            spec.leaks,
+        )
+        try:
+            result = self._docker_exec(
+                container_id, attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"memray attach failed: {result.stderr}")
+
+            result = self._docker_exec(container_id, transform_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
+
+            if spec.output_is_file:
+                return self._docker_read_file(container_id, output_path)
+            else:
+                return result.stdout.encode("utf-8")
+        finally:
+            self._docker_rm_files(container_id, [trace_path, output_path])
 
     def cleanup(self) -> None:
         """Remove the run container and clean up resources."""
@@ -380,6 +504,7 @@ exec {quoted_cmd}
             cmd.append("--add-host=host.docker.internal:host-gateway")
 
         cmd.extend(["--cap-drop", "ALL"])
+        cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
         if include_resources:
@@ -403,7 +528,7 @@ exec {quoted_cmd}
                 cmd.extend(["--memory", f"{memory_mb}m"])
 
         # Build combined environment
-        device_env = _build_device_env_vars(config) if include_resources else {}
+        device_env = build_device_env_vars(config) if include_resources else {}
         combined_env = {**device_env, **config.env}
 
         for k, v in combined_env.items():
@@ -474,55 +599,6 @@ exec {quoted_cmd}
             )
         except (json.JSONDecodeError, KeyError) as e:
             return ContainerStatus(running=False, error=f"Failed to parse inspect output: {e}")
-
-    def _docker_logs(self, container_id: str, since: Timestamp | None = None) -> list[LogLine]:
-        """Get container logs."""
-        logs: list[LogLine] = []
-
-        base_cmd = ["docker", "logs", "--timestamps"]
-        if since:
-            base_cmd.extend(["--since", since.as_formatted_date()])
-        base_cmd.append(container_id)
-
-        # Check if container exists
-        result = subprocess.run(
-            base_cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            return []
-
-        # Fetch stdout
-        stdout_result = subprocess.run(
-            base_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-
-        for line in stdout_result.stdout.splitlines():
-            if line:
-                timestamp, data = _parse_docker_log_line(line)
-                logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
-
-        # Fetch stderr
-        stderr_result = subprocess.run(
-            base_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-
-        for line in stderr_result.stderr.splitlines():
-            if line:
-                timestamp, data = _parse_docker_log_line(line)
-                logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
-
-        return logs
 
     def _docker_stats(self, container_id: str) -> ContainerStats:
         """Get container stats."""
@@ -614,6 +690,20 @@ class DockerRuntime:
         handle = DockerContainerHandle(config=config, runtime=self)
         self._handles.append(handle)
         return handle
+
+    def stage_bundle(
+        self,
+        *,
+        bundle_gcs_path: str,
+        workdir: Path,
+        workdir_files: dict[str, bytes],
+        fetch_bundle: Callable[[str], Path],
+    ) -> None:
+        """Stage bundle and workdir files on worker-local filesystem."""
+        bundle_path = fetch_bundle(bundle_gcs_path)
+        shutil.copytree(bundle_path, workdir, dirs_exist_ok=True)
+        for name, data in workdir_files.items():
+            (workdir / name).write_bytes(data)
 
     def _track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Convert user-facing Entrypoint + EnvironmentConfig into a structured RuntimeEntrypoint.
 
@@ -47,7 +36,7 @@ def _build_uv_sync_flags(extras: Sequence[str]) -> str:
 
 def _build_pip_install_args(pip_packages: Sequence[str]) -> str:
     """Build pip install args. Each package is quoted for shell safety (e.g. torch>=2.0)."""
-    packages = ["cloudpickle", *list(pip_packages)]
+    packages = ["cloudpickle", "py-spy", "memray", *list(pip_packages)]
     # Use shlex.quote to safely escape each package spec for the shell.
     return " ".join(shlex.quote(pkg) for pkg in packages)
 
@@ -75,18 +64,22 @@ def build_runtime_entrypoint(
     setup_commands = [
         "cd /app",
     ]
-    # Use --link-mode copy to avoid hardlink warnings when cache and workdir
-    # are on different filesystems (common with Docker bind mounts).
-    link_mode_flag = "--link-mode copy"
+    # Use --link-mode symlink to reference cached wheels directly from .venv,
+    # avoiding redundant installation. Symlinks work across bind mounts.
+    link_mode_flag = "--link-mode symlink"
+    setup_commands.append("echo 'syncing deps'")
     if uv_sync_flags:
         setup_commands.append(f"uv sync {link_mode_flag} {python_flag} {uv_sync_flags}".strip())
     else:
         setup_commands.append(f"uv sync {link_mode_flag} {python_flag}".strip())
+    setup_commands.append("echo 'installing pip deps'")
     if pip_install_args:
-        setup_commands.append(f"uv pip install {pip_install_args}")
+        setup_commands.append(f"uv pip install {link_mode_flag} {pip_install_args}")
+    setup_commands.append("echo 'activating venv'")
     setup_commands.append("source .venv/bin/activate")
     setup_commands.append('echo "python=$(which python)"')
     setup_commands.append("python -c \"import sys; print('sys.path:', sys.path)\"")
+    setup_commands.append("echo 'running user command'")
 
     rt = cluster_pb2.RuntimeEntrypoint()
     rt.setup_commands[:] = setup_commands

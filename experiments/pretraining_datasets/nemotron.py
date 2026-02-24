@@ -1,20 +1,10 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """NEMOTRON CC dataset definitions and tokenization."""
 
 import os.path
+
 
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
@@ -73,7 +63,9 @@ def _get_nemotron_split_paths(split: str):
     return [_nemotron_cc_path / pattern for pattern in patterns]
 
 
-def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
+def tokenize_nemotron(
+    *, tokenizer: str | None = None, window_size_bytes: int = 10_000_000_000
+) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Nemotron CC dataset splits."""
     if tokenizer is None:
         from experiments.llama import llama3_tokenizer
@@ -92,6 +84,7 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
+                window_size_bytes=window_size_bytes,
             ),
         )
 

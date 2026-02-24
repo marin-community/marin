@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 from typing import Callable
 
 import equinox as eqx
@@ -36,6 +35,22 @@ def test_layer_norm():
     out = f(hax.random.uniform(jrandom.PRNGKey(0), (H,)))
 
     assert out.axes == (H,)
+
+
+@pytest.mark.parametrize("norm_cls", [hax.nn.LayerNorm, hax.nn.RmsNorm])
+@pytest.mark.parametrize("use_jit", [False, True])
+def test_norm_mixed_precision_params(norm_cls, use_jit):
+    H = Axis("H", 10)
+    x = hax.random.uniform(jrandom.PRNGKey(0), (H,), dtype=jnp.bfloat16)
+
+    # Keep params in float32 and inputs in bfloat16 to mirror mixed-precision training.
+    norm = norm_cls.init(H, dtype=jnp.float32)
+
+    fn = eqx.filter_jit(norm) if use_jit else norm
+    out = fn(x)
+
+    assert out.axes == (H,)
+    assert out.dtype == x.dtype
 
 
 def test_dropout():

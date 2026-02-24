@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for Worker class (includes PortAllocator and task management)."""
 
@@ -135,7 +124,12 @@ def create_mock_container_handle(
 
     handle.status = Mock(side_effect=status_side_effect)
     handle.stop = Mock()
-    handle.logs = Mock(return_value=[])
+
+    log_reader_mock = Mock()
+    log_reader_mock.read = Mock(return_value=[])
+    log_reader_mock.read_all = Mock(return_value=[])
+    handle.log_reader = Mock(return_value=log_reader_mock)
+
     handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
     handle.cleanup = Mock()
     return handle
@@ -167,6 +161,8 @@ def worker(mock_bundle_cache, mock_runtime, tmp_path):
         port_range=(50000, 50100),
         poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
         cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
     )
     return Worker(
         config,
@@ -301,9 +297,9 @@ def test_task_failure_on_error(worker, mock_runtime):
     assert final_task.error == "Container crashed"
 
 
-def test_task_exception_handling(worker, mock_bundle_cache):
+def test_task_exception_handling(worker, mock_runtime):
     """Test task handles exceptions during execution."""
-    mock_bundle_cache.get_bundle = Mock(side_effect=Exception("Bundle download failed"))
+    mock_runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
 
     request = create_run_task_request()
     task_id = worker.submit_task(request)
@@ -460,9 +456,63 @@ def test_port_env_vars_set(worker, mock_runtime):
     assert len(ports) == 3
 
 
-def test_task_failure_error_appears_in_logs(worker, mock_bundle_cache):
+def test_env_merge_precedence(mock_bundle_cache, mock_runtime, tmp_path):
+    """Job-level env vars win over default_task_env, which wins over iris system vars.
+
+    The merge order in _create_container is:
+      1. iris system vars (IRIS_JOB_ID, etc.)
+      2. default_task_env (worker-level defaults, overrides iris vars)
+      3. job-level env_vars (from the request, wins over everything user-visible)
+
+    This test verifies the observable precedence: job > default > absent.
+    """
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
+        default_task_env={"SHARED_KEY": "default_value", "DEFAULT_ONLY": "from_default"},
+    )
+    w = Worker(config, bundle_provider=mock_bundle_cache, container_runtime=mock_runtime)
+
+    # Build a request whose env_vars override SHARED_KEY but leave DEFAULT_ONLY untouched.
+    def _fn():
+        pass
+
+    request = cluster_pb2.Worker.RunTaskRequest(
+        task_id=JobName.root("env-test").task(0).to_wire(),
+        num_tasks=1,
+        attempt_id=0,
+        entrypoint=Entrypoint.from_callable(_fn).to_proto(),
+        environment=cluster_pb2.EnvironmentConfig(
+            env_vars={"SHARED_KEY": "job_value", "JOB_ONLY": "from_job"},
+        ),
+        bundle_gcs_path="gs://bucket/bundle.zip",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
+    )
+
+    task_id = w.submit_task(request)
+    task = w.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.called
+    env = mock_runtime.create_container.call_args[0][0].env
+
+    # Job-level wins over default_task_env.
+    assert env["SHARED_KEY"] == "job_value"
+    # default_task_env key present when job doesn't override it.
+    assert env["DEFAULT_ONLY"] == "from_default"
+    # Job-only key propagates.
+    assert env["JOB_ONLY"] == "from_job"
+    # Iris system vars are always injected.
+    assert "IRIS_JOB_ID" in env
+
+
+def test_task_failure_error_appears_in_logs(worker, mock_runtime):
     """Test that task failure errors appear in logs."""
-    mock_bundle_cache.get_bundle = Mock(side_effect=Exception("Bundle download failed"))
+    mock_runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
 
     request = create_run_task_request()
     task_id = worker.submit_task(request)
@@ -499,6 +549,8 @@ def test_port_binding_failure(mock_bundle_cache, tmp_path):
         port_range=(50000, 50100),
         poll_interval=Duration.from_seconds(0.1),
         cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
     )
     worker = Worker(
         config,
@@ -596,6 +648,8 @@ def real_worker(cache_dir):
         cache_dir=cache_dir,
         port_range=(40000, 40100),
         poll_interval=Duration.from_seconds(0.5),  # Faster polling for tests
+        default_task_image="iris-task:latest",
+        log_prefix=f"file://{(cache_dir / 'iris-logs').as_posix()}",
     )
     worker = Worker(config, container_runtime=runtime)
     yield worker

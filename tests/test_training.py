@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 from pathlib import Path
@@ -61,7 +50,7 @@ class MockNestedConfig:
     path: str
 
 
-@pytest.mark.parametrize("tpu_type", [None, "v3-8"])
+@pytest.mark.parametrize("tpu_type", [None, "v4-8"])
 def test_lm_config_with_local_paths(trainer_config, tpu_type):
     """Test that local paths are allowed when running locally."""
     with (
@@ -104,7 +93,7 @@ def test_lm_config_with_gcs_paths_same_region(trainer_config):
                 data=MockDataConfig(cache_dir="gs://bucket/path"),
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
         )
 
         # This should not raise an exception
@@ -128,7 +117,7 @@ def test_lm_config_with_gcs_paths_different_region(trainer_config):
                 data=MockDataConfig(cache_dir="gs://bucket/path"),
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
         )
 
         # This should raise an exception
@@ -138,8 +127,8 @@ def test_lm_config_with_gcs_paths_different_region(trainer_config):
         assert "not in the same region" in str(excinfo.value)
 
 
-def test_lm_config_with_allowed_out_of_region_paths(trainer_config):
-    """Test that paths in allow_out_of_region are allowed to be in different regions."""
+def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
+    """Test that train/validation source URLs are allowed to be in different regions."""
     with (
         patch("marin.training.training.get_vm_region") as mock_get_vm_region,
         patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
@@ -149,14 +138,13 @@ def test_lm_config_with_allowed_out_of_region_paths(trainer_config):
         mock_get_vm_region.return_value = "us-central1"
         mock_get_bucket_location.return_value = "us-east1"
 
-        # Create a config with GCS paths in a different region but allowed
+        # Create a config with out-of-region source URL; this should be allowed.
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
-                data=MockDataConfig(cache_dir="gs://bucket/path"),
+                data={"train_urls": ["gs://bucket/path"]},  # type: ignore[arg-type]
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
-            allow_out_of_region=("data.cache_dir",),
+            resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
         )
 
         # This should not raise an exception
@@ -184,7 +172,7 @@ def test_recursive_path_checking(trainer_config):
                 data=nested_data,
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
         )
 
         # This should raise an exception
@@ -211,7 +199,7 @@ def test_dataclass_recursive_checking(trainer_config):
                 data=MockDataConfig(cache_dir=MockNestedConfig(path="gs://bucket/path")),  # type: ignore
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
         )
 
         # This should raise an exception
@@ -237,7 +225,7 @@ def test_pathlib_path_handling(trainer_config):
                 data=MockDataConfig(cache_dir=Path("gs://bucket/path")),
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v3-8"),
+            resources=ResourceConfig.with_tpu("v4-8"),
         )
 
         with pytest.raises(ValueError) as excinfo:

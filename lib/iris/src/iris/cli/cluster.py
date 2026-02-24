@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Cluster management CLI commands.
 
@@ -20,22 +9,26 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 
 import signal
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
 
-from iris.cli.build import _build_image, _find_iris_root, _find_marin_root, _push_to_registries
-from iris.cli.debug import debug
+from iris.cli.build import (
+    build_image,
+    find_iris_root,
+    find_marin_root,
+    get_git_sha,
+    push_to_gcp_registries,
+    push_to_ghcr,
+)
+from iris.cluster.platform.bootstrap import collect_all_regions, parse_artifact_registry_tag
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.manager import ClusterManager
-from iris.cluster.config import make_local_config
-from iris.cluster.controller.lifecycle import create_controller_vm
-from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
+from iris.cluster.config import IrisConfig, make_local_config
+from iris.cluster.manager import stop_all
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_utils import Timestamp
@@ -55,7 +48,7 @@ def _format_status_table(status: vm_pb2.AutoscalerStatus) -> str:
     header = f"{'Scale Group':<18} {'Booting':>8} {'Initializing':>12} {'Ready':>6} {'Failed':>7} {'Demand':>7}"
     lines = [header]
     for group in status.groups:
-        counts = compute_slice_state_counts(group.slices)
+        counts = dict(group.slice_state_counts)
         line = (
             f"{group.name:<18} "
             f"{counts.get('booting', 0):>8} "
@@ -81,25 +74,21 @@ def _get_vm_logs(controller_url: str, vm_id: str, tail: int) -> tuple[str, str, 
     return response.logs, response.vm_id, response.state
 
 
-def _parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | None:
-    """Parse ``REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION``."""
-    if "-docker.pkg.dev/" not in image_tag:
+def _parse_ghcr_tag(image_tag: str) -> tuple[str, str, str] | None:
+    """Parse ``ghcr.io/ORG/IMAGE:VERSION``. Returns (org, image_name, version) or None."""
+    if not image_tag.startswith("ghcr.io/"):
         return None
-    parts = image_tag.split("/")
-    if len(parts) < 4:
+    parts = image_tag.removeprefix("ghcr.io/").split("/")
+    if len(parts) < 2:
         return None
-    registry = parts[0]
-    if not registry.endswith("-docker.pkg.dev"):
-        return None
-    region = registry.replace("-docker.pkg.dev", "")
-    project = parts[1]
-    image_and_version = parts[3]
+    org = parts[0]
+    image_and_version = parts[1]
     if ":" in image_and_version:
         image_name, version = image_and_version.split(":", 1)
     else:
         image_name = image_and_version
         version = "latest"
-    return region, project, image_name, version
+    return org, image_name, version
 
 
 @dataclass
@@ -118,7 +107,7 @@ class _ImageBuildParams:
 
 
 def _extract_image_params(image_tag: str, image_type: str) -> _ImageBuildParams | None:
-    parsed = _parse_artifact_registry_tag(image_tag)
+    parsed = parse_artifact_registry_tag(image_tag)
     if not parsed:
         return None
     region, project, image_name, version = parsed
@@ -127,57 +116,181 @@ def _extract_image_params(image_tag: str, image_type: str) -> _ImageBuildParams 
     )
 
 
-def _build_and_push_image(params: _ImageBuildParams) -> None:
+def _build_and_push_image(params: _ImageBuildParams, regions: set[str], verbose: bool = False) -> None:
     click.echo(f"Building {params.image_type} image: {params.local_tag}")
-    click.echo(f"  Region: {params.region}")
+    click.echo(f"  Regions: {', '.join(sorted(regions))}")
     click.echo(f"  Project: {params.project}")
     click.echo()
-    _build_image(
+    build_image(
         image_type=params.image_type,
         tag=params.local_tag,
         push=False,
         dockerfile=params.dockerfile,
         context=params.context,
         platform="linux/amd64",
-        region=(),
-        project=params.project,
+        registry="gcp",
+        ghcr_org="",
+        gcp_regions=(),
+        gcp_project=params.project,
+        verbose=verbose,
     )
     click.echo()
-    _push_to_registries(
+    push_to_gcp_registries(
         source_tag=params.local_tag,
-        regions=(params.region,),
+        regions=tuple(sorted(regions)),
         project=params.project,
         image_name=params.image_name,
         version=params.version,
+        verbose=verbose,
     )
 
 
-def _build_cluster_images(config) -> None:
+def _build_and_push_for_tag(image_tag: str, image_type: str, regions: set[str], verbose: bool = False) -> None:
+    """Build and push a single image, auto-detecting registry from the tag."""
+    gcp_parsed = parse_artifact_registry_tag(image_tag)
+    if gcp_parsed:
+        region, project, image_name, version = gcp_parsed
+        params = _ImageBuildParams(
+            image_type=image_type, region=region, project=project, image_name=image_name, version=version
+        )
+        _build_and_push_image(params, regions=regions, verbose=verbose)
+        click.echo()
+        return
+
+    ghcr_parsed = _parse_ghcr_tag(image_tag)
+    if ghcr_parsed:
+        org, image_name, version = ghcr_parsed
+        local_tag = f"{image_name}:{version}"
+        click.echo(f"Building {image_type} image: {local_tag}")
+        click.echo(f"  Registry: ghcr.io/{org}")
+        click.echo()
+        build_image(
+            image_type=image_type,
+            tag=local_tag,
+            push=False,
+            dockerfile=None,
+            context=None,
+            platform="linux/amd64",
+            registry="ghcr",
+            ghcr_org=org,
+            gcp_regions=(),
+            gcp_project="",
+            verbose=verbose,
+        )
+        click.echo()
+        push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
+        click.echo()
+        return
+
+    raise click.ClickException(f"Unrecognized image tag format: {image_tag}")
+
+
+def _build_and_push_task_image(task_tag: str, regions: set[str], verbose: bool = False) -> None:
+    """Build and push the task image, deriving registry from the task image tag.
+
+    The task image uses a different Dockerfile (Dockerfile.task) and build context
+    (marin repo root) than worker/controller, so it can't use _build_and_push_for_tag
+    directly.
+    """
+    marin_root = str(find_marin_root())
+    task_dockerfile = str(find_iris_root() / "Dockerfile.task")
+
+    gcp_parsed = parse_artifact_registry_tag(task_tag)
+    if gcp_parsed:
+        region, project, image_name, version = gcp_parsed
+        task_params = _ImageBuildParams(
+            image_type="task",
+            region=region,
+            project=project,
+            image_name=image_name,
+            version=version,
+            context=marin_root,
+            dockerfile=task_dockerfile,
+        )
+        _build_and_push_image(task_params, regions=regions, verbose=verbose)
+        click.echo()
+        return
+
+    ghcr_parsed = _parse_ghcr_tag(task_tag)
+    if ghcr_parsed:
+        org, image_name, version = ghcr_parsed
+        local_tag = f"{image_name}:{version}"
+        click.echo(f"Building task image: {local_tag}")
+        click.echo(f"  Registry: ghcr.io/{org}")
+        click.echo()
+        build_image(
+            image_type="task",
+            tag=local_tag,
+            push=False,
+            dockerfile=task_dockerfile,
+            context=marin_root,
+            platform="linux/amd64",
+            registry="ghcr",
+            ghcr_org=org,
+            gcp_regions=(),
+            gcp_project="",
+            verbose=verbose,
+        )
+        click.echo()
+        push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
+        click.echo()
+        return
+
+    raise click.ClickException(f"Unrecognized image tag format: {task_tag}")
+
+
+def _build_cluster_images(config, verbose: bool = False) -> dict[str, str]:
+    built: dict[str, str] = {}
+    all_regions = collect_all_regions(config)
+
     for tag, typ in [(config.defaults.bootstrap.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
-            params = _extract_image_params(tag, typ)
-            if params:
-                _build_and_push_image(params)
-                click.echo()
+            _build_and_push_for_tag(tag, typ, regions=all_regions, verbose=verbose)
+            built[typ] = tag
 
-    # Build and push the task image. It uses the marin repo root as context
-    # (needs pyproject.toml + uv.lock) and Dockerfile.task from iris root.
-    worker_tag = config.defaults.bootstrap.docker_image
-    if worker_tag:
-        parsed = _parse_artifact_registry_tag(worker_tag)
-        if parsed:
-            region, project, _, _ = parsed
-            task_params = _ImageBuildParams(
-                image_type="task",
-                region=region,
-                project=project,
-                image_name="iris-task",
-                version="latest",
-                context=str(_find_marin_root()),
-                dockerfile=str(_find_iris_root() / "Dockerfile.task"),
-            )
-            _build_and_push_image(task_params)
-            click.echo()
+    task_tag = config.defaults.default_task_image
+    if task_tag:
+        _build_and_push_task_image(task_tag, regions=all_regions, verbose=verbose)
+        built["task"] = task_tag
+
+    return built
+
+
+def _pin_latest_images(config) -> dict[str, str]:
+    """Pin :latest image tags to the current git SHA in memory only."""
+
+    def _pin_tag(tag: str | None, git_sha: str) -> str | None:
+        if not tag:
+            return tag
+        if tag.endswith(":latest"):
+            return f"{tag.removesuffix(':latest')}:{git_sha}"
+        return tag
+
+    tags = {
+        "controller": config.controller.image,
+        "worker": config.defaults.bootstrap.docker_image,
+        "task": config.defaults.default_task_image,
+    }
+    needs_pin = any(tag.endswith(":latest") for tag in tags.values() if tag)
+    if not needs_pin:
+        return {k: v for k, v in tags.items() if v}
+
+    git_sha = get_git_sha()
+    pinned = {name: _pin_tag(tag, git_sha) for name, tag in tags.items()}
+
+    if pinned["controller"]:
+        config.controller.image = pinned["controller"]
+    if pinned["worker"]:
+        config.defaults.bootstrap.docker_image = pinned["worker"]
+    if pinned["task"]:
+        config.defaults.default_task_image = pinned["task"]
+
+    click.echo("Pinning :latest image tags to git SHA for this run:")
+    for name, tag in pinned.items():
+        if tag:
+            click.echo(f"  {name}: {tag}")
+
+    return {k: v for k, v in pinned.items() if v}
 
 
 # =============================================================================
@@ -203,9 +316,13 @@ def cluster(ctx):
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
 @click.pass_context
 def cluster_start(ctx, local: bool):
-    """Start controller VM and wait for health.
+    """Start controller and wait for health.
 
-    Builds and pushes images, then boots the controller GCE VM.
+    Each platform handles its own controller lifecycle:
+    - GCP: builds images, creates GCE VM, SSHes in, bootstraps
+    - CoreWeave: kubectl apply ConfigMap + NodePool + Deployment + Service
+    - Local: starts in-process controller
+
     Use --local to create a local cluster for testing that mimics the original config.
     """
     config = ctx.obj.get("config")
@@ -213,67 +330,65 @@ def cluster_start(ctx, local: bool):
         raise click.ClickException("--config is required for cluster start")
     if local:
         config = make_local_config(config)
-    manager = ClusterManager(config)
-    if not manager.is_local:
-        _build_cluster_images(config)
+    is_local = config.controller.WhichOneof("controller") == "local"
+    if not is_local:
+        _pin_latest_images(config)
+        verbose = ctx.obj.get("verbose", False)
+        built = _build_cluster_images(config, verbose=verbose)
+        if built:
+            click.echo("Built image tags:")
+            for name, tag in built.items():
+                click.echo(f"  {name}: {tag}")
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
     click.echo("Starting controller...")
     try:
-        address = manager.start()
+        address = platform.start_controller(config)
         click.echo(f"Controller started at {address}")
         click.echo("\nController is running with integrated autoscaler.")
-        click.echo("Use 'iris cluster --config=... status' to check cluster state.")
+        if is_local:
+            click.echo("Press Ctrl+C to stop.")
+            if threading.current_thread() is threading.main_thread():
+                signal.signal(signal.SIGINT, lambda *_: platform.stop_controller(config))
+                signal.signal(signal.SIGTERM, lambda *_: platform.stop_controller(config))
+            platform.wait_for_controller()
+        else:
+            click.echo("Use 'iris --config=... cluster status' to check cluster state.")
     except Exception as e:
         click.echo(f"Failed to start controller: {e}", err=True)
         raise SystemExit(1) from e
 
 
 @cluster.command("stop")
+@click.option("--dry-run/--no-dry-run", default=False, help="Show what would be deleted without deleting")
+@click.option("--label", "label_override", default=None, help="Label prefix override (default from config or 'iris')")
 @click.pass_context
-def cluster_stop(ctx):
+def cluster_stop(ctx, dry_run: bool, label_override: str | None):
     """Stop controller and terminate all slices."""
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster stop")
-    from iris.cluster.config import IrisConfig
 
-    iris_config = IrisConfig(config)
-    platform = iris_config.platform()
-    ops = platform.vm_ops()
-    slice_ids_by_group: dict[str, list[str]] = {}
+    if dry_run:
+        click.echo("Scanning for resources (dry-run)...")
+    else:
+        click.echo("Stopping cluster (controller + all slices)...")
 
-    # Discover slices via platform ops (more reliable than RPC since controller may be down)
-    click.echo("Discovering existing slices via platform ops...")
-    for name, group_config in config.scale_groups.items():
-        slice_ids = ops.list_slices(group_config)
-        if slice_ids:
-            slice_ids_by_group[name] = slice_ids
-        click.echo(f"  Found {len(slice_ids)} slice(s) in group '{name}'")
+    try:
+        names = stop_all(config, dry_run=dry_run, label_prefix=label_override)
+    except Exception as e:
+        click.echo(f"Failed to stop cluster: {e}", err=True)
+        raise SystemExit(1) from e
 
-    ctrl = create_controller_vm(config)
-    click.echo("Stopping controller...")
-
-    total = sum(len(ids) for ids in slice_ids_by_group.values())
-    click.echo(f"Terminating {total} slice(s)...")
-
-    # make an executor for these
-    with ThreadPoolExecutor(max_workers=total + 1) as pool:
-        futures = []
-        futures.append(pool.submit(ctrl.stop))
-        for name, slice_ids in slice_ids_by_group.items():
-            group_config = config.scale_groups[name]
-            for slice_id in slice_ids:
-                try:
-                    futures.append(pool.submit(ops.delete_slice, group_config, slice_id))
-                except Exception as e:
-                    click.echo(f"Failed to terminate {slice_id}: {e}", err=True)
-
-        for future in as_completed(futures):
-            try:
-                future.result()
-                click.echo(f"Terminated: {future.result()}")
-            except Exception as e:
-                click.echo(f"Failed to terminate: {e}", err=True)
-    click.echo("Cluster stopped")
+    if dry_run:
+        if not names:
+            click.echo("Nothing to clean up.")
+        else:
+            click.echo(f"Would delete {len(names)} resource(s):")
+            for n in names:
+                click.echo(f"  - {n}")
+    else:
+        click.echo("Cluster stopped")
 
 
 @cluster.command("restart")
@@ -290,17 +405,25 @@ def cluster_restart(ctx):
 @click.option("--validate", is_flag=True, help="Submit a health check after reload")
 @click.pass_context
 def cluster_reload(ctx, no_build: bool, validate: bool):
-    """Rebuild images and reload the controller (faster than full restart)."""
+    """Rebuild images and reload the cluster (controller + workers)."""
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for cluster reload")
+    is_local = config.controller.WhichOneof("controller") == "local"
+    if not is_local:
+        _pin_latest_images(config)
     if not no_build:
-        _build_cluster_images(config)
-    manager = ClusterManager(config)
-    click.echo("Reloading controller (workers will be re-bootstrapped automatically)...")
+        built = _build_cluster_images(config)
+        if built:
+            click.echo("Built image tags:")
+            for name, tag in built.items():
+                click.echo(f"  {name}: {tag}")
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
+    click.echo("Reloading cluster (workers + controller)...")
     try:
-        address = manager.reload()
-        click.echo(f"Controller reloaded at {address}")
+        address = platform.reload(config)
+        click.echo(f"Cluster reloaded. Controller at {address}")
     except Exception as e:
         click.echo(f"Failed to reload cluster: {e}", err=True)
         raise SystemExit(1) from e
@@ -390,7 +513,7 @@ def vm_status(ctx, scale_group):
     for group in as_status.groups:
         if scale_group and group.name != scale_group:
             continue
-        counts = compute_slice_state_counts(group.slices)
+        counts = dict(group.slice_state_counts)
         total = sum(counts.values())
         click.echo(f"\nScale Group: {group.name}")
         accel_display = format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)
@@ -407,7 +530,9 @@ def vm_status(ctx, scale_group):
         if group.slices:
             click.echo("  Slices:")
             for si in group.slices:
-                ss = "READY" if slice_all_ready(si) else ("FAILED" if slice_any_failed(si) else "PENDING")
+                all_ready = bool(si.vms) and all(vm.state == vm_pb2.VM_STATE_READY for vm in si.vms)
+                any_failed = any(vm.state in (vm_pb2.VM_STATE_FAILED, vm_pb2.VM_STATE_PREEMPTED) for vm in si.vms)
+                ss = "READY" if all_ready else ("FAILED" if any_failed else "PENDING")
                 click.echo(f"    {si.slice_id}: {ss}")
                 for vi in si.vms:
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")
@@ -441,13 +566,6 @@ def vm_logs(ctx, vm_id, tail):
     click.echo(f"State: {vm_state_name(state)}")
     click.echo("---")
     click.echo(log_content if log_content else "(no logs available)")
-
-
-# =============================================================================
-# Register debug sub-group
-# =============================================================================
-
-cluster.add_command(debug)
 
 
 # =============================================================================

@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Ray backend for fray v2 Client protocol."""
 
@@ -31,6 +20,7 @@ from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _r
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
+    ActorConfig,
     CpuConfig,
     GpuConfig,
     JobRequest,
@@ -256,8 +246,15 @@ class RayClient:
                 pass
         return self._address
 
-    def submit(self, request: JobRequest) -> RayJobHandle:
-        """Submit a job, routing to TPU/binary/callable based on device type."""
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> RayJobHandle:
+        """Submit a job, routing to TPU/binary/callable based on device type.
+
+        Args:
+            request: The job request to submit.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
+                          RayClient currently doesn't enforce unique names, so this
+                          parameter has no effect but is included for API compatibility.
+        """
         logger.info("Submitting job: %s", request.name)
 
         if isinstance(request.resources.device, TpuConfig):
@@ -354,10 +351,13 @@ class RayClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> RayActorHandle:
         """Create a single Ray actor and return a handle immediately."""
-        group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
+        group = self.create_actor_group(
+            actor_class, *args, name=name, count=1, resources=resources, actor_config=actor_config, **kwargs
+        )
         return group.wait_ready()[0]  # type: ignore[return-value]
 
     def create_actor_group(
@@ -367,6 +367,7 @@ class RayClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorGroup:
         """Create N Ray actors named "{name}-0", "{name}-1", ...
@@ -374,7 +375,7 @@ class RayClient:
         Uses _RayActorHost to wrap actors, enabling them to access their
         own handle via current_actor().handle during __init__.
         """
-        ray_options = _actor_ray_options(resources)
+        ray_options = _actor_ray_options(resources, actor_config)
         # Don't specify runtime_env - let actors inherit from parent job
         # This prevents rebuilding packages that are already available
         handles: list[RayActorHandle] = []
@@ -390,15 +391,14 @@ class RayClient:
         logger.info("RayClient shutdown (namespace=%s)", self._namespace)
 
 
-def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
+def _actor_ray_options(resources: ResourceConfig, actor_config: ActorConfig = ActorConfig()) -> dict[str, Any]:
     """Build ray.remote().options() kwargs for an actor.
 
-    Maps ResourceConfig fields to Ray scheduling parameters so that
-    actors reserve the right amount of CPU/memory and get spread
-    across nodes instead of piling onto one.
+    Maps ResourceConfig and ActorConfig fields to Ray scheduling parameters so
+    that actors reserve the right amount of CPU/memory and get spread across
+    nodes instead of piling onto one.
 
     preemptible=False pins the actor to the head node via a custom resource.
-    max_concurrency>1 enables concurrent method calls (threaded actor).
     """
     options: dict[str, Any] = {
         "num_cpus": resources.cpu,
@@ -408,8 +408,19 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
         options["memory"] = humanfriendly.parse_size(resources.ram, binary=True)
     if not resources.preemptible:
         options["resources"] = {"head_node": 0.0001}
-    if resources.max_concurrency > 1:
-        options["max_concurrency"] = resources.max_concurrency
+    else:
+        # Preemptible actors should be restarted automatically by Ray when their
+        # node is preempted. Without this, the actor dies permanently and the
+        # pool degrades over time (see marin#2943).
+        options["max_restarts"] = -1
+    # Explicit max_restarts takes precedence over the preemptible default.
+    # Useful for actors like coordinators that are preemptible (not pinned to
+    # head node) but should NOT auto-restart because they require remote
+    # initialization beyond __init__.
+    if actor_config.max_restarts is not None:
+        options["max_restarts"] = actor_config.max_restarts
+    if actor_config.max_concurrency > 1:
+        options["max_concurrency"] = actor_config.max_concurrency
     return options
 
 

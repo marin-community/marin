@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import dataclasses
 from abc import abstractmethod
 from typing import TypeVar
@@ -114,9 +113,9 @@ class LayerNorm(LayerNormBase):
         out = out.astype(dtype)
 
         if self.weight is not None:
-            out = self.weight * out
+            out = self.weight.astype(out.dtype) * out
         if self.bias is not None:
-            out = out + self.bias
+            out = out + self.bias.astype(out.dtype)
         return out
 
 
@@ -134,9 +133,9 @@ class RmsNorm(LayerNormBase):
         out = out.astype(in_dtype)
 
         if self.weight is not None:
-            out = self.weight * out
+            out = self.weight.astype(out.dtype) * out
         if self.bias is not None:
-            out = out + self.bias
+            out = out + self.bias.astype(out.dtype)
         return out
 
 

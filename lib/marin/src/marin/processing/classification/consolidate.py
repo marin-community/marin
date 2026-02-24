@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Consolidate takes a set of documents with corresponding attributes and writes
@@ -203,13 +192,13 @@ def _compute_percentile_threshold(
             combined.merge(sketch)
         return combined
 
-    with ZephyrContext(name="consolidate-stats") as ctx:
-        result = ctx.execute(
-            Dataset.from_list(attr_paths)
-            .load_file()
-            .select("attributes")
-            .reduce(local_reducer=local_reducer, global_reducer=global_reducer)
-        )
+    ctx = ZephyrContext(name="consolidate-stats")
+    result = ctx.execute(
+        Dataset.from_list(attr_paths)
+        .load_file()
+        .select("attributes")
+        .reduce(local_reducer=local_reducer, global_reducer=global_reducer)
+    )
 
     combined_sketch = next(iter(result))
     threshold = combined_sketch.get_quantile_value(1 - keep_fraction)
@@ -333,15 +322,15 @@ def consolidate(config: ConsolidateConfig):
 
     output_pattern = f"{config.output_path}/part-{{shard:04d}}.parquet"
 
-    with ZephyrContext(name="consolidate-filter") as ctx:
-        results = ctx.execute(
-            Dataset.from_list(input_paths)
-            .map_shard(
-                lambda shard: process_file_shard(
-                    shard=shard, filters=filters, input_base=config.input_path, filetype=config.filetype
-                )
+    ctx = ZephyrContext(name="consolidate-filter")
+    results = ctx.execute(
+        Dataset.from_list(input_paths)
+        .map_shard(
+            lambda shard: process_file_shard(
+                shard=shard, filters=filters, input_base=config.input_path, filetype=config.filetype
             )
-            .write_parquet(output_pattern)
         )
+        .write_parquet(output_pattern)
+    )
 
     logger.info(f"Consolidation complete. Wrote {len(results)} output files")

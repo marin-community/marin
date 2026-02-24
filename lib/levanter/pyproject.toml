@@ -173,6 +173,15 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
+filterwarnings = [
+    "ignore:Transparent hugepages are not enabled\\..*:UserWarning:jax._src.cloud_tpu_init",
+    "ignore:Read the `app_url` setting from the appropriate Settings object\\.:DeprecationWarning:wandb.analytics.sentry",
+    "ignore:websockets\\.legacy is deprecated.*:DeprecationWarning:websockets.legacy",
+    "ignore:websockets\\.server\\.WebSocketServerProtocol is deprecated:DeprecationWarning:uvicorn.protocols.websockets.websockets_impl",
+    "ignore:'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated\\. Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead\\.:DeprecationWarning:gradio.routes",
+    "ignore:Passing 'msg' argument to Task\\.cancel\\(\\) is deprecated since Python 3\\.11, and scheduled for removal in Python 3\\.14\\.:DeprecationWarning",
+    "ignore:Passing 'msg' argument to Future\\.cancel\\(\\) is deprecated since Python 3\\.11, and scheduled for removal in Python 3\\.14\\.:DeprecationWarning",
+]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "entry: marks tests as entry point tests (deselect with '-m \"not entry\"')",

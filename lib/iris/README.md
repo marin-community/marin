@@ -8,19 +8,20 @@ Distributed job orchestration replacing Ray with simpler primitives.
 
 ```bash
 # Start controller VM (runs autoscaler internally)
-uv run iris cluster --config=examples/eu-west4.yaml start
+uv run iris --config=examples/marin.yaml cluster start
 
 # Start a local cluster for testing (mimics the config without GCP)
-uv run iris cluster --config=examples/eu-west4.yaml start --local
+# Dashboard is available at the printed URL; press Ctrl+C to stop.
+uv run iris --config=examples/marin.yaml cluster start --local
 
 # Check cluster status
-uv run iris cluster --config=examples/eu-west4.yaml status
+uv run iris --config=examples/marin.yaml cluster status
 
 # Validate cluster with test jobs (establishes SSH tunnel automatically)
-uv run iris cluster --config=examples/eu-west4.yaml debug validate
+uv run iris --config=examples/marin.yaml cluster debug validate
 
-# Stop cluster (controller + all worker slices)
-uv run iris cluster --config=examples/eu-west4.yaml stop
+# Stop cluster (controller + all worker slices, terminated in parallel; 60s timeout)
+uv run iris --config=examples/marin.yaml cluster stop
 ```
 
 ### Submit a Job
@@ -49,7 +50,7 @@ Controller Process (in Docker container):
 ├── HTTP dashboard (monitoring, status)
 ├── Scheduler thread (task→worker matching)
 ├── Autoscaler thread (VM lifecycle management)
-└── ManagedVm threads (per-VM state machines)
+└── WorkerVm threads (per-VM state machines)
 
 Worker Process (on each VM):
 ├── Task executor (runs jobs in containers)
@@ -106,7 +107,7 @@ result = client.predict({"text": "hello"})
 | **Worker** | Execution agent running jobs in isolated containers |
 | **Scale Group** | Configuration for a type of accelerator (TPU, GPU) with min/max slices |
 | **Slice** | Atomic scaling unit - a complete TPU pod that succeeds or fails as a whole |
-| **VmManager** | Abstraction for VM lifecycle (GCP, Manual, or Fake for testing) |
+| **Platform** | Protocol for VM/slice lifecycle (GCP, Manual, Local, or Fake for testing) |
 
 ### Network Architecture
 
@@ -198,7 +199,10 @@ When a job requests TPU resources (`device=tpu_device("v5litepod-16")`), workers
 **Environment variables:**
 - `JAX_PLATFORMS=tpu,cpu` - JAX platform configuration
 - `PJRT_DEVICE=TPU` - PJRT runtime device
+- `TPU_SKIP_MDS_QUERY=1` - force JAX to use explicit TPU worker metadata in containers
+- `TPU_ACCELERATOR_TYPE`, `TPU_TYPE` - TPU accelerator variant (for libtpu/JAX topology init)
 - `TPU_NAME`, `TPU_WORKER_ID`, `TPU_WORKER_HOSTNAMES`, `TPU_CHIPS_PER_HOST_BOUNDS` - TPU metadata from host
+- `JAX_COORDINATOR_ADDRESS`, `JAX_NUM_PROCESSES`, `JAX_PROCESS_ID` - explicit JAX distributed coordination
 
 This enables JAX and other TPU-aware frameworks to initialize correctly inside job containers.
 
@@ -209,42 +213,53 @@ Jobs can include a `bundle_blob` containing workspace files. The controller stor
 **Configuration** (required):
 
 ```yaml
-controller:
-  bundle_prefix: gs://my-bucket/iris/bundles  # GCS for distributed workers
+storage:
+  bundle_prefix: gs://my-bucket/iris/bundles  # shared storage for distributed workers
 ```
 
-The controller will **fail at startup** if `bundle_prefix` is not configured.
+The controller will **fail at startup** if `storage.bundle_prefix` is not configured.
+
+### Multi-Region Bundle Storage
+
+**Design Decision:** Bundles are stored in a single centralized GCS bucket and fetched by workers in all regions as needed, rather than implementing regional caching or replication.
+
+**Rationale:**
+- Bundles are small (~4MB each)
+- Cross-region transfer costs are negligible at expected scale:
+  - 10,000 tasks/day × 4MB = 40GB/day ≈ $4/day in cross-region transfer fees
+- The complexity of regional bundle caching is not justified by these costs
+- Centralized storage simplifies operations and reduces infrastructure complexity
 
 ## CLI Reference
 
-**Note:** The `--config` option is a global option on the top-level `iris` command group. It must be placed after `iris` but before the subcommand (e.g., `iris --config cluster.yaml job run ...` or `iris cluster --config cluster.yaml start`).
+**Note:** The `--config` option is a global option on the top-level `iris` command group. It must be placed after `iris` but before the subcommand (e.g., `iris --config cluster.yaml cluster start` or `iris --config cluster.yaml job run ...`).
 
 ### Cluster Commands
 
 ```bash
-# Start/stop/restart controller VM (--config on cluster group)
-iris cluster --config=cluster.yaml start
-iris cluster --config=cluster.yaml start --local   # Local cluster for testing
-iris cluster --config=cluster.yaml stop
-iris cluster --config=cluster.yaml restart
-iris cluster --config=cluster.yaml reload           # Rebuild images + redeploy on existing VMs
-iris cluster --config=cluster.yaml status
+# Start/stop/restart controller VM
+iris --config=cluster.yaml cluster start
+iris --config=cluster.yaml cluster start --local   # Local cluster for testing
+iris --config=cluster.yaml cluster stop
+iris --config=cluster.yaml cluster restart
+iris --config=cluster.yaml cluster reload           # Rebuild images + redeploy on existing VMs
+iris --config=cluster.yaml cluster status
 ```
 
 ### Controller Subcommands
 
 ```bash
 # Controller-specific operations
-iris cluster --config=... controller start          # Boot controller GCE VM
-iris cluster --config=... controller status          # Controller status
+iris --config=... cluster controller start          # Boot controller GCE VM
+iris --config=... cluster controller status          # Controller status
 ```
 
 ### VM Operations (via controller RPC)
 
 ```bash
 # VM status and logs (always via controller)
-iris cluster vm --controller-url=http://localhost:10000 status
-iris cluster vm --controller-url=http://localhost:10000 logs VM_ID
+iris --controller-url=http://localhost:10000 cluster vm status
+iris --controller-url=http://localhost:10000 cluster vm logs VM_ID
 ```
 
 ### Image Builds
@@ -258,20 +273,11 @@ iris build controller-image -t iris-controller:v1 --push --region us-central1
 ### Dashboard & Debugging
 
 ```bash
-iris cluster --config=... dashboard
-iris cluster --config=... dashboard --port 8080
-```
+# Remote clusters: opens SSH tunnel to controller dashboard
+iris --config=... cluster dashboard
+iris --config=... cluster dashboard --port 8080
 
-### Debug cluster status
-```bash
-iris cluster --config=... debug discover         # Find controller VM
-iris cluster --config=... debug health           # Health check
-iris cluster --config=... debug autoscaler-status
-iris cluster --config=... debug bootstrap-logs   # VM startup logs
-iris cluster --config=... debug show-task-logs JOB_ID
-iris cluster --config=... debug validate         # Run test TPU jobs
-iris cluster --config=... debug cleanup          # Dry-run by default
-iris cluster --config=... debug cleanup --no-dry-run
+# Local clusters: dashboard is at the URL printed by `cluster start --local`
 ```
 
 ### Job Management
@@ -299,7 +305,7 @@ The smoke test validates end-to-end cluster functionality including autoscaling.
 
 ```bash
 # Full smoke test (builds images, starts cluster, runs TPU jobs, cleans up)
-uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/eu-west4.yaml
+uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/marin.yaml
 
 # Run tests and keep VMs running for debugging (manual cleanup required later)
 uv run python lib/iris/scripts/smoke-test.py --config ... --mode keep
@@ -337,9 +343,6 @@ platform:
   label_prefix: iris
   gcp:
     project_id: my-project
-    region: us-central1
-    zone: us-central1-a
-    default_zones: [us-central1-a, us-central1-b]
 
 defaults:
   timeouts:
@@ -360,20 +363,21 @@ defaults:
     worker_port: 10001
     controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
 
+storage:
+  bundle_prefix: gs://my-bucket/iris/bundles  # shared storage for distributed workers
+
 controller:
   image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest
-  bundle_prefix: gs://my-bucket/iris/bundles
   gcp:
+    zone: us-central1-a
     machine_type: n2-standard-4
     port: 10000
 
 scale_groups:
   tpu_v5e_4:
-    vm_type: tpu_vm
     accelerator_type: tpu
     accelerator_variant: v5litepod-4
-    runtime_version: v2-alpha-tpuv5-lite
-    slice_size: 4
+    num_vms: 4
     resources:
       cpu: 64
       ram: 64GB
@@ -382,13 +386,16 @@ scale_groups:
       gpu_count: 0
     min_slices: 0
     max_slices: 10
-    preemptible: true
-    zones: [us-central1-a, us-central1-b]
+    slice_template:
+      preemptible: true
+      gcp:
+        zone: us-central1-a
+        zones: [us-central1-a, us-central1-b]
+        runtime_version: v2-alpha-tpuv5-lite
 
   manual_hosts:
-    vm_type: manual_vm
     accelerator_type: cpu
-    slice_size: 1
+    num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
@@ -397,10 +404,11 @@ scale_groups:
       gpu_count: 0
     min_slices: 0
     max_slices: 2
-    manual:
-      hosts: [10.0.0.1, 10.0.0.2]
-      ssh_user: ubuntu
-      ssh_key_file: ~/.ssh/manual_key
+    slice_template:
+      manual:
+        hosts: [10.0.0.1, 10.0.0.2]
+        ssh_user: ubuntu
+        ssh_key_file: ~/.ssh/manual_key
 ```
 
 ## Directory Structure
@@ -417,17 +425,17 @@ src/iris/
 │   ├── resolver.py          # ClusterResolver
 │   └── worker_pool.py       # Task dispatch
 ├── cluster/                  # Cluster orchestration
+│   ├── manager.py           # connect_cluster() + stop_all(dry_run) free functions
 │   ├── controller/          # Controller service + autoscaler
 │   ├── worker/              # Worker service
-│   └── vm/                  # VM management + autoscaling
+│   └── platform/            # Platform abstractions (GCP, Manual, Local, CoreWeave)
 ├── rpc/                      # Protocol definitions + generated code
 └── cli/                      # CLI package
     ├── main.py               # Top-level iris group
     ├── cluster.py            # Cluster lifecycle, controller, VM ops, dashboard
     ├── build.py              # Image build commands
     ├── run.py                # Job submission (command passthrough)
-    ├── rpc.py                # Dynamic RPC CLI
-    └── debug.py              # Debugging & validation
+    └── rpc.py                # Dynamic RPC CLI
 ```
 
 ## References

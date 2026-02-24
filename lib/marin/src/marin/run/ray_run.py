@@ -1,16 +1,6 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa
 
 import argparse
@@ -20,6 +10,7 @@ import json
 import logging
 import os
 import re
+import sys
 import shlex
 import subprocess
 import time
@@ -203,6 +194,12 @@ async def submit_and_track_job(
     # Stream logs asynchronously
     async for lines in client.tail_job_logs(submission_id):
         print(lines, end="")
+
+    # Check terminal status — tail_job_logs returns when the job finishes
+    # but does not raise on failure.
+    status = client.get_job_status(submission_id)
+    if status != "SUCCEEDED":
+        raise RuntimeError(f"Ray job {submission_id} ended with status: {status}")
 
 
 def main():
@@ -399,6 +396,7 @@ def main():
             asyncio.run(run_job())
     except Exception:
         logger.error("Failed to run job", exc_info=True)
+        sys.exit(1)
     finally:
         if args.auto_stop:
             logger.info(f"Auto-stopping job {submission_id}...")

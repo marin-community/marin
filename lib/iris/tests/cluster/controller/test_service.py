@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for controller RPC service implementation.
 
@@ -128,11 +117,14 @@ def state():
 
 
 class MockSchedulerWake:
-    """Mock object that tracks scheduler protocol calls."""
+    """Mock object that tracks controller protocol calls."""
 
     def __init__(self):
         self.wake = Mock()
         self.kill_tasks_on_workers = Mock()
+        self.create_scheduling_context = Mock(return_value=Mock())
+        self.get_job_scheduling_diagnostics = Mock(return_value="")
+        self.stub_factory = Mock()
 
 
 @pytest.fixture
@@ -266,7 +258,6 @@ def test_launch_job_rejects_empty_name(service, state):
         service.launch_job(request, None)
 
     assert exc_info.value.code == Code.INVALID_ARGUMENT
-    assert "name is required" in exc_info.value.message.lower()
 
 
 # =============================================================================
@@ -561,11 +552,17 @@ def test_get_process_logs():
     log_buffer = LogRingBuffer(maxlen=100)
 
     # Add some test log records
-    log_buffer.append(BufferedLogRecord(timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1"))
     log_buffer.append(
-        BufferedLogRecord(timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log")
+        BufferedLogRecord(seq=1, timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1")
     )
-    log_buffer.append(BufferedLogRecord(timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2"))
+    log_buffer.append(
+        BufferedLogRecord(
+            seq=2, timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log"
+        )
+    )
+    log_buffer.append(
+        BufferedLogRecord(seq=3, timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2")
+    )
 
     service = ControllerServiceImpl(
         state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=log_buffer

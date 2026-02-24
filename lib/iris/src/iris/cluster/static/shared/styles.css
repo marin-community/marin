@@ -396,6 +396,8 @@ button:not(.tab-btn):disabled { color: #8c959f; cursor: default; background: #f6
 .action-type.quota_exceeded { background: #ffebe9; color: #cf222e; }
 .action-type.backoff_triggered { background: #fff8c5; color: #9a6700; }
 .action-type.worker_failed { background: #ffebe9; color: #cf222e; }
+.action-type.slice_ready { background: #dafbe1; color: #1a7f37; }
+.action-type.slice_failed { background: #ffebe9; color: #cf222e; }
 
 .future-feature {
   color: #57606a;

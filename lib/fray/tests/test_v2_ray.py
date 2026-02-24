@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for the fray v2 Ray backend that run WITHOUT a real Ray cluster.
 
@@ -273,3 +262,21 @@ def test_actor_options_non_preemptible_pins_head_node():
     options = _actor_ray_options(ResourceConfig(preemptible=False))
     assert options["num_cpus"] == 1
     assert options["resources"] == {"head_node": 0.0001}
+    assert "max_restarts" not in options
+
+
+def test_actor_options_preemptible_sets_max_restarts():
+    from fray.v2.ray_backend.backend import _actor_ray_options
+
+    options = _actor_ray_options(ResourceConfig(preemptible=True))
+    assert options["max_restarts"] == -1
+    assert "resources" not in options
+
+
+def test_actor_options_explicit_max_restarts_overrides_preemptible():
+    from fray.v2.ray_backend.backend import _actor_ray_options
+    from fray.v2.types import ActorConfig
+
+    options = _actor_ray_options(ResourceConfig(preemptible=True), ActorConfig(max_restarts=0))
+    assert options["max_restarts"] == 0
+    assert "resources" not in options

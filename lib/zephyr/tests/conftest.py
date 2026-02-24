@@ -1,19 +1,10 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Pytest fixtures for zephyr tests."""
+import tempfile
 
+import atexit
 import logging
 import os
 import sys
@@ -47,17 +38,13 @@ IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "demo.
 @pytest.fixture(scope="session")
 def iris_cluster():
     """Start local Iris cluster for testing - reused across all tests."""
-    from iris.cluster.manager import ClusterManager
+    from iris.cluster.manager import connect_cluster
     from iris.cluster.config import load_config, make_local_config
 
-    try:
-        config = load_config(IRIS_CONFIG)
-        config = make_local_config(config)
-        manager = ClusterManager(config)
-        with manager.connect() as url:
-            yield url
-    except Exception as e:
-        pytest.skip(f"Failed to start local Iris cluster: {e}")
+    config = load_config(IRIS_CONFIG)
+    config = make_local_config(config)
+    with connect_cluster(config) as url:
+        yield url
 
 
 @pytest.fixture(scope="session")
@@ -112,6 +99,18 @@ def fray_client(request):
 
 
 @pytest.fixture
+def actor_context():
+    """Provide a fake actor context so ZephyrCoordinator can call current_actor()."""
+    from unittest.mock import MagicMock
+
+    from fray.v2.actor import ActorContext, _reset_current_actor, _set_current_actor
+
+    token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
+    yield
+    _reset_current_actor(token)
+
+
+@pytest.fixture
 def sample_data():
     """Sample data for testing."""
     return list(range(1, 11))  # [1, 2, 3, ..., 10]
@@ -125,14 +124,14 @@ def zephyr_ctx(fray_client, tmp_path_factory):
     """
     tmp_path = tmp_path_factory.mktemp("zephyr")
     chunk_prefix = str(tmp_path / "chunks")
-    with ZephyrContext(
+    ctx = ZephyrContext(
         client=fray_client,
-        num_workers=2,
+        max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name="test-ctx",
-    ) as ctx:
-        yield ctx
+    )
+    yield ctx
 
 
 class CallCounter:
@@ -156,6 +155,16 @@ class CallCounter:
         self.map_count += 1
         self.processed_ids.append(x["id"])
         return {**x, "processed": True}
+
+
+@pytest.fixture(autouse=True)
+def _configure_marin_prefix():
+    """Set MARIN_PREFIX to a temp directory for tests that rely on it."""
+    if "MARIN_PREFIX" not in os.environ:
+        with tempfile.TemporaryDirectory(prefix="marin_prefix") as temp_dir:
+            os.environ["MARIN_PREFIX"] = temp_dir
+            yield
+            del os.environ["MARIN_PREFIX"]
 
 
 @pytest.fixture(autouse=True)
@@ -203,4 +212,4 @@ def pytest_sessionfinish(session, exitstatus):
         tty.flush()
         tty.close()
         if exitstatus != 0:
-            os._exit(exitstatus)
+            atexit.register(os._exit, exitstatus)

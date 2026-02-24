@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -62,6 +51,9 @@ class ModelConfig:
     """
     Whether or not this model was trained with a Chat Template in the tokenizer
     """
+
+    base_eval_run_name: str | None = None
+    """Custom base name for wandb runs."""
 
 
 class Evaluator(ABC):
@@ -120,6 +112,8 @@ def launch_evaluate_with_ray(
     pip_packages: Sequence[str] = (),
     env_vars: dict[str, str] | None = None,
     configure_logging: bool = True,
+    max_retries_failure: int = 0,
+    max_retries_preemption: int = 100,
 ) -> None:
     """Launch an evaluator on the Ray/Fray cluster."""
 
@@ -152,6 +146,8 @@ def launch_evaluate_with_ray(
             pip_packages=list(pip_packages),
             env_vars=env_vars,
         ),
+        max_retries_failure=max_retries_failure,
+        max_retries_preemption=max_retries_preemption,
     )
 
     cluster = current_cluster()

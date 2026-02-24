@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import logging
@@ -18,11 +7,11 @@ import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import PurePath
+from typing import TypeVar
 
 import draccus
 import levanter.infra.cli_helpers
 from fray.v2 import (
-    Client,
     CpuConfig,
     Entrypoint,
     GpuConfig,
@@ -33,11 +22,14 @@ from fray.v2 import (
     current_client,
 )
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
+from levanter.main import train_dpo
 from levanter.main import train_lm
+from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
+from iris.temp_buckets import get_temp_bucket_path
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +48,6 @@ class TrainLmOnPodConfig:
 
     Note that trainer.id and the RUN_ID env variable take precedence, in that order.
     """
-    allow_out_of_region: tuple[str, ...] = ()
-    """Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
     auto_build_caches: bool = False
@@ -69,15 +59,39 @@ class TrainLmOnPodConfig:
     """
 
 
+@dataclass(frozen=True)
+class TrainDpoOnPodConfig:
+    """Configuration for DPO training on a pod."""
+
+    train_config: TrainDpoConfig
+    resources: ResourceConfig
+    output_path: str | None = None
+    """Base output directory to be used for training, mainly for use with executor framework."""
+    impute_run_id_from_output_path: bool = True
+    """
+    If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
+
+    Note that trainer.id and the RUN_ID env variable take precedence, in that order.
+    """
+    env_vars: dict[str, str] | None = None
+    """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
+    auto_build_caches: bool = False
+    """Whether to allow Levanter to build dataset caches on the fly.
+
+    Defaults to False so Marin jobs fail fast when a cache is missing instead of
+    spending time (and money) building it during training. Override to True if
+    you explicitly want cache construction.
+    """
+
+
+TrainConfigT = TypeVar("TrainConfigT", TrainLmConfig, TrainDpoConfig)
+TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnPodConfig)
+
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
 
 
-def _get_client() -> Client:
-    return current_client()
-
-
-def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
+def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     """
     Update the config to use the out_path as the base output directory for training.
 
@@ -107,7 +121,7 @@ def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnP
     return replace(pod_config, train_config=config)
 
 
-def _suppress_ray_config(config: TrainLmConfig) -> TrainLmConfig:
+def _suppress_ray_config(config: TrainConfigT) -> TrainConfigT:
     """
     Levanter wants to auto-start the Ray cluster, but we're already in a Ray cluster. Disable that.
     """
@@ -129,7 +143,7 @@ def _suppress_ray_config(config: TrainLmConfig) -> TrainLmConfig:
     return config
 
 
-def _maybe_override_auto_build_caches(config: TrainLmConfig, auto_build: bool) -> TrainLmConfig:
+def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) -> TrainConfigT:
     data = config.data
     if data.auto_build_caches != auto_build:
         logger.info("Overriding auto_build_caches to %s", auto_build)
@@ -138,7 +152,7 @@ def _maybe_override_auto_build_caches(config: TrainLmConfig, auto_build: bool) -
     return config
 
 
-def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
+def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     """
     Levanter will auto-generate a run ID if it's not set. We want to enforce that it's set, so that it resumes
     properly after preemption.
@@ -190,7 +204,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
     - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
-    - if allow_out_of_region is False, it checks that the data cache paths are in the same region as the VM.
+    - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
@@ -203,6 +217,72 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         default_launch_config.env_for_accel(config.resources.device.variant),
     )
     # if we're on tpu, ensure we have wandb
+    if isinstance(config.resources.device, TpuConfig):
+        _check_for_wandb_key(env)
+
+    env = _add_run_env_variables(env)
+
+    if "JAX_COMPILATION_CACHE_DIR" not in env:
+        temp_cache_path = get_temp_bucket_path(ttl_days=30, prefix="compilation-cache")
+        if temp_cache_path is not None:
+            env["JAX_COMPILATION_CACHE_DIR"] = temp_cache_path
+            logger.info("JAX compilation cache on temp bucket: %s", temp_cache_path)
+        else:
+            logger.warning("No temp bucket available; JAX compilation cache will not be configured.")
+
+    config = _enforce_run_id(config)
+    logger.info(f"Using run ID: {config.train_config.trainer.id}")
+
+    train_config = config.train_config
+    train_config = _suppress_ray_config(train_config)
+    train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
+
+    # disable accelerator requirement when running without GPU/TPU resources
+    if config.resources.device.kind == "cpu":
+        trainer = replace(train_config.trainer, require_accelerator=False)
+        train_config = replace(train_config, trainer=trainer)
+
+    if not isinstance(config.resources.device, CpuConfig):
+        _doublecheck_paths(config)
+
+    client = current_client()
+
+    extras = []
+    if isinstance(config.resources.device, TpuConfig):
+        extras.append("tpu")
+    elif isinstance(config.resources.device, GpuConfig):
+        extras.append("gpu")
+
+    # Note: Using a constant job name allows restarts to adopt the existing job handle
+    # instead of raising a duplicate name error (adopt_existing=True is the default).
+    job_request = JobRequest(
+        name="train_lm",
+        entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
+        resources=config.resources,
+        environment=create_environment(env_vars=env, extras=extras),
+        max_retries_failure=10,
+    )
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
+
+
+def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
+    """
+    Run the Levanter DPO training main function on a Ray cluster.
+
+    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
+    It should also be run with a Ray cluster already running.
+    """
+    default_launch_config = levanter.infra.cli_helpers.load_config()
+
+    if config.output_path is not None:
+        logger.info(f"Using output path: {config.output_path}")
+        config = _update_config_to_use_out_path(config)
+
+    env = _add_default_env_variables(
+        config.env_vars or {},
+        default_launch_config.env_for_accel(config.resources.device.variant),
+    )
     if isinstance(config.resources.device, TpuConfig):
         _check_for_wandb_key(env)
 
@@ -223,15 +303,14 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     train_config = _suppress_ray_config(train_config)
     train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
 
-    # disable accelerator requirement when running without GPU/TPU resources
     if config.resources.device.kind == "cpu":
         trainer = replace(train_config.trainer, require_accelerator=False)
         train_config = replace(train_config, trainer=trainer)
 
-    if not config.allow_out_of_region and not isinstance(config.resources.device, CpuConfig):
+    if not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
-    client = _get_client()
+    client = current_client()
 
     extras = []
     if isinstance(config.resources.device, TpuConfig):
@@ -240,8 +319,8 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         extras.append("gpu")
 
     job_request = JobRequest(
-        name="train_lm",
-        entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
+        name="train_dpo",
+        entrypoint=Entrypoint.from_callable(train_dpo.main, args=[train_config]),
         resources=config.resources,
         environment=create_environment(env_vars=env, extras=extras),
         max_retries_failure=10,
@@ -250,16 +329,13 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     job.wait(raise_on_failure=True)
 
 
-def _doublecheck_paths(config: TrainLmOnPodConfig):
+def _doublecheck_paths(config: TrainOnPodConfigT):
     """
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
 
     This function recursively examines all strings/paths in the config to identify GCS paths and checks their regions.
     """
-    # Determine if we're running locally or if path checks should be bypassed
-    allow_out_of_region = config.allow_out_of_region
-
     local_ok = not isinstance(config.resources.device, TpuConfig)
 
     try:
@@ -271,12 +347,12 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
     # Recursively check all paths in the config
-    _check_paths_recursively(config.train_config, "", region, local_ok, allow_out_of_region)
+    _check_paths_recursively(config.train_config, "", region, local_ok)
 
     return config
 
 
-def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_region):
+def _check_paths_recursively(obj, path_prefix, region, local_ok):
     """
     Check all strings in the config object that look like GCS paths appear to respect same-region constraints.
 
@@ -285,17 +361,15 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
         path_prefix: The prefix for the current path (e.g., "config.trainer")
         region: The region of the VM
         local_ok: Whether local paths are allowed
-        allow_out_of_region: Tuple of paths that are allowed to be read from or written to different regions
-        must_save_checkpoints: Whether checkpoints must be saved
     """
     if isinstance(obj, dict):
         for key, value in obj.items():
             new_prefix = f"{path_prefix}.{key}" if path_prefix else key
-            _check_paths_recursively(value, new_prefix, region, local_ok, allow_out_of_region)
+            _check_paths_recursively(value, new_prefix, region, local_ok)
     elif isinstance(obj, list | tuple):
         for i, item in enumerate(obj):
             new_prefix = f"{path_prefix}[{i}]"
-            _check_paths_recursively(item, new_prefix, region, local_ok, allow_out_of_region)
+            _check_paths_recursively(item, new_prefix, region, local_ok)
     elif isinstance(obj, str | os.PathLike):
         if isinstance(obj, os.PathLike):
             path_str = os.fspath(obj)
@@ -308,20 +382,15 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
             path_str = obj
 
         if path_str.startswith("gs://"):
-            # This is a GCS path, check if it's in the right region
-            is_allow_listed_path = any(path_prefix.startswith(p) for p in allow_out_of_region)
-            # whitelist train and validation urls because we are always cached
+            # Source URLs are always read-and-cached, so they may be out of region.
             if "train_urls" in path_prefix or "validation_urls" in path_prefix:
-                is_allow_listed_path = True
-
-            # Determine if this path should be checked
-            if not is_allow_listed_path:
-                _check_path_in_region(
-                    path_prefix,
-                    path_str,
-                    region=region,
-                    local_ok=local_ok,
-                )
+                return
+            _check_path_in_region(
+                path_prefix,
+                path_str,
+                region=region,
+                local_ok=local_ok,
+            )
     elif dataclasses.is_dataclass(obj):
         for field in dataclasses.fields(obj):
             new_prefix = f"{path_prefix}.{field.name}" if path_prefix else field.name
@@ -331,7 +400,6 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
                 new_prefix,
                 region,
                 local_ok,
-                allow_out_of_region,
             )
     # allow primitives through, warn on other types
     elif not isinstance(obj, str | int | float | bool | type(None)):

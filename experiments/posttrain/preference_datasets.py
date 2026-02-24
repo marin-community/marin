@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Preference datasets are downloaded from Hugging Face and transformed into OpenAI messages
@@ -25,7 +14,7 @@ How to retrieve a preference dataset:
 
 Current datasets:
 1. HuggingFaceH4/ultrafeedback_binarized
-   (only train_prefs split included to avoid accidentally training on test_prefs)
+   (train_prefs and test_prefs splits included; keep them separate in downstream training)
 2. allenai/olmo-2-1124-7b-preference-mix
 """
 
@@ -80,7 +69,7 @@ PREFERENCE_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["prompt", "score_chosen", "score_rejected"],
         filetype="parquet",
-        splits=["train_prefs"],
+        splits=["train_prefs", "test_prefs"],
     ),
     "allenai/olmo-2-1124-7b-preference-mix": PreferenceDatasetConfig(
         hf_dataset_id="allenai/olmo-2-1124-7b-preference-mix",

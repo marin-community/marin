@@ -1,19 +1,9 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Iterator, Sequence
 from functools import partial
+import dupekit
 import logging
 from marin.utils import rebase_file_path
 import pyarrow as pa
@@ -40,24 +30,24 @@ logger = logging.getLogger(__name__)
 
 def _compute_fuzzy_dedup_stats(shards: list[str] | Sequence[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute fuzzy deduplication stats from {len(shards)} shards"):
-        with ZephyrContext(client=LocalClient(), name="fuzzy-dup-counts") as ctx:
-            result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
-                Dataset.from_list(shards)
-                .load_parquet(columns=["component_id"])
-                # Compute the per-component statistics and then roll them up into a single counter group
-                .group_by(
-                    key=lambda r: r["component_id"],
-                    reducer=lambda _, items: DupCounters(
-                        method=method,
-                        level=level,
-                        total=(total := sum(1 for _ in items)),
-                        dups=total if total > 1 else 0,
-                        unique=1,
-                        dup_clusters=int(total > 1),
-                    ),
-                )
-                .reduce(partial(sum, start=DupCounters(method=method, level=level))),
-            )[0]
+        ctx = ZephyrContext(client=LocalClient(), name="fuzzy-dup-counts")
+        result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
+            Dataset.from_list(shards)
+            .load_parquet(columns=["component_id"])
+            # Compute the per-component statistics and then roll them up into a single counter group
+            .group_by(
+                key=lambda r: r["component_id"],
+                reducer=lambda _, items: DupCounters(
+                    method=method,
+                    level=level,
+                    total=(total := sum(1 for _ in items)),
+                    dups=total if total > 1 else 0,
+                    unique=1,
+                    dup_clusters=int(total > 1),
+                ),
+            )
+            .reduce(partial(sum, start=DupCounters(method=method, level=level))),
+        )[0]
     return result
 
 
@@ -73,10 +63,10 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
         shard_dup_map[record["id"]] = record["fuzzy_duplicate"]
 
     with log_time(f"Load fuzzy duplicate map from {len(shards)} shards"):
-        with ZephyrContext(client=LocalClient(), name="fuzzy-dup-map") as ctx:
-            ctx.execute(
-                Dataset.from_list(shards).load_parquet().map(add_to_dup_map),
-            )
+        ctx = ZephyrContext(client=LocalClient(), name="fuzzy-dup-map")
+        ctx.execute(
+            Dataset.from_list(shards).load_parquet().map(add_to_dup_map),
+        )
 
     return shard_dup_map
 
@@ -90,9 +80,6 @@ def dedup_fuzzy_document(config: DedupConfig):
             f"minhash_num_bands ({config.fuzzy_minhash_num_bands})"
         )
 
-    import dupekit
-    from dupekit import Transformation
-
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
     _init_wandb(config)
@@ -103,19 +90,19 @@ def dedup_fuzzy_document(config: DedupConfig):
         Yields {bucket: str, id: Any} for each bucket hit.
         """
         pipeline = [
-            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
-            Transformation.CleanText(input_col=config.text_field, output_col="clean_text"),
-            Transformation.MinHash(
+            dupekit.Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
+            dupekit.Transformation.CleanText(input_col=config.text_field, output_col="clean_text"),
+            dupekit.Transformation.MinHash(
                 input_col="clean_text",
                 output_col="signature",
                 num_perms=config.fuzzy_minhash_num_perms,
                 ngram_size=config.fuzzy_minhash_ngram_size,
                 seed=config.fuzzy_minhash_seed,
             ),
-            Transformation.MinHashLSH(
+            dupekit.Transformation.MinHashLSH(
                 input_col="signature", output_col="buckets", num_bands=config.fuzzy_minhash_num_bands
             ),
-            Transformation.SelectColumns(columns=["resolved_id", "buckets"]),
+            dupekit.Transformation.SelectColumns(columns=["resolved_id", "buckets"]),
         ]
 
         result_batch = dupekit.transform(batch, pipeline)
@@ -131,63 +118,63 @@ def dedup_fuzzy_document(config: DedupConfig):
             for b in doc_buckets.as_py():
                 yield {"bucket": str(b), "id": doc_id_val}
 
-    with ZephyrContext(name="fuzzy-dedup") as ctx:
-        doc_minhash_lsh = (
-            Dataset.from_list(input_files)
-            .flat_map(lambda f: _load_batches(f, columns=[config.text_field, "id"]))
-            .flat_map(compute_minhash_lsh_batches)
+    ctx = ZephyrContext(name="fuzzy-dedup")
+    doc_minhash_lsh = (
+        Dataset.from_list(input_files)
+        .flat_map(lambda f: _load_batches(f, columns=[config.text_field, "id"]))
+        .flat_map(compute_minhash_lsh_batches)
+    )
+    converged, cc_files = connected_components(doc_minhash_lsh, ctx, output_dir=f"{config.output_path}/metadata/cc")
+    if not converged:
+        # TODO (rav): log the number of changed nodes?
+        logger.warning("Connected components did not converge")
+    fuzzy_dup_shards = ctx.execute(
+        Dataset.from_list(cc_files)
+        .flat_map(load_file)
+        .map(
+            lambda r: {
+                "id": r["node_id"]["record_id"],
+                "fuzzy_duplicate": r["component_id"] != r["node_id"]["record_id_norm"],
+            }
         )
-        converged, cc_files = connected_components(doc_minhash_lsh, ctx, output_dir=f"{config.output_path}/metadata/cc")
-        if not converged:
-            # TODO (rav): log the number of changed nodes?
-            logger.warning("Connected components did not converge")
-        fuzzy_dup_shards = ctx.execute(
-            Dataset.from_list(cc_files)
-            .flat_map(load_file)
-            .map(
-                lambda r: {
-                    "id": r["node_id"]["record_id"],
-                    "fuzzy_duplicate": r["component_id"] != r["node_id"]["record_id_norm"],
-                }
-            )
-            .reshard(num_shards=42)
-            .write_parquet(f"{config.output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
-            verbose=True,
-        )
+        .reshard(num_shards=42)
+        .write_parquet(f"{config.output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
+        verbose=True,
+    )
 
-        fuzzy_cnt = _compute_fuzzy_dedup_stats(cc_files, method="fuzzy", level="document")
-        logger.info(str(fuzzy_cnt))
+    fuzzy_cnt = _compute_fuzzy_dedup_stats(cc_files, method="fuzzy", level="document")
+    logger.info(str(fuzzy_cnt))
 
-        if wandb.run:
-            wandb.log(fuzzy_cnt.to_dict())
+    if wandb.run:
+        wandb.log(fuzzy_cnt.to_dict())
 
-        def mark_dup_documents(docs: Iterator[dict]) -> Iterator[dict]:
-            fuzzy_dup_map = _load_fuzzy_dupe_map_shard(fuzzy_dup_shards)
+    def mark_dup_documents(docs: Iterator[dict]) -> Iterator[dict]:
+        fuzzy_dup_map = _load_fuzzy_dupe_map_shard(fuzzy_dup_shards)
 
-            for doc in docs:
-                is_fuzzy_dup = fuzzy_dup_map.get(doc["id"], False)
-                doc["attributes"] = doc.get("attributes", {})
-                assert DedupMode.FUZZY_DOCUMENT not in doc["attributes"]
-                doc["attributes"][str(DedupMode.FUZZY_DOCUMENT)] = is_fuzzy_dup
-                yield doc
+        for doc in docs:
+            is_fuzzy_dup = fuzzy_dup_map.get(doc["id"], False)
+            doc["attributes"] = doc.get("attributes", {})
+            assert DedupMode.FUZZY_DOCUMENT not in doc["attributes"]
+            doc["attributes"][str(DedupMode.FUZZY_DOCUMENT)] = is_fuzzy_dup
+            yield doc
 
-        base_path = _find_base_path(config.input_paths, input_files)
-        ctx.execute(
-            Dataset.from_list(input_files).flat_map(lambda p: load_file(InputFileSpec(path=p, columns=["id"])))
-            # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
-            # the shards of the input files for rebase_file_path to work correctly.
-            .map_shard(mark_dup_documents).write_jsonl(
-                output_pattern=lambda shard_idx, total: rebase_file_path(
-                    base_path,
-                    input_files[shard_idx],
-                    f"{config.output_path}/data",
-                    old_extension=_get_extension(input_files[shard_idx]),
-                    new_extension=".jsonl.gz",
-                ),
-                skip_existing=True,
+    base_path = _find_base_path(config.input_paths, input_files)
+    ctx.execute(
+        Dataset.from_list(input_files).flat_map(lambda p: load_file(InputFileSpec(path=p, columns=["id"])))
+        # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
+        # the shards of the input files for rebase_file_path to work correctly.
+        .map_shard(mark_dup_documents).write_jsonl(
+            output_pattern=lambda shard_idx, total: rebase_file_path(
+                base_path,
+                input_files[shard_idx],
+                f"{config.output_path}/data",
+                old_extension=_get_extension(input_files[shard_idx]),
+                new_extension=".jsonl.gz",
             ),
-            verbose=True,
-        )
+            skip_existing=True,
+        ),
+        verbose=True,
+    )
 
     if wandb.run:
         wandb.finish()

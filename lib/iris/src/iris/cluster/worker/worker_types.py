@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Internal worker types for task tracking."""
 
@@ -19,7 +8,7 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState
 from iris.time_utils import Timestamp
 
@@ -42,8 +31,8 @@ class LogLine(BaseModel):
             data=data,
         )
 
-    def to_proto(self) -> cluster_pb2.Worker.LogEntry:
-        proto = cluster_pb2.Worker.LogEntry(
+    def to_proto(self) -> logging_pb2.LogEntry:
+        proto = logging_pb2.LogEntry(
             source=self.source,
             data=self.data,
         )
@@ -72,11 +61,6 @@ class TaskInfo(Protocol):
     @property
     def status(self) -> TaskState:
         """Current task state (PENDING, RUNNING, SUCCEEDED, etc.)."""
-        ...
-
-    @property
-    def result(self) -> bytes | None:
-        """Serialized task result (cloudpickle), if available."""
         ...
 
     def to_proto(self) -> cluster_pb2.TaskStatus:

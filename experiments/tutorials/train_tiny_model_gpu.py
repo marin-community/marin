@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 This is a tutorial on how to train a tiny model on a small dataset using a GPU.
@@ -47,8 +36,8 @@ wikitext_tokenized = default_tokenize(
 
 nano_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
-    resources=ResourceConfig.with_gpu(count=1),
-    train_batch_size=32,
+    resources=ResourceConfig.with_gpu(count=8, cpu=32, disk="128G", ram="128G"),
+    train_batch_size=256,
     num_train_steps=100,
     learning_rate=6e-4,
     weight_decay=0.1,

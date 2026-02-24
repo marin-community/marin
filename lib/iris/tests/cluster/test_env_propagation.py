@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for environment variable propagation from parent jobs to child jobs.
 
@@ -28,7 +17,16 @@ import pytest
 
 from iris.client import IrisClient, IrisContext, LocalClientConfig, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.cluster.types import (
+    PREEMPTIBLE_ATTRIBUTE_KEY,
+    REGION_ATTRIBUTE_KEY,
+    Constraint,
+    ConstraintOp,
+    Entrypoint,
+    EnvironmentSpec,
+    JobName,
+    ResourceSpec,
+)
 
 
 def dummy_entrypoint():
@@ -51,10 +49,11 @@ def parent_context(local_client):
     )
 
 
-def _parent_job_info(env: dict[str, str]) -> JobInfo:
+def _parent_job_info(env: dict[str, str], constraints: list[Constraint] | None = None) -> JobInfo:
     return JobInfo(
         task_id=JobName.from_wire("/parent-job/0"),
         env=env,
+        constraints=constraints or [],
     )
 
 
@@ -156,6 +155,62 @@ def test_no_env_inheritance_without_parent_context(local_client):
         local_client._cluster_client.submit_job = original_submit
 
     assert captured_env == {}
+
+
+def test_child_job_inherits_parent_constraints(local_client, parent_context):
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    parent_constraints = [
+        Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="us-west4"),
+        Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="true"),
+    ]
+
+    captured_constraints = []
+    original_submit = local_client._cluster_client.submit_job
+
+    def capturing_submit(*, constraints=None, **kwargs):
+        captured_constraints.extend(list(constraints or []))
+        return original_submit(constraints=constraints, **kwargs)
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, constraints=parent_constraints)),
+    ):
+        local_client._cluster_client.submit_job = capturing_submit
+        try:
+            local_client.submit(entrypoint, "child-inherit-constraints", resources)
+        finally:
+            local_client._cluster_client.submit_job = original_submit
+
+    assert any(c.key == REGION_ATTRIBUTE_KEY and c.value.string_value == "us-west4" for c in captured_constraints)
+    assert any(c.key == PREEMPTIBLE_ATTRIBUTE_KEY and c.value.string_value == "true" for c in captured_constraints)
+
+
+def test_child_explicit_constraints_override_parent(local_client, parent_context):
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    parent_constraints = [Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="us-west4")]
+    child_constraints = [Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="europe-west4")]
+
+    captured_constraints = []
+    original_submit = local_client._cluster_client.submit_job
+
+    def capturing_submit(*, constraints=None, **kwargs):
+        captured_constraints.extend(list(constraints or []))
+        return original_submit(constraints=constraints, **kwargs)
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, constraints=parent_constraints)),
+    ):
+        local_client._cluster_client.submit_job = capturing_submit
+        try:
+            local_client.submit(entrypoint, "child-override-constraints", resources, constraints=child_constraints)
+        finally:
+            local_client._cluster_client.submit_job = original_submit
+
+    assert any(c.key == REGION_ATTRIBUTE_KEY and c.value.string_value == "europe-west4" for c in captured_constraints)
+    assert not any(c.key == REGION_ATTRIBUTE_KEY and c.value.string_value == "us-west4" for c in captured_constraints)
 
 
 # ---------------------------------------------------------------------------

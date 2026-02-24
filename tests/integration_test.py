@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import logging
@@ -192,8 +181,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=tokenizer,
-        zephyr_num_cpus=1,
-        zephyr_memory=humanfriendly.parse_size("1MB", binary=True),
     )
 
     tokenize_step = ExecutorStep(
@@ -267,6 +254,8 @@ def main(config: ExecutorMainConfig):
         config = dataclasses.replace(
             config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
         )
+
+        os.environ["MARIN_PREFIX"] = bucket_prefix
 
         # start Ray explicitly and set it as the current cluster
         # N.B. This script must not be launched via `uv run`, or Ray will prefer to use `uv` for all execution

@@ -167,7 +167,7 @@ Zephyr uses an actor-based execution model with a pull-based task distribution p
 User Code
     │
     ▼
-ZephyrContext(client, num_workers, resources)
+ZephyrContext(client, max_workers, resources)
     │
     ├── .put(name, obj)              # broadcast shared data
     ├── .execute(dataset)             # run pipeline
@@ -190,25 +190,25 @@ ZephyrContext(client, num_workers, resources)
 
 ### Data Flow Between Stages
 
-**Important**: Zephyr passes data between stages via **disk-based chunk references**, not in-memory. Each stage:
+**Important**: Zephyr passes data between stages via **filesystem-based chunk references** (typically GCS), not in-memory. Each stage:
 
-1. **Receives input** as `ShardRefs` (references to chunks stored on disk)
-2. **Workers stream chunks** one at a time from disk via `_SerializableShard` to minimize memory pressure
+1. **Receives input** as `ShardRefs` (references to chunks stored on the filesystem)
+2. **Workers stream chunks** one at a time from storage via `_SerializableShard` to minimize memory pressure
 3. **Executes operations** on each shard, processing chunks lazily
-4. **Writes results** back to disk and returns `ChunkRef` objects (disk references)
+4. **Writes results** back to storage and returns `ChunkRef` objects (filesystem references)
 5. **Coordinator collects** chunk references and regroups them into new `ShardRefs`
-6. **Next stage uses** those disk references as input
+6. **Next stage uses** those filesystem references as input
 
 **File I/O happens at multiple points:**
 - **Source operations** (e.g., `from_files`, `load_jsonl`) read files from GCS/S3/local and write to intermediate chunk storage
-- **Each stage** reads chunks from disk, processes them, and writes results back to disk
+- **Each stage** reads chunks from storage, processes them, and writes results back
 - **Sink operations** (e.g., `write_jsonl`, `write_parquet`) write final output files to storage
 - **Only final materialization** loads data into memory via `shard_refs.load().materialize()`
 
 This design enables:
 - **Low memory footprint** - workers stream one chunk at a time instead of loading entire shards
-- **Large-scale pipelines** - data size limited by disk, not RAM
-- **Fault tolerance** - intermediate results persisted to disk automatically
+- **Large-scale pipelines** - data size limited by storage, not RAM
+- **Fault tolerance** - intermediate results persisted to storage automatically
 - **Automatic chunking** to prevent large object overhead in the execution framework
 
 ### Execution Sequence

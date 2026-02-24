@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """aggregate_total.py
 
@@ -74,8 +63,8 @@ def _compute_dataset_sizes(dataset_steps: list[ExecutorStep]) -> dict[str, int]:
     def count_dir(path: str) -> int:
         pattern = os.path.join(path.rstrip("/"), "**", "*.jsonl*")
         pipeline = Dataset.from_files(pattern, empty_glob_ok=True).flat_map(load_file).map(lambda _: 1).reduce(sum)
-        with ZephyrContext(name="overlap-size") as ctx:
-            results = ctx.execute(pipeline)
+        ctx = ZephyrContext(name="overlap-size")
+        results = ctx.execute(pipeline)
         return results[0]
 
     size_map: dict[str, int] = {}
@@ -215,12 +204,12 @@ def aggregate_single_dataset(
             }
 
     intermediate_dir = os.path.join(cfg.output_path, ".intermediate", training_name)
-    with ZephyrContext(name="overlap-aggregate") as ctx:
-        intermediate_paths = ctx.execute(
-            Dataset.from_list(shard_paths)
-            .flat_map(extract_overlap_records)
-            .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
-        )
+    ctx = ZephyrContext(name="overlap-aggregate")
+    intermediate_paths = ctx.execute(
+        Dataset.from_list(shard_paths)
+        .flat_map(extract_overlap_records)
+        .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
+    )
 
     logger.info(f"Wrote {len(intermediate_paths)} intermediate files to {intermediate_dir}")
 
