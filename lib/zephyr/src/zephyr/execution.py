@@ -1050,8 +1050,9 @@ class ZephyrContext:
         Application errors (``ZephyrWorkerError``) are never retried.
         """
         plan = compute_plan(dataset, hints)
-        if dry_run:
+        if verbose or dry_run:
             _print_plan(dataset.operations, plan)
+        if dry_run:
             return []
 
         # NOTE: pipeline ID incremented on clean completion only
