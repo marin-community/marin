@@ -23,6 +23,10 @@ from iris.cluster.controller.events import (
     JobSubmittedEvent,
     WorkerRegisteredEvent,
 )
+from iris.cluster.controller.pending_diagnostics import (
+    build_job_pending_hints,
+    is_active_scale_up_hint,
+)
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.state import (
     ControllerEndpoint,
@@ -110,6 +114,16 @@ class ControllerServiceImpl:
         self._controller = controller
         self._bundle_store = BundleStore(bundle_prefix)
         self._log_buffer = log_buffer
+
+    def _get_autoscaler_pending_hints(self) -> dict[str, str]:
+        """Build autoscaler-based pending hints keyed by job id."""
+        autoscaler = self._controller.autoscaler
+        if autoscaler is None:
+            return {}
+        status = autoscaler.get_status()
+        if not status.HasField("last_routing_decision"):
+            return {}
+        return build_job_pending_hints(status.last_routing_decision)
 
     def launch_job(
         self,
@@ -258,6 +272,12 @@ class ControllerServiceImpl:
             sched_context = self._controller.create_scheduling_context(workers)
             # Get job-level diagnostics (expensive but only for detail view)
             pending_reason = self._controller.get_job_scheduling_diagnostics(job, sched_context)
+            autoscaler_hint = self._get_autoscaler_pending_hints().get(job.job_id.to_wire(), "")
+            # Only override scheduler diagnostics when autoscaler is actively
+            # requesting new capacity. Otherwise, scheduler root-cause details
+            # (e.g., constraint/resource mismatch) are more actionable.
+            if autoscaler_hint and is_active_scale_up_hint(autoscaler_hint):
+                pending_reason = autoscaler_hint
 
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
@@ -350,6 +370,7 @@ class ControllerServiceImpl:
         all_jobs: list[cluster_pb2.JobStatus] = []
         name_filter = request.name_filter.lower() if request.name_filter else ""
         state_filter = request.state_filter.lower() if request.state_filter else ""
+        autoscaler_pending_hints = self._get_autoscaler_pending_hints()
 
         for j in self._state.list_all_jobs():
             # Apply name filter
@@ -379,6 +400,10 @@ class ControllerServiceImpl:
                     completed_count += 1
 
             pending_reason = j.error or ""
+            if j.state == cluster_pb2.JOB_STATE_PENDING:
+                autoscaler_hint = autoscaler_pending_hints.get(j.job_id.to_wire(), "")
+                if autoscaler_hint and is_active_scale_up_hint(autoscaler_hint):
+                    pending_reason = autoscaler_hint
 
             proto_job = cluster_pb2.JobStatus(
                 job_id=j.job_id.to_wire(),
