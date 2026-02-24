@@ -3,6 +3,7 @@
 
 import copy
 import logging as pylogging
+import os
 from datetime import timedelta
 from typing import Optional
 
@@ -68,6 +69,8 @@ def log_performance_stats(
     if flops_per_example is not None:
         levanter.tracker.log_summary({wrap_key("flops_per_example"): flops_per_example})
 
+    log_mfu_to_ray = os.environ.get("LEVANTER_LOG_MFU_TO_RAY", "").lower() in {"1", "true", "yes", "on"}
+
     def log_performance_stats(step_info: StepInfo):
         dict_to_log: dict[str, float | int] = {}
 
@@ -97,6 +100,21 @@ def log_performance_stats(
 
         dict_to_log = {wrap_key(k): v for k, v in dict_to_log.items()}
         levanter.tracker.log(dict_to_log, step=step_info.step)
+
+        mfu_key = wrap_key("mfu")
+        tps_key = wrap_key("tokens_per_second")
+        duration_key = wrap_key("duration")
+        if log_mfu_to_ray and mfu_key in dict_to_log:
+            logger.info(
+                "step=%s %s=%.3f %s=%.3f %s=%.3f",
+                step_info.step,
+                mfu_key,
+                float(dict_to_log.get(mfu_key, 0.0)),
+                tps_key,
+                float(dict_to_log.get(tps_key, 0.0)),
+                duration_key,
+                float(dict_to_log.get(duration_key, 0.0)),
+            )
 
     return log_performance_stats
 

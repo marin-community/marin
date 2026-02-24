@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import dataclasses
 from typing import Any, Protocol, cast
 import logging
+import os
 
 import equinox as eqx
 import haliax as hax
@@ -102,6 +103,10 @@ def nemotron_only_speedrun(
     if tracker:
         wandb_entity = tracker.entity or WANDB_ENTITY
         wandb_project = tracker.project or WANDB_PROJECT
+
+    if os.getenv("WANDB_MODE", "").lower() in {"disabled", "offline", "dryrun"}:
+        logger.info("Skipping speedrun_results step because WANDB_MODE=%s", os.getenv("WANDB_MODE"))
+        return [train_step]
 
     results_step = ExecutorStep(
         name=f"speedrun/{name}-speedrun_results",

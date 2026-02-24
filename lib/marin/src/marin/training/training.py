@@ -373,6 +373,12 @@ def _add_run_env_variables(env: dict):
     if "TPU_STDERR_LOG_LEVEL" not in env:
         env["TPU_STDERR_LOG_LEVEL"] = "2"
 
+    # Respect WANDB_MODE from the submitting environment when launching the TPU job.
+    # The base TPU images often set WANDB_MODE=offline; if the driver overrides it
+    # (e.g. WANDB_MODE=online), we want that to propagate to the actual training task.
+    if "WANDB_MODE" not in env and os.environ.get("WANDB_MODE") is not None:
+        env["WANDB_MODE"] = os.environ["WANDB_MODE"]
+
     return env
 
 

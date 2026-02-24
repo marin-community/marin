@@ -10,8 +10,11 @@ Muon used for training.
 # nodryrun
 from __future__ import annotations
 
+import argparse
+import dataclasses
 from dataclasses import dataclass
 from functools import partial
+import os
 
 from jax.experimental.shard_map import shard_map
 import sys
@@ -34,8 +37,9 @@ from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pbatch, Pvocab, unshard
 import levanter.tracker
 from haliax.partitioning import _get_mesh
+from haliax.nn.linear import gmm_sharded
 from levanter.optim import GrugMuonConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.speedrun.speedrun import Author
 
 
@@ -177,6 +181,16 @@ def _ragged_moe_linear(
     )
 
 
+def _gmm_moe_linear(
+    x: jax.Array,
+    w: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    ar: bool = False,
+) -> jax.Array:
+    return gmm_sharded(x, w, group_sizes, ar=ar)
+
+
 class MOE(eqx.Module):
     router_w: jax.Array  # [D, E]
     router_bias: jax.Array
@@ -225,10 +239,17 @@ class MOE(eqx.Module):
         )
         def _moe_block(x_flat, topk_idx_flat, topk_weights, w1, w2, w3):
             x_repeat_sort, group_sizes, sort_idx = self._permute(x_flat, topk_idx_flat)
-            w1_out = _ragged_moe_linear(x_repeat_sort, w1, group_sizes)  # [TR, I]
-            w2_out = _ragged_moe_linear(x_repeat_sort, w2, group_sizes)  # [TR, I]
+            if self.cfg.use_gmm:
+                w1_out = _gmm_moe_linear(x_repeat_sort, w1, group_sizes, ar=False)  # [TR, I]
+                w2_out = _gmm_moe_linear(x_repeat_sort, w2, group_sizes, ar=False)  # [TR, I]
+            else:
+                w1_out = _ragged_moe_linear(x_repeat_sort, w1, group_sizes)  # [TR, I]
+                w2_out = _ragged_moe_linear(x_repeat_sort, w2, group_sizes)  # [TR, I]
             gated = jax.nn.silu(w1_out) * w2_out  # [TR, I]
-            out_repeat_sort = _ragged_moe_linear(gated, w3, group_sizes)  # [TR, D]
+            if self.cfg.use_gmm:
+                out_repeat_sort = _gmm_moe_linear(gated, w3, group_sizes, ar=True)  # [TR, D]
+            else:
+                out_repeat_sort = _ragged_moe_linear(gated, w3, group_sizes)  # [TR, D]
             out_repeat_unflat = self._unpermute(out_repeat_sort, sort_idx)
             out_flat = jnp.sum(out_repeat_unflat * topk_weights[..., None], axis=1)  # [T, D]
             return out_flat, group_sizes
@@ -403,6 +424,7 @@ class ModelConfig:
     num_layers: int = 12
     num_heads: int = 8
     num_kv_heads: int = 8
+    intermediate_dim: int = 3072
     max_seq_len: int = 2048
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
@@ -412,14 +434,11 @@ class ModelConfig:
     lbl_coef: float = 0.01
     rzl_coef: float = 0.001
     num_experts_per_tok: int = 2
+    use_gmm: bool = False
 
     @property
     def head_dim(self) -> int:
         return self.hidden_dim // self.num_heads
-
-    @property
-    def intermediate_dim(self) -> int:
-        return int(self.hidden_dim * 3)
 
     @property
     def total_trainable_params(self) -> int:
@@ -453,8 +472,14 @@ class ModelConfig:
 
 
 def build_train_config(model_cfg: ModelConfig) -> SimpleTrainConfig:
-    batch_size = 128
-    num_train_steps = 100
+    raise NotImplementedError("Use `build_train_config_from_args` instead.")
+
+
+def build_train_config_from_args(model_cfg: ModelConfig, *, args: argparse.Namespace) -> SimpleTrainConfig:
+    batch_size = args.global_batch_size
+    num_train_steps = args.num_train_steps
+    tpu_type = args.tpu_type
+    seq_len = args.seq_len
 
     muon = GrugMuonConfig(
         learning_rate=0.01,
@@ -473,17 +498,56 @@ def build_train_config(model_cfg: ModelConfig) -> SimpleTrainConfig:
     )
 
     train_cfg = SimpleTrainConfig(
-        resources=ResourceConfig.with_tpu("v4-8"),
+        resources=ResourceConfig.with_tpu(tpu_type),
         train_batch_size=batch_size,
         learning_rate=muon.learning_rate,
         explicit_mesh_axes=True,
-        profiler=False,
-        train_seq_len=model_cfg.max_seq_len,
+        profiler=bool(args.profiler),
+        profiler_start_step=args.profiler_start_step,
+        profiler_num_steps=args.profiler_num_steps,
+        train_seq_len=seq_len,
         num_train_steps=num_train_steps,
         steps_per_hf_export=-1,
         optimizer_config=muon,
     )
     return train_cfg
+
+
+def build_model_config_from_args(*, args: argparse.Namespace) -> ModelConfig:
+    use_gmm = args.use_gmm if args.use_gmm is not None else args.model in (_MODEL_OLMOE_M, _MODEL_OLMOE_1B7B)
+
+    if args.model == _MODEL_GRUG_2X:
+        return dataclasses.replace(ModelConfig(), max_seq_len=args.seq_len, use_gmm=use_gmm)
+
+    if args.model == _MODEL_OLMOE_M:
+        return dataclasses.replace(
+            ModelConfig(),
+            hidden_dim=1024,
+            intermediate_dim=512,
+            num_layers=12,
+            num_heads=8,
+            num_kv_heads=4,
+            n_routed_experts=16,
+            num_experts_per_tok=2,
+            max_seq_len=args.seq_len,
+            use_gmm=use_gmm,
+        )
+
+    if args.model == _MODEL_OLMOE_1B7B:
+        return dataclasses.replace(
+            ModelConfig(),
+            hidden_dim=2048,
+            intermediate_dim=1024,
+            num_layers=16,
+            num_heads=16,
+            num_kv_heads=8,
+            n_routed_experts=64,
+            num_experts_per_tok=8,
+            max_seq_len=args.seq_len,
+            use_gmm=use_gmm,
+        )
+
+    raise ValueError(f"Unknown model preset: {args.model}")
 
 
 # -----------------------------------------------------------------------------
@@ -502,18 +566,49 @@ def repoint_modules_for_ray(classes_in_main):
 # Main
 
 
+_DEFAULT_TPU_TYPE = "v5p-16"
+_DEFAULT_SEQ_LEN = 2048
+_DEFAULT_GLOBAL_BATCH_SIZE = 128
+_DEFAULT_NUM_TRAIN_STEPS = 100
+_MODEL_GRUG_2X = "grug_2x"
+_MODEL_OLMOE_M = "olmoe_m"
+_MODEL_OLMOE_1B7B = "olmoe_1b7b"
+_MODEL_OPTIONS = (_MODEL_GRUG_2X, _MODEL_OLMOE_M, _MODEL_OLMOE_1B7B)
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", choices=_MODEL_OPTIONS, default=_MODEL_GRUG_2X)
+    parser.add_argument("--use-gmm", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--tpu-type", default=_DEFAULT_TPU_TYPE)
+    parser.add_argument("--seq-len", type=int, default=_DEFAULT_SEQ_LEN)
+    parser.add_argument("--global-batch-size", type=int, default=_DEFAULT_GLOBAL_BATCH_SIZE)
+    parser.add_argument("--num-train-steps", type=int, default=_DEFAULT_NUM_TRAIN_STEPS)
+    parser.add_argument("--profiler", action="store_true")
+    parser.add_argument("--profiler-start-step", type=int, default=5)
+    parser.add_argument("--profiler-num-steps", type=int, default=25)
+    parser.add_argument("--run-suffix", type=str, default=None)
+    return parser.parse_args()
+
+
 def main() -> None:
-    module_classes = [Transformer, ModelConfig, Block, RMSNorm, MLP, CausalSelfAttention]
+    args = _parse_args()
+
+    module_classes = [Transformer, ModelConfig, Block, RMSNorm, MLP, CausalSelfAttention, MOE]
     repoint_modules_for_ray(module_classes)
 
-    model_cfg = ModelConfig()
-    train_cfg = build_train_config(model_cfg)
+    model_cfg = build_model_config_from_args(args=args)
+    train_cfg = build_train_config_from_args(model_cfg, args=args)
+    run_suffix = (
+        args.run_suffix
+        or f"{args.model}_b{args.global_batch_size}_s{args.seq_len}_t{args.num_train_steps}_{args.tpu_type}"
+    )
     speedrun = build_speedrun(
         model_cls=Transformer,
         model_cfg=model_cfg,
         train_cfg=train_cfg,
         loss_fn=loss_fn,
-        speedrun_name="grug_moe_scaled_2x_128",
+        speedrun_name=f"grug_moe_scaled_2x_{run_suffix}",
         speedrun_desc="Scaled MoE Transformer (2x layers/hidden/heads) with Muon",
         author=Author(
             name="Larry Dial",
@@ -521,7 +616,12 @@ def main() -> None:
             url="https://github.com/ClassicLarry",
         ),
     )
-    executor_main(steps=speedrun, description="Single Nano Run")
+    # `executor_main` is draccus-wrapped, but this experiment uses argparse for its own runtime flags.
+    executor_main.__wrapped__(
+        ExecutorMainConfig(prefix=os.environ.get("MARIN_PREFIX")),
+        steps=speedrun,
+        description="Single Nano Run",
+    )
 
 
 if __name__ == "__main__":
