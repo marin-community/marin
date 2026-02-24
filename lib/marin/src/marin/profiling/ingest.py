@@ -1596,8 +1596,15 @@ def _is_fallback_parts_for_event(parts: list[str], event: _CompleteTraceEvent) -
 
 def _format_gap_region_context_label(op_name: str, region_path: str) -> str:
     canonical_op = _canonical_name_part(op_name).lower()
-    if canonical_op.startswith("copy") and region_path and not region_path.startswith("copy("):
-        return f"copy({region_path})"
+    if canonical_op.startswith("copy"):
+        normalized = region_path.strip()
+        if not normalized:
+            return "copy"
+        if normalized.startswith("copy("):
+            return normalized
+        if normalized.lower() == "copy":
+            return "copy"
+        return f"copy({normalized})"
     return region_path
 
 

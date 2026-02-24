@@ -222,6 +222,26 @@ def test_dynamic_donated_prefix_is_trimmed_not_dropped(tmp_path: Path) -> None:
     assert summary.gap_region_contexts[0].region_path == "copy(model.params.blocks[0].attn.w_k)"
 
 
+def test_copy_gap_context_does_not_double_wrap_copy_label(tmp_path: Path) -> None:
+    trace_path = tmp_path / "copy_gap_trace.json.gz"
+    payload = {
+        "displayTimeUnit": "ns",
+        "traceEvents": [
+            {"ph": "M", "pid": 1, "name": "process_name", "args": {"name": "/device:TPU:0"}},
+            {"ph": "M", "pid": 1, "tid": 2, "name": "thread_name", "args": {"name": "XLA Ops"}},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "copy.1", "ts": 0, "dur": 10},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "copy.1", "ts": 30, "dur": 10},
+        ],
+    }
+    with gzip.open(trace_path, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+    summary = summarize_trace(trace_path, warmup_steps=0, hot_op_limit=10)
+    assert summary.gap_region_contexts
+    assert summary.gap_region_contexts[0].op_name == "copy.1"
+    assert summary.gap_region_contexts[0].region_path == "copy"
+
+
 def _write_trace(path: Path, *, step_durations: list[float], softmax_duration: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
