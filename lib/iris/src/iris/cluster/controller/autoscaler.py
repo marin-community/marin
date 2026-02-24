@@ -19,9 +19,11 @@ The run_once() flow splits into two phases:
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -118,6 +120,48 @@ class RoutingDecision:
     routed_entries: dict[str, list[DemandEntry]]
     unmet_entries: list[UnmetDemand]
     group_reasons: dict[str, str]
+
+
+def _diagnose_no_matching_group(
+    entry: DemandEntry,
+    groups: list[ScalingGroup],
+    group_region: Callable[[ScalingGroup], str | None],
+    group_zone: Callable[[ScalingGroup], str | None],
+) -> str:
+    """Produce a concise, actionable reason when no group matches a demand entry.
+
+    Checks filters in order (device → preemptible → zone → region) and reports
+    the first mismatch with enough context to fix the issue.
+    """
+    device_matches = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
+
+    if not device_matches:
+        return f"no_matching_group: no groups with device {entry.device_type.value}:{entry.device_variant or '*'}"
+
+    if entry.preemptible is not None:
+        preempt_matches = [g for g in device_matches if g.config.slice_template.preemptible == entry.preemptible]
+        if not preempt_matches:
+            want = "preemptible" if entry.preemptible else "non-preemptible"
+            return (
+                f"no_matching_group: no {want} groups for device {entry.device_type.value}:{entry.device_variant or '*'}"
+            )
+        device_matches = preempt_matches
+
+    if entry.required_zones:
+        available_zones = {group_zone(g) for g in device_matches} - {None}
+        requested = sorted(entry.required_zones)
+        msg = f"no_matching_group: no groups in zone {', '.join(requested)}"
+        for req_zone in requested:
+            close = difflib.get_close_matches(req_zone, available_zones, n=1, cutoff=0.7)
+            if close:
+                msg += f" (did you mean {close[0]}?)"
+        return msg
+
+    if entry.required_regions:
+        requested = sorted(entry.required_regions)
+        return f"no_matching_group: no groups in region {', '.join(requested)}"
+
+    return f"no_matching_group: no groups match device={entry.device_type.value}:{entry.device_variant or '*'}"
 
 
 def route_demand(
@@ -246,12 +290,7 @@ def route_demand(
             and (not entry.required_zones or group_zone(g) in entry.required_zones)
         ]
         if not matching_groups:
-            reason = (
-                f"no_matching_group: need device={entry.device_type}:{entry.device_variant}"
-                f", required_regions={sorted(entry.required_regions) if entry.required_regions else []}"
-                f", required_zones={sorted(entry.required_zones) if entry.required_zones else []}"
-                f", available groups={[g.name for g in sorted_groups]}"
-            )
+            reason = _diagnose_no_matching_group(entry, sorted_groups, group_region, group_zone)
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 

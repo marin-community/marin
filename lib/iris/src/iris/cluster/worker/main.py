@@ -7,14 +7,17 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import click
 
 from iris.cluster.config import load_config
+from iris.cluster.platform.bootstrap import zone_to_multi_region
 from iris.cluster.platform.factory import create_platform
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
+from iris.cluster.worker.env_probe import detect_gcp_zone
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.logging import configure_logging
 
@@ -28,6 +31,38 @@ def _load_task_default_env() -> dict[str, str]:
     if not isinstance(parsed, dict):
         raise ValueError("IRIS_TASK_DEFAULT_ENV_JSON must decode to a dictionary")
     return {str(k): str(v) for k, v in parsed.items()}
+
+
+def _configure_docker_ar_auth() -> None:
+    """Configure Docker to authenticate with Artifact Registry for the worker's continent.
+
+    On GCP, task containers are pulled by the Docker CLI inside the worker
+    container (via the host docker socket). The host's bootstrap configured
+    gcloud auth for its own docker config, but the worker container has its own
+    config. This runs ``gcloud auth configure-docker`` inside the worker
+    container so that ``docker create`` can pull AR images for tasks.
+    """
+    zone = detect_gcp_zone()
+    if not zone:
+        return
+
+    multi_region = zone_to_multi_region(zone)
+    if not multi_region:
+        return
+
+    ar_host = f"{multi_region}-docker.pkg.dev"
+    logger = logging.getLogger(__name__)
+    logger.info("Configuring Docker auth for %s", ar_host)
+    result = subprocess.run(
+        ["gcloud", "auth", "configure-docker", ar_host, "-q"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        logger.warning("gcloud auth configure-docker failed: %s", result.stderr)
+    else:
+        logger.info("Docker AR auth configured for %s", ar_host)
 
 
 def _load_worker_attributes() -> dict[str, str]:
@@ -108,6 +143,7 @@ def serve(
     if runtime == "kubernetes":
         container_runtime = KubernetesRuntime()
     else:
+        _configure_docker_ar_auth()
         container_runtime = DockerRuntime()
 
     config = WorkerConfig(
