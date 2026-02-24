@@ -18,7 +18,7 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, vm_pb2
 from iris.time_utils import Timestamp
 
 
@@ -535,6 +535,35 @@ def test_get_autoscaler_status_includes_slice_details(client_with_autoscaler):
         assert "vms" in slice_info
         assert len(slice_info["vms"]) == 1
     assert group["config"]["acceleratorVariant"] == "v4-8"
+
+
+def test_pending_reason_uses_autoscaler_hint_for_scale_up(
+    client_with_autoscaler,
+    state,
+    job_request,
+    mock_autoscaler,
+):
+    """Pending jobs surface autoscaler scale-up wait hints in job/detail APIs."""
+    submit_job(state, "pending-scale", job_request)
+
+    task_id = JobName.root("pending-scale").task(0).to_wire()
+    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
+        last_routing_decision=vm_pb2.RoutingDecision(
+            group_to_launch={"tpu_v5e_32": 1},
+            routed_entries={
+                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
+            },
+        )
+    )
+
+    job_resp = rpc_post(client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("pending-scale").to_wire()})
+    pending_reason = job_resp.get("job", {}).get("pendingReason", "")
+    assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in pending_reason
+
+    jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
+    listed = [j for j in jobs_resp.get("jobs", []) if j.get("jobId") == JobName.root("pending-scale").to_wire()]
+    assert listed
+    assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in listed[0].get("pendingReason", "")
 
 
 # =============================================================================
