@@ -368,13 +368,6 @@ class TaggedEvaluator(Generic[Ex, M]):
         self.device_mesh = device_mesh
         self.tokenizer = tokenizer
         self.axis_mapping = axis_mapping
-        if device_mesh is None or axis_mapping is None:
-            self.per_pos_out_sharding = None
-        else:
-            batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
-            self.per_pos_out_sharding = None
-            if batch_axis_resource is not None:
-                self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
 
         self.bytes_per_token = self._calculate_bytes_per_token_type(tokenizer)
         self.hierarchy = self._construct_tag_hierarchy()
@@ -384,7 +377,6 @@ class TaggedEvaluator(Generic[Ex, M]):
         bytes_per_token = self.bytes_per_token
         log2e = jnp.log2(jnp.e)
         per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
-        per_pos_out_sharding = self.per_pos_out_sharding
 
         @hax.named_jit
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
@@ -415,10 +407,7 @@ class TaggedEvaluator(Generic[Ex, M]):
                 state = dataclasses.replace(state, loss_per_tag=mean_per_tag)
 
             if bytes_per_token is not None:
-                if per_pos_out_sharding is None:
-                    bytes_per_pos = bytes_per_token[token_ids]
-                else:
-                    bytes_per_pos = bytes_per_token.at[token_ids].get(out_sharding=per_pos_out_sharding)
+                bytes_per_pos = bytes_per_token[token_ids]
                 this_bytes = jnp.sum(bytes_per_pos * weights)
                 if per_tag_out_sharding is None:
                     bytes_per_tag = jnp.einsum("bt,bt,bk->k", bytes_per_pos, weights, tags)
