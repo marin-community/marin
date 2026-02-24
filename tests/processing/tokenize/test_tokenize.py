@@ -15,7 +15,7 @@ from marin.processing.tokenize.tokenize import (
     HfTokenizeConfig,
     TokenizeConfig,
     _bundle_files_by_size,
-    compute_target_group_bytes,
+    _compute_target_group_bytes,
     tokenize,
 )
 
@@ -136,7 +136,7 @@ def test_mixed_paths_one_invalid_inputname():
     ],
 )
 def test_compute_target_group_bytes(total_bytes, max_workers, expected):
-    assert compute_target_group_bytes(total_bytes, max_workers) == expected
+    assert _compute_target_group_bytes(total_bytes, max_workers) == expected
 
 
 def test_bundle_files_produces_expected_groups():
@@ -144,7 +144,7 @@ def test_bundle_files_produces_expected_groups():
     file_infos = [{"filename": f"file_{i}.jsonl", "size": 500_000_000} for i in range(20)]
     total_bytes = sum(f["size"] for f in file_infos)  # 10 GB total
     max_workers = 4
-    target = compute_target_group_bytes(total_bytes, max_workers)  # 2.5 GB per group
+    target = _compute_target_group_bytes(total_bytes, max_workers)  # 2.5 GB per group
 
     groups = list(_bundle_files_by_size(file_infos, target))
     # _bundle_files_by_size yields a group when adding the next file would reach

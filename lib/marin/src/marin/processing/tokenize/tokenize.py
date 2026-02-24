@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
 
 
-def compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int:
+def _compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int:
     """Compute target group size to produce approximately max_workers groups.
 
     Applies a floor of MIN_GROUP_BYTES to avoid degenerate tiny shards.
@@ -350,7 +350,7 @@ def tokenize(config: TokenizeConfigBase):
             )
         )
         total_input_bytes = sum(f["size"] for f in file_stats)
-        target_group_bytes = compute_target_group_bytes(total_input_bytes, config.max_workers)
+        target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.max_workers)
         file_groups = list(_bundle_files_by_size(file_stats, target_group_bytes))
         logger.info(
             f"Grouped {len(paths):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
