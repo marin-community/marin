@@ -3,20 +3,21 @@
 # Build from the iris directory:
 #   docker build -f Dockerfile.controller -t iris-controller:latest .
 #
-FROM python:3.11-slim
+FROM python:3.12
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
 LABEL org.opencontainers.image.description="Iris controller image"
 
 ARG KUBECTL_VERSION=v1.32.2
 
-# Install system dependencies (openssh-client required for gcloud TPU SSH)
+# Install common system dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    git \
+    ca-certificates \
     gnupg \
     apt-transport-https \
     openssh-client \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Google Cloud SDK (required for TPU management via gcloud)

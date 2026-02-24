@@ -167,11 +167,10 @@ it as `/var/lib/containerd`, `/var/lib/kubelet`, `/opt`, etc. The `cache_dir` mu
 NVMe (e.g. `/mnt/local/iris-cache`) — the default `/var/cache/iris` lands on the tiny RAM disk
 and will fill up immediately when installing CUDA packages.
 
-**K8s manifests** (`infra/coreweave/k8s/`):
-- `namespace.yaml`, `service-account.yaml`, `cluster-role.yaml`, `cluster-role-binding.yaml` — RBAC/namespace prerequisites (one-time operator setup)
-
-Controller lifecycle resources (ConfigMap, shared NodePools, Deployment, Service) are created
-automatically by `iris cluster start` via `CoreweavePlatform.start_controller()`.
+All K8s resources (RBAC, ConfigMap, shared NodePools, Deployment, Service) are created
+automatically by `iris cluster start` via `CoreweavePlatform.start_controller()`. RBAC
+manifests (Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding) are defined in
+`CoreweavePlatform.ensure_rbac()` — no separate YAML files needed.
 
 ## Key Modules
 
@@ -217,6 +216,24 @@ in any zone and serve workers across all regions.
 controller bootstrap scripts). If you add a new region's Artifact Registry, add
 it to both `gcloud auth configure-docker` lines. List existing repos with:
 `gcloud artifacts repositories list --project=hai-gcp-models`
+
+### Multi-Region Image Push/Pull
+
+For production deployments, use GCP Artifact Registry (AR) instead of GHCR.
+AR images pull quickly within GCP; GHCR pulls from GCP VMs are often slow.
+
+**Push**: When `--config` is provided, `iris build push` auto-derives GCP regions:
+
+`iris --config examples/marin.yaml build push iris-worker:v1 --registry gcp`
+
+`iris cluster start` also auto-pushes all three image types (worker, controller,
+task) to every discovered cluster region when the image tags are AR format.
+
+**Pull**: The autoscaler rewrites AR image tags to match each scale group's zone
+region automatically. Set `defaults.bootstrap.docker_image` to any AR region tag
+(for example `us-central2-docker.pkg.dev/project/marin/iris-worker:v1`) and the
+per-group rewrite handles the rest. Non-AR tags (`ghcr.io`, `docker.io`) pass
+through unchanged and are not rewritten.
 
 **Bundle storage** (`controller.bundle_prefix`) is a GCS URI with no zone
 affinity — globally accessible.

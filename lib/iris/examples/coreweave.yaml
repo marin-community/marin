@@ -8,19 +8,16 @@
 #
 # Workflow:
 #
-#   1. Deploy RBAC prerequisites (one-time):
-#        kubectl apply -f infra/coreweave/k8s/
-#
-#   2. Set S3 object storage credentials (required for s3:// storage URIs):
+#   1. Set S3 object storage credentials (required for s3:// storage URIs):
 #        export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
 #        export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
 #      These are created in the Cloudflare dashboard under R2 > Manage R2 API Tokens.
 #      `iris cluster start` creates a K8s Secret from these env vars automatically.
 #
-#   3. Start the cluster (creates shared NodePools, ConfigMap, Deployment, Service):
+#   2. Start the cluster (creates RBAC, shared NodePools, ConfigMap, Deployment, Service):
 #        iris --config=lib/iris/examples/coreweave.yaml cluster start
 #
-#   4. Use the Iris CLI:
+#   3. Use the Iris CLI:
 #        iris --config=lib/iris/examples/coreweave.yaml cluster status
 #        iris --config=lib/iris/examples/coreweave.yaml cluster dashboard
 #
