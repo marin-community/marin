@@ -285,7 +285,7 @@ def cb_tagged_lm_evaluate(
                     content = f.read()
             else:
                 content = ""
-            
+
             with fs.open(metrics_file, "w") as f:
                 # Convert numpy/jax floats to Python floats for JSON serialization
                 serializable_metrics = {
