@@ -1,4 +1,4 @@
-# Copyright 2026 The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """NAMO and NAMO-D optimizer configs for Levanter.
@@ -196,7 +196,7 @@ class ScaleByNamoState(NamedTuple):
     conventions across ``levanter.optim`` and Optax examples.
     """
 
-    count: jnp.ndarray
+    step_count: jnp.ndarray
     momentum_buffer: optax.Updates
     v_squared: optax.Updates
 
@@ -204,7 +204,7 @@ class ScaleByNamoState(NamedTuple):
 class ScaleByNamoDState(NamedTuple):
     """Optax-compatible NAMO-D state."""
 
-    count: jnp.ndarray
+    step_count: jnp.ndarray
     momentum_buffer: optax.Updates
     v: optax.Updates
 
@@ -248,7 +248,11 @@ def scale_with_namo(
             return None
 
         v_squared = jax.tree_util.tree_map(init_v, flat_params, is_leaf=_is_linear_or_none)
-        return ScaleByNamoState(count=jnp.zeros([], jnp.int32), momentum_buffer=momentum_buffer, v_squared=v_squared)
+        return ScaleByNamoState(
+            step_count=jnp.zeros([], jnp.int32),
+            momentum_buffer=momentum_buffer,
+            v_squared=v_squared,
+        )
 
     def update_fn(updates, state, params=None):
         if params is None:
@@ -273,7 +277,7 @@ def scale_with_namo(
         else:
             m_for_update = buf
 
-        count_inc = optax.safe_increment(state.count)
+        count_inc = optax.safe_increment(state.step_count)
         bc1 = 1.0 - (momentum**count_inc)
         bc2 = 1.0 - (mu2**count_inc)
 
@@ -331,7 +335,7 @@ def scale_with_namo(
 
         final_updates = unflatten_linear_layers(updates, new_flat_updates)
 
-        return final_updates, ScaleByNamoState(count=count_inc, momentum_buffer=buf, v_squared=new_v)
+        return final_updates, ScaleByNamoState(step_count=count_inc, momentum_buffer=buf, v_squared=new_v)
 
     return optax.GradientTransformation(init_fn, update_fn)
 
@@ -366,7 +370,11 @@ def scale_with_namod(
             return None
 
         v = jax.tree_util.tree_map(init_v, flat_params, is_leaf=_is_linear_or_none)
-        return ScaleByNamoDState(count=jnp.zeros([], jnp.int32), momentum_buffer=momentum_buffer, v=v)
+        return ScaleByNamoDState(
+            step_count=jnp.zeros([], jnp.int32),
+            momentum_buffer=momentum_buffer,
+            v=v,
+        )
 
     def update_fn(updates, state, params=None):
         if params is None:
@@ -391,7 +399,7 @@ def scale_with_namod(
         else:
             m_for_update = buf
 
-        count_inc = optax.safe_increment(state.count)
+        count_inc = optax.safe_increment(state.step_count)
         bc1 = 1.0 - (momentum**count_inc)
         bc2 = 1.0 - (mu2**count_inc)
 
@@ -452,6 +460,6 @@ def scale_with_namod(
 
         final_updates = unflatten_linear_layers(updates, new_flat_updates)
 
-        return final_updates, ScaleByNamoDState(count=count_inc, momentum_buffer=buf, v=new_v)
+        return final_updates, ScaleByNamoDState(step_count=count_inc, momentum_buffer=buf, v=new_v)
 
     return optax.GradientTransformation(init_fn, update_fn)
