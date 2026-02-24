@@ -287,6 +287,7 @@ iris --config=... cluster dashboard --port 8080
 iris --config cluster.yaml job run -- python train.py
 iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 iris --config cluster.yaml job run --no-wait -- python long_job.py
+iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 
 # Stream logs for a job (batch-fetches from all tasks in one RPC)
 iris --config cluster.yaml job logs /my-job

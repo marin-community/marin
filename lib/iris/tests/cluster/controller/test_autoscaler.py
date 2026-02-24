@@ -29,7 +29,7 @@ from iris.cluster.platform.base import (
     SliceStatus,
     WorkerStatus,
 )
-from iris.cluster.types import REGION_ATTRIBUTE_KEY, DeviceType, VmWorkerStatus
+from iris.cluster.types import REGION_ATTRIBUTE_KEY, ZONE_ATTRIBUTE_KEY, DeviceType, VmWorkerStatus
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
@@ -1069,6 +1069,45 @@ class TestRegionRouting:
         assert result.routed_entries.get("west-ondemand") is None
         assert result.routed_entries.get("eu-preemptible") is None
         assert result.unmet_entries == []
+
+
+class TestZoneRouting:
+    def test_route_demand_filters_by_required_zone(self):
+        config_a = make_scale_group_config(name="zone-a", max_slices=5, priority=10, zones=["us-central2-a"])
+        config_a.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-central2"
+        config_a.worker.attributes[ZONE_ATTRIBUTE_KEY] = "us-central2-a"
+
+        config_b = make_scale_group_config(name="zone-b", max_slices=5, priority=10, zones=["us-central2-b"])
+        config_b.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-central2"
+        config_b.worker.attributes[ZONE_ATTRIBUTE_KEY] = "us-central2-b"
+
+        zone_a = ScalingGroup(config_a, make_mock_platform())
+        zone_b = ScalingGroup(config_b, make_mock_platform())
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        for entry in demand:
+            entry.required_zones = frozenset({"us-central2-b"})
+
+        result = route_demand([zone_a, zone_b], demand)
+
+        assert len(result.routed_entries["zone-b"]) == 2
+        assert result.routed_entries.get("zone-a") is None
+        assert result.unmet_entries == []
+
+    def test_route_demand_unmet_when_no_group_matches_zone(self):
+        config_a = make_scale_group_config(name="zone-a", max_slices=5, priority=10, zones=["us-central2-a"])
+        config_a.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-central2"
+        config_a.worker.attributes[ZONE_ATTRIBUTE_KEY] = "us-central2-a"
+        zone_a = ScalingGroup(config_a, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_zones = frozenset({"us-central2-b"})
+
+        result = route_demand([zone_a], demand)
+
+        assert result.routed_entries.get("zone-a") is None
+        assert len(result.unmet_entries) == 1
+        assert "required_zones=['us-central2-b']" in result.unmet_entries[0].reason
 
 
 class TestAutoscalerWaterfallEndToEnd:
