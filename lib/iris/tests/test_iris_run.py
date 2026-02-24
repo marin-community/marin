@@ -48,10 +48,22 @@ def test_iris_config_empty_file(tmp_path):
         IrisConfig.load(bad_config)
 
 
-def test_build_resources_gpu_not_supported():
-    """Test that GPU raises error."""
-    with pytest.raises(ValueError, match="GPU support not yet implemented"):
-        build_resources(tpu=None, gpu=2, cpu=None, memory=None)
+def test_build_resources_gpu():
+    """Test GPU spec parsing in build_resources."""
+    spec = build_resources(tpu=None, gpu="H100x8")
+    assert spec.device.HasField("gpu")
+    assert spec.device.gpu.variant == "H100"
+    assert spec.device.gpu.count == 8
+
+    # Bare count defaults to empty variant
+    spec = build_resources(tpu=None, gpu="4")
+    assert spec.device.gpu.variant == ""
+    assert spec.device.gpu.count == 4
+
+    # Bare variant defaults to count=1
+    spec = build_resources(tpu=None, gpu="A100")
+    assert spec.device.gpu.variant == "A100"
+    assert spec.device.gpu.count == 1
 
 
 # Integration tests using local cluster
