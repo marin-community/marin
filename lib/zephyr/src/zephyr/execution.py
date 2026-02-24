@@ -567,12 +567,6 @@ class ZephyrCoordinator:
         with self._lock:
             return dict(self._results)
 
-    def set_execution_config(self, shared_data: dict[str, Any], execution_id: str) -> None:
-        """Set config for the current execution."""
-        with self._lock:
-            self._shared_data = shared_data
-            self._execution_id = execution_id
-
     def run_pipeline(
         self,
         plan: PhysicalPlan,
