@@ -71,7 +71,9 @@ def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str,
         if launch_groups:
             group_name, _ = launch_groups[0]
             launch_count = routing.group_to_launch.get(group_name, 0)
-            hints[job_id] = f"Waiting for worker scale-up in scale group '{group_name}' ({launch_count} slice(s) requested)"
+            hints[job_id] = (
+                f"Waiting for worker scale-up in scale group '{group_name}' ({launch_count} slice(s) requested)"
+            )
             continue
 
         # Demand is routed but no new slices requested right now (for example
