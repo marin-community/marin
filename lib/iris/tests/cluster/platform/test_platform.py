@@ -307,6 +307,33 @@ def test_gcp_list_slices_skips_deleting_tpus():
         assert handle.slice_id not in slice_ids
 
 
+def test_gcp_create_slice_resolves_ghcr_image_in_bootstrap_config():
+    """create_slice rewrites GHCR images in bootstrap_config via resolve_image."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="my-proj")
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-16",
+    )
+    cfg.gcp.zone = "europe-west4-b"
+    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+
+    bc = config_pb2.BootstrapConfig(
+        docker_image="ghcr.io/marin-community/iris-worker:latest",
+        worker_port=10001,
+        controller_address="controller:10000",
+        cache_dir="/var/cache/iris",
+    )
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        platform.create_slice(cfg, bootstrap_config=bc)
+
+    assert bc.docker_image == "europe-docker.pkg.dev/my-proj/ghcr-mirror/marin-community/iris-worker:latest"
+
+
 # =============================================================================
 # Section 3: Manual-Specific Tests
 #

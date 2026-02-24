@@ -601,6 +601,7 @@ class GcpPlatform:
         )
 
         if bootstrap_config:
+            bootstrap_config.docker_image = self.resolve_image(bootstrap_config.docker_image, zone=gcp.zone)
 
             def _bootstrap_worker():
                 try:

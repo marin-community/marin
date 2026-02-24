@@ -697,16 +697,6 @@ class Autoscaler:
         bc = config_pb2.BootstrapConfig()
         bc.CopyFrom(self._bootstrap_config)
 
-        # Determine the zone for this group (GCP zone or CoreWeave region)
-        template = group.config.slice_template
-        zone: str | None = None
-        if template.HasField("gcp") and template.gcp.zone:
-            zone = template.gcp.zone
-        elif template.HasField("coreweave") and template.coreweave.region:
-            zone = template.coreweave.region
-
-        bc.docker_image = self._platform.resolve_image(bc.docker_image, zone=zone)
-
         if has_worker:
             attributes = dict(group.config.worker.attributes)
             if attributes:
