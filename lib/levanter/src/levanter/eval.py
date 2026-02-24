@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
-from jax.sharding import Mesh
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
 
@@ -365,8 +365,16 @@ class TaggedEvaluator(Generic[Ex, M]):
             mesh=device_mesh,
             axis_resources=axis_mapping,
         )
+        self.device_mesh = device_mesh
         self.tokenizer = tokenizer
         self.axis_mapping = axis_mapping
+        if device_mesh is None or axis_mapping is None:
+            self.per_pos_out_sharding = None
+        else:
+            batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
+            self.per_pos_out_sharding = None
+            if batch_axis_resource is not None:
+                self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
 
         self.bytes_per_token = self._calculate_bytes_per_token_type(tokenizer)
         self.hierarchy = self._construct_tag_hierarchy()
@@ -375,6 +383,8 @@ class TaggedEvaluator(Generic[Ex, M]):
     def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
         bytes_per_token = self.bytes_per_token
         log2e = jnp.log2(jnp.e)
+        per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
+        per_pos_out_sharding = self.per_pos_out_sharding
 
         @hax.named_jit
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
@@ -388,8 +398,12 @@ class TaggedEvaluator(Generic[Ex, M]):
                     f"Expected batched eval tensors with rank 2, got losses={losses.ndim}, "
                     f"weights={weights.ndim}, token_ids={token_ids.ndim}, tags={tags.ndim}"
                 )
-            this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags)
-            this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags)
+            if per_tag_out_sharding is None:
+                this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags)
+                this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags)
+            else:
+                this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags, out_sharding=per_tag_out_sharding)
+                this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags, out_sharding=per_tag_out_sharding)
 
             mean = state.token_avg_loss.add(this_loss / jnp.maximum(this_weights, 1.0), this_weights)
             state = dataclasses.replace(state, token_avg_loss=mean)
@@ -401,9 +415,17 @@ class TaggedEvaluator(Generic[Ex, M]):
                 state = dataclasses.replace(state, loss_per_tag=mean_per_tag)
 
             if bytes_per_token is not None:
-                bytes_per_pos = bytes_per_token[token_ids]
+                if per_pos_out_sharding is None:
+                    bytes_per_pos = bytes_per_token[token_ids]
+                else:
+                    bytes_per_pos = bytes_per_token.at[token_ids].get(out_sharding=per_pos_out_sharding)
                 this_bytes = jnp.sum(bytes_per_pos * weights)
-                bytes_per_tag = jnp.einsum("bt,bt,bk->k", bytes_per_pos, weights, tags)
+                if per_tag_out_sharding is None:
+                    bytes_per_tag = jnp.einsum("bt,bt,bk->k", bytes_per_pos, weights, tags)
+                else:
+                    bytes_per_tag = jnp.einsum(
+                        "bt,bt,bk->k", bytes_per_pos, weights, tags, out_sharding=per_tag_out_sharding
+                    )
 
                 bpb = this_loss / jnp.maximum(this_bytes, 1.0) * log2e
                 bpb_per_tag = this_loss_per_tag / jnp.maximum(bytes_per_tag, 1.0) * log2e
