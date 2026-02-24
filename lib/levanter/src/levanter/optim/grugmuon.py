@@ -5,8 +5,9 @@
 Muon optimizer for models using raw JAX arrays with (fan_in, fan_out) layout,
 such as Grug models.
 
-All 2D arrays are routed to Muon, except those whose path contains
-'embed', 'lm_head', or 'output' (case-insensitive), which use AdamW.
+2D arrays and 3D arrays (where the first dim is a batch/expert dim) are routed
+to Muon, except those whose path contains 'embed', 'lm_head', or 'output'
+(case-insensitive), which use AdamW.
 """
 
 from dataclasses import dataclass
@@ -30,7 +31,7 @@ class GrugMuonConfig(MuonConfig):
     Muon optimizer for models that use raw JAX arrays in (fan_in, fan_out) layout.
 
     Routing rules:
-    - 2D arrays whose path does NOT contain 'embed', 'lm_head', or 'output' -> Muon
+    - 2D and 3D arrays whose path does NOT contain 'embed', 'lm_head', or 'output' -> Muon
     - Everything else -> AdamW
     """
 
@@ -86,7 +87,7 @@ class GrugMuonConfig(MuonConfig):
             path_lower = path_str.lower()
             if "embed" in path_lower or "lm_head" in path_lower or "output" in path_lower:
                 return "adamw"
-            elif hasattr(param, "ndim") and param.ndim == 2:
+            elif hasattr(param, "ndim") and param.ndim in (2, 3):
                 return "muon"
             else:
                 return "adamw"
@@ -123,11 +124,22 @@ def _grug_scale_with_muon(
             updates = buf
 
         def transform_array(x):
-            if not hasattr(x, "ndim") or x.ndim != 2:
+            if not hasattr(x, "ndim") or x.ndim not in (2, 3):
                 return x
-            updated = _zeropower_via_newtonschulz(x, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
-            # Layout is (fan_in, fan_out)
-            fan_in, fan_out = updated.shape
+            if x.ndim == 3:
+                from jax.sharding import PartitionSpec as P, reshard
+
+                # Replicate then vmap the Newton-Schulz core over the batch/expert dim
+                x = reshard(x, P(None, None, None))
+                updated = jax.vmap(
+                    lambda m: _newtonschulz_core(m, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
+                )(x)
+                # Layout per slice is (fan_in, fan_out)
+                fan_in, fan_out = updated.shape[1], updated.shape[2]
+            else:
+                updated = _zeropower_via_newtonschulz(x, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
+                # Layout is (fan_in, fan_out)
+                fan_in, fan_out = updated.shape
             if not use_kimi_scaling:
                 scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
             else:
@@ -142,20 +154,12 @@ def _grug_scale_with_muon(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def _zeropower_via_newtonschulz(X, steps: int = 5, eps: float = 1e-7, coefficient_type: CoefficientType = "quintic"):
-    """Newton-Schulz iteration to orthogonalize X.
+def _newtonschulz_core(X, steps: int = 5, eps: float = 1e-7, coefficient_type: CoefficientType = "quintic"):
+    """Pure Newton-Schulz iteration on a 2D matrix.
 
-    Replicates the array across devices before iterating to avoid sharding
-    ambiguities in the X @ X.T contractions, then reshards back to the
-    original sharding.
+    No resharding logic so this is safe to call under vmap. Callers are
+    responsible for replicating X before calling this function.
     """
-    from jax.sharding import PartitionSpec as P, reshard
-
-    assert X.ndim == 2
-
-    orig_sharding = X.sharding if hasattr(X, "sharding") else None
-    X = reshard(X, P(None, None))
-
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
     X /= jnp.linalg.norm(X) + eps
 
@@ -173,7 +177,17 @@ def _zeropower_via_newtonschulz(X, steps: int = 5, eps: float = 1e-7, coefficien
     if transpose:
         X = X.T
 
-    if orig_sharding is not None:
-        X = reshard(X, orig_sharding)
-
     return X
+
+
+def _zeropower_via_newtonschulz(X, steps: int = 5, eps: float = 1e-7, coefficient_type: CoefficientType = "quintic"):
+    """Newton-Schulz iteration to orthogonalize a 2D matrix.
+
+    Replicates X before iterating to avoid sharding ambiguities in the
+    X @ X.T contractions.
+    """
+    from jax.sharding import PartitionSpec as P, reshard
+
+    assert X.ndim == 2
+    X = reshard(X, P(None, None))
+    return _newtonschulz_core(X, steps=steps, eps=eps, coefficient_type=coefficient_type)
