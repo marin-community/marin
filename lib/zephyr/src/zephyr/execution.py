@@ -140,9 +140,9 @@ def _generate_execution_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def _shared_data_path(prefix: str, name: str) -> str:
-    """Path for a shared data object: {prefix}/shared/{name}.pkl"""
-    return f"{prefix}/shared/{name}.pkl"
+def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
+    """Path for a shared data object: {prefix}/{execution_id}/shared/{name}.pkl"""
+    return f"{prefix}/{execution_id}/shared/{name}.pkl"
 
 
 def _chunk_path(
@@ -758,7 +758,7 @@ class ZephyrWorker:
 
     def get_shared(self, name: str) -> Any:
         if name not in self._shared_data_cache:
-            path = _shared_data_path(self._chunk_prefix, name)
+            path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
             logger.info("[%s] Loading shared data '%s' from %s", self._worker_id, name, path)
             t0 = time.monotonic()
             with fsspec.open(path, "rb") as f:
@@ -991,6 +991,8 @@ class ZephyrContext:
     no_workers_timeout: float | None = None
     max_execution_retries: int = 3
 
+    # Shared data staged by put(), uploaded to disk at the start of execute()
+    _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     _coordinator: ActorHandle | None = field(default=None, repr=False)
     _coordinator_group: Any = field(default=None, repr=False)
     _worker_group: Any = field(default=None, repr=False)
@@ -1034,26 +1036,34 @@ class ZephyrContext:
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
 
     def put(self, name: str, obj: Any) -> None:
-        """Serialize shared data to disk for workers to load on demand.
+        """Stage shared data for workers to load on demand.
 
         Must be called before execute(). The object must be picklable.
         Workers access it via zephyr_worker_ctx().get_shared(name), which
         loads from disk on first access and caches locally.
+
+        The actual serialization to disk happens at the start of execute(),
+        once the execution_id is known, so each execution is isolated.
         """
-        path = _shared_data_path(self.chunk_storage_prefix, name)
-        ensure_parent_dir(path)
-        t0 = time.monotonic()
-        data = cloudpickle.dumps(obj)
-        elapsed = time.monotonic() - t0
-        with fsspec.open(path, "wb") as f:
-            f.write(data)
-        logger.info(
-            "Shared data '%s' written to %s (serialized %d bytes in %.2fs)",
-            name,
-            path,
-            len(data),
-            elapsed,
-        )
+        self._shared_data[name] = obj
+
+    def _upload_shared_data(self, execution_id: str) -> None:
+        """Serialize all staged shared data to disk under the execution directory."""
+        for name, obj in self._shared_data.items():
+            path = _shared_data_path(self.chunk_storage_prefix, execution_id, name)
+            ensure_parent_dir(path)
+            t0 = time.monotonic()
+            data = cloudpickle.dumps(obj)
+            elapsed = time.monotonic() - t0
+            with fsspec.open(path, "wb") as f:
+                f.write(data)
+            logger.info(
+                "Shared data '%s' written to %s (serialized %d bytes in %.2fs)",
+                name,
+                path,
+                len(data),
+                elapsed,
+            )
 
     def execute(
         self,
@@ -1086,6 +1096,7 @@ class ZephyrContext:
             )
 
             try:
+                self._upload_shared_data(execution_id)
                 self._create_coordinator(attempt)
                 self._create_workers(plan.num_shards, attempt)
 
