@@ -29,6 +29,7 @@ provider's view of resources, distinct from the Iris lifecycle states in vm.prot
 from __future__ import annotations
 
 import logging
+import socket
 import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -40,6 +41,53 @@ from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Label Keys
+# ============================================================================
+
+
+class Labels:
+    """Label keys for Iris-managed cloud resources.
+
+    All keys follow the format ``iris-{prefix}-<suffix>`` so resources are
+    self-documenting and namespaced per cluster.
+    """
+
+    def __init__(self, prefix: str):
+        self.iris_managed = f"iris-{prefix}-managed"
+        self.iris_scale_group = f"iris-{prefix}-scale-group"
+        self.iris_controller = f"iris-{prefix}-controller"
+        self.iris_controller_address = f"iris-{prefix}-controller-address"
+        self.iris_slice_id = f"iris-{prefix}-slice-id"
+
+
+# ============================================================================
+# Port Utilities
+# ============================================================================
+
+
+def find_free_port(start: int = -1) -> int:
+    """Find an available port.
+
+    Args:
+        start: Starting port for sequential scan. Default of -1 lets the kernel
+            pick a random ephemeral port, which avoids collisions when multiple
+            processes search for ports concurrently (e.g. pytest-xdist).
+    """
+    if start == -1:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+    for port in range(start, start + 1000):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
+
 
 # ============================================================================
 # Exception Types
@@ -228,7 +276,7 @@ class SliceHandle(Protocol):
     def scale_group(self) -> str:
         """Name of the scale group this slice belongs to.
 
-        Extracted from labels (e.g., labels["{prefix}-scale-group"]).
+        Extracted from labels (e.g., labels["iris-{prefix}-scale-group"]).
         """
         ...
 
@@ -429,9 +477,10 @@ def default_stop_all(
     that timed-out threads don't block interpreter shutdown.
     """
     prefix = label_prefix or config.platform.label_prefix or "iris"
+    labels = Labels(prefix)
 
     target_names: list[str] = ["controller"]
-    all_slices = platform.list_all_slices(labels={f"{prefix}-managed": "true"})
+    all_slices = platform.list_all_slices(labels={labels.iris_managed: "true"})
     for s in all_slices:
         logger.info("Found managed slice %s", s.slice_id)
         target_names.append(f"slice:{s.slice_id}")

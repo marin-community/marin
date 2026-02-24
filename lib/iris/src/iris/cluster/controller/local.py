@@ -26,7 +26,8 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.vm_lifecycle import ControllerStatus
 from iris.cluster.controller.scaling_group import ScalingGroup
-from iris.cluster.platform.local import LocalPlatform, find_free_port
+from iris.cluster.platform.base import find_free_port
+from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2

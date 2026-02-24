@@ -159,8 +159,8 @@ def main(cfg: ValidationConfig) -> None:
         )
     )
 
-    with ZephyrContext(name="validate") as ctx:
-        result = list(ctx.execute(pipeline))
+    ctx = ZephyrContext(name="validate")
+    result = list(ctx.execute(pipeline))
     print(f"Validation complete: {result[0]}")
 
 

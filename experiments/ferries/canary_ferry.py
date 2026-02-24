@@ -64,8 +64,8 @@ def _resources(accelerator: str) -> ResourceConfig:
         raise ValueError(f"Unknown accelerator: {accelerator!r}. Expected 'tpu' or 'gpu'.")
 
 
-def main():
-    accelerator = os.environ.get("CANARY_ACCELERATOR", "tpu")
+def make_training_step(accelerator: str = "tpu"):
+    """Create the canary ferry training step for the given accelerator."""
     train_config = SimpleTrainConfig(
         resources=_resources(accelerator),
         train_batch_size=BATCH_SIZE,
@@ -89,7 +89,7 @@ def main():
         steps_per_eval=500,
     )
 
-    training_step = default_train(
+    return default_train(
         name=f"canary-ferry-{CANARY_DATE}",
         tokenized=nemotron_mix,
         model_config=model,
@@ -98,6 +98,10 @@ def main():
         eval_harness_tasks=[],
     )
 
+
+def main():
+    accelerator = os.environ.get("CANARY_ACCELERATOR", "tpu")
+    training_step = make_training_step(accelerator)
     executor_main(steps=[training_step])
 
 
