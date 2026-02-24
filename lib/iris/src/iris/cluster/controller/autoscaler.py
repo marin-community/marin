@@ -34,7 +34,7 @@ from iris.cluster.platform.base import (
     SliceHandle,
 )
 from iris.cluster.platform.bootstrap import rewrite_artifact_registry_region
-from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap
+from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap, ZONE_ATTRIBUTE_KEY
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
@@ -101,6 +101,7 @@ class DemandEntry:
     resources: cluster_pb2.ResourceSpecProto
     preemptible: bool | None = None  # None = no preference
     required_regions: frozenset[str] | None = None
+    required_zones: frozenset[str] | None = None
     invalid_reason: str | None = None
 
 
@@ -154,6 +155,18 @@ def route_demand(
             return template.coreweave.region
         return None
 
+    def group_zone(group: ScalingGroup) -> str | None:
+        if group.config.HasField("worker"):
+            zone = group.config.worker.attributes.get(ZONE_ATTRIBUTE_KEY, "").strip()
+            if zone:
+                return zone
+        template = group.config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
+
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
         if not group.matches_device_requirement(entry.device_type, entry.device_variant):
             return False
@@ -162,6 +175,10 @@ def route_demand(
         if entry.required_regions:
             region = group_region(group)
             if region not in entry.required_regions:
+                return False
+        if entry.required_zones:
+            zone = group_zone(group)
+            if zone not in entry.required_zones:
                 return False
         if entry.invalid_reason:
             return False
@@ -234,11 +251,13 @@ def route_demand(
             if g.matches_device_requirement(entry.device_type, entry.device_variant)
             and (entry.preemptible is None or g.config.slice_template.preemptible == entry.preemptible)
             and (not entry.required_regions or group_region(g) in entry.required_regions)
+            and (not entry.required_zones or group_zone(g) in entry.required_zones)
         ]
         if not matching_groups:
             reason = (
                 f"no_matching_group: need device={entry.device_type}:{entry.device_variant}"
                 f", required_regions={sorted(entry.required_regions) if entry.required_regions else []}"
+                f", required_zones={sorted(entry.required_zones) if entry.required_zones else []}"
                 f", available groups={[g.name for g in sorted_groups]}"
             )
             unmet.append(UnmetDemand(entry=entry, reason=reason))
