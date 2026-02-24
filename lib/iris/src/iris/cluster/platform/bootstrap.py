@@ -28,16 +28,25 @@ logger = logging.getLogger(__name__)
 _ZONE_PREFIX_TO_MULTI_REGION = {
     "us": "us",
     "europe": "europe",
-    "asia": "asia",
-    "me": "asia",  # Middle East → closest multi-region
 }
+
+_UNSUPPORTED_ZONE_PREFIXES = {"asia", "me"}
 
 GHCR_MIRROR_REPO = "ghcr-mirror"
 
 
 def zone_to_multi_region(zone: str) -> str | None:
-    """Map a GCP zone to its multi-region location (e.g. 'us-central1-a' → 'us')."""
+    """Map a GCP zone to its multi-region location (e.g. 'us-central1-a' → 'us').
+
+    Returns None for unknown prefixes. Raises ValueError for zones in regions
+    where AR remote repos are not yet provisioned (asia, me).
+    """
     prefix = zone.split("-", 1)[0]
+    if prefix in _UNSUPPORTED_ZONE_PREFIXES:
+        raise ValueError(
+            f"Zone {zone!r} is in region prefix {prefix!r} which has no AR remote repo provisioned. "
+            f"Supported prefixes: {sorted(_ZONE_PREFIX_TO_MULTI_REGION)}"
+        )
     return _ZONE_PREFIX_TO_MULTI_REGION.get(prefix)
 
 
@@ -456,6 +465,7 @@ def build_controller_bootstrap_script_from_config(
         multi_region = zone_to_multi_region(ctrl.gcp.zone)
         if multi_region:
             project = config.platform.gcp.project_id
+            assert project, "platform.gcp.project_id required for GHCR→AR controller image rewrite"
             image = rewrite_ghcr_to_ar_remote(image, multi_region, project)
 
     return build_controller_bootstrap_script(image, port, config_yaml)

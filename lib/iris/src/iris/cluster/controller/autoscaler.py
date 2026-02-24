@@ -673,6 +673,7 @@ class Autoscaler:
             multi_region = zone_to_multi_region(template.gcp.zone)
             if multi_region:
                 project = self._gcp_project
+                assert project, "gcp_project required for GHCR→AR worker image rewrite"
                 bc.docker_image = rewrite_ghcr_to_ar_remote(bc.docker_image, multi_region, project)
 
         if has_worker:

@@ -88,8 +88,6 @@ def test_render_template_preserves_shell_variables() -> None:
         ("us-central1-a", "us"),
         ("us-west4-b", "us"),
         ("europe-west4-b", "europe"),
-        ("asia-east1-a", "asia"),
-        ("me-west1-a", "asia"),
     ],
 )
 def test_zone_to_multi_region(zone: str, expected: str) -> None:
@@ -98,6 +96,12 @@ def test_zone_to_multi_region(zone: str, expected: str) -> None:
 
 def test_zone_to_multi_region_unknown_prefix() -> None:
     assert zone_to_multi_region("southamerica-east1-a") is None
+
+
+@pytest.mark.parametrize("zone", ["asia-east1-a", "me-west1-a"])
+def test_zone_to_multi_region_unsupported_raises(zone: str) -> None:
+    with pytest.raises(ValueError, match="no AR remote repo provisioned"):
+        zone_to_multi_region(zone)
 
 
 @pytest.mark.parametrize(
@@ -117,9 +121,9 @@ def test_zone_to_multi_region_unknown_prefix() -> None:
         ),
         (
             "ghcr.io/myorg/myimage:abc123",
-            "asia",
+            "us",
             "my-project",
-            "asia-docker.pkg.dev/my-project/ghcr-mirror/myorg/myimage:abc123",
+            "us-docker.pkg.dev/my-project/ghcr-mirror/myorg/myimage:abc123",
         ),
     ],
 )

@@ -12,14 +12,14 @@ infrastructure.
 ```
 Developer → docker push → ghcr.io/marin-community/iris-worker:v1
                                     │
-                    ┌───────────────┼───────────────┐
-                    ▼               ▼               ▼
-            us-docker.pkg.dev  europe-docker.pkg.dev  (future: asia)
-            /hai-gcp-models    /hai-gcp-models
-            /ghcr-mirror/...   /ghcr-mirror/...
-                    │               │
-                    ▼               ▼
-             US GCP VMs       Europe GCP VMs
+                    ┌───────────────┴───────────────┐
+                    ▼                               ▼
+            us-docker.pkg.dev              europe-docker.pkg.dev
+            /hai-gcp-models                /hai-gcp-models
+            /ghcr-mirror/...               /ghcr-mirror/...
+                    │                               │
+                    ▼                               ▼
+             US GCP VMs                     Europe GCP VMs
 ```
 
 ### How it works
@@ -27,11 +27,12 @@ Developer → docker push → ghcr.io/marin-community/iris-worker:v1
 1. **Push**: Images are pushed only to `ghcr.io/marin-community/`.
 2. **Pull**: When a GCP VM pulls from `us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/...`,
    the AR remote repo transparently fetches from `ghcr.io` on first access and caches it.
-3. **Rewrite**: The autoscaler and controller bootstrap automatically rewrite GHCR image tags
-   to the appropriate AR remote repo based on the VM's zone → continent mapping:
+3. **Rewrite**: The autoscaler, controller bootstrap, and worker task image resolver
+   automatically rewrite GHCR image tags to the appropriate AR remote repo based on
+   the VM's zone → continent mapping:
    - `us-*` zones → `us-docker.pkg.dev`
    - `europe-*` zones → `europe-docker.pkg.dev`
-   - `asia-*` zones → `asia-docker.pkg.dev`
+   - `asia-*` / `me-*` zones → **not supported** (raises error; provision AR remote repo first)
    - Non-GCP (CoreWeave) → pulls directly from `ghcr.io`
 
 ### Cost
