@@ -79,6 +79,16 @@ def test_query_and_compare_helpers(tmp_path: Path) -> None:
     assert "## Optimization Candidates" in report
 
 
+def test_semantic_family_share_is_bounded_with_global_breakdown(tmp_path: Path) -> None:
+    trace_path = tmp_path / "global_breakdown_trace.json.gz"
+    _write_trace(trace_path, step_durations=[100, 110, 120, 130, 140, 150], softmax_duration=60)
+
+    summary = summarize_trace(trace_path, warmup_steps=2, hot_op_limit=10, breakdown_mode="exclusive_global")
+    assert summary.time_breakdown.duration_basis == "exclusive_duration_global_timeline"
+    assert summary.semantic_families
+    assert all(0.0 <= family.share_of_total <= 1.0 for family in summary.semantic_families)
+
+
 def test_gap_before_specific_op_and_hierarchical_regions(tmp_path: Path) -> None:
     trace_path = tmp_path / "hierarchical_trace.json.gz"
     target = "_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined.1"

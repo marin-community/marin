@@ -831,6 +831,18 @@ def _summarize_semantic_families(
     total_duration: float,
     limit: int,
 ) -> list[SemanticFamilyAggregate]:
+    # Semantic-family aggregates are computed from per-op exclusive durations.
+    # When the overall breakdown uses a global non-overlap basis, that total can
+    # be smaller than summed per-op exclusive durations, which would otherwise
+    # yield >100% shares. Use a denominator consistent with the aggregated basis.
+    op_exclusive_total = sum(op.exclusive_duration for op in hot_ops)
+    if total_duration > 0 and op_exclusive_total > 0:
+        semantic_total_duration = max(total_duration, op_exclusive_total)
+    elif total_duration > 0:
+        semantic_total_duration = total_duration
+    else:
+        semantic_total_duration = op_exclusive_total
+
     aggregate: dict[str, dict[str, float | int | Counter[str] | str]] = {}
     for op in hot_ops:
         family = classify_semantic_family(op.name)
@@ -875,7 +887,7 @@ def _summarize_semantic_families(
                 count=count,
                 total_duration=total,
                 exclusive_duration=exclusive,
-                share_of_total=(exclusive / total_duration) if total_duration > 0 else 0.0,
+                share_of_total=(exclusive / semantic_total_duration) if semantic_total_duration > 0 else 0.0,
                 avg_duration=(total / count) if count else 0.0,
                 avg_exclusive_duration=(exclusive / count) if count else 0.0,
                 example_op=cast(str, stats["example_op"]),

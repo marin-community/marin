@@ -132,6 +132,7 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
         lines.append("Evidence:")
         for evidence in candidate.evidence:
             lines.append(f"- {evidence}")
+        lines.append("")
         lines.append("Suggestions:")
         for suggestion in candidate.suggestions:
             lines.append(f"- {suggestion}")
