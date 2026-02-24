@@ -15,7 +15,12 @@ from iris.cluster.controller.events import (
     TaskStateChangedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingResult
+from iris.cluster.controller.scheduler import (
+    JobRequirements,
+    Scheduler,
+    SchedulingResult,
+    device_variant_matches,
+)
 from iris.cluster.controller.state import ControllerState, ControllerTask
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, JobName, WorkerId
 from iris.rpc import cluster_pb2
@@ -1909,3 +1914,52 @@ def test_mixed_variant_cluster_many_jobs_all_scheduled(state, worker_metadata):
             assert (
                 worker.device_variant == "v5litepod-16"
             ), f"Job {job_name} assigned to {worker.device_variant}, expected v5litepod-16"
+
+
+def test_gpu_job_matches_worker_with_full_nvidia_smi_variant(scheduler, state, worker_metadata):
+    """A job requesting variant="H100" matches a worker reporting "NVIDIA H100 80GB HBM3".
+
+    nvidia-smi reports the full GPU model string, but configs and jobs use short
+    names. The scheduler uses substring matching so these interoperate.
+    """
+    meta = worker_metadata(gpu_count=8, gpu_name="NVIDIA H100 80GB HBM3")
+    register_worker(state, "gpu-w1", "addr", meta)
+
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="gpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="H100", count=8)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    tasks = submit_job(state, "j1", req)
+
+    context = scheduler.create_scheduling_context(
+        state.get_available_workers(),
+        pending_tasks=[t.task_id for t in tasks],
+        jobs={tasks[0].job_id: _job_requirements_from_job(state.get_job(tasks[0].job_id))},
+    )
+    result = scheduler.find_assignments(context)
+    assert len(result.assignments) == 1, f"Expected 1 assignment, got {len(result.assignments)}"
+    assert result.assignments[0][1] == WorkerId("gpu-w1")
+
+
+@pytest.mark.parametrize(
+    "job_variant, worker_variant, expected",
+    [
+        ("H100", "NVIDIA H100 80GB HBM3", True),
+        ("h100", "NVIDIA H100 80GB HBM3", True),
+        ("H100", "H100", True),
+        ("A100", "NVIDIA H100 80GB HBM3", False),
+        ("H100", "NVIDIA H200", False),
+        ("H100", None, False),
+        ("A100", "NVIDIA A100-SXM4-80GB", True),
+        ("v5litepod", "v5litepod-16", True),
+    ],
+)
+def test_device_variant_matches(job_variant, worker_variant, expected):
+    assert device_variant_matches(job_variant, worker_variant) == expected

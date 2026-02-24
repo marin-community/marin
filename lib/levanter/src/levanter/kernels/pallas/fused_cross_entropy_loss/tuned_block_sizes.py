@@ -202,12 +202,32 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ),
     },
     "TPU v4": {
+        ("bfloat16", "small-vocab"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=256,
+            v_block_size=1024,
+        ),
+        ("bfloat16", "llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=1024,
+        ),
         ("bfloat16", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
             v_block_size=1024,
         ),
         ("bfloat16", "medium-batch-medium-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=1024,
+        ),
+        ("float32", "small-vocab"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=256,
+            v_block_size=1024,
+        ),
+        ("float32", "llama3-ish"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
             v_block_size=1024,
@@ -317,6 +337,10 @@ _WARNED_HUGE_BATCH_SAFE_FALLBACK = False
 _TPU_LABEL_LAYOUT_DEVICE_KEYS = {"TPU v4", "TPU v5", "TPU v5p"}
 
 
+def _is_tpu_device(device_key: Optional[str]) -> bool:
+    return bool(device_key and device_key.startswith("TPU"))
+
+
 def _device_key(device_kind: Optional[str]) -> Optional[str]:
     if device_kind is None and jax.devices():
         device_kind = jax.devices()[0].device_kind.lower()
@@ -422,12 +446,22 @@ def _is_valid_for_pallas_shape(
     h: int,
     device_key: Optional[str],
 ) -> bool:
-    if block_sizes.b_block_size % 128 != 0 or block_sizes.h_block_size % 128 != 0:
+    if _is_tpu_device(device_key):
+        if block_sizes.b_block_size % 128 != 0 or block_sizes.h_block_size % 128 != 0:
+            return False
+        if b % block_sizes.b_block_size != 0 or h % block_sizes.h_block_size != 0:
+            return False
+        if device_key in _TPU_LABEL_LAYOUT_DEVICE_KEYS and b >= 1024 and block_sizes.b_block_size % 1024 != 0:
+            return False
+        return True
+
+    if block_sizes.b_block_size <= 0 or block_sizes.h_block_size <= 0 or block_sizes.v_block_size <= 0:
         return False
-    if b % block_sizes.b_block_size != 0 or h % block_sizes.h_block_size != 0:
-        return False
-    if device_key in _TPU_LABEL_LAYOUT_DEVICE_KEYS and b >= 1024 and block_sizes.b_block_size % 1024 != 0:
-        return False
+    if device_key and device_key.startswith("NVIDIA"):
+        if block_sizes.b_block_size < 16 or block_sizes.h_block_size < 16 or block_sizes.v_block_size < 16:
+            return False
+        if block_sizes.b_block_size % 16 != 0 or block_sizes.h_block_size % 16 != 0:
+            return False
     return True
 
 
@@ -436,8 +470,11 @@ def _sanitize_for_pallas(
     *,
     b: int,
     h: int,
+    device_key: Optional[str],
 ) -> BlockSizes:
     """Adjust inferred block sizes so B/H blocks divide local shapes when possible."""
+    if not _is_tpu_device(device_key):
+        return block_sizes
     b_block_size = _largest_divisor_multiple_of_128(b, block_sizes.b_block_size)
     h_block_size = _largest_divisor_multiple_of_128(h, block_sizes.h_block_size)
     return BlockSizes(
@@ -489,7 +526,7 @@ def infer_block_sizes(
     default_entry = BlockSizes.get_default()
     if _is_valid_for_pallas_shape(default_entry, b=b, h=h, device_key=device_key):
         return default_entry
-    return _sanitize_for_pallas(default_entry, b=b, h=h)
+    return _sanitize_for_pallas(default_entry, b=b, h=h, device_key=device_key)
 
 
 def infer_xla_v_block_size(
@@ -501,8 +538,13 @@ def infer_xla_v_block_size(
     device_kind: Optional[str] = None,
 ) -> int:
     """Heuristic v-block size for the XLA streaming path."""
-    del b, h, dtype, device_kind  # currently unused
-    target = min(v, 32768)
+    del b, h, dtype
+    # Larger v-tiles improve throughput, but very large blocks can trigger OOM
+    # in full training runs because backward materializes [B, v_block] temporaries.
+    # Keep TPU v5p a bit larger (16384) and use 8192 elsewhere for safer memory.
+    device_key = _device_key(device_kind)
+    max_v_block_size = 16384 if device_key == "TPU v5p" else 8192
+    target = min(v, max_v_block_size)
     if target <= 0:
         return 1
     # Keep the block size <= v to avoid excess padding work.

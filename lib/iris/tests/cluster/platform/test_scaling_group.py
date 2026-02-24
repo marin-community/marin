@@ -16,7 +16,14 @@ from iris.cluster.controller.scaling_group import (
     SliceState,
     _zones_from_config,
 )
-from iris.cluster.platform.base import CloudSliceState, CloudWorkerState, QuotaExhaustedError, SliceStatus, WorkerStatus
+from iris.cluster.platform.base import (
+    CloudSliceState,
+    CloudWorkerState,
+    Labels,
+    QuotaExhaustedError,
+    SliceStatus,
+    WorkerStatus,
+)
 from iris.cluster.types import VmWorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
@@ -73,7 +80,8 @@ def make_mock_slice_handle(
     handle.slice_id = slice_id
     handle.scale_group = scale_group
     handle.zone = "us-central1-a"
-    handle.labels = {"iris-scale-group": scale_group, "iris-managed": "true"}
+    iris_labels = Labels("iris")
+    handle.labels = {iris_labels.iris_scale_group: scale_group, iris_labels.iris_managed: "true"}
     handle.created_at = Timestamp.from_ms(created_at_ms)
 
     if vm_states is None:
@@ -94,13 +102,14 @@ def make_mock_slice_handle(
     else:
         slice_state = CloudSliceState.CREATING
 
-    # Generate unique addresses by hashing slice_id
-    slice_hash = abs(hash(slice_id)) % 256
+    # Addresses are not valid IPs (e.g. "10.0.slice-001.0"), but that's fine —
+    # ScalingGroup only uses them as opaque dict keys for worker status lookups,
+    # never parsed or validated as IP addresses.
     worker_handles = []
     for i, state in enumerate(vm_states):
         worker_handle = make_mock_worker_handle(
             vm_id=f"{slice_id}-vm-{i}",
-            address=f"10.0.{slice_hash}.{i}",
+            address=f"10.0.{slice_id}.{i}",
             state=state,
         )
         worker_handles.append(worker_handle)
@@ -126,11 +135,11 @@ def make_mock_platform(slice_handles_to_discover: list[MagicMock] | None = None)
     return platform
 
 
-def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock]) -> None:
+def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock], timestamp: Timestamp | None = None) -> None:
     """Mark discovered slices as READY with their VM addresses."""
     for handle in handles:
         vm_addresses = [vm.internal_address for vm in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, vm_addresses)
+        group.mark_slice_ready(handle.slice_id, vm_addresses, timestamp=timestamp)
 
 
 def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> None:
@@ -298,14 +307,14 @@ class TestScalingGroupScalingPolicy:
     def test_cannot_scale_up_during_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """can_scale_up() returns False during backoff period."""
         platform = make_mock_platform()
-        group = ScalingGroup(unbounded_config, platform)
+        group = ScalingGroup(unbounded_config, platform, backoff_initial=Duration.from_seconds(5.0))
 
         ts = Timestamp.from_ms(1000000)
         group.record_failure(timestamp=ts)
 
         # During backoff period
         assert not group.can_scale_up(timestamp=Timestamp.from_ms(1001000))
-        # After backoff expires (default 5s = 5000ms)
+        # After backoff expires (5s = 5000ms)
         assert group.can_scale_up(timestamp=Timestamp.from_ms(1006000))
 
     def test_cannot_scale_up_during_cooldown(self, unbounded_config: config_pb2.ScaleGroupConfig):
@@ -549,9 +558,10 @@ class TestScalingGroupIdleTracking:
             make_mock_slice_handle("slice-002", all_ready=True),
         ]
         platform = make_mock_platform(slice_handles_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, platform)
+        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(1000))
         group.reconcile()
-        _mark_discovered_ready(group, discovered)
+        ready_ts = Timestamp.from_ms(1000)
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
 
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
@@ -564,12 +574,13 @@ class TestScalingGroupIdleTracking:
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
-        group.update_slice_activity(vm_status_map, Timestamp.from_ms(5000))
+        check_ts = Timestamp.from_ms(5000)
+        group.update_slice_activity(vm_status_map, check_ts)
 
         # Observable behavior: slice-001 should not be eligible for scaledown (recently active)
-        # slice-002 should remain eligible (no activity tracked)
-        assert not group.is_slice_eligible_for_scaledown("slice-001", Timestamp.from_ms(5000))
-        assert group.is_slice_eligible_for_scaledown("slice-002", Timestamp.from_ms(5000))
+        # slice-002 is eligible because idle_threshold (1000ms) has passed since ready_ts (1000ms)
+        assert not group.is_slice_eligible_for_scaledown("slice-001", check_ts)
+        assert group.is_slice_eligible_for_scaledown("slice-002", check_ts)
 
     def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """scale_down_if_idle terminates an eligible idle slice."""
@@ -777,8 +788,8 @@ class TestScalingGroupAvailability:
 
         assert group.can_accept_demand() is True
 
-    def test_can_accept_demand_false_when_at_capacity(self):
-        """can_accept_demand() returns False when AT_CAPACITY."""
+    def test_can_accept_demand_true_when_at_capacity(self):
+        """AT_CAPACITY groups accept demand so ready slices keep current_demand accurate."""
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
                 name="test-group",
@@ -793,7 +804,7 @@ class TestScalingGroupAvailability:
         group = ScalingGroup(config, platform)
         group.reconcile()
 
-        assert group.can_accept_demand() is False
+        assert group.can_accept_demand() is True
 
     def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded state auto-expires after timeout."""
@@ -1007,6 +1018,47 @@ class TestPrepareSliceConfigPreemptible:
 
         result = prepare_slice_config(parent.slice_template, parent, "iris")
         assert result.preemptible is False
+
+
+class TestPrepareSliceConfigGpuCount:
+    """prepare_slice_config propagates gpu_count from parent resources."""
+
+    def test_gpu_count_propagated_from_resources(self):
+        from iris.cluster.controller.scaling_group import prepare_slice_config
+
+        parent = config_pb2.ScaleGroupConfig(name="gpu-group")
+        parent.resources.CopyFrom(config_pb2.ScaleGroupResources(gpu_count=8))
+        parent.slice_template.coreweave.instance_type = "gd-8xh100ib-i128"
+
+        result = prepare_slice_config(parent.slice_template, parent, "iris")
+        assert result.gpu_count == 8
+
+    def test_gpu_count_zero_when_no_resources(self):
+        from iris.cluster.controller.scaling_group import prepare_slice_config
+
+        parent = config_pb2.ScaleGroupConfig(name="cpu-group")
+        parent.slice_template.coreweave.instance_type = "cd-gp-i64-erapids"
+
+        result = prepare_slice_config(parent.slice_template, parent, "iris")
+        assert result.gpu_count == 0
+
+    def test_coreweave_yaml_gpu_count_flows_through(self):
+        """Loading coreweave.yaml and running prepare_slice_config produces correct gpu_count."""
+        from pathlib import Path
+
+        from iris.cluster.config import load_config
+        from iris.cluster.controller.scaling_group import prepare_slice_config
+
+        yaml_path = Path(__file__).parents[3] / "examples" / "coreweave.yaml"
+        config = load_config(yaml_path)
+
+        h100_sg = config.scale_groups["h100-8x"]
+        slice_config = prepare_slice_config(h100_sg.slice_template, h100_sg, config.platform.label_prefix)
+        assert slice_config.gpu_count == 8
+
+        cpu_sg = config.scale_groups["cpu-erapids"]
+        cpu_slice = prepare_slice_config(cpu_sg.slice_template, cpu_sg, config.platform.label_prefix)
+        assert cpu_slice.gpu_count == 0
 
 
 class TestMarkSliceLockDiscipline:

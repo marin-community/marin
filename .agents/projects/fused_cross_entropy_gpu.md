@@ -510,3 +510,50 @@ Interpretation note:
   - `pallas_hybrid` (inferred blocks): `~143.42 ms`
   - `pallas_fa` (inferred blocks + opt-in): `~143.94 ms`
 - Numerics vs XLA in sampled run remained tight (`loss_diff=0.0`, `gx_max ~7.63e-6`, sampled `gw_max=0.0`).
+
+## 2026-02-24 merge/argmax + GB10 retune revalidation
+
+### Merge + feature completion
+- Resolved merge conflicts in:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py`
+- Added missing GPU argmax support in:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`
+  - `return_argmax` now threads through dispatch and returns per-row argmax ids.
+
+### GB10 routing/stability fixes
+- Kept GB10 BF16 behavior unchanged for tuned hybrid/native paths.
+- Added explicit GB10 non-BF16 fallback to XLA path in `pallas_gpu.py` to avoid unsupported/unstable native FP32 behavior in small-shape tests.
+- Updated tuned block-size validation in `tuned_block_sizes.py` so TPU divisibility rules are only enforced for TPU device keys; NVIDIA keys now validate against GPU constraints.
+
+### Test updates and results
+- Added GPU argmax parity test in:
+  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+- Added GB10 tuned-entry lookup test in:
+  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+- Validation (sequential GPU runs):
+  - `uv run pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+    - `19 passed, 5 skipped`
+  - `uv run pytest lib/levanter/tests/test_loss.py -k fused_loss_returns_argmax`
+    - `1 passed`
+- Repo checks:
+  - `./infra/pre-commit.py --all-files` passed after formatting.
+
+### GB10 retune re-run (sequential only, no parallel GPU workloads)
+- Command pattern:
+  - `LEVANTER_PALLAS_GPU_GB10_NATIVE_FORWARD=1 uv run python -u lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_gpu_block_sweep.py ...`
+- Primary shape: `B=8192, H=1024, V=128256` (implemented as `--batch 4 --pos 2048`).
+- Selected candidates and measured `tokens/s`:
+  - `b=512,h=16,v=1024`: `~239,470`
+  - `b=1024,h=16,v=1024`: `~224,465`
+  - `b=1024,h=32,v=1024`: `~246,261` (best)
+  - `b=2048,h=32,v=1024`: `~240,085`
+  - `b=512,h=32,v=1024`: `~235,856`
+  - `v=2048` candidates were slower (`~184k-192k`).
+- Cross-check on `B=4096` (`--batch 2 --pos 2048`) kept the same winner:
+  - `b=1024,h=32,v=1024`: `~183,830 tokens/s` (best among checked candidates).
+
+### Retune decision
+- No tuned-table change required: existing GB10 entry
+  - `BlockSizes(b_block_size=1024, h_block_size=32, v_block_size=1024)`
+  remains the best performer in this revalidation.

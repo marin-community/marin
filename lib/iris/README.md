@@ -213,11 +213,11 @@ Jobs can include a `bundle_blob` containing workspace files. The controller stor
 **Configuration** (required):
 
 ```yaml
-controller:
-  bundle_prefix: gs://my-bucket/iris/bundles  # GCS for distributed workers
+storage:
+  bundle_prefix: gs://my-bucket/iris/bundles  # shared storage for distributed workers
 ```
 
-The controller will **fail at startup** if `bundle_prefix` is not configured.
+The controller will **fail at startup** if `storage.bundle_prefix` is not configured.
 
 ### Multi-Region Bundle Storage
 
@@ -278,18 +278,6 @@ iris --config=... cluster dashboard
 iris --config=... cluster dashboard --port 8080
 
 # Local clusters: dashboard is at the URL printed by `cluster start --local`
-```
-
-### Debug cluster status
-```bash
-iris --config=... cluster debug discover         # Find controller VM
-iris --config=... cluster debug health           # Health check
-iris --config=... cluster debug autoscaler-status
-iris --config=... cluster debug bootstrap-logs   # VM startup logs
-iris --config=... cluster debug show-task-logs JOB_ID
-iris --config=... cluster debug validate         # Run test TPU jobs
-iris --config=... cluster debug cleanup          # Dry-run by default
-iris --config=... cluster debug cleanup --no-dry-run
 ```
 
 ### Job Management
@@ -375,9 +363,11 @@ defaults:
     worker_port: 10001
     controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
 
+storage:
+  bundle_prefix: gs://my-bucket/iris/bundles  # shared storage for distributed workers
+
 controller:
   image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest
-  bundle_prefix: gs://my-bucket/iris/bundles
   gcp:
     zone: us-central1-a
     machine_type: n2-standard-4
@@ -435,7 +425,7 @@ src/iris/
 │   ├── resolver.py          # ClusterResolver
 │   └── worker_pool.py       # Task dispatch
 ├── cluster/                  # Cluster orchestration
-│   ├── manager.py           # connect_cluster() + stop_all() free functions
+│   ├── manager.py           # connect_cluster() + stop_all(dry_run) free functions
 │   ├── controller/          # Controller service + autoscaler
 │   ├── worker/              # Worker service
 │   └── platform/            # Platform abstractions (GCP, Manual, Local, CoreWeave)
@@ -445,8 +435,7 @@ src/iris/
     ├── cluster.py            # Cluster lifecycle, controller, VM ops, dashboard
     ├── build.py              # Image build commands
     ├── run.py                # Job submission (command passthrough)
-    ├── rpc.py                # Dynamic RPC CLI
-    └── debug.py              # Debugging & validation
+    └── rpc.py                # Dynamic RPC CLI
 ```
 
 ## References

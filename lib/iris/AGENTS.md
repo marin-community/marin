@@ -121,6 +121,56 @@ When adding new modules or significant features:
 | Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
 | Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
 | Original Design | docs/fray-zero.md | Rationale and design decisions |
+| CoreWeave Integration | (below) | Platform, runtime, and networking for CoreWeave bare metal |
+
+### CoreWeave Integration
+
+Iris runs on CoreWeave bare-metal GPU nodes. The integration spans three layers:
+
+**Platform** (`cluster/platform/coreweave.py`): Uses shared NodePools with CoreWeave autoscaling.
+`iris cluster start` creates one NodePool per scale group (plus a controller pool) via
+`ensure_nodepools()`. NodePool names are derived from config: `{label_prefix}-{scale_group_name}`.
+Each NodePool has `autoscaling: true` and `targetNodes: 0`; CoreWeave provisions nodes on demand
+when Pods are scheduled. Iris manages only Pods; cleanup/stop leaves NodePools alone (they scale
+to zero when idle). The controller runs as a Deployment with a `ClusterIP` Service
+(`iris-controller-svc`). Workers discover the controller via in-cluster DNS
+(`iris-controller-svc.iris.svc.cluster.local:10000`).
+
+**Runtime**: `kubernetes` (`cluster/runtime/kubernetes.py`). Each task is a separate K8s Pod that
+can be scheduled independently (not co-located with the worker). Task Pods claim GPU/RDMA resources
+directly from the device plugin. The worker Pod must **not** request GPU/RDMA resources (the
+platform skips them when `runtime: kubernetes`). Task Pods get `hostNetwork`, tolerations,
+service account, S3 secret refs, and an emptyDir-backed UV cache automatically.
+Docker is not available on CoreWeave bare metal.
+
+**Networking**: All traffic stays inside the CoreWeave VPC. Worker Pods use `hostNetwork: True`
+(bypassing the Kubernetes overlay for RDMA/GPU performance). Task Pods set
+`hostNetwork: True` + `dnsPolicy: ClusterFirstWithHostNet` in their Pod spec.
+
+### Light Worker Mode (CoreWeave + runtime=kubernetes)
+
+When `runtime: kubernetes` is configured, worker Pods are intentionally "light":
+- Worker Pod must not request `nvidia.com/gpu` or `rdma/ib`.
+- Task Pods created by `cluster/runtime/kubernetes.py` request accelerators per task.
+- Worker Pod still uses the scale-group `nodeSelector` and `hostNetwork: true`.
+- Worker Pod passes control-plane env needed for task-pod creation (for example
+  `IRIS_SERVICE_ACCOUNT_NAME`, and `IRIS_S3_SECRET_NAME` when S3 is enabled).
+
+Quick verification:
+- Worker create log should show `resource_limits=none`.
+- `kubectl get pod <worker> -o jsonpath='{.spec.containers[0].resources}'` should be empty.
+- Task pod specs should include GPU limits when task resources request GPUs.
+
+**Disk layout**: CoreWeave bare-metal nodes have a 15 GB RAM disk (`/dev/ram0`) as the root
+filesystem and a multi-TB NVMe RAID (`/dev/md127`) mounted at `/mnt/local`. Bind mounts expose
+it as `/var/lib/containerd`, `/var/lib/kubelet`, `/opt`, etc. The `cache_dir` must point to the
+NVMe (e.g. `/mnt/local/iris-cache`) — the default `/var/cache/iris` lands on the tiny RAM disk
+and will fill up immediately when installing CUDA packages.
+
+All K8s resources (RBAC, ConfigMap, shared NodePools, Deployment, Service) are created
+automatically by `iris cluster start` via `CoreweavePlatform.start_controller()`. RBAC
+manifests (Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding) are defined in
+`CoreweavePlatform.ensure_rbac()` — no separate YAML files needed.
 
 ## Key Modules
 
@@ -167,6 +217,24 @@ controller bootstrap scripts). If you add a new region's Artifact Registry, add
 it to both `gcloud auth configure-docker` lines. List existing repos with:
 `gcloud artifacts repositories list --project=hai-gcp-models`
 
+### Multi-Region Image Push/Pull
+
+For production deployments, use GCP Artifact Registry (AR) instead of GHCR.
+AR images pull quickly within GCP; GHCR pulls from GCP VMs are often slow.
+
+**Push**: When `--config` is provided, `iris build push` auto-derives GCP regions:
+
+`iris --config examples/marin.yaml build push iris-worker:v1 --registry gcp`
+
+`iris cluster start` also auto-pushes all three image types (worker, controller,
+task) to every discovered cluster region when the image tags are AR format.
+
+**Pull**: The autoscaler rewrites AR image tags to match each scale group's zone
+region automatically. Set `defaults.bootstrap.docker_image` to any AR region tag
+(for example `us-central2-docker.pkg.dev/project/marin/iris-worker:v1`) and the
+per-group rewrite handles the rest. Non-AR tags (`ghcr.io`, `docker.io`) pass
+through unchanged and are not rewritten.
+
 **Bundle storage** (`controller.bundle_prefix`) is a GCS URI with no zone
 affinity — globally accessible.
 
@@ -200,12 +268,11 @@ src/iris/
 │   ├── main.py                  # Top-level iris group
 │   ├── cluster.py               # Cluster lifecycle, controller, VM ops, dashboard
 │   ├── build.py                 # Image build commands
-│   ├── debug.py                 # Debugging & validation
 │   ├── run.py                   # Command passthrough job submission
 │   └── rpc.py                   # Dynamic RPC CLI
 ├── cluster/
 │   ├── config.py                # General Iris configuration (load_config, IrisConfig)
-│   ├── manager.py               # connect_cluster() + stop_all() free functions
+│   ├── manager.py               # connect_cluster() + stop_all(dry_run) free functions
 │   ├── controller/
 │   │   ├── controller.py        # Controller with integrated autoscaler
 │   │   ├── main.py              # Controller daemon CLI (serve command)
@@ -213,13 +280,13 @@ src/iris/
 │   │   ├── scaling_group.py     # Per-group state tracking and lifecycle
 │   │   ├── config.py            # Autoscaler factory functions
 │   │   ├── local.py             # LocalController for in-process testing
-│   │   └── lifecycle.py         # Controller lifecycle (start/stop/reload via Platform)
+│   │   └── vm_lifecycle.py      # Controller lifecycle (start/stop/reload via Platform)
 │   └── platform/
 │       ├── base.py              # Platform protocol and SliceHandle/VmHandle
 │       ├── gcp.py               # GCP TPU platform
 │       ├── manual.py            # Pre-existing host platform
 │       ├── local.py             # Local development platform
-│       ├── coreweave.py         # CoreWeave stub
+│       ├── coreweave.py         # CoreWeave CKS platform (shared NodePools)
 │       ├── bootstrap.py         # Worker bootstrap script generation
 │       ├── ssh.py               # SSH connection management
 │       ├── factory.py           # Platform factory from config
