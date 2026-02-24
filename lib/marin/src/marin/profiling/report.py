@@ -58,6 +58,23 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
     lines.append(f"| Stall | {_fmt(breakdown.stall.total_duration)} | {_pct(breakdown.stall.share_of_total)} |")
     lines.append(f"| Other | {_fmt(breakdown.other.total_duration)} | {_pct(breakdown.other.share_of_total)} |")
     lines.append("")
+    lines.append("## Hierarchical Regions")
+    lines.append("| Region Path | Depth | Count | Inclusive | Inclusive % | Exclusive | Exclusive % |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|")
+    root_totals = _hierarchical_root_totals(summary)
+    fallback_total = max(root_totals.values(), default=0.0)
+    for region in summary.hierarchical_regions[:top_k]:
+        inclusive = _fmt(region.inclusive_duration)
+        exclusive = _fmt(region.exclusive_duration)
+        root = region.path.split("=>", 1)[0]
+        region_total = root_totals.get(root, fallback_total)
+        inclusive_share = _pct((region.inclusive_duration / region_total) if region_total > 0 else 0.0)
+        exclusive_share = _pct((region.exclusive_duration / region_total) if region_total > 0 else 0.0)
+        lines.append(
+            f"| `{region.path}` | {region.depth} | {region.count} | {inclusive} | "
+            f"{inclusive_share} | {exclusive} | {exclusive_share} |"
+        )
+    lines.append("")
     lines.append("## Top Ops")
     lines.append("| Op | Canonical | Category | Count | Exclusive | Avg | Shape Signature |")
     lines.append("|---|---|---|---:|---:|---:|---|")
@@ -104,20 +121,6 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
         avg_gap = _fmt(context.avg_gap_duration)
         lines.append(f"| `{context.op_name}` | `{context.region_path}` | {context.count} | {total_gap} | {avg_gap} |")
     lines.append("")
-    lines.append("## Hierarchical Regions")
-    lines.append("| Region Path | Depth | Count | Inclusive | Inclusive % | Exclusive | Exclusive % |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|")
-    total_duration = summary.time_breakdown.total_duration
-    for region in summary.hierarchical_regions[:top_k]:
-        inclusive = _fmt(region.inclusive_duration)
-        exclusive = _fmt(region.exclusive_duration)
-        inclusive_share = _pct((region.inclusive_duration / total_duration) if total_duration > 0 else 0.0)
-        exclusive_share = _pct((region.exclusive_duration / total_duration) if total_duration > 0 else 0.0)
-        lines.append(
-            f"| `{region.path}` | {region.depth} | {region.count} | {inclusive} | "
-            f"{inclusive_share} | {exclusive} | {exclusive_share} |"
-        )
-    lines.append("")
     lines.append("## Optimization Candidates")
     for candidate in summary.optimization_candidates:
         lines.append(f"### {candidate.title}")
@@ -150,3 +153,12 @@ def _fmt_sci(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{value:.3e}"
+
+
+def _hierarchical_root_totals(summary: ProfileSummary) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for region in summary.hierarchical_regions:
+        if region.depth != 1:
+            continue
+        totals[region.path] = max(0.0, float(region.inclusive_duration))
+    return totals

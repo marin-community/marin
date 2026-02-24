@@ -999,6 +999,8 @@ def _summarize_hierarchical_regions(
         leaf_bucket = aggregate[leaf_path]
         leaf_bucket["exclusive_duration"] = float(leaf_bucket["exclusive_duration"]) + exclusive_duration
 
+    _prune_redundant_unary_hierarchy_paths(aggregate)
+
     ranked = sorted(
         aggregate.items(),
         key=lambda item: (
@@ -1020,6 +1022,32 @@ def _summarize_hierarchical_regions(
             )
         )
     return result
+
+
+def _prune_redundant_unary_hierarchy_paths(aggregate: dict[str, dict[str, float | int]]) -> None:
+    children_by_parent: dict[str, set[str]] = defaultdict(set)
+    for path in aggregate:
+        if "=>" not in path:
+            continue
+        parent = path.rsplit("=>", 1)[0]
+        children_by_parent[parent].add(path)
+
+    redundant: set[str] = set()
+    for path, stats in aggregate.items():
+        depth = int(stats["depth"])
+        if depth <= 1:
+            continue
+        children = children_by_parent.get(path)
+        if children is None or len(children) != 1:
+            continue
+        child = next(iter(children))
+        parent_inclusive = float(stats["inclusive_duration"])
+        child_inclusive = float(aggregate[child]["inclusive_duration"])
+        if math.isclose(parent_inclusive, child_inclusive, rel_tol=1e-9, abs_tol=1e-6):
+            redundant.add(path)
+
+    for path in redundant:
+        aggregate.pop(path, None)
 
 
 def _summarize_gap_region_contexts(events: list[_CompleteTraceEvent], *, limit: int) -> list[GapRegionContext]:

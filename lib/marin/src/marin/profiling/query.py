@@ -102,11 +102,13 @@ def query_profile_summary(summary: ProfileSummary, question: str, *, top_k: int 
         }
 
     if "region" in normalized or "hierarch" in normalized:
-        total_duration = summary.time_breakdown.total_duration
+        root_totals = _hierarchical_root_totals(summary)
+        fallback_total = max(root_totals.values(), default=0.0)
         return {
             "query_type": "hierarchical_regions",
             "results": [
-                _region_to_dict(region, total_duration=total_duration) for region in summary.hierarchical_regions[:top_k]
+                _region_to_dict(region, root_totals=root_totals, fallback_total=fallback_total)
+                for region in summary.hierarchical_regions[:top_k]
             ],
         }
 
@@ -448,9 +450,16 @@ def _find_gap_match(gaps: list[GapBeforeOp], target: str) -> GapBeforeOp | None:
     return None
 
 
-def _region_to_dict(region: RegionAggregate, *, total_duration: float) -> dict[str, Any]:
-    inclusive_share = (region.inclusive_duration / total_duration) if total_duration > 0 else 0.0
-    exclusive_share = (region.exclusive_duration / total_duration) if total_duration > 0 else 0.0
+def _region_to_dict(
+    region: RegionAggregate,
+    *,
+    root_totals: dict[str, float],
+    fallback_total: float,
+) -> dict[str, Any]:
+    root = region.path.split("=>", 1)[0]
+    region_total = root_totals.get(root, fallback_total)
+    inclusive_share = (region.inclusive_duration / region_total) if region_total > 0 else 0.0
+    exclusive_share = (region.exclusive_duration / region_total) if region_total > 0 else 0.0
     return {
         "path": region.path,
         "depth": region.depth,
@@ -460,6 +469,15 @@ def _region_to_dict(region: RegionAggregate, *, total_duration: float) -> dict[s
         "inclusive_share_of_total": inclusive_share,
         "exclusive_share_of_total": exclusive_share,
     }
+
+
+def _hierarchical_root_totals(summary: ProfileSummary) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for region in summary.hierarchical_regions:
+        if region.depth != 1:
+            continue
+        totals[region.path] = max(0.0, float(region.inclusive_duration))
+    return totals
 
 
 def _find_gap_contexts(summary: ProfileSummary, target: str | None, *, top_k: int) -> list[GapRegionContext]:

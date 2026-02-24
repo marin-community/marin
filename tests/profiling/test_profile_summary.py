@@ -113,7 +113,8 @@ def test_gap_before_specific_op_and_hierarchical_regions(tmp_path: Path) -> None
     region_paths = {region.path for region in summary.hierarchical_regions}
     assert "train_step" in region_paths
     assert "_train_step" in region_paths
-    assert "_train_step=>apply_rotary_embedding" in region_paths
+    assert "_train_step=>apply_rotary_embedding" not in region_paths
+    assert "_train_step=>apply_rotary_embedding=>linear_softmax_cross_entropy_loss_bwd" in region_paths
 
     gap_query = query_profile_summary(
         summary,
