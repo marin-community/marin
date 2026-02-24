@@ -63,7 +63,7 @@ train_config_kwargs = dict(
     lr_schedule="linear",
     decay=0.2,
     weight_decay=0.1,
-    min_lr_ratio=0.08,
+    min_lr_ratio=0.05,
     warmup=1000,
     z_loss_weight=1e-4,
 )
