@@ -683,13 +683,11 @@ class Autoscaler:
             return False
 
     def _per_group_bootstrap_config(self, group: ScalingGroup) -> config_pb2.BootstrapConfig | None:
-        """Build a per-group BootstrapConfig by merging worker attributes, image rewrite, and accelerator settings.
+        """Build a per-group BootstrapConfig by merging worker attributes and accelerator settings.
 
-        Copies the base bootstrap config and:
-        1. Rewrites GHCR docker_image via ``platform.resolve_image()``
-        2. Injects IRIS_WORKER_ATTRIBUTES, IRIS_TASK_DEFAULT_ENV_JSON, and
-           IRIS_SCALE_GROUP from the group's worker settings into env_vars.
-        3. Injects accelerator type/variant/GPU count env vars for the group.
+        Copies the base bootstrap config and injects IRIS_WORKER_ATTRIBUTES,
+        IRIS_TASK_DEFAULT_ENV_JSON, IRIS_SCALE_GROUP, and accelerator env vars
+        from the group's worker settings.
         """
         if not self._bootstrap_config:
             return None
@@ -707,7 +705,6 @@ class Autoscaler:
         elif template.HasField("coreweave") and template.coreweave.region:
             zone = template.coreweave.region
 
-        # Rewrite worker image via platform
         bc.docker_image = self._platform.resolve_image(bc.docker_image, zone=zone)
 
         if has_worker:

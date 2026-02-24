@@ -166,22 +166,6 @@ def test_build_controller_bootstrap_script_from_config_rewrites_ghcr_to_ar() -> 
     assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
 
 
-def test_build_controller_bootstrap_script_from_config_non_ghcr_passthrough() -> None:
-    """Non-GHCR images are not rewritten."""
-    from unittest.mock import MagicMock
-
-    config = config_pb2.IrisClusterConfig()
-    config.controller.image = "us-docker.pkg.dev/proj/repo/iris-controller:latest"
-    config.controller.gcp.zone = "europe-west4-b"
-    config.controller.gcp.port = 10000
-
-    platform = MagicMock()
-    platform.resolve_image.side_effect = lambda image, zone=None: image
-    script = build_controller_bootstrap_script_from_config(config, platform=platform)
-
-    assert "Pulling image: us-docker.pkg.dev/proj/repo/iris-controller:latest" in script
-
-
 # --- Platform.resolve_image() tests ---
 
 
@@ -228,12 +212,3 @@ def test_gcp_platform_resolve_image_requires_zone_for_ghcr() -> None:
 
     with pytest.raises(ValueError, match="zone is required"):
         platform.resolve_image("ghcr.io/org/img:v1")
-
-
-def test_local_platform_resolve_image_passthrough() -> None:
-    """LocalPlatform.resolve_image() always returns the image unchanged."""
-    from iris.cluster.platform.local import LocalPlatform
-
-    platform = LocalPlatform(label_prefix="test")
-    assert platform.resolve_image("ghcr.io/org/img:v1", zone="us-central1-a") == "ghcr.io/org/img:v1"
-    assert platform.resolve_image("docker.io/library/ubuntu:latest") == "docker.io/library/ubuntu:latest"

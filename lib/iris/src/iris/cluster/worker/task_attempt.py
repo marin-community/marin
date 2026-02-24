@@ -460,9 +460,6 @@ class TaskAttempt:
 
         No per-job Docker build — the pre-built base image has a pre-warmed
         uv cache. The remote client wraps the entrypoint with uv sync.
-
-        Image rewriting (e.g. GHCR→AR) is delegated to ``resolve_image``
-        which was bound to the platform and zone at worker startup.
         """
         if not self._default_task_image:
             raise ValueError("No task image configured. Set defaults.default_task_image in cluster config.")

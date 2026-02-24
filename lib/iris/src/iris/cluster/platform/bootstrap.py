@@ -454,7 +454,6 @@ def build_controller_bootstrap_script_from_config(
     """Build controller bootstrap script from the full cluster config.
 
     Serializes the config to YAML and embeds it in the bootstrap script.
-    Image rewriting is delegated to ``platform.resolve_image()``.
 
     Args:
         config: Full cluster configuration.

@@ -119,7 +119,6 @@ def serve(
     else:
         raise click.ClickException("Either --controller-address or --config must be provided")
 
-    # Build resolve_image callable binding the platform and this worker's zone.
     zone = detect_gcp_zone()
     if platform:
 
