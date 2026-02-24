@@ -87,6 +87,7 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
    - If a user-specified stopping point has been reached → summarize status and exit loop.
    - If the job is terminal and successful (`SUCCEEDED`) → report completion and exit loop.
    - If the job is terminal and not successful (`FAILED`/`STOPPED`) → go to step 7 unless user says otherwise.
+   - Ignore `worker_pool.cc:1865: Delete runtime env failed` by itself. This signal is common under heavy cluster utilization and is not, on its own, a restart trigger.
    - If output contains "error" or "Error" or "Traceback" → go to step 7
    - Treat TPU/XLA HBM reports as failures even when "OOM" is not present. In particular, if logs include:
      - `Program hbm requirement ...`
@@ -159,6 +160,7 @@ Treat this as a bad TPU node:
 
 ## Notes
 
+- `worker_pool.cc:1865: Delete runtime env failed` should be treated as non-fatal noise unless paired with stronger failure signals (terminal Ray failure, no-progress with dead-node/unsatisfied-resource patterns, explicit traceback, or OOM signatures).
 - Sleep must be foreground (max ~10 min due to tool timeout)
 - The loop is controlled at the agent level, not bash
 - Track restart_count to detect flapping jobs
