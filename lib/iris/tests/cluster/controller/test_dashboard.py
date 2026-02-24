@@ -608,6 +608,31 @@ def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
     assert "constraints" in pending_reason.lower() or "nonexistent-attr" in pending_reason
 
 
+def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
+    client_with_autoscaler,
+    state,
+    job_request,
+    mock_autoscaler,
+):
+    """ListJobs should not override pending diagnostics with non-active wait hints."""
+    submit_job(state, "pending-no-launch", job_request)
+    task_id = JobName.root("pending-no-launch").task(0).to_wire()
+
+    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
+        last_routing_decision=vm_pb2.RoutingDecision(
+            group_to_launch={"tpu_v5e_32": 0},
+            routed_entries={
+                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
+            },
+        )
+    )
+
+    jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
+    listed = [j for j in jobs_resp.get("jobs", []) if j.get("jobId") == JobName.root("pending-no-launch").to_wire()]
+    assert listed
+    assert listed[0].get("pendingReason", "") == ""
+
+
 # =============================================================================
 # Health Endpoint Tests
 # =============================================================================

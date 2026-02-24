@@ -401,7 +401,9 @@ class ControllerServiceImpl:
 
             pending_reason = j.error or ""
             if j.state == cluster_pb2.JOB_STATE_PENDING:
-                pending_reason = autoscaler_pending_hints.get(j.job_id.to_wire(), pending_reason)
+                autoscaler_hint = autoscaler_pending_hints.get(j.job_id.to_wire(), "")
+                if autoscaler_hint and is_active_scale_up_hint(autoscaler_hint):
+                    pending_reason = autoscaler_hint
 
             proto_job = cluster_pb2.JobStatus(
                 job_id=j.job_id.to_wire(),
