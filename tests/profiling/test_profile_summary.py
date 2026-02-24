@@ -89,6 +89,35 @@ def test_semantic_family_share_is_bounded_with_global_breakdown(tmp_path: Path) 
     assert all(0.0 <= family.share_of_total <= 1.0 for family in summary.semantic_families)
 
 
+def test_global_stall_uses_compute_window_gaps(tmp_path: Path) -> None:
+    trace_path = tmp_path / "global_stall_window_trace.json.gz"
+    payload = {
+        "displayTimeUnit": "ns",
+        "traceEvents": [
+            {"ph": "M", "pid": 1, "name": "process_name", "args": {"name": "/device:TPU:0"}},
+            {"ph": "M", "pid": 1, "tid": 2, "name": "thread_name", "args": {"name": "XLA Ops"}},
+            {"ph": "M", "pid": 2, "name": "process_name", "args": {"name": "/host:CPU"}},
+            {"ph": "M", "pid": 2, "tid": 1, "name": "thread_name", "args": {"name": "main"}},
+            # Outside compute window and should not contribute to global-window stall accounting.
+            {"ph": "X", "pid": 2, "tid": 1, "name": "python_host_compute", "ts": 0, "dur": 80},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "fusion.1", "ts": 100, "dur": 20},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "all-reduce.1", "ts": 130, "dur": 10},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "fusion.2", "ts": 180, "dur": 20},
+        ],
+    }
+    with gzip.open(trace_path, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+    summary = summarize_trace(trace_path, warmup_steps=0, hot_op_limit=20, breakdown_mode="exclusive_global")
+    breakdown = summary.time_breakdown
+    assert breakdown.duration_basis == "exclusive_duration_global_timeline"
+    assert breakdown.total_duration == 100.0
+    assert breakdown.compute.total_duration == 40.0
+    assert breakdown.communication.total_duration == 10.0
+    assert breakdown.host.total_duration == 0.0
+    assert breakdown.stall.total_duration == 50.0
+
+
 def test_gap_before_specific_op_and_hierarchical_regions(tmp_path: Path) -> None:
     trace_path = tmp_path / "hierarchical_trace.json.gz"
     target = "_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined.1"

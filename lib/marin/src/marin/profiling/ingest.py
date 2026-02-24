@@ -691,15 +691,9 @@ def _summarize_breakdown_global(events: list[_CompleteTraceEvent]) -> TimeBreakd
         "stall": 0.0,
         "other": 0.0,
     }
-    points: list[tuple[float, int, str]] = []
-    for event in events:
-        if event.thread_name == "Steps":
-            continue
-        category = _event_category(event)
-        points.append((event.ts, 1, category))
-        points.append((event.ts + event.dur, -1, category))
 
-    if not points:
+    window = _global_stall_window(events)
+    if window is None:
         return TimeBreakdown(
             duration_basis="exclusive_duration_global_timeline",
             total_duration=0.0,
@@ -709,23 +703,39 @@ def _summarize_breakdown_global(events: list[_CompleteTraceEvent]) -> TimeBreakd
             stall=_breakdown_part(0.0, 0.0),
             other=_breakdown_part(0.0, 0.0),
         )
+    window_start, window_end = window
+    window_duration = max(0.0, window_end - window_start)
 
+    points: list[tuple[float, int, str]] = []
+    for event in events:
+        if event.thread_name == "Steps":
+            continue
+        if not _is_device_event(event):
+            continue
+        category = _event_category(event)
+        if category not in {"compute", "communication"}:
+            continue
+        start = max(event.ts, window_start)
+        end = min(event.ts + event.dur, window_end)
+        if end <= start:
+            continue
+        points.append((start, 1, category))
+        points.append((end, -1, category))
+
+    active = {"compute": 0, "communication": 0}
+    uncovered_duration = 0.0
     points.sort(key=lambda item: (item[0], item[1]))
-    active = {
-        "compute": 0,
-        "communication": 0,
-        "host": 0,
-        "stall": 0,
-        "other": 0,
-    }
-    previous_ts: float | None = None
+
+    previous_ts: float = window_start
     index = 0
     while index < len(points):
         timestamp = points[index][0]
         if previous_ts is not None and timestamp > previous_ts:
-            category = _active_category(active)
+            category = _active_device_category(active)
             if category is not None:
                 totals[category] += timestamp - previous_ts
+            else:
+                uncovered_duration += timestamp - previous_ts
 
         while index < len(points) and points[index][0] == timestamp:
             _, delta, category = points[index]
@@ -733,7 +743,15 @@ def _summarize_breakdown_global(events: list[_CompleteTraceEvent]) -> TimeBreakd
             index += 1
         previous_ts = timestamp
 
-    total_duration = sum(totals.values())
+    if previous_ts < window_end:
+        category = _active_device_category(active)
+        if category is not None:
+            totals[category] += window_end - previous_ts
+        else:
+            uncovered_duration += window_end - previous_ts
+
+    totals["stall"] = max(0.0, uncovered_duration)
+    total_duration = window_duration
     return TimeBreakdown(
         duration_basis="exclusive_duration_global_timeline",
         total_duration=total_duration,
@@ -743,6 +761,21 @@ def _summarize_breakdown_global(events: list[_CompleteTraceEvent]) -> TimeBreakd
         stall=_breakdown_part(totals["stall"], total_duration),
         other=_breakdown_part(totals["other"], total_duration),
     )
+
+
+def _global_stall_window(events: list[_CompleteTraceEvent]) -> tuple[float, float] | None:
+    compute_events = [
+        event
+        for event in events
+        if event.thread_name != "Steps" and _event_category(event) == "compute"
+    ]
+    if not compute_events:
+        return None
+    start = min(event.ts for event in compute_events)
+    end = max(event.ts + event.dur for event in compute_events)
+    if end <= start:
+        return None
+    return start, end
 
 
 def _summarize_hot_ops(
@@ -1417,6 +1450,13 @@ def _estimate_periodicity(steps: list[int]) -> int | None:
 
 def _active_category(active: dict[str, int]) -> str | None:
     for category in ("communication", "compute", "stall", "host", "other"):
+        if active[category] > 0:
+            return category
+    return None
+
+
+def _active_device_category(active: dict[str, int]) -> str | None:
+    for category in ("communication", "compute"):
         if active[category] > 0:
             return category
     return None
