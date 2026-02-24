@@ -754,6 +754,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         subsets=[],
         splits=["train"],
     ),
+    "teetone/qwen3_4b_openthoughts3_math53K_instill_n1_valredundancy1_round1": InstructionDatasetConfig(
+        hf_dataset_id="teetone/qwen3_4b_openthoughts3_math53K_instill_n1_valredundancy1_round1",
+        revision="d2e20af",
+        adapter=multi_turn_adapter(),
+        metadata_columns=[],
+        name="teetone/qwen3_4b_openthoughts3_math53K_instill_n1_valredundancy1_round1",
+        subsets=[],
+        splits=["train"],
+    ),
 }
 
 for split_name in SMOLTALK2_SPLITS:
