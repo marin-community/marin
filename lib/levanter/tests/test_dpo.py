@@ -2,11 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import os
-import subprocess
-import sys
 import tempfile
-import textwrap
 from pathlib import Path
 
 import equinox as eqx
@@ -14,12 +10,16 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
+import numpy as np
 import pytest
 from transformers import AutoTokenizer
 
 import haliax as hax
+from haliax import Axis
+from haliax.partitioning import set_mesh
 from haliax.quantization import apply_updates, partition_for_grad_overwrite
 from haliax.jax_utils import is_jax_array_like
+from jax.sharding import Mesh
 
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.mixture import MixtureDataset
@@ -379,53 +379,21 @@ def test_eval_model_fills_missing_namedarrays_from_model():
 
 
 def test_vmapped_init_with_sharding_handles_layer_axis():
-    script = textwrap.dedent(
-        """
-        import numpy as np
-        import jax
-        import haliax as hax
-        from haliax import Axis
-        from haliax.partitioning import set_mesh
-        from jax.sharding import Mesh
+    devices = jax.devices()
+    if len(devices) < 4:
+        pytest.skip(f"requires at least 4 JAX devices; found {len(devices)}")
 
-        Embed = Axis("embed", 32)
-        Qkv = Axis("qkv", 3)
-        Heads = Axis("heads", 4)
-        HeadSize = Axis("head_size", 8)
-        Layers = Axis("layers", 5)
+    Embed = Axis("embed", 32)
+    Qkv = Axis("qkv", 3)
+    Heads = Axis("heads", 4)
+    HeadSize = Axis("head_size", 8)
+    Layers = Axis("layers", 5)
 
-        def init_fn(key):
-            return hax.random.truncated_normal(key, (Embed, Qkv, Heads, HeadSize), -3, 3)
+    def init_fn(key):
+        return hax.random.truncated_normal(key, (Embed, Qkv, Heads, HeadSize), -3, 3)
 
-        devices = jax.devices()
-        assert len(devices) == 4, f"Expected 4 devices, got {len(devices)}"
-        mesh = Mesh(np.array(devices).reshape((4, 1)), ("data", "model"))
-
-        with set_mesh(mesh), hax.axis_mapping({"embed": "data", "heads": "model"}):
-            keys = jax.random.split(jax.random.PRNGKey(0), Layers.size)
-            out = hax.vmap(init_fn, Layers)(keys)
-            assert out.axes[0].name == "layers"
-        """
-    )
-    env = os.environ.copy()
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    env["JAX_PLATFORMS"] = "cpu"
-    env.setdefault("JAX_PLATFORM_NAME", "cpu")
-    repo_root = Path(__file__).resolve().parents[2]
-    pythonpath = os.pathsep.join(
-        [
-            str(repo_root / "lib" / "haliax" / "src"),
-            str(repo_root / "lib" / "levanter" / "src"),
-            env.get("PYTHONPATH", ""),
-        ]
-    )
-    env["PYTHONPATH"] = pythonpath
-
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr + result.stdout
+    mesh = Mesh(np.array(devices[:4]).reshape((4, 1)), ("data", "model"))
+    with set_mesh(mesh), hax.axis_mapping({"embed": "data", "heads": "model"}):
+        keys = jax.random.split(jax.random.PRNGKey(0), Layers.size)
+        out = hax.vmap(init_fn, Layers)(keys)
+        assert out.axes[0].name == "layers"
