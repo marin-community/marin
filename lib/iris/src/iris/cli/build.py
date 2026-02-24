@@ -3,12 +3,25 @@
 
 """Image build commands."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import subprocess
 from pathlib import Path
 
 import click
 
+from iris.cluster.platform.bootstrap import collect_all_regions, parse_artifact_registry_tag
+from iris.rpc import config_pb2
+
 GHCR_DEFAULT_ORG = "marin-community"
+
+
+def _is_verbose(ctx: click.Context) -> bool:
+    """Walk up the Click context chain to find the top-level --verbose flag."""
+    while ctx:
+        if "verbose" in (ctx.params or {}):
+            return ctx.params["verbose"]
+        ctx = ctx.parent  # type: ignore[assignment]
+    return False
 
 
 def get_git_sha() -> str:
@@ -107,6 +120,7 @@ def push_to_ghcr(
     ghcr_org: str = GHCR_DEFAULT_ORG,
     image_name: str | None = None,
     version: str | None = None,
+    verbose: bool = False,
 ) -> None:
     """Push a local Docker image to GitHub Container Registry (ghcr.io)."""
     image_name, version = _resolve_image_name_and_version(source_tag, image_name, version)
@@ -120,13 +134,20 @@ def push_to_ghcr(
         raise SystemExit(1)
 
     click.echo(f"Pushing to {dest_tag}...")
-    result = subprocess.run(["docker", "push", "--quiet", dest_tag], capture_output=True, text=True)
+    push_cmd = ["docker", "push", dest_tag]
+    if not verbose:
+        push_cmd.insert(2, "--quiet")
+    if verbose:
+        result = subprocess.run(push_cmd)
+    else:
+        result = subprocess.run(push_cmd, capture_output=True, text=True)
     if result.returncode != 0:
         click.echo(f"Failed to push to {dest_tag}", err=True)
-        if result.stdout:
-            click.echo(result.stdout, err=True)
-        if result.stderr:
-            click.echo(result.stderr, err=True)
+        if not verbose:
+            if result.stdout:
+                click.echo(result.stdout, err=True)
+            if result.stderr:
+                click.echo(result.stderr, err=True)
         raise SystemExit(1)
 
     click.echo(f"Successfully pushed to {dest_tag}")
@@ -139,15 +160,16 @@ def push_to_gcp_registries(
     project: str,
     image_name: str | None = None,
     version: str | None = None,
+    verbose: bool = False,
 ) -> None:
     """Push a local Docker image to multiple GCP Artifact Registry regions."""
     image_name, version = _resolve_image_name_and_version(source_tag, image_name, version)
 
-    click.echo(f"Pushing {source_tag} to {len(regions)} GCP region(s)...")
+    ordered_regions = tuple(sorted(set(regions)))
+    click.echo(f"Pushing {source_tag} to {len(ordered_regions)} GCP region(s)...")
 
-    for r in regions:
-        dest_tag = f"{r}-docker.pkg.dev/{project}/marin/{image_name}:{version}"
-
+    # Configure auth first to avoid concurrent writes to docker config.
+    for r in ordered_regions:
         click.echo(f"\nConfiguring {r}-docker.pkg.dev...")
         result = subprocess.run(
             ["gcloud", "auth", "configure-docker", f"{r}-docker.pkg.dev", "-q"],
@@ -159,23 +181,39 @@ def push_to_gcp_registries(
                 f"Warning: Failed to configure docker auth for {r}-docker.pkg.dev: {result.stderr.strip()}", err=True
             )
 
-        click.echo(f"Tagging as {dest_tag}")
-        result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
-        if result.returncode != 0:
-            click.echo(f"Failed to tag image for {r}", err=True)
-            continue
+    def _tag_and_push_region(r: str) -> tuple[str, bool, str]:
+        dest_tag = f"{r}-docker.pkg.dev/{project}/marin/{image_name}:{version}"
+        tag_result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
+        if tag_result.returncode != 0:
+            return r, False, f"Failed to tag image for {r}"
 
-        click.echo(f"Pushing to {r}...")
-        result = subprocess.run(["docker", "push", "--quiet", dest_tag], capture_output=True, text=True)
-        if result.returncode != 0:
-            click.echo(f"Failed to push to {r}", err=True)
-            if result.stdout:
-                click.echo(result.stdout, err=True)
-            if result.stderr:
-                click.echo(result.stderr, err=True)
-            continue
+        if verbose:
+            push_result = subprocess.run(["docker", "push", dest_tag], check=False)
+            stdout, stderr = "", ""
+        else:
+            push_result = subprocess.run(
+                ["docker", "push", "--quiet", dest_tag], capture_output=True, text=True, check=False
+            )
+            stdout, stderr = push_result.stdout, push_result.stderr
+        if push_result.returncode != 0:
+            details = [f"Failed to push to {r}", stdout.strip(), stderr.strip()]
+            return r, False, "\n".join(x for x in details if x)
 
-        click.echo(f"Successfully pushed to {dest_tag}")
+        return r, True, f"Successfully pushed to {dest_tag}"
+
+    max_workers = min(4, len(ordered_regions))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_tag_and_push_region, r): r for r in ordered_regions}
+        failures: list[str] = []
+        for future in as_completed(futures):
+            region, ok, message = future.result()
+            click.echo(message, err=not ok)
+            if not ok:
+                failures.append(region)
+
+    if failures:
+        failed_list = ", ".join(sorted(failures))
+        raise SystemExit(f"Failed to push {source_tag} to region(s): {failed_list}")
 
     click.echo("\nDone!")
 
@@ -188,14 +226,17 @@ def _push_image(
     ghcr_org: str = GHCR_DEFAULT_ORG,
     gcp_regions: tuple[str, ...] = (),
     gcp_project: str = "hai-gcp-models",
+    verbose: bool = False,
 ) -> None:
     """Push a local Docker image to the specified registry."""
     if registry == "ghcr":
-        push_to_ghcr(source_tag, ghcr_org=ghcr_org, image_name=image_name, version=version)
+        push_to_ghcr(source_tag, ghcr_org=ghcr_org, image_name=image_name, version=version, verbose=verbose)
     elif registry == "gcp":
         if not gcp_regions:
             raise click.ClickException("--region is required when pushing to GCP Artifact Registry")
-        push_to_gcp_registries(source_tag, gcp_regions, gcp_project, image_name=image_name, version=version)
+        push_to_gcp_registries(
+            source_tag, gcp_regions, gcp_project, image_name=image_name, version=version, verbose=verbose
+        )
     else:
         raise click.ClickException(f"Unknown registry: {registry}. Use 'ghcr' or 'gcp'.")
 
@@ -211,6 +252,7 @@ def build_image(
     ghcr_org: str,
     gcp_regions: tuple[str, ...],
     gcp_project: str,
+    verbose: bool = False,
 ) -> None:
     """Build a Docker image for Iris (worker or controller).
 
@@ -251,13 +293,17 @@ def build_image(
     click.echo(f"Context: {context_path}")
     click.echo()
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    if verbose:
+        result = subprocess.run(cmd)
+    else:
+        result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         click.echo("Build failed", err=True)
-        if result.stdout:
-            click.echo(result.stdout, err=True)
-        if result.stderr:
-            click.echo(result.stderr, err=True)
+        if not verbose:
+            if result.stdout:
+                click.echo(result.stdout, err=True)
+            if result.stderr:
+                click.echo(result.stderr, err=True)
         raise SystemExit(1)
 
     # buildx --output=docker only loads one name; tag the rest manually
@@ -275,6 +321,7 @@ def build_image(
             ghcr_org=ghcr_org,
             gcp_regions=gcp_regions,
             gcp_project=gcp_project,
+            verbose=verbose,
         )
         _push_image(
             latest_tag,
@@ -282,6 +329,7 @@ def build_image(
             ghcr_org=ghcr_org,
             gcp_regions=gcp_regions,
             gcp_project=gcp_project,
+            verbose=verbose,
         )
 
 
@@ -299,6 +347,29 @@ def _add_registry_options(fn):
     return fn
 
 
+def _resolve_gcp_push_targets(
+    config: config_pb2.IrisClusterConfig | None,
+    registry: str,
+    gcp_regions: tuple[str, ...],
+    gcp_project: str,
+) -> tuple[tuple[str, ...], str]:
+    """Resolve GCP push regions/project, deriving from config when possible."""
+    if registry != "gcp" or gcp_regions or config is None:
+        return gcp_regions, gcp_project
+
+    regions = collect_all_regions(config)
+    if not regions:
+        raise click.ClickException("No GCP regions found in config")
+
+    resolved_project = gcp_project
+    if config.platform.HasField("gcp") and config.platform.gcp.project_id:
+        resolved_project = config.platform.gcp.project_id
+
+    ordered_regions = tuple(sorted(regions))
+    click.echo(f"Using {len(ordered_regions)} GCP region(s) from config: {', '.join(ordered_regions)}")
+    return ordered_regions, resolved_project
+
+
 def _build_all(
     push: bool,
     platform: str,
@@ -306,17 +377,20 @@ def _build_all(
     ghcr_org: str,
     gcp_regions: tuple[str, ...],
     gcp_project: str,
+    config: config_pb2.IrisClusterConfig | None = None,
 ) -> None:
     """Build all Iris images (worker, controller, task).
 
     Tags are derived automatically: git SHA + latest.
     """
+    resolved_regions, resolved_project = _resolve_gcp_push_targets(config, registry, gcp_regions, gcp_project)
+
     marin_root = find_marin_root()
     iris_root = find_iris_root()
 
     for image_type in ("worker", "controller"):
         tag = _default_versioned_tag(f"iris-{image_type}")
-        build_image(image_type, tag, push, None, None, platform, registry, ghcr_org, gcp_regions, gcp_project)
+        build_image(image_type, tag, push, None, None, platform, registry, ghcr_org, resolved_regions, resolved_project)
         click.echo()
 
     task_dockerfile = str(iris_root / "Dockerfile.task")
@@ -329,8 +403,8 @@ def _build_all(
         platform,
         registry,
         ghcr_org,
-        gcp_regions,
-        gcp_project,
+        resolved_regions,
+        resolved_project,
     )
 
 
@@ -345,16 +419,27 @@ def build(ctx, push: bool, platform: str, registry: str, ghcr_org: str, region: 
     When invoked without a subcommand, builds all images (worker, controller, task).
     """
     if ctx.invoked_subcommand is None:
-        _build_all(push, platform, registry, ghcr_org, gcp_regions=region, gcp_project=project)
+        config = ctx.obj.get("config") if ctx.obj else None
+        _build_all(push, platform, registry, ghcr_org, gcp_regions=region, gcp_project=project, config=config)
 
 
 @build.command("all")
 @click.option("--push", is_flag=True, help="Push images to registry after building")
 @click.option("--platform", default="linux/amd64", help="Target platform")
 @_add_registry_options
-def build_all(push: bool, platform: str, registry: str, ghcr_org: str, region: tuple[str, ...], project: str):
+@click.pass_context
+def build_all(
+    ctx: click.Context,
+    push: bool,
+    platform: str,
+    registry: str,
+    ghcr_org: str,
+    region: tuple[str, ...],
+    project: str,
+):
     """Build all Iris images (worker, controller, task)."""
-    _build_all(push, platform, registry, ghcr_org, gcp_regions=region, gcp_project=project)
+    config = ctx.obj.get("config") if ctx.obj else None
+    _build_all(push, platform, registry, ghcr_org, gcp_regions=region, gcp_project=project, config=config)
 
 
 @build.command("worker-image")
@@ -364,7 +449,9 @@ def build_all(push: bool, platform: str, registry: str, ghcr_org: str, region: t
 @click.option("--context", type=click.Path(exists=True), help="Build context directory")
 @click.option("--platform", default="linux/amd64", help="Target platform")
 @_add_registry_options
+@click.pass_context
 def build_worker_image(
+    ctx,
     tag: str,
     push: bool,
     dockerfile: str | None,
@@ -376,8 +463,9 @@ def build_worker_image(
     project: str,
 ):
     """Build Docker image for Iris worker."""
+    verbose = _is_verbose(ctx)
     tag = tag or _default_versioned_tag("iris-worker")
-    build_image("worker", tag, push, dockerfile, context, platform, registry, ghcr_org, region, project)
+    build_image("worker", tag, push, dockerfile, context, platform, registry, ghcr_org, region, project, verbose=verbose)
 
 
 @build.command("controller-image")
@@ -387,7 +475,9 @@ def build_worker_image(
 @click.option("--context", type=click.Path(exists=True), help="Build context directory")
 @click.option("--platform", default="linux/amd64", help="Target platform")
 @_add_registry_options
+@click.pass_context
 def build_controller_image(
+    ctx,
     tag: str,
     push: bool,
     dockerfile: str | None,
@@ -399,8 +489,11 @@ def build_controller_image(
     project: str,
 ):
     """Build Docker image for Iris controller."""
+    verbose = _is_verbose(ctx)
     tag = tag or _default_versioned_tag("iris-controller")
-    build_image("controller", tag, push, dockerfile, context, platform, registry, ghcr_org, region, project)
+    build_image(
+        "controller", tag, push, dockerfile, context, platform, registry, ghcr_org, region, project, verbose=verbose
+    )
 
 
 @build.command("task-image")
@@ -409,7 +502,9 @@ def build_controller_image(
 @click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
 @click.option("--platform", default="linux/amd64", help="Target platform")
 @_add_registry_options
+@click.pass_context
 def build_task_image(
+    ctx,
     tag: str,
     push: bool,
     dockerfile: str | None,
@@ -431,6 +526,7 @@ def build_task_image(
     if not dockerfile_path.exists():
         raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
 
+    verbose = _is_verbose(ctx)
     resolved_tag = tag or _default_versioned_tag("iris-task")
 
     build_image(
@@ -444,6 +540,7 @@ def build_task_image(
         ghcr_org,
         region,
         project,
+        verbose=verbose,
     )
 
 
@@ -455,7 +552,9 @@ def build_task_image(
 @click.option("--project", default="hai-gcp-models", help="GCP project ID")
 @click.option("--image-name", help="Image name in registry (default: derived from source tag)")
 @click.option("--version", help="Version tag (default: derived from source tag)")
+@click.pass_context
 def build_push(
+    ctx: click.Context,
     source_tag: str,
     registry: str,
     ghcr_org: str,
@@ -474,6 +573,31 @@ def build_push(
 
         iris build push iris-task:v1.0 --registry gcp --region us-central1
     """
+    verbose = _is_verbose(ctx)
+    config = ctx.obj.get("config") if ctx.obj else None
+    if registry == "gcp" and config and not region:
+        regions = collect_all_regions(config)
+        if not regions:
+            raise click.ClickException("No GCP regions found in config")
+
+        parsed = parse_artifact_registry_tag(source_tag)
+        resolved_project = project
+        if parsed:
+            _, parsed_project, _, _ = parsed
+            resolved_project = parsed_project
+
+        ordered_regions = tuple(sorted(regions))
+        click.echo(f"Pushing to {len(ordered_regions)} region(s) from config: {', '.join(ordered_regions)}")
+        push_to_gcp_registries(
+            source_tag,
+            ordered_regions,
+            resolved_project,
+            image_name=image_name,
+            version=version,
+            verbose=verbose,
+        )
+        return
+
     _push_image(
         source_tag,
         registry=registry,
@@ -482,4 +606,5 @@ def build_push(
         ghcr_org=ghcr_org,
         gcp_regions=region,
         gcp_project=project,
+        verbose=verbose,
     )

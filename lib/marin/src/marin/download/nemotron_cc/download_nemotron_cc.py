@@ -102,7 +102,7 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
         .write_jsonl(os.path.join(cfg.output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
-    with ZephyrContext(name="download-nemotron-cc") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="download-nemotron-cc")
+    ctx.execute(pipeline)
 
     logger.info(f"Downloaded Nemotron CC files to {cfg.output_path}")

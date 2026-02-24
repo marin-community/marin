@@ -329,13 +329,13 @@ def tokenize(config: TokenizeConfigBase):
     def local_preprocess_paths(paths: list[str]) -> list[list[str]]:
         """Scan file sizes locally and bundle into groups for distributed processing."""
         filescan_start = time.monotonic()
-        with ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan") as local_ctx:
-            file_stats = list(
-                local_ctx.execute(
-                    Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
-                    verbose=False,
-                )
+        local_ctx = ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan")
+        file_stats = list(
+            local_ctx.execute(
+                Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
+                verbose=False,
             )
+        )
         total_input_bytes = sum(f["size"] for f in file_stats)
         file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
         logger.info(
@@ -418,23 +418,23 @@ def tokenize(config: TokenizeConfigBase):
     # TODO (rav): both train and val could run at the same time
     if train_paths and not split_already_done("train"):
         train_groups = local_preprocess_paths(train_paths)
-        with ZephyrContext(
+        ctx = ZephyrContext(
             resources=config.worker_resources,
             max_workers=min(config.max_workers, len(train_groups)),
             name="tokenize-train",
             no_workers_timeout=20 * 60,
-        ) as ctx:
-            run_pipeline(ctx, train_groups, "train")
+        )
+        run_pipeline(ctx, train_groups, "train")
 
     if validation_paths and not split_already_done("validation"):
         validation_groups = local_preprocess_paths(validation_paths)
-        with ZephyrContext(
+        ctx = ZephyrContext(
             resources=config.worker_resources,
             max_workers=min(config.max_workers, len(validation_groups)),
             name="tokenize-validation",
             no_workers_timeout=20 * 60,
-        ) as ctx:
-            run_pipeline(ctx, validation_groups, "validation")
+        )
+        run_pipeline(ctx, validation_groups, "validation")
 
 
 @draccus.wrap()

@@ -63,8 +63,8 @@ def _compute_dataset_sizes(dataset_steps: list[ExecutorStep]) -> dict[str, int]:
     def count_dir(path: str) -> int:
         pattern = os.path.join(path.rstrip("/"), "**", "*.jsonl*")
         pipeline = Dataset.from_files(pattern, empty_glob_ok=True).flat_map(load_file).map(lambda _: 1).reduce(sum)
-        with ZephyrContext(name="overlap-size") as ctx:
-            results = ctx.execute(pipeline)
+        ctx = ZephyrContext(name="overlap-size")
+        results = ctx.execute(pipeline)
         return results[0]
 
     size_map: dict[str, int] = {}
@@ -204,12 +204,12 @@ def aggregate_single_dataset(
             }
 
     intermediate_dir = os.path.join(cfg.output_path, ".intermediate", training_name)
-    with ZephyrContext(name="overlap-aggregate") as ctx:
-        intermediate_paths = ctx.execute(
-            Dataset.from_list(shard_paths)
-            .flat_map(extract_overlap_records)
-            .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
-        )
+    ctx = ZephyrContext(name="overlap-aggregate")
+    intermediate_paths = ctx.execute(
+        Dataset.from_list(shard_paths)
+        .flat_map(extract_overlap_records)
+        .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
+    )
 
     logger.info(f"Wrote {len(intermediate_paths)} intermediate files to {intermediate_dir}")
 
