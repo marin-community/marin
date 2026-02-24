@@ -5,6 +5,7 @@ import dataclasses
 
 import jax
 import jax.numpy as jnp
+import pytest
 
 import haliax as hax
 
@@ -13,7 +14,8 @@ from levanter.optim.namo import _clamp_to_mean
 from levanter.optim.util import flatten_linear_layers
 
 
-def _make_toy_params_and_grads():
+@pytest.fixture
+def toy_params_and_grads():
     in_axis = hax.Axis("In", 4)
     out_axis = hax.Axis("Out", 3)
     linear = hax.nn.Linear.init(in_axis, out_axis, key=jax.random.PRNGKey(0), out_first=True)
@@ -41,8 +43,8 @@ def test_namo_registration():
     assert OptimizerConfig.get_choice_class("namoD") is NamoDConfig
 
 
-def test_namo_build_and_update_smoke():
-    params, grads = _make_toy_params_and_grads()
+def test_namo_build_and_update_smoke(toy_params_and_grads):
+    params, grads = toy_params_and_grads
     config = NamoConfig(
         learning_rate=1e-2,
         adam_lr=1e-3,
@@ -67,8 +69,8 @@ def test_namo_build_and_update_smoke():
     assert jnp.all(jnp.isfinite(updates["extra"]))
 
 
-def test_namod_build_and_update_smoke():
-    params, grads = _make_toy_params_and_grads()
+def test_namod_build_and_update_smoke(toy_params_and_grads):
+    params, grads = toy_params_and_grads
     config = NamoDConfig(
         learning_rate=1e-2,
         adam_lr=1e-3,

@@ -1,14 +1,26 @@
 # Copyright 2026 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""NAMO and NAMO-D optimizer configs for Levanter.
+
+This module implements:
+- NAMO: Norm-Based Adaptive Moment Estimation with Orthogonalized Momentum.
+- NAMO-D: A diagonal (column-wise) extension of NAMO with clamped adaptivity.
+
+References:
+- Paper: https://arxiv.org/abs/2602.17080
+- Official implementation: https://github.com/minxin-zhg/namo/blob/main/src/namo.py
+"""
+
 import dataclasses
 from dataclasses import dataclass
-from typing import NamedTuple, Optional
+from typing import Any, NamedTuple, Optional
 
 import jax
 import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
+from jaxtyping import Array
 
 import haliax
 from haliax.nn import Linear
@@ -23,11 +35,11 @@ from levanter.optim.util import (
 from levanter.utils.jax_utils import leaf_key_paths
 
 
-def _is_linear_or_none(x):
+def _is_linear_or_none(x: Any) -> bool:
     return isinstance(x, Linear) or x is None
 
 
-def _create_namo_mask(params):
+def _create_namo_mask(params: Any) -> Any:
     paths = leaf_key_paths(params)
 
     def mask_fn(param, path):
@@ -39,6 +51,26 @@ def _create_namo_mask(params):
         return "adamw"
 
     return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
+
+
+def _adamw_transform(
+    *,
+    max_grad_norm: float,
+    beta1: float,
+    beta2: float,
+    epsilon: float,
+    adam_lr: float,
+    weight_decay: float,
+    build_weight_decay_mask,
+) -> optax.GradientTransformation:
+    components = []
+    if max_grad_norm:
+        components.append(optax.clip_by_global_norm(max_grad_norm))
+    components.append(optax.scale_by_adam(beta1, beta2, epsilon))
+    if weight_decay > 0:
+        components.append(optax.add_decayed_weights(weight_decay, build_weight_decay_mask()))
+    components.append(optax.scale(-adam_lr))
+    return optax.chain(*components)
 
 
 @OptimizerConfig.register_subclass("namo")
@@ -62,7 +94,7 @@ class NamoConfig(OptimizerConfig):
     max_grad_norm: float = 1.0
     coefficient_type: CoefficientType = "quintic"
 
-    def build(self, num_train_steps):
+    def build(self, num_train_steps: int) -> optax.GradientTransformation:
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 
@@ -82,15 +114,16 @@ class NamoConfig(OptimizerConfig):
                 )
 
             def adamw_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
                 adam_weight_decay = self.adam_weight_decay if self.adam_weight_decay is not None else self.weight_decay
-                if adam_weight_decay > 0:
-                    components.append(optax.add_decayed_weights(adam_weight_decay, self.build_weight_decay_mask()))
-                components.append(optax.scale(-adam_lr))
-                return optax.chain(*components)
+                return _adamw_transform(
+                    max_grad_norm=self.max_grad_norm,
+                    beta1=self.beta1,
+                    beta2=self.beta2,
+                    epsilon=self.epsilon,
+                    adam_lr=adam_lr,
+                    weight_decay=adam_weight_decay,
+                    build_weight_decay_mask=self.build_weight_decay_mask,
+                )
 
             return optax.multi_transform({"namo": namo_transform(), "adamw": adamw_transform()}, _create_namo_mask)
 
@@ -119,7 +152,7 @@ class NamoDConfig(OptimizerConfig):
     max_grad_norm: float = 1.0
     coefficient_type: CoefficientType = "quintic"
 
-    def build(self, num_train_steps):
+    def build(self, num_train_steps: int) -> optax.GradientTransformation:
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 
@@ -140,15 +173,16 @@ class NamoDConfig(OptimizerConfig):
                 )
 
             def adamw_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
                 adam_weight_decay = self.adam_weight_decay if self.adam_weight_decay is not None else self.weight_decay
-                if adam_weight_decay > 0:
-                    components.append(optax.add_decayed_weights(adam_weight_decay, self.build_weight_decay_mask()))
-                components.append(optax.scale(-adam_lr))
-                return optax.chain(*components)
+                return _adamw_transform(
+                    max_grad_norm=self.max_grad_norm,
+                    beta1=self.beta1,
+                    beta2=self.beta2,
+                    epsilon=self.epsilon,
+                    adam_lr=adam_lr,
+                    weight_decay=adam_weight_decay,
+                    build_weight_decay_mask=self.build_weight_decay_mask,
+                )
 
             return optax.multi_transform({"namo": namod_transform(), "adamw": adamw_transform()}, _create_namo_mask)
 
@@ -167,7 +201,7 @@ class ScaleByNamoDState(NamedTuple):
     v: optax.Updates
 
 
-def _clamp_to_mean(col_scale: jnp.ndarray, clamp_c: float) -> jnp.ndarray:
+def _clamp_to_mean(col_scale: Array, clamp_c: float) -> Array:
     if not (0.0 < float(clamp_c) <= 1.0):
         return col_scale
 
@@ -179,18 +213,22 @@ def _clamp_to_mean(col_scale: jnp.ndarray, clamp_c: float) -> jnp.ndarray:
 
 def scale_with_namo(
     *,
-    momentum=0.95,
-    mu2=0.99,
-    nesterov=True,
-    steps=5,
-    muon_eps=1e-8,
-    learning_rate=1e-2,
-    weight_decay=0.1,
-    adamnorm_eps=1e-8,
-    scale_coeff=0.2,
-    coefficient_type="quintic",
-):
-    steps = int(steps)
+    momentum: float = 0.95,
+    mu2: float = 0.99,
+    nesterov: bool = True,
+    steps: int = 5,
+    muon_eps: float = 1e-8,
+    learning_rate: float = 1e-2,
+    weight_decay: float = 0.1,
+    adamnorm_eps: float = 1e-8,
+    scale_coeff: float = 0.2,
+    coefficient_type: CoefficientType = "quintic",
+) -> optax.GradientTransformation:
+    """Build the NAMO gradient transformation.
+
+    NAMO combines orthogonalized momentum directions with Adam-style norm-based
+    adaptive scaling and applies adaptive decoupled weight decay.
+    """
 
     def init_fn(params):
         flat_params = flatten_linear_layers(params)
@@ -292,19 +330,23 @@ def scale_with_namo(
 
 def scale_with_namod(
     *,
-    momentum=0.95,
-    mu2=0.99,
-    nesterov=True,
-    steps=5,
-    muon_eps=1e-8,
-    learning_rate=1e-2,
-    weight_decay=0.1,
-    adamnorm_eps=1e-8,
-    scale_coeff=0.2,
-    clamp_c=0.75,
-    coefficient_type="quintic",
-):
-    steps = int(steps)
+    momentum: float = 0.95,
+    mu2: float = 0.99,
+    nesterov: bool = True,
+    steps: int = 5,
+    muon_eps: float = 1e-8,
+    learning_rate: float = 1e-2,
+    weight_decay: float = 0.1,
+    adamnorm_eps: float = 1e-8,
+    scale_coeff: float = 0.2,
+    clamp_c: float = 0.75,
+    coefficient_type: CoefficientType = "quintic",
+) -> optax.GradientTransformation:
+    """Build the NAMO-D gradient transformation.
+
+    NAMO-D extends NAMO with column-wise adaptivity and clamped scaling to
+    balance conditioning and fine-grained noise adaptation.
+    """
 
     def init_fn(params):
         flat_params = flatten_linear_layers(params)
