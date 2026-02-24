@@ -12204,6 +12204,7 @@ source = { editable = "lib/zephyr" }
 dependencies = [
     { name = "braceexpand" },
     { name = "click" },
+    { name = "cloudpickle" },
     { name = "fray", extra = ["ray"] },
     { name = "fsspec" },
     { name = "humanfriendly" },
@@ -12234,6 +12235,7 @@ test = [
 requires-dist = [
     { name = "braceexpand", specifier = ">=0.1.0" },
     { name = "click", specifier = ">=8.0" },
+    { name = "cloudpickle", specifier = ">=3.0" },
     { name = "fray", extras = ["ray"], editable = "lib/fray" },
     { name = "fsspec", specifier = ">=2023.1.0" },
     { name = "humanfriendly", specifier = ">=10.0" },
