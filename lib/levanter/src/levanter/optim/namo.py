@@ -190,12 +190,20 @@ class NamoDConfig(OptimizerConfig):
 
 
 class ScaleByNamoState(NamedTuple):
+    """Optax-compatible NAMO state.
+
+    We keep this as a ``NamedTuple`` to match existing optimizer-state
+    conventions across ``levanter.optim`` and Optax examples.
+    """
+
     count: jnp.ndarray
     momentum_buffer: optax.Updates
     v_squared: optax.Updates
 
 
 class ScaleByNamoDState(NamedTuple):
+    """Optax-compatible NAMO-D state."""
+
     count: jnp.ndarray
     momentum_buffer: optax.Updates
     v: optax.Updates
