@@ -764,11 +764,7 @@ def _summarize_breakdown_global(events: list[_CompleteTraceEvent]) -> TimeBreakd
 
 
 def _global_stall_window(events: list[_CompleteTraceEvent]) -> tuple[float, float] | None:
-    compute_events = [
-        event
-        for event in events
-        if event.thread_name != "Steps" and _event_category(event) == "compute"
-    ]
+    compute_events = [event for event in events if event.thread_name != "Steps" and _event_category(event) == "compute"]
     if not compute_events:
         return None
     start = min(event.ts for event in compute_events)
