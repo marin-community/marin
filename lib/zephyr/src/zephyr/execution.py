@@ -837,7 +837,14 @@ class ZephyrWorker:
 
             logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
             try:
+                t_0 = time.monotonic()
                 result = self._execute_shard(task, config)
+                logger.info(
+                    "[%s] Task for shard %d completed in %.2f seconds",
+                    self._worker_id,
+                    task.shard_idx,
+                    time.monotonic() - t_0,
+                )
                 # Block until coordinator records the result. This ensures
                 # report_result is fully processed before the next pull_task,
                 # preventing _in_flight tracking races.
