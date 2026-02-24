@@ -72,7 +72,7 @@ scale_groups:
       disk: 1TB
       tpu_count: 4
       gpu_count: 0
-    min_slices: 1
+    min_slices: 0
     max_slices: 16
     priority: 100
     slice_template:

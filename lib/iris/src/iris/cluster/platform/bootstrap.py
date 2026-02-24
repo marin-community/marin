@@ -21,65 +21,43 @@ from iris.rpc import config_pb2
 logger = logging.getLogger(__name__)
 
 
-def parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | None:
-    """Parse ``REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION``.
+# GCP multi-region locations used for AR remote repos that proxy GHCR.
+# Each AR remote repo is a pull-through cache for ghcr.io, deployed to a
+# multi-region location. GCP VMs pull from their continent's cache; egress
+# within a multi-region is free.
+_ZONE_PREFIX_TO_MULTI_REGION = {
+    "us": "us",
+    "europe": "europe",
+    "asia": "asia",
+    "me": "asia",  # Middle East → closest multi-region
+}
 
-    Returns:
-        (region, project, image_name, version) or None if not an AR tag.
+GHCR_MIRROR_REPO = "ghcr-mirror"
+
+
+def zone_to_multi_region(zone: str) -> str | None:
+    """Map a GCP zone to its multi-region location (e.g. 'us-central1-a' → 'us')."""
+    prefix = zone.split("-", 1)[0]
+    return _ZONE_PREFIX_TO_MULTI_REGION.get(prefix)
+
+
+def rewrite_ghcr_to_ar_remote(
+    image_tag: str,
+    multi_region: str,
+    project: str,
+    mirror_repo: str = GHCR_MIRROR_REPO,
+) -> str:
+    """Rewrite a ghcr.io image tag to pull from an AR remote repo.
+
+    ghcr.io/marin-community/iris-worker:v1
+    → us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:v1
+
+    Non-GHCR images pass through unchanged.
     """
-    if "-docker.pkg.dev/" not in image_tag:
-        return None
-    parts = image_tag.split("/")
-    if len(parts) < 4:
-        return None
-    registry = parts[0]
-    if not registry.endswith("-docker.pkg.dev"):
-        return None
-    region = registry.replace("-docker.pkg.dev", "")
-    project = parts[1]
-    image_and_version = parts[3]
-    if ":" in image_and_version:
-        image_name, version = image_and_version.split(":", 1)
-    else:
-        image_name = image_and_version
-        version = "latest"
-    return region, project, image_name, version
-
-
-def rewrite_artifact_registry_region(image_tag: str, target_region: str) -> str:
-    """Rewrite an Artifact Registry image tag to use a different region.
-
-    Non-AR images pass through unchanged. If the image is already in the
-    target region, returns the original tag.
-    """
-    parsed = parse_artifact_registry_tag(image_tag)
-    if parsed is None:
+    if not image_tag.startswith("ghcr.io/"):
         return image_tag
-    current_region = parsed[0]
-    if current_region == target_region:
-        return image_tag
-    parts = image_tag.split("/")
-    parts[0] = f"{target_region}-docker.pkg.dev"
-    return "/".join(parts)
-
-
-def collect_all_regions(config: config_pb2.IrisClusterConfig) -> set[str]:
-    """Extract all unique GCP regions from an Iris cluster config.
-
-    Includes regions from all scale group zones and the controller zone.
-    """
-    regions: set[str] = set()
-
-    for sg in config.scale_groups.values():
-        template = sg.slice_template
-        if template.HasField("gcp") and template.gcp.zone:
-            regions.add(template.gcp.zone.rsplit("-", 1)[0])
-
-    ctrl = config.controller
-    if ctrl.HasField("gcp") and ctrl.gcp.zone:
-        regions.add(ctrl.gcp.zone.rsplit("-", 1)[0])
-
-    return regions
+    path = image_tag.removeprefix("ghcr.io/")
+    return f"{multi_region}-docker.pkg.dev/{project}/{mirror_repo}/{path}"
 
 
 def render_template(template: str, **variables: str | int) -> str:
@@ -474,8 +452,10 @@ def build_controller_bootstrap_script_from_config(
     port = config.controller.gcp.port or config.controller.manual.port or 10000
     image = config.controller.image
     ctrl = config.controller
-    if ctrl.HasField("gcp") and ctrl.gcp.zone:
-        controller_region = ctrl.gcp.zone.rsplit("-", 1)[0]
-        image = rewrite_artifact_registry_region(image, controller_region)
+    if ctrl.HasField("gcp") and ctrl.gcp.zone and image.startswith("ghcr.io/"):
+        multi_region = zone_to_multi_region(ctrl.gcp.zone)
+        if multi_region:
+            project = config.platform.gcp.project_id
+            image = rewrite_ghcr_to_ar_remote(image, multi_region, project)
 
     return build_controller_bootstrap_script(image, port, config_yaml)
