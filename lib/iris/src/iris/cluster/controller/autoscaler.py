@@ -130,13 +130,22 @@ def _diagnose_no_matching_group(
 ) -> str:
     """Produce a concise, actionable reason when no group matches a demand entry.
 
-    Checks filters in order (device → zone → region) and reports the first
-    mismatch with enough context to fix the issue (e.g. typo suggestions).
+    Checks filters in order (device → preemptible → zone → region) and reports
+    the first mismatch with enough context to fix the issue.
     """
     device_matches = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
 
     if not device_matches:
         return f"no_matching_group: no groups with device {entry.device_type.value}:{entry.device_variant or '*'}"
+
+    if entry.preemptible is not None:
+        preempt_matches = [g for g in device_matches if g.config.slice_template.preemptible == entry.preemptible]
+        if not preempt_matches:
+            want = "preemptible" if entry.preemptible else "non-preemptible"
+            return (
+                f"no_matching_group: no {want} groups for device {entry.device_type.value}:{entry.device_variant or '*'}"
+            )
+        device_matches = preempt_matches
 
     if entry.required_zones:
         available_zones = {group_zone(g) for g in device_matches} - {None}
