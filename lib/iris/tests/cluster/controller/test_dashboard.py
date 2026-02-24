@@ -566,6 +566,48 @@ def test_pending_reason_uses_autoscaler_hint_for_scale_up(
     assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in listed[0].get("pendingReason", "")
 
 
+def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
+    client_with_autoscaler,
+    state,
+    mock_autoscaler,
+    make_worker_metadata,
+):
+    """GetJobStatus should keep scheduler diagnostics when autoscaler has no active launch."""
+    register_worker(state, "w1", "h1:8080", make_worker_metadata())
+
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="diag-constraint",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+        constraints=[
+            cluster_pb2.Constraint(
+                key="nonexistent-attr",
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="x"),
+            )
+        ],
+    )
+    submit_job(state, "diag-constraint", request)
+    task_id = JobName.root("diag-constraint").task(0).to_wire()
+
+    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
+        last_routing_decision=vm_pb2.RoutingDecision(
+            group_to_launch={"tpu_v5e_32": 0},
+            routed_entries={
+                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
+            },
+        )
+    )
+
+    job_resp = rpc_post(client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("diag-constraint").to_wire()})
+    pending_reason = job_resp.get("job", {}).get("pendingReason", "")
+    assert pending_reason
+    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" not in pending_reason
+    assert "constraints" in pending_reason.lower() or "nonexistent-attr" in pending_reason
+
+
 # =============================================================================
 # Health Endpoint Tests
 # =============================================================================

@@ -18,6 +18,8 @@ from collections import Counter, defaultdict
 from iris.cluster.types import JobName
 from iris.rpc import vm_pb2
 
+ACTIVE_SCALE_UP_HINT_PREFIX = "Waiting for worker scale-up in scale group"
+
 
 def _task_id_to_job_id(task_id: str) -> str | None:
     """Return parent job wire id for a task id, or None for invalid input."""
@@ -69,9 +71,7 @@ def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str,
         if launch_groups:
             group_name, _ = launch_groups[0]
             launch_count = routing.group_to_launch.get(group_name, 0)
-            hints[job_id] = (
-                f"Waiting for worker scale-up in scale group '{group_name}' " f"({launch_count} slice(s) requested)"
-            )
+            hints[job_id] = f"Waiting for worker scale-up in scale group '{group_name}' ({launch_count} slice(s) requested)"
             continue
 
         # Demand is routed but no new slices requested right now (for example
@@ -86,3 +86,8 @@ def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str,
         hints[job_id] = f"Unsatisfied autoscaler demand: {reason}"
 
     return hints
+
+
+def is_active_scale_up_hint(hint: str) -> bool:
+    """Whether a hint indicates an active scale-up request."""
+    return hint.startswith(ACTIVE_SCALE_UP_HINT_PREFIX)

@@ -229,13 +229,15 @@ def test_pending_reason_reports_waiting_for_scale_up_group(cold_start_cluster, p
 
     assert saw_scale_up_action, "Expected autoscaler to record a scale_up action for tpu_v5e_16"
 
-    status = cold_start_cluster.status(job)
-    assert status.state == cluster_pb2.JOB_STATE_PENDING
-    assert "No healthy workers available" not in status.pending_reason
-    assert (
-        "Waiting for worker scale-up in scale group 'tpu_v5e_16'" in status.pending_reason
-        or "Waiting for workers in scale group 'tpu_v5e_16'" in status.pending_reason
-    ), f"Expected scale-group waiting diagnostic, got: {status.pending_reason!r}"
+    saw_scaleup_hint = False
+    for _ in range(80):
+        status = cold_start_cluster.status(job)
+        if "Waiting for worker scale-up in scale group 'tpu_v5e_16'" in status.pending_reason:
+            saw_scaleup_hint = True
+            break
+        time.sleep(0.05)
+
+    assert saw_scaleup_hint, "Expected pending_reason to surface active scale-up hint with scale group name"
 
     # Capture the job detail diagnostic rendering for this scenario.
     dashboard_goto(page, f"{cold_start_cluster.url}/job/{job.job_id.to_wire()}")

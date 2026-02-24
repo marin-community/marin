@@ -23,7 +23,10 @@ from iris.cluster.controller.events import (
     JobSubmittedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.pending_diagnostics import build_job_pending_hints
+from iris.cluster.controller.pending_diagnostics import (
+    build_job_pending_hints,
+    is_active_scale_up_hint,
+)
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.state import (
     ControllerEndpoint,
@@ -269,7 +272,12 @@ class ControllerServiceImpl:
             sched_context = self._controller.create_scheduling_context(workers)
             # Get job-level diagnostics (expensive but only for detail view)
             pending_reason = self._controller.get_job_scheduling_diagnostics(job, sched_context)
-            pending_reason = self._get_autoscaler_pending_hints().get(job.job_id.to_wire(), pending_reason)
+            autoscaler_hint = self._get_autoscaler_pending_hints().get(job.job_id.to_wire(), "")
+            # Only override scheduler diagnostics when autoscaler is actively
+            # requesting new capacity. Otherwise, scheduler root-cause details
+            # (e.g., constraint/resource mismatch) are more actionable.
+            if autoscaler_hint and is_active_scale_up_hint(autoscaler_hint):
+                pending_reason = autoscaler_hint
 
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
