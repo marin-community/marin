@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
 
@@ -376,17 +376,40 @@ class TaggedEvaluator(Generic[Ex, M]):
         self.device_mesh = device_mesh
         self.tokenizer = tokenizer
         self.axis_mapping = axis_mapping
-        if device_mesh is None or axis_mapping is None:
-            self.per_pos_out_sharding = None
-        else:
+        self.per_pos_out_sharding = None
+        if device_mesh is not None and axis_mapping is not None:
             batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
-            self.per_pos_out_sharding = None
-            if batch_axis_resource is not None:
+            if batch_axis_resource is not None and self._axis_resource_is_explicit(device_mesh, batch_axis_resource):
                 self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
 
         self.bytes_per_token = self._calculate_bytes_per_token_type(tokenizer)
         self.hierarchy = self._construct_tag_hierarchy()
         self.accum_for_batch = self._make_accum_for_batch()
+
+    @staticmethod
+    def _flatten_axis_resource(axis_resource) -> tuple[str, ...]:
+        if axis_resource is None:
+            return ()
+        if isinstance(axis_resource, str):
+            return (axis_resource,)
+        if isinstance(axis_resource, tuple):
+            names: list[str] = []
+            for axis in axis_resource:
+                names.extend(TaggedEvaluator._flatten_axis_resource(axis))
+            return tuple(names)
+        return ()
+
+    @staticmethod
+    def _axis_resource_is_explicit(mesh: Mesh, axis_resource) -> bool:
+        axis_types = dict(zip(mesh.axis_names, mesh.axis_types, strict=True))
+        axis_names = TaggedEvaluator._flatten_axis_resource(axis_resource)
+        if len(axis_names) == 0:
+            return False
+        for axis_name in axis_names:
+            axis_type = axis_types.get(axis_name)
+            if axis_type is None or axis_type != AxisType.Explicit:
+                return False
+        return True
 
     def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
         bytes_per_token = self.bytes_per_token
