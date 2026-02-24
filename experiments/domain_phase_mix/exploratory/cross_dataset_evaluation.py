@@ -154,16 +154,71 @@ def load_dataset_spec(
 # ---------------------------------------------------------------------------
 # Cross-validation
 # ---------------------------------------------------------------------------
+def _topk_metrics(y_true: np.ndarray, y_pred: np.ndarray, K: int) -> dict[str, float]:
+    """Compute top-K recall and mean-rank metrics (lower y = better).
+
+    Args:
+        y_true: True target values (lower is better, e.g. BPB).
+        y_pred: Predicted target values.
+        K: Number of top runs to consider.
+
+    Returns:
+        Dictionary with:
+        - recall@K: fraction of predicted top-K that are in true top-K
+        - mean_true_rank_of_pred_topK: avg true rank of runs predicted to be top-K
+        - mean_pred_rank_of_true_topK: avg predicted rank of runs that are truly top-K
+    """
+    R = len(y_true)
+    if K > R:
+        K = R
+
+    # Ranks: 0 = best (lowest value)
+    true_ranks = np.argsort(np.argsort(y_true))
+    pred_ranks = np.argsort(np.argsort(y_pred))
+
+    true_topk = set(np.where(true_ranks < K)[0])
+    pred_topk = set(np.where(pred_ranks < K)[0])
+
+    recall = len(true_topk & pred_topk) / K
+
+    # Mean true rank (0-indexed) of runs predicted to be top-K
+    mean_true_rank = float(np.mean([true_ranks[i] for i in pred_topk]))
+    # Mean predicted rank of runs that are truly top-K
+    mean_pred_rank = float(np.mean([pred_ranks[i] for i in true_topk]))
+
+    return {
+        f"recall@{K}": recall,
+        f"mean_true_rank_of_pred_top{K}": mean_true_rank,
+        f"mean_pred_rank_of_true_top{K}": mean_pred_rank,
+    }
+
+
 def cross_validate(
     spec: DatasetSpec,
     model: GeneralModelSpec,
     k: int = 5,
     seed: int = 42,
+    topk_values: list[int] | None = None,
 ) -> dict[str, float]:
-    """k-fold CV returning {R², RMSE, MAE, Spearman, Huber}."""
+    """k-fold CV returning {R², RMSE, MAE, Spearman, Huber, top-K metrics}."""
+    if topk_values is None:
+        topk_values = []
+
     rng = np.random.default_rng(seed)
     idx = rng.permutation(spec.R)
     folds = np.array_split(idx, k)
+
+    nan_result: dict[str, float] = {
+        "R²": float("nan"),
+        "RMSE": float("nan"),
+        "MAE": float("nan"),
+        "Spearman": float("nan"),
+        "Huber": float("nan"),
+    }
+    for K in topk_values:
+        nan_result[f"recall@{K}"] = float("nan")
+        nan_result[f"mean_true_rank_of_pred_top{K}"] = float("nan")
+        nan_result[f"mean_pred_rank_of_true_top{K}"] = float("nan")
 
     all_preds = np.full(spec.R, np.nan)
     for fold_i, test_idx in enumerate(folds):
@@ -175,13 +230,7 @@ def cross_validate(
             all_preds[test_idx] = preds
         except Exception as e:
             log.warning(f"  {model.name} fold {fold_i} failed: {e}")
-            return {
-                "R²": float("nan"),
-                "RMSE": float("nan"),
-                "MAE": float("nan"),
-                "Spearman": float("nan"),
-                "Huber": float("nan"),
-            }
+            return nan_result
 
     y_true = spec.y
     residuals = y_true - all_preds
@@ -201,7 +250,13 @@ def cross_validate(
     huber = np.where(abs_r <= delta, 0.5 * residuals**2, delta * abs_r - 0.5 * delta**2)
     huber_mean = float(np.mean(huber))
 
-    return {"R²": r2, "RMSE": rmse, "MAE": mae, "Spearman": float(sp_corr), "Huber": huber_mean}
+    result = {"R²": r2, "RMSE": rmse, "MAE": mae, "Spearman": float(sp_corr), "Huber": huber_mean}
+
+    # Top-K metrics on full CV predictions
+    for K in topk_values:
+        result.update(_topk_metrics(y_true, all_preds, K))
+
+    return result
 
 
 # ---------------------------------------------------------------------------

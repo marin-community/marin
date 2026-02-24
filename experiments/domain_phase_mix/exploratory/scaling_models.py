@@ -1113,6 +1113,376 @@ def fit_ces_overfit(X, y, n_restarts=15, seed=0):
 
 
 # =========================================================================
+# CEQ-SUM soft: shared CES + phase weights + softplus overfit penalty
+# (2-phase specialisation of the general_scaling_models implementation)
+# =========================================================================
+
+def _ceq_sum_core(X, p, nested=False):
+    """Forward pass shared by CEQ-SUM soft and NCEQ (2-phase, 2-domain)."""
+    e_sc0, e_sc1, e_nem0, e_nem1 = _epochs_from_weights(X)
+    # Stack into (R, N=2, M=2) epoch tensor: domains = [SC, Nem]
+    E = np.stack([
+        np.column_stack([e_sc0, e_nem0]),
+        np.column_stack([e_sc1, e_nem1]),
+    ], axis=1)  # (R, 2, 2)
+
+    idx = 0
+    c0 = p[idx]; idx += 1
+    logA = p[idx]; idx += 1
+    logB = p[idx]; idx += 1
+    # Domain weight: 1 logit for M=2
+    logit_a = p[idx]; idx += 1
+    a_sc = 1.0 / (1.0 + np.exp(-logit_a))
+    a = np.array([a_sc, 1.0 - a_sc])
+    # rho via tanh
+    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99)); idx += 1
+    gamma = p[idx]; idx += 1
+    tau = float(np.exp(np.clip(p[idx], -5.0, 8.0))); idx += 1
+
+    rho_p = None
+    if nested:
+        rho_p = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99)); idx += 1
+
+    A = np.exp(np.clip(logA, -10.0, 10.0))
+    B = np.exp(np.clip(logB, -10.0, 10.0))
+
+    # Satiety
+    sat = np.maximum(np.log1p(E), 1e-12)  # (R, 2, 2)
+
+    # Per-phase CES
+    U_k = np.zeros((len(X), 2))
+    for ph in range(2):
+        inner = a[0] * np.power(sat[:, ph, 0], rho) + a[1] * np.power(sat[:, ph, 1], rho)
+        U_k[:, ph] = np.power(np.maximum(inner, 1e-12), 1.0 / rho)
+
+    # Phase weights via softmax on evenly spaced anchors
+    t = np.array([0.0, 1.0])
+    logits = gamma * t
+    logits -= logits.max()
+    pi = np.exp(logits)
+    pi = pi / pi.sum()
+
+    if nested and rho_p is not None:
+        if abs(rho_p) < 1e-4:
+            U = np.exp(pi[0] * np.log(np.maximum(U_k[:, 0], 1e-12))
+                       + pi[1] * np.log(np.maximum(U_k[:, 1], 1e-12)))
+        else:
+            inner_p = pi[0] * np.power(np.maximum(U_k[:, 0], 1e-12), rho_p) \
+                    + pi[1] * np.power(np.maximum(U_k[:, 1], 1e-12), rho_p)
+            U = np.power(np.maximum(inner_p, 1e-12), 1.0 / rho_p)
+    else:
+        U = U_k @ pi
+
+    # Overfit penalty on total StarCoder epochs (small domain)
+    E_sc_total = e_sc0 + e_sc1
+    h = _softplus(E_sc_total - tau)
+    P = h * h
+
+    return c0 - A * U + B * P
+
+
+def fit_ceq_sum_soft(X, y, n_restarts=15, seed=0):
+    """CEQ-SUM soft: shared CES per phase + softplus overfit penalty.
+
+    7 parameters: c0, logA, logB, logit_a, rho_raw, gamma, logtau.
+    Features: weight.
+    """
+    rng = np.random.default_rng(seed)
+    n_params = 7
+    E_sc_med = float(np.median(SC_EPOCH_MULT * (X[:, 0] + X[:, 1])) + 1e-6)
+
+    def loss(p):
+        r = _ceq_sum_core(X, p, nested=False) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
+
+    best_l, best_p = np.inf, None
+    for _ in range(n_restarts):
+        p0 = np.array([
+            y.max() + rng.normal(0, 0.05),
+            rng.normal(0, 1),           # logA
+            rng.normal(-2, 1),          # logB
+            rng.normal(0, 1),           # logit_a (domain weight)
+            rng.normal(0, 0.7),         # rho_raw
+            rng.normal(0, 1),           # gamma
+            np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
+        ])
+        try:
+            res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_l:
+                best_l, best_p = res.fun, res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        best_p = np.zeros(n_params)
+        best_p[0] = np.mean(y)
+
+    return lambda Xn: _ceq_sum_core(Xn, best_p, nested=False), best_p
+
+
+def fit_nceq(X, y, n_restarts=15, seed=0):
+    """NCEQ: nested CES across phases (adds rho_p to CEQ-SUM soft).
+
+    8 parameters: c0, logA, logB, logit_a, rho_raw, gamma, logtau, rho_p_raw.
+    Features: weight.
+    """
+    rng = np.random.default_rng(seed)
+    n_params = 8
+    E_sc_med = float(np.median(SC_EPOCH_MULT * (X[:, 0] + X[:, 1])) + 1e-6)
+
+    def loss(p):
+        r = _ceq_sum_core(X, p, nested=True) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
+
+    best_l, best_p = np.inf, None
+    for _ in range(n_restarts):
+        p0 = np.array([
+            y.max() + rng.normal(0, 0.05),
+            rng.normal(0, 1),           # logA
+            rng.normal(-2, 1),          # logB
+            rng.normal(0, 1),           # logit_a (domain weight)
+            rng.normal(0, 0.7),         # rho_raw
+            rng.normal(0, 1),           # gamma
+            np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
+            rng.normal(0, 0.7),         # rho_p_raw
+        ])
+        try:
+            res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_l:
+                best_l, best_p = res.fun, res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        best_p = np.zeros(n_params)
+        best_p[0] = np.mean(y)
+
+    return lambda Xn: _ceq_sum_core(Xn, best_p, nested=True), best_p
+
+
+def label_ceq_sum_soft(params):
+    a_sc = 1.0 / (1.0 + np.exp(-params[3]))
+    rho = np.clip(5.0 * np.tanh(params[4]), -10, 0.99)
+    tau = np.exp(np.clip(params[6], -5, 8))
+    return rf"$\rho$={rho:.2f}, $a_{{sc}}$={a_sc:.2f}, $\tau$={tau:.1f}"
+
+
+def label_nceq(params):
+    a_sc = 1.0 / (1.0 + np.exp(-params[3]))
+    rho = np.clip(5.0 * np.tanh(params[4]), -10, 0.99)
+    tau = np.exp(np.clip(params[6], -5, 8))
+    rho_p = np.clip(5.0 * np.tanh(params[7]), -10, 0.99)
+    return rf"$\rho$={rho:.2f}, $\rho_p$={rho_p:.2f}, $a_{{sc}}$={a_sc:.2f}, $\tau$={tau:.1f}"
+
+
+# =========================================================================
+# FM-CEQ: Forgetting Marginal CEQ (sequential + retention)
+# =========================================================================
+
+def _fm_ceq_core(X, p):
+    """Forward pass for FM-CEQ (2-phase, 2-domain)."""
+    e_sc0, e_sc1, e_nem0, e_nem1 = _epochs_from_weights(X)
+    # Per-phase epoch tensors: (R, M=2), domains = [SC, Nem]
+    E0 = np.column_stack([e_sc0, e_nem0])
+    E1 = np.column_stack([e_sc1, e_nem1])
+
+    idx = 0
+    c0 = p[idx]; idx += 1
+    logA = p[idx]; idx += 1
+    logB = p[idx]; idx += 1
+    logit_a = p[idx]; idx += 1
+    a_sc = 1.0 / (1.0 + np.exp(-logit_a))
+    a = np.array([a_sc, 1.0 - a_sc])
+    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99)); idx += 1
+    # Retention factor delta in [0, 1] via sigmoid
+    delta = float(1.0 / (1.0 + np.exp(-np.clip(p[idx], -10.0, 10.0)))); idx += 1
+    tau = float(np.exp(np.clip(p[idx], -5.0, 8.0))); idx += 1
+
+    A = np.exp(np.clip(logA, -10.0, 10.0))
+    B = np.exp(np.clip(logB, -10.0, 10.0))
+
+    def _ces(s):
+        inner = a[0] * np.power(s[:, 0], rho) + a[1] * np.power(s[:, 1], rho)
+        return np.power(np.maximum(inner, 1e-12), 1.0 / rho)
+
+    # Phase 0: h_prior = 0, h = E0
+    h_prior_0 = np.zeros_like(E0)
+    h_0 = E0
+    U_state_0 = _ces(np.maximum(np.log1p(h_0), 1e-12))
+    U_prior_0 = _ces(np.maximum(np.log1p(h_prior_0), 1e-12))
+
+    # Phase 1: h_prior = delta * h_0, h = h_prior + E1
+    h_prior_1 = delta * h_0
+    h_1 = h_prior_1 + E1
+    U_state_1 = _ces(np.maximum(np.log1p(h_1), 1e-12))
+    U_prior_1 = _ces(np.maximum(np.log1p(h_prior_1), 1e-12))
+
+    U_total = (U_state_0 - U_prior_0) + (U_state_1 - U_prior_1)
+
+    # Phasewise overfit penalty on StarCoder epochs (domain 0)
+    h0 = _softplus(e_sc0 - tau)
+    h1 = _softplus(e_sc1 - tau)
+    P = h0 * h0 + h1 * h1
+
+    return c0 - A * U_total + B * P
+
+
+def fit_fm_ceq(X, y, n_restarts=15, seed=0):
+    """FM-CEQ: Forgetting Marginal CEQ (sequential + retention).
+
+    7 parameters: c0, logA, logB, logit_a, rho_raw, delta_raw, logtau.
+    Features: weight.
+    """
+    rng = np.random.default_rng(seed)
+    n_params = 7
+    E_sc_med = float(np.median(SC_EPOCH_MULT * (X[:, 0] + X[:, 1])) + 1e-6)
+
+    def loss(p):
+        r = _fm_ceq_core(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
+
+    best_l, best_p = np.inf, None
+    for _ in range(n_restarts):
+        p0 = np.array([
+            y.max() + rng.normal(0, 0.05),
+            rng.normal(0, 1),           # logA
+            rng.normal(-2, 1),          # logB
+            rng.normal(0, 1),           # logit_a (domain weight)
+            rng.normal(0, 0.7),         # rho_raw
+            rng.normal(0, 1.5),         # delta_raw (sigmoid -> [0,1])
+            np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
+        ])
+        try:
+            res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_l:
+                best_l, best_p = res.fun, res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        best_p = np.zeros(n_params)
+        best_p[0] = np.mean(y)
+
+    return lambda Xn: _fm_ceq_core(Xn, best_p), best_p
+
+
+def label_fm_ceq(params):
+    a_sc = 1.0 / (1.0 + np.exp(-params[3]))
+    rho = np.clip(5.0 * np.tanh(params[4]), -10, 0.99)
+    delta = 1.0 / (1.0 + np.exp(-np.clip(params[5], -10, 10)))
+    tau = np.exp(np.clip(params[6], -5, 8))
+    return rf"$\rho$={rho:.2f}, $\delta$={delta:.2f}, $a_{{sc}}$={a_sc:.2f}, $\tau$={tau:.1f}"
+
+
+# =========================================================================
+# CEQ-Washpen: CEQ-SUM soft utility + washout-weighted overfit penalty
+# =========================================================================
+
+def _ceq_washpen_core(X, p):
+    """Forward pass for CEQ-Washpen (2-phase, 2-domain).
+
+    Same utility as CEQ-SUM soft, but the overfit penalty per phase is
+    weighted by exp(-lambda * broad_epochs_after), so early-phase overfit
+    is discounted when later phases train on broad data.
+    """
+    e_sc0, e_sc1, e_nem0, e_nem1 = _epochs_from_weights(X)
+
+    idx = 0
+    c0 = p[idx]; idx += 1
+    logA = p[idx]; idx += 1
+    logB = p[idx]; idx += 1
+    logit_a = p[idx]; idx += 1
+    a_sc = 1.0 / (1.0 + np.exp(-logit_a))
+    a = np.array([a_sc, 1.0 - a_sc])
+    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99)); idx += 1
+    gamma = p[idx]; idx += 1
+    tau = float(np.exp(np.clip(p[idx], -5.0, 8.0))); idx += 1
+    lam = float(np.exp(np.clip(p[idx], -8.0, 8.0))); idx += 1
+
+    A = np.exp(np.clip(logA, -10.0, 10.0))
+    B = np.exp(np.clip(logB, -10.0, 10.0))
+
+    # Satiety + per-phase CES (same as CEQ-SUM soft)
+    E = np.stack([
+        np.column_stack([e_sc0, e_nem0]),
+        np.column_stack([e_sc1, e_nem1]),
+    ], axis=1)
+    sat = np.maximum(np.log1p(E), 1e-12)
+
+    U_k = np.zeros((len(X), 2))
+    for ph in range(2):
+        inner = a[0] * np.power(sat[:, ph, 0], rho) + a[1] * np.power(sat[:, ph, 1], rho)
+        U_k[:, ph] = np.power(np.maximum(inner, 1e-12), 1.0 / rho)
+
+    t = np.array([0.0, 1.0])
+    logits = gamma * t
+    logits -= logits.max()
+    pi = np.exp(logits)
+    pi = pi / pi.sum()
+    U = U_k @ pi
+
+    # Washout-weighted overfit penalty
+    # Phase 0: broad training after = e_nem1; Phase 1: nothing after
+    omega_0 = np.exp(-lam * e_nem1)  # discounted if lots of Nemotron in phase 1
+    omega_1 = np.ones_like(e_sc1)    # last phase, full penalty
+
+    h0 = _softplus(e_sc0 - tau)
+    h1 = _softplus(e_sc1 - tau)
+    P = omega_0 * (h0 * h0) + omega_1 * (h1 * h1)
+
+    return c0 - A * U + B * P
+
+
+def fit_ceq_washpen(X, y, n_restarts=15, seed=0):
+    """CEQ-Washpen: CEQ-SUM soft utility + washout-weighted overfit penalty.
+
+    8 parameters: c0, logA, logB, logit_a, rho_raw, gamma, logtau, loglambda.
+    Features: weight.
+    """
+    rng = np.random.default_rng(seed)
+    n_params = 8
+    E_sc_med = float(np.median(SC_EPOCH_MULT * (X[:, 0] + X[:, 1])) + 1e-6)
+
+    def loss(p):
+        r = _ceq_washpen_core(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
+
+    best_l, best_p = np.inf, None
+    for _ in range(n_restarts):
+        p0 = np.array([
+            y.max() + rng.normal(0, 0.05),
+            rng.normal(0, 1),           # logA
+            rng.normal(-2, 1),          # logB
+            rng.normal(0, 1),           # logit_a
+            rng.normal(0, 0.7),         # rho_raw
+            rng.normal(0, 1),           # gamma
+            np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
+            rng.normal(-1, 1),          # loglambda
+        ])
+        try:
+            res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_l:
+                best_l, best_p = res.fun, res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        best_p = np.zeros(n_params)
+        best_p[0] = np.mean(y)
+
+    return lambda Xn: _ceq_washpen_core(Xn, best_p), best_p
+
+
+def label_ceq_washpen(params):
+    a_sc = 1.0 / (1.0 + np.exp(-params[3]))
+    rho = np.clip(5.0 * np.tanh(params[4]), -10, 0.99)
+    gamma = params[5]
+    tau = np.exp(np.clip(params[6], -5, 8))
+    lam = np.exp(np.clip(params[7], -8, 8))
+    return rf"$\rho$={rho:.2f}, $\gamma$={gamma:.2f}, $a_{{sc}}$={a_sc:.2f}, $\tau$={tau:.1f}, $\lambda$={lam:.2f}"
+
+
+# =========================================================================
 # PCEQ: Phase CES utility + epoch-entropy + epoch-overfit quadratic
 # =========================================================================
 
@@ -1574,6 +1944,11 @@ MODELS: list[ModelSpec] = [
     # Hybrid models: mixture design + economics utility + information theory
     ModelSpec("SHEQ", fit_sheq, "weight", label_sheq, "darkmagenta", "-"),
     ModelSpec("PCEQ", fit_pceq, "weight", label_pceq, "steelblue", "-"),
+    # CEQ-SUM soft and NCEQ: shared CES + phase weights + overfit penalty
+    ModelSpec("CEQ-SUM soft", fit_ceq_sum_soft, "weight", label_ceq_sum_soft, "mediumvioletred", "-"),
+    ModelSpec("NCEQ", fit_nceq, "weight", label_nceq, "royalblue", "-"),
+    ModelSpec("FM-CEQ", fit_fm_ceq, "weight", label_fm_ceq, "darkorchid", "-"),
+    ModelSpec("CEQ-Washpen", fit_ceq_washpen, "weight", label_ceq_washpen, "darkgoldenrod", "-"),
 ]
 
 

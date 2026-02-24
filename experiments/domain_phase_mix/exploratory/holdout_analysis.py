@@ -62,7 +62,7 @@ script_dir = Path(__file__).parent
 # =========================================================================
 # Data loading
 # =========================================================================
-_csv_name = os.environ.get("DATA_CSV", "two_phase_starcoder.csv")
+_csv_name = os.environ.get("DATA_CSV", "two_phase_starcoder_combined.csv")
 TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
 
 df = pd.read_csv(script_dir / _csv_name)

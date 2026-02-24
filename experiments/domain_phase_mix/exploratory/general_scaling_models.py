@@ -381,6 +381,49 @@ def _applicable_linear(spec: DatasetSpec) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Model: LogLinear (weight-only) — exp(OLS linear on weights)
+# ---------------------------------------------------------------------------
+def _fit_loglinear(spec: DatasetSpec):
+    X = np.column_stack([np.ones(spec.R), _flat_weights(spec)])
+    log_y = np.log(spec.y)
+    beta = _fit_ols(X, log_y)
+    n_params = X.shape[1]
+
+    def predict(W_new):
+        sp = _as_3d(W_new)
+        Xn = np.column_stack([np.ones(sp.shape[0]), sp.reshape(sp.shape[0], -1)])
+        return np.exp(Xn @ beta)
+
+    return predict, {"n_params": n_params}
+
+
+# ---------------------------------------------------------------------------
+# Model: LogLinear(w-e) — exp(OLS linear on weight+epoch features)
+# ---------------------------------------------------------------------------
+def _fit_loglinear_we(spec: DatasetSpec):
+    X = np.column_stack([np.ones(spec.R), _flat_weight_epoch(spec)])
+    log_y = np.log(spec.y)
+    beta = _fit_ols(X, log_y)
+    n_params = X.shape[1]
+    emult = spec.epoch_multipliers
+
+    def predict(W_new):
+        sp = _as_3d(W_new)
+        C = _broadcast_epoch_mult(emult, sp.shape[1], sp.shape[2])
+        E = _compute_epochs(sp, C)
+        w_flat = sp.reshape(sp.shape[0], -1)
+        e_flat = np.log(E.reshape(sp.shape[0], -1) + EPS)
+        Xn = np.column_stack([np.ones(sp.shape[0]), w_flat, e_flat])
+        return np.exp(Xn @ beta)
+
+    return predict, {"n_params": n_params}
+
+
+def _applicable_loglinear_we(spec: DatasetSpec) -> bool:
+    return spec.R > 2 * spec.N * spec.M + 1
+
+
+# ---------------------------------------------------------------------------
 # Model: Quadratic (weight-only), unregularized
 # ---------------------------------------------------------------------------
 def _fit_quadratic_weight(spec: DatasetSpec):
@@ -860,39 +903,39 @@ def _scheffe_nparams(d: int) -> int:
 
 
 def _fit_scheffe_log(spec: DatasetSpec):
+    """Scheffé + (w log w) mixture model.
+
+    Notes
+    -----
+    * Uses v-dom fractions V (N*M features on the simplex: sum(V)=1).
+    * Always fits an intercept (either via explicit column in OLS, or via
+      RidgeCV(fit_intercept=True) in the underdetermined regime).
+    """
     V = _vdom_features(spec)
     d = V.shape[1]
-    n_params = _scheffe_nparams(d)
 
-    Z = _scheffe_log_features(V)
+    Z = _scheffe_log_features(V)  # (R, d_features)
+    n_params = 1 + Z.shape[1]  # intercept + coefficients
 
     if spec.R > n_params:
-        coef = _fit_ols(Z, spec.y)
+        X = np.column_stack([np.ones(spec.R), Z])
+        beta = _fit_ols(X, spec.y)
+        intercept, coef = float(beta[0]), beta[1:]
     else:
-        # Fall back to Ridge for high-d
         from sklearn.linear_model import RidgeCV
 
-        mu, sigma = Z.mean(0), Z.std(0)
-        sigma[sigma < 1e-12] = 1.0
-        Z_std = (Z - mu) / sigma
-        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=False)
-        ridge.fit(Z_std, spec.y)
-        coef = ridge.coef_ / sigma
-        coef -= ridge.coef_ * mu / sigma
+        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=True)
+        ridge.fit(Z, spec.y)
+        intercept, coef = float(ridge.intercept_), ridge.coef_
 
     phase_fracs = np.ones(spec.N) / spec.N
 
     def predict(W_new):
         sp = _as_3d(W_new)
         Vn = (sp * phase_fracs[None, :, None]).reshape(sp.shape[0], -1)
-        return _scheffe_log_features(Vn) @ coef
+        return intercept + _scheffe_log_features(Vn) @ coef
 
     return predict, {"n_params": n_params}
-
-
-# ---------------------------------------------------------------------------
-# Model: Scheffé+EpEnt (Scheffé+log + epoch-entropy per phase)
-# ---------------------------------------------------------------------------
 def _epoch_entropy_features(spec: DatasetSpec) -> np.ndarray:
     """(R, N) epoch-entropy per phase: H_k = sum_d q_{k,d} * ln(q_{k,d})."""
     C = _broadcast_epoch_mult(spec.epoch_multipliers, spec.N, spec.M)
@@ -904,45 +947,50 @@ def _epoch_entropy_features(spec: DatasetSpec) -> np.ndarray:
 
 
 def _fit_scheffe_log_epoch_entropy(spec: DatasetSpec):
+    """Scheffé+log with an added *epoch-entropy* term per phase.
+
+    Uses epoch-based entropy:
+      H_k = -sum_d q_{k,d} log q_{k,d},  q_{k,d} ∝ w_{k,d} * C_{k,d}.
+    """
     V = _vdom_features(spec)
-    d = V.shape[1]
-    Z_scheffe = _scheffe_log_features(V)
+
+    Z_s = _scheffe_log_features(V)
     H = _epoch_entropy_features(spec)  # (R, N)
-    Z = np.column_stack([Z_scheffe, H])
-    n_params = _scheffe_nparams(d) + spec.N
+    Z = np.column_stack([Z_s, H])
+    n_params = 1 + Z.shape[1]
 
     if spec.R > n_params:
-        coef = _fit_ols(Z, spec.y)
+        X = np.column_stack([np.ones(spec.R), Z])
+        beta = _fit_ols(X, spec.y)
+        intercept, coef = float(beta[0]), beta[1:]
     else:
         from sklearn.linear_model import RidgeCV
 
-        mu, sigma = Z.mean(0), Z.std(0)
-        sigma[sigma < 1e-12] = 1.0
-        Z_std = (Z - mu) / sigma
-        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=False)
-        ridge.fit(Z_std, spec.y)
-        coef = ridge.coef_ / sigma
-        coef -= ridge.coef_ * mu / sigma
+        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=True)
+        ridge.fit(Z, spec.y)
+        intercept, coef = float(ridge.intercept_), ridge.coef_
 
     phase_fracs = np.ones(spec.N) / spec.N
-    C_mult = _broadcast_epoch_mult(spec.epoch_multipliers, spec.N, spec.M)
 
     def predict(W_new):
         sp = _as_3d(W_new)
         Vn = (sp * phase_fracs[None, :, None]).reshape(sp.shape[0], -1)
-        Z_s = _scheffe_log_features(Vn)
-        E = sp * C_mult[None, :, :]
-        denom = E.sum(axis=2, keepdims=True)
-        q = np.clip(E / np.maximum(denom, 1e-10), 1e-10, 1.0)
-        Hn = np.sum(q * np.log(q), axis=2)
-        return np.column_stack([Z_s, Hn]) @ coef
+        Zsn = _scheffe_log_features(Vn)
+
+        tmp_spec = DatasetSpec(
+            weights=sp,
+            y=np.zeros(sp.shape[0]),
+            epoch_multipliers=spec.epoch_multipliers,
+            domain_names=spec.domain_names,
+            phase_names=spec.phase_names,
+            small_domains=spec.small_domains,
+            name=spec.name,
+        )
+        Hn = _epoch_entropy_features(tmp_spec)
+        Zn = np.column_stack([Zsn, Hn])
+        return intercept + Zn @ coef
 
     return predict, {"n_params": n_params}
-
-
-# ---------------------------------------------------------------------------
-# Model: Scheffé+TiedEnt (phase-tied entropy instead of per-component log)
-# ---------------------------------------------------------------------------
 def _scheffe_tied_entropy_features(V: np.ndarray, N: int, M: int) -> np.ndarray:
     """Scheffé design with phase-tied entropy: linear + pairwise + N phase-tied entropy terms."""
     d = V.shape[1]
@@ -965,37 +1013,76 @@ def _scheffe_tied_nparams(d: int, N: int) -> int:
 
 
 def _fit_scheffe_tied_entropy(spec: DatasetSpec):
+    """Scheffé+log + tied epoch-entropy + adjacent epoch-symKL.
+
+    Features:
+      - Scheffé+log mixture terms on v-dom fractions V
+      - sum_k H_k where H_k is epoch-entropy per phase
+      - sum_k symKL(q_k, q_{k+1}) where q_k is the epoch distribution over domains
+        in phase k (curriculum smoothness)
+    """
+    W = spec.weights
     V = _vdom_features(spec)
-    d = V.shape[1]
-    n_params = _scheffe_tied_nparams(d, spec.N)
-    Z = _scheffe_tied_entropy_features(V, spec.N, spec.M)
+
+    Z_s = _scheffe_log_features(V)
+    H_sum = _epoch_entropy_features(spec).sum(axis=1, keepdims=True)  # (R,1)
+
+    C = _broadcast_epoch_mult(spec.epoch_multipliers, spec.N, spec.M)
+
+    def _adjacent_epoch_symkl(W_in: np.ndarray) -> np.ndarray:
+        eps = 1e-12
+        E = _compute_epochs(W_in, C)
+        q = E / (E.sum(axis=2, keepdims=True) + eps)  # (R,N,M)
+        Rn, Nn, Mn = q.shape
+        out = np.zeros(Rn)
+        if Nn <= 1:
+            return out
+        for k in range(Nn - 1):
+            p = np.clip(q[:, k, :], eps, 1.0)
+            r = np.clip(q[:, k + 1, :], eps, 1.0)
+            kl_pr = np.sum(p * (np.log(p) - np.log(r)), axis=1)
+            kl_rp = np.sum(r * (np.log(r) - np.log(p)), axis=1)
+            out += 0.5 * (kl_pr + kl_rp)
+        return out
+
+    KL_adj = _adjacent_epoch_symkl(W).reshape(-1, 1)
+
+    Z = np.column_stack([Z_s, H_sum, KL_adj])
+    n_params = 1 + Z.shape[1]
 
     if spec.R > n_params:
-        coef = _fit_ols(Z, spec.y)
+        X = np.column_stack([np.ones(spec.R), Z])
+        beta = _fit_ols(X, spec.y)
+        intercept, coef = float(beta[0]), beta[1:]
     else:
         from sklearn.linear_model import RidgeCV
 
-        mu, sigma = Z.mean(0), Z.std(0)
-        sigma[sigma < 1e-12] = 1.0
-        Z_std = (Z - mu) / sigma
-        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=False)
-        ridge.fit(Z_std, spec.y)
-        coef = ridge.coef_ / sigma
-        coef -= ridge.coef_ * mu / sigma
+        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=True)
+        ridge.fit(Z, spec.y)
+        intercept, coef = float(ridge.intercept_), ridge.coef_
 
     phase_fracs = np.ones(spec.N) / spec.N
 
     def predict(W_new):
         sp = _as_3d(W_new)
         Vn = (sp * phase_fracs[None, :, None]).reshape(sp.shape[0], -1)
-        return _scheffe_tied_entropy_features(Vn, spec.N, spec.M) @ coef
+        Zsn = _scheffe_log_features(Vn)
+
+        tmp_spec = DatasetSpec(
+            weights=sp,
+            y=np.zeros(sp.shape[0]),
+            epoch_multipliers=spec.epoch_multipliers,
+            domain_names=spec.domain_names,
+            phase_names=spec.phase_names,
+            small_domains=spec.small_domains,
+            name=spec.name,
+        )
+        Hs = _epoch_entropy_features(tmp_spec).sum(axis=1, keepdims=True)
+        KL = _adjacent_epoch_symkl(sp).reshape(-1, 1)
+        Zn = np.column_stack([Zsn, Hs, KL])
+        return intercept + Zn @ coef
 
     return predict, {"n_params": n_params}
-
-
-# ---------------------------------------------------------------------------
-# Model: SHEQ (Scheffé+log + epoch-entropy + epoch-overfit quadratic)
-# ---------------------------------------------------------------------------
 def _epoch_overfit_quadratic_raw(
     W: np.ndarray,
     epoch_multipliers: np.ndarray,
@@ -1033,61 +1120,68 @@ def _epoch_overfit_nparams(N: int, M: int, small_domains: list[int] | None) -> i
 
 
 def _fit_sheq(spec: DatasetSpec):
-    """SHEQ: Scheffé+log + epoch-entropy + epoch-overfit quadratic.
-
-    Combines mixture-design polynomial, epoch-entropy, and convex overtraining cost.
-    """
+    """SHEQ: Scheffé+log + tied epoch-entropy + quadratic epoch overfit (+ reuse)."""
+    W = spec.weights
     V = _vdom_features(spec)
-    d = V.shape[1]
-    Z_scheffe = _scheffe_log_features(V)
-    H = _epoch_entropy_features(spec)
-    Z_eq, n_eq = _epoch_overfit_quadratic_raw(spec.weights, spec.epoch_multipliers, spec.small_domains, spec.N, spec.M)
 
-    parts = [Z_scheffe, H]
-    if n_eq > 0:
-        parts.append(Z_eq)
-    Z = np.column_stack(parts)
-    n_params = _scheffe_nparams(d) + spec.N + n_eq
+    Z_s = _scheffe_log_features(V)
+
+    # epoch-entropy (tied across phases)
+    H_sum = _epoch_entropy_features(spec).sum(axis=1, keepdims=True)
+
+    # epoch overfit features for small domains only (quadratic + adjacent reuse)
+    Z_eq, _ = _epoch_overfit_quadratic_raw(
+        W,
+        spec.epoch_multipliers,
+        spec.small_domains,
+        spec.N,
+        spec.M,
+    )
+
+    Z = np.column_stack([Z_s, H_sum, Z_eq])
+    n_params = 1 + Z.shape[1]
 
     if spec.R > n_params:
-        coef = _fit_ols(Z, spec.y)
+        X = np.column_stack([np.ones(spec.R), Z])
+        beta = _fit_ols(X, spec.y)
+        intercept, coef = float(beta[0]), beta[1:]
     else:
         from sklearn.linear_model import RidgeCV
 
-        mu, sigma = Z.mean(0), Z.std(0)
-        sigma[sigma < 1e-12] = 1.0
-        Z_std = (Z - mu) / sigma
-        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=False)
-        ridge.fit(Z_std, spec.y)
-        coef = ridge.coef_ / sigma
-        coef -= ridge.coef_ * mu / sigma
+        ridge = RidgeCV(alphas=np.logspace(-4, 4, 50), fit_intercept=True)
+        ridge.fit(Z, spec.y)
+        intercept, coef = float(ridge.intercept_), ridge.coef_
 
     phase_fracs = np.ones(spec.N) / spec.N
-    C_mult = _broadcast_epoch_mult(spec.epoch_multipliers, spec.N, spec.M)
-    emult = spec.epoch_multipliers
-    sd = spec.small_domains
 
     def predict(W_new):
         sp = _as_3d(W_new)
-        R_new = sp.shape[0]
-        Vn = (sp * phase_fracs[None, :, None]).reshape(R_new, -1)
-        Z_s = _scheffe_log_features(Vn)
-        E = sp * C_mult[None, :, :]
-        denom = E.sum(axis=2, keepdims=True)
-        q = np.clip(E / np.maximum(denom, 1e-10), 1e-10, 1.0)
-        Hn = np.sum(q * np.log(q), axis=2)
-        Z_eq_new, _ = _epoch_overfit_quadratic_raw(sp, emult, sd, spec.N, spec.M)
-        pparts = [Z_s, Hn]
-        if n_eq > 0:
-            pparts.append(Z_eq_new)
-        return np.column_stack(pparts) @ coef
+        Vn = (sp * phase_fracs[None, :, None]).reshape(sp.shape[0], -1)
+        Zsn = _scheffe_log_features(Vn)
+
+        tmp_spec = DatasetSpec(
+            weights=sp,
+            y=np.zeros(sp.shape[0]),
+            epoch_multipliers=spec.epoch_multipliers,
+            domain_names=spec.domain_names,
+            phase_names=spec.phase_names,
+            small_domains=spec.small_domains,
+            name=spec.name,
+        )
+        Hs = _epoch_entropy_features(tmp_spec).sum(axis=1, keepdims=True)
+
+        Z_eqn, _ = _epoch_overfit_quadratic_raw(
+            sp,
+            spec.epoch_multipliers,
+            spec.small_domains,
+            spec.N,
+            spec.M,
+        )
+
+        Zn = np.column_stack([Zsn, Hs, Z_eqn])
+        return intercept + Zn @ coef
 
     return predict, {"n_params": n_params}
-
-
-# ---------------------------------------------------------------------------
-# Model: CES (general, on vdom features)
-# ---------------------------------------------------------------------------
 def _fit_ces(spec: DatasetSpec, n_restarts: int = 40, seed: int = 42):
     V = _vdom_features(spec)
     y = spec.y
@@ -1242,6 +1336,577 @@ def _applicable_ces_overfit(spec: DatasetSpec) -> bool:
     S = len(_parse_small(spec.small_domains, spec.M))
     n_params = 1 + spec.N * (spec.M + 1) + 2 * S
     return spec.R > n_params
+
+
+
+# ---------------------------------------------------------------------------
+# CEQ family: low-parameter CES-like models with explicit overtraining penalty
+# ---------------------------------------------------------------------------
+
+def _mad_sigma(x: np.ndarray) -> float:
+    """Robust scale estimate via MAD."""
+    x = np.asarray(x, float)
+    med = float(np.median(x))
+    mad = float(np.median(np.abs(x - med)))
+    if mad < 1e-12:
+        return float(np.std(x) + 1e-12)
+    return mad / 0.6745
+
+
+def _huber_delta(y: np.ndarray) -> float:
+    """Delta for (pseudo-)Huber based on robust scale, with sane bounds."""
+    sigma = _mad_sigma(y)
+    return float(np.clip(1.345 * sigma, 0.02, 0.30))
+
+
+def _pseudo_huber(resid: np.ndarray, delta: float) -> np.ndarray:
+    resid = np.asarray(resid, float)
+    d = float(delta)
+    return d * d * (np.sqrt(1.0 + (resid / d) ** 2) - 1.0)
+
+
+def _softplus_scaled(x: np.ndarray, k: float) -> np.ndarray:
+    """softplus(k*x)/k, with k>0; k->inf recovers hinge."""
+    kk = float(max(k, 1e-8))
+    return _softplus(kk * x) / kk
+
+
+def _ces_mean_stable(X: np.ndarray, w: np.ndarray, rho: float) -> np.ndarray:
+    """Stable CES mean over the last axis."""
+    X = np.maximum(X, 1e-12)
+    r = float(rho)
+    if abs(r) < 1e-4:
+        return np.exp(np.sum(w * np.log(X), axis=-1))
+    inner = np.sum(w * np.power(X, r), axis=-1)
+    inner = np.maximum(inner, 1e-12)
+    return np.power(inner, 1.0 / r)
+
+
+def _phase_softmax_weights(gamma: float, N: int) -> np.ndarray:
+    if N <= 1:
+        return np.ones(1)
+    t = np.linspace(0.0, 1.0, N)
+    z = gamma * t
+    z = z - np.max(z)
+    w = np.exp(z)
+    return w / w.sum()
+
+
+def _fit_ceq_sum(
+    spec: DatasetSpec,
+    *,
+    nested: bool,
+    learn_k: bool,
+    k_fixed: float,
+    n_restarts: int,
+    seed: int,
+    maxiter: int,
+    reg: float,
+):
+    """Core CEQ fitter (CEQ-SUM and NCEQ)."""
+    rng = np.random.default_rng(seed)
+    W = spec.weights
+    y = spec.y
+    R, N, M = W.shape
+
+    # Epoch exposures and satiety transform.
+    C = _broadcast_epoch_mult(spec.epoch_multipliers, N, M)
+    E = _compute_epochs(W, C)  # (R,N,M)
+    sat = np.maximum(np.log1p(E), 1e-12)
+
+    S_list = _parse_small(spec.small_domains, M)
+    E_small_total = E[:, :, S_list].sum(axis=(1, 2))
+
+    delta = _huber_delta(y)
+
+    n_params = 3 + (M - 1) + 1 + 1 + 1 + (1 if learn_k else 0) + (1 if nested else 0)
+
+    def _softmax_logits(logits: np.ndarray) -> np.ndarray:
+        z = logits - np.max(logits)
+        e = np.exp(z)
+        return e / e.sum()
+
+    def unpack(p: np.ndarray):
+        idx = 0
+        c0 = float(p[idx])
+        logA = float(p[idx + 1])
+        logB = float(p[idx + 2])
+        idx += 3
+
+        logits = np.zeros(M)
+        if M > 1:
+            logits[: M - 1] = p[idx : idx + (M - 1)]
+            idx += M - 1
+        a = _softmax_logits(logits)
+
+        rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+        idx += 1
+
+        gamma = float(p[idx])
+        idx += 1
+
+        tau = float(np.exp(np.clip(p[idx], -5.0, 8.0)))
+        idx += 1
+
+        if learn_k:
+            k = float(np.exp(np.clip(p[idx], -5.0, 8.0)))
+            idx += 1
+        else:
+            k = float(k_fixed)
+
+        if nested:
+            rho_p = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+            idx += 1
+        else:
+            rho_p = None
+
+        return c0, logA, logB, a, rho, gamma, tau, k, rho_p
+
+    def forward(p: np.ndarray, W_in: np.ndarray) -> np.ndarray:
+        c0, logA, logB, a, rho, gamma, tau, k, rho_p = unpack(p)
+        A = float(np.exp(np.clip(logA, -10.0, 10.0)))
+        B = float(np.exp(np.clip(logB, -10.0, 10.0)))
+
+        E_in = _compute_epochs(W_in, C)
+        sat_in = np.maximum(np.log1p(E_in), 1e-12)
+        E_small = E_in[:, :, S_list].sum(axis=(1, 2))
+
+        U_k = np.zeros((W_in.shape[0], N))
+        for ph in range(N):
+            U_k[:, ph] = _ces_mean_stable(sat_in[:, ph, :], a[None, :], rho)
+
+        pi = _phase_softmax_weights(gamma, N)
+
+        if nested:
+            if abs(float(rho_p)) < 1e-4:
+                U = np.exp(np.sum(pi[None, :] * np.log(np.maximum(U_k, 1e-12)), axis=1))
+            else:
+                inner = np.sum(pi[None, :] * np.power(np.maximum(U_k, 1e-12), float(rho_p)), axis=1)
+                U = np.power(np.maximum(inner, 1e-12), 1.0 / float(rho_p))
+        else:
+            U = U_k @ pi
+
+        h = _softplus_scaled(E_small - tau, k)
+        P = h * h
+
+        return c0 - A * U + B * P
+
+    def obj(p: np.ndarray) -> float:
+        yhat = forward(p, W)
+        loss = float(np.sum(_pseudo_huber(yhat - y, delta)))
+        loss += float(reg) * float(np.sum(p * p))
+        return loss
+
+    medE = float(np.median(E_small_total) + 1e-6)
+    best_val, best_p = np.inf, None
+
+    for r in range(n_restarts):
+        p0 = np.zeros(n_params)
+        idx = 0
+        p0[idx] = float(np.median(y))
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))  # logB
+        idx += 3
+
+        if M > 1:
+            p0[idx : idx + (M - 1)] = rng.normal(0.0, 0.5, M - 1)
+            idx += M - 1
+
+        p0[idx] = float(rng.normal(0.0, 0.7))  # rho raw
+        idx += 1
+        p0[idx] = float(rng.normal(0.0, 1.0))  # gamma
+        idx += 1
+        p0[idx] = float(np.log(medE) + rng.normal(0.0, 0.3))  # logtau
+        idx += 1
+        if learn_k:
+            p0[idx] = float(np.log(10.0) + rng.normal(0.0, 0.4))  # logk
+            idx += 1
+        if nested:
+            p0[idx] = float(rng.normal(0.0, 0.7))  # rho_p raw
+            idx += 1
+
+        try:
+            res = minimize(obj, p0, method="L-BFGS-B", options={"maxiter": maxiter, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_val:
+                best_val, best_p = float(res.fun), res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        raise RuntimeError("CEQ optimization failed to converge")
+
+    final_p = best_p.copy()
+
+    def predict(W_new: np.ndarray) -> np.ndarray:
+        sp = _as_3d(W_new)
+        return forward(final_p, sp)
+
+    return predict, {"n_params": n_params}
+
+
+def _fit_ceq_sum_soft(spec: DatasetSpec):
+    return _fit_ceq_sum(
+        spec,
+        nested=False,
+        learn_k=False,
+        k_fixed=1.0,
+        n_restarts=12,
+        seed=0,
+        maxiter=700,
+        reg=1e-4,
+    )
+
+
+def _fit_ceq_sum_hinge(spec: DatasetSpec):
+    return _fit_ceq_sum(
+        spec,
+        nested=False,
+        learn_k=False,
+        k_fixed=50.0,
+        n_restarts=12,
+        seed=0,
+        maxiter=700,
+        reg=1e-4,
+    )
+
+
+def _fit_ceq_sum_learnk(spec: DatasetSpec):
+    return _fit_ceq_sum(
+        spec,
+        nested=False,
+        learn_k=True,
+        k_fixed=1.0,
+        n_restarts=12,
+        seed=0,
+        maxiter=700,
+        reg=1e-4,
+    )
+
+
+def _fit_nceq_fixedk(spec: DatasetSpec):
+    return _fit_ceq_sum(
+        spec,
+        nested=True,
+        learn_k=False,
+        k_fixed=1.0,
+        n_restarts=12,
+        seed=0,
+        maxiter=700,
+        reg=1e-4,
+    )
+
+
+def _fit_nceq_learnk(spec: DatasetSpec):
+    return _fit_ceq_sum(
+        spec,
+        nested=True,
+        learn_k=True,
+        k_fixed=1.0,
+        n_restarts=12,
+        seed=0,
+        maxiter=700,
+        reg=1e-4,
+    )
+
+# ---------------------------------------------------------------------------
+# Model: FM-CEQ (Forgetting Marginal CEQ)
+# ---------------------------------------------------------------------------
+def _fit_fmceq(
+    spec: DatasetSpec,
+    *,
+    n_restarts: int = 12,
+    seed: int = 0,
+    maxiter: int = 700,
+    reg: float = 1e-4,
+):
+    """FM-CEQ: Forgetting Marginal CEQ.
+
+    Sequential state dynamics with a retention factor delta:
+      h_{-1} = 0
+      h_prior_k = delta * h_{k-1}   (partial forgetting between phases)
+      h_k = h_prior_k + E_k         (apply phase k's data)
+      DU_k = CES(log1p(h_k)) - CES(log1p(h_prior_k))   (marginal gain)
+      U_total = sum_k DU_k          (unweighted sum — no backloading incentive)
+
+    Phasewise overfit penalty:
+      P = sum_k softplus(E_{k,small} - tau)^2
+
+    Parameters: c0, logA, logB, (M-1) domain logits, rho, delta_raw, tau
+    = M + 5 total (same as CEQ-SUM soft).
+    """
+    rng = np.random.default_rng(seed)
+    W = spec.weights
+    y = spec.y
+    _, N, M = W.shape
+
+    C = _broadcast_epoch_mult(spec.epoch_multipliers, N, M)
+    E = _compute_epochs(W, C)  # (R, N, M)
+
+    S_list = _parse_small(spec.small_domains, M)
+    E_small_total = E[:, :, S_list].sum(axis=(1, 2))
+
+    huber_d = _huber_delta(y)
+
+    # c0, logA, logB, (M-1) logits, rho, delta_raw, tau = M + 5
+    n_params = 3 + (M - 1) + 1 + 1 + 1
+
+    def _softmax_logits(logits: np.ndarray) -> np.ndarray:
+        z = logits - np.max(logits)
+        e = np.exp(z)
+        return e / e.sum()
+
+    def unpack(p: np.ndarray):
+        idx = 0
+        c0 = float(p[idx])
+        logA = float(p[idx + 1])
+        logB = float(p[idx + 2])
+        idx += 3
+
+        logits = np.zeros(M)
+        if M > 1:
+            logits[: M - 1] = p[idx : idx + (M - 1)]
+            idx += M - 1
+        a = _softmax_logits(logits)
+
+        rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+        idx += 1
+
+        # Retention factor delta in [0, 1] via sigmoid
+        delta = float(1.0 / (1.0 + np.exp(-np.clip(p[idx], -10.0, 10.0))))
+        idx += 1
+
+        tau = float(np.exp(np.clip(p[idx], -5.0, 8.0)))
+        idx += 1
+
+        return c0, logA, logB, a, rho, delta, tau
+
+    def forward(p: np.ndarray, W_in: np.ndarray) -> np.ndarray:
+        c0, logA, logB, a, rho, delta, tau = unpack(p)
+        A = float(np.exp(np.clip(logA, -10.0, 10.0)))
+        B = float(np.exp(np.clip(logB, -10.0, 10.0)))
+
+        R_in = W_in.shape[0]
+        E_in = _compute_epochs(W_in, C)  # (R_in, N, M)
+        a_row = a[None, :]
+
+        # Sequential state dynamics with forgetting
+        h = np.zeros((R_in, M))
+        U_total = np.zeros(R_in)
+        for k in range(N):
+            h_prior = np.zeros_like(h) if k == 0 else delta * h
+            h = h_prior + E_in[:, k, :]
+
+            U_state = _ces_mean_stable(np.maximum(np.log1p(h), 1e-12), a_row, rho)
+            U_prior = _ces_mean_stable(np.maximum(np.log1p(h_prior), 1e-12), a_row, rho)
+            U_total += U_state - U_prior
+
+        # Phasewise overfit penalty
+        P = np.zeros(R_in)
+        for k in range(N):
+            E_k_small = E_in[:, k, S_list].sum(axis=1)
+            hk = _softplus_scaled(E_k_small - tau, 1.0)
+            P += hk * hk
+
+        return c0 - A * U_total + B * P
+
+    def obj(p: np.ndarray) -> float:
+        yhat = forward(p, W)
+        loss = float(np.sum(_pseudo_huber(yhat - y, huber_d)))
+        loss += float(reg) * float(np.sum(p * p))
+        return loss
+
+    medE = float(np.median(E_small_total) + 1e-6)
+    best_val, best_p = np.inf, None
+
+    for r in range(n_restarts):
+        p0 = np.zeros(n_params)
+        idx = 0
+        p0[idx] = float(np.median(y))
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))  # logB
+        idx += 3
+
+        if M > 1:
+            p0[idx : idx + (M - 1)] = rng.normal(0.0, 0.5, M - 1)
+            idx += M - 1
+
+        p0[idx] = float(rng.normal(0.0, 0.7))  # rho raw
+        idx += 1
+        p0[idx] = float(rng.normal(0.0, 1.5))  # delta_raw (sigmoid -> [0,1])
+        idx += 1
+        p0[idx] = float(np.log(medE) + rng.normal(0.0, 0.3))  # logtau
+        idx += 1
+
+        try:
+            res = minimize(obj, p0, method="L-BFGS-B", options={"maxiter": maxiter, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_val:
+                best_val, best_p = float(res.fun), res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        raise RuntimeError("FM-CEQ optimization failed to converge")
+
+    final_p = best_p.copy()
+
+    def predict(W_new: np.ndarray) -> np.ndarray:
+        sp = _as_3d(W_new)
+        return forward(final_p, sp)
+
+    return predict, {"n_params": n_params}
+
+
+# ---------------------------------------------------------------------------
+# Model: CEQ-Washpen (CEQ-SUM soft utility + washout-weighted overfit penalty)
+# ---------------------------------------------------------------------------
+def _fit_ceq_washpen(
+    spec: DatasetSpec,
+    *,
+    n_restarts: int = 12,
+    seed: int = 0,
+    maxiter: int = 700,
+    reg: float = 1e-4,
+):
+    """CEQ-SUM soft utility + washout-weighted phasewise overfit penalty.
+
+    The overfit penalty for each phase is discounted by how much broad-domain
+    training follows it:  omega_k = exp(-lambda * E^big_after_k).
+    This makes early-phase overfit less costly when later phases wash it out.
+
+    Parameters: c0, logA, logB, (M-1) domain logits, rho, gamma, tau, lambda
+    = M + 6 total (one more than CEQ-SUM soft).
+    """
+    rng = np.random.default_rng(seed)
+    W = spec.weights
+    y = spec.y
+    R, N, M = W.shape
+
+    C = _broadcast_epoch_mult(spec.epoch_multipliers, N, M)
+    E = _compute_epochs(W, C)
+
+    S_list = _parse_small(spec.small_domains, M)
+    B_list = [d for d in range(M) if d not in set(S_list)]
+    E_small_total = E[:, :, S_list].sum(axis=(1, 2))
+
+    huber_d = _huber_delta(y)
+
+    # c0, logA, logB, (M-1) logits, rho, gamma, tau, loglambda = M + 6
+    n_params = 3 + (M - 1) + 1 + 1 + 1 + 1
+
+    def _softmax_logits(logits: np.ndarray) -> np.ndarray:
+        z = logits - np.max(logits)
+        e = np.exp(z)
+        return e / e.sum()
+
+    def unpack(p: np.ndarray):
+        idx = 0
+        c0 = float(p[idx])
+        logA = float(p[idx + 1])
+        logB = float(p[idx + 2])
+        idx += 3
+
+        logits = np.zeros(M)
+        if M > 1:
+            logits[: M - 1] = p[idx : idx + (M - 1)]
+            idx += M - 1
+        a = _softmax_logits(logits)
+
+        rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+        idx += 1
+
+        gamma = float(p[idx])
+        idx += 1
+
+        tau = float(np.exp(np.clip(p[idx], -5.0, 8.0)))
+        idx += 1
+
+        lam = float(np.exp(np.clip(p[idx], -8.0, 8.0)))
+        idx += 1
+
+        return c0, logA, logB, a, rho, gamma, tau, lam
+
+    def forward(p: np.ndarray, W_in: np.ndarray) -> np.ndarray:
+        c0, logA, logB, a, rho, gamma, tau, lam = unpack(p)
+        A = float(np.exp(np.clip(logA, -10.0, 10.0)))
+        B = float(np.exp(np.clip(logB, -10.0, 10.0)))
+
+        E_in = _compute_epochs(W_in, C)  # (R_in, N, M)
+        sat_in = np.maximum(np.log1p(E_in), 1e-12)
+
+        # CEQ-SUM utility (same as CEQ-SUM soft)
+        U_k = np.zeros((W_in.shape[0], N))
+        for ph in range(N):
+            U_k[:, ph] = _ces_mean_stable(sat_in[:, ph, :], a[None, :], rho)
+        pi = _phase_softmax_weights(gamma, N)
+        U = U_k @ pi
+
+        # Washout-weighted overfit penalty
+        E_small = E_in[:, :, S_list].sum(axis=2)  # (R_in, N)
+        if B_list:
+            E_big = E_in[:, :, B_list].sum(axis=2)  # (R_in, N)
+        else:
+            E_big = E_in.sum(axis=2)
+
+        # E^big_after_k = sum_{j>k} E_big_j
+        Big_after = np.zeros_like(E_big)
+        if N > 1:
+            suffix = np.cumsum(E_big[:, ::-1], axis=1)[:, ::-1]
+            Big_after[:, :-1] = suffix[:, 1:]
+        # Last phase: Big_after = 0, so omega = 1 (full penalty)
+
+        omega = np.exp(-lam * Big_after)  # (R_in, N)
+        h = _softplus_scaled(E_small - tau, 1.0)
+        P = np.sum(omega * (h * h), axis=1)
+
+        return c0 - A * U + B * P
+
+    def obj(p: np.ndarray) -> float:
+        yhat = forward(p, W)
+        loss = float(np.sum(_pseudo_huber(yhat - y, huber_d)))
+        loss += float(reg) * float(np.sum(p * p))
+        return loss
+
+    medE = float(np.median(E_small_total) + 1e-6)
+    best_val, best_p = np.inf, None
+
+    for r in range(n_restarts):
+        p0 = np.zeros(n_params)
+        idx = 0
+        p0[idx] = float(np.median(y))
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))   # logB
+        idx += 3
+
+        if M > 1:
+            p0[idx : idx + (M - 1)] = rng.normal(0.0, 0.5, M - 1)
+            idx += M - 1
+
+        p0[idx] = float(rng.normal(0.0, 0.7))  # rho raw
+        idx += 1
+        p0[idx] = float(rng.normal(0.0, 1.0))  # gamma
+        idx += 1
+        p0[idx] = float(np.log(medE) + rng.normal(0.0, 0.3))  # logtau
+        idx += 1
+        p0[idx] = float(rng.normal(-1.0, 1.0))  # loglambda
+        idx += 1
+
+        try:
+            res = minimize(obj, p0, method="L-BFGS-B", options={"maxiter": maxiter, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_val:
+                best_val, best_p = float(res.fun), res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        raise RuntimeError("CEQ-Washpen optimization failed to converge")
+
+    final_p = best_p.copy()
+
+    def predict(W_new: np.ndarray) -> np.ndarray:
+        sp = _as_3d(W_new)
+        return forward(final_p, sp)
+
+    return predict, {"n_params": n_params}
 
 
 # ---------------------------------------------------------------------------
@@ -1412,6 +2077,8 @@ def _applicable_pceq(spec: DatasetSpec) -> bool:
 # ---------------------------------------------------------------------------
 GENERAL_MODELS: list[GeneralModelSpec] = [
     GeneralModelSpec("Linear", _fit_linear, _applicable_linear, "OLS linear on weights"),
+    GeneralModelSpec("LogLinear", _fit_loglinear, _applicable_linear, "exp(OLS linear) on weights"),
+    GeneralModelSpec("LogLinear(w-e)", _fit_loglinear_we, _applicable_loglinear_we, "exp(OLS linear) on weight+epoch"),
     GeneralModelSpec("Quadratic", _fit_quadratic_weight, _applicable_quadratic_weight, "OLS quadratic on weights"),
     GeneralModelSpec("Quadratic(w-e)", _fit_quadratic_we, _applicable_quadratic_we, "OLS quadratic on weight+epoch"),
     GeneralModelSpec("RidgeQuad(w-e)", _fit_ridge_quad_we, lambda _: True, "Ridge quadratic on weight+epoch"),
@@ -1442,6 +2109,13 @@ GENERAL_MODELS: list[GeneralModelSpec] = [
     GeneralModelSpec(
         "CES-Overfit", _fit_ces_overfit, _applicable_ces_overfit, "CES utility + softplus overtraining penalty"
     ),
+    GeneralModelSpec("CEQ-SUM soft", _fit_ceq_sum_soft, lambda _: True, "CEQ-SUM (k=1) satiety+overfit"),
+    GeneralModelSpec("CEQ-SUM hinge", _fit_ceq_sum_hinge, lambda _: True, "CEQ-SUM (k=50) satiety+overfit"),
+    GeneralModelSpec("CEQ-SUM(k)", _fit_ceq_sum_learnk, lambda _: True, "CEQ-SUM with learnable sharpness k"),
+    GeneralModelSpec("NCEQ", _fit_nceq_fixedk, lambda _: True, "Nested CEQ across phases (k=1 fixed)"),
+    GeneralModelSpec("NCEQ(k)", _fit_nceq_learnk, lambda _: True, "Nested CEQ across phases + learnable k"),
+    GeneralModelSpec("FM-CEQ", _fit_fmceq, lambda _: True, "Forgetting Marginal CEQ (sequential + retention)"),
+    GeneralModelSpec("CEQ-Washpen", _fit_ceq_washpen, lambda _: True, "CEQ-SUM soft + washout-weighted overfit penalty"),
     # Hybrid models: mixture design + economics utility + information theory
     GeneralModelSpec("SHEQ", _fit_sheq, lambda _: True, "Scheffé+log + epoch-entropy + epoch-overfit quadratic"),
     GeneralModelSpec("PCEQ", _fit_pceq, _applicable_pceq, "Phase CES utility + entropy + epoch-overfit quadratic"),

@@ -79,7 +79,7 @@ logger = logging.getLogger("ray")
 # EXPERIMENT CONFIGURATION
 # ============================================================================
 
-NAME_BASE = "pinlin_calvin_xu/data_mixture/single_phase"
+NAME_BASE = "pinlin_calvin_xu/data_mixture/single_phase_v2"
 
 # Token budget: 1B tokens (as specified in RegMix paper)
 EXPERIMENT_BUDGET = 1_000_000_000
@@ -135,8 +135,8 @@ SAMPLING_PARAMS = DirichletSamplingParams(
     strategy=SamplingStrategy.DIRICHLET,
     min_weight=0.01,
     min_config_distance=0.001,
-    min_strength=0.2,
-    max_strength=2.0,
+    min_strength=3.0,
+    max_strength=10.0,
     temp=0.5,
 )
 
