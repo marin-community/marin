@@ -18,6 +18,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
+from ..cost_estimate_utils import with_io_bytes_accessed
 from .reference import linear_softmax_cross_entropy_loss_reference
 
 
@@ -26,32 +27,6 @@ class PallasUnsupportedError(NotImplementedError):
 
 
 NUM_LANES = 128
-
-
-def _bytes(spec: jax.Array | jax.ShapeDtypeStruct | None) -> int:
-    if spec is None:
-        return 0
-    shape = getattr(spec, "shape", None)
-    dtype = getattr(spec, "dtype", None)
-    if shape is None or dtype is None:
-        return 0
-    return math.prod(shape) * jnp.dtype(dtype).itemsize
-
-
-def _with_io_bytes(
-    body_cost: pl.CostEstimate,
-    *,
-    kernel_inputs_specs,
-    kernel_outputs_specs,
-) -> pl.CostEstimate:
-    input_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_inputs_specs))
-    output_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_outputs_specs))
-    return pl.CostEstimate(
-        flops=body_cost.flops,
-        transcendentals=body_cost.transcendentals,
-        bytes_accessed=input_bytes + output_bytes,
-        remote_bytes_transferred=body_cost.remote_bytes_transferred,
-    )
 
 
 def _fwd_cost_estimate(
@@ -74,7 +49,7 @@ def _fwd_cost_estimate(
         logit_soft_cap=logit_soft_cap,
         precision=precision,
     )
-    return _with_io_bytes(
+    return with_io_bytes_accessed(
         body_cost,
         kernel_inputs_specs=kernel_inputs_specs,
         kernel_outputs_specs=kernel_outputs_specs,
@@ -157,7 +132,7 @@ def _bwd_cost_estimate(
         logit_soft_cap=logit_soft_cap,
         precision=precision,
     )
-    return _with_io_bytes(
+    return with_io_bytes_accessed(
         body_cost,
         kernel_inputs_specs=kernel_inputs_specs,
         kernel_outputs_specs=kernel_outputs_specs,

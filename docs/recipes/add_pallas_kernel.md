@@ -175,10 +175,7 @@ in your benchmark script. Prefer the explicit `preferred_element_type` in kernel
 - Compute `bytes_accessed` from kernel inputs + outputs passed to the call.
 
 ```python
-def _bytes(spec: jax.Array | jax.ShapeDtypeStruct | None) -> int:
-    if spec is None:
-        return 0
-    return math.prod(spec.shape) * jnp.dtype(spec.dtype).itemsize
+from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
 
 def _cost_estimate(
@@ -190,13 +187,10 @@ def _cost_estimate(
     kernel_outputs_specs,
 ) -> pl.CostEstimate | None:
     body_cost = pl.estimate_cost(reference_impl, q, k, v)
-    input_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_inputs_specs))
-    output_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_outputs_specs))
-    return pl.CostEstimate(
-        flops=body_cost.flops,
-        transcendentals=body_cost.transcendentals,
-        bytes_accessed=input_bytes + output_bytes,
-        remote_bytes_transferred=body_cost.remote_bytes_transferred,
+    return with_io_bytes_accessed(
+        body_cost,
+        kernel_inputs_specs=kernel_inputs_specs,
+        kernel_outputs_specs=kernel_outputs_specs,
     )
 
 

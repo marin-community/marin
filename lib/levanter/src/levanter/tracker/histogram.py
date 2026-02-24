@@ -1,8 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-
 import equinox
 import jax
 import jax.numpy as jnp
@@ -15,6 +13,7 @@ from jaxtyping import ArrayLike, Scalar
 import haliax as hax
 from haliax import NamedArray
 from haliax.partitioning import shard_map
+from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
 
 class Histogram(equinox.Module):
@@ -152,32 +151,6 @@ def _flattened_spec(spec):
 TILE_SIZE = 1024  # Can tune based on memory pressure
 
 
-def _bytes(spec: jax.Array | jax.ShapeDtypeStruct | None) -> int:
-    if spec is None:
-        return 0
-    shape = getattr(spec, "shape", None)
-    dtype = getattr(spec, "dtype", None)
-    if shape is None or dtype is None:
-        return 0
-    return math.prod(shape) * jnp.dtype(dtype).itemsize
-
-
-def _with_io_bytes(
-    body_cost: pl.CostEstimate,
-    *,
-    kernel_inputs_specs,
-    kernel_outputs_specs,
-) -> pl.CostEstimate:
-    input_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_inputs_specs))
-    output_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_outputs_specs))
-    return pl.CostEstimate(
-        flops=body_cost.flops,
-        transcendentals=body_cost.transcendentals,
-        bytes_accessed=input_bytes + output_bytes,
-        remote_bytes_transferred=body_cost.remote_bytes_transferred,
-    )
-
-
 def _histogram_cost_reference(a: jax.Array, bin_edges: jax.Array) -> jax.Array:
     # Mirror tile-wise histogram math without `pl.program_id` so estimate_cost can trace it.
     a_tiled = a.reshape((-1, TILE_SIZE))
@@ -195,7 +168,7 @@ def _histogram_cost_estimate(
     kernel_outputs_specs,
 ) -> pl.CostEstimate | None:
     body_cost = pl.estimate_cost(_histogram_cost_reference, a, bin_edges)
-    return _with_io_bytes(
+    return with_io_bytes_accessed(
         body_cost,
         kernel_inputs_specs=kernel_inputs_specs,
         kernel_outputs_specs=kernel_outputs_specs,
