@@ -223,7 +223,7 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
 
 @partial(
     jax.jit,
-    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"],
+    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision", "return_argmax"],
 )
 def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     x: Float[Array, "B H"],
@@ -234,9 +234,12 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Forward Pallas kernel wrapper (per-example loss + logsumexp)."""
     _validate_inputs(x, labels, w, block_sizes)
+    if return_argmax:
+        raise PallasUnsupportedError("Pallas backend does not support return_argmax. Use XLA for return_argmax=True.")
 
     h_dim = x.shape[-1]
     v_dim = w.shape[1]
@@ -684,8 +687,11 @@ def linear_softmax_cross_entropy_loss_pallas(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Pallas implementation returning (loss, lse) per example."""
+    if return_argmax:
+        raise PallasUnsupportedError("Pallas backend does not support return_argmax. Use XLA for return_argmax=True.")
     fn = _make_custom_vjp(
         block_sizes.b_block_size,
         block_sizes.h_block_size,
