@@ -1422,7 +1422,7 @@ def _coreweave_tunnel(
 ) -> Iterator[str]:
     """kubectl port-forward to a K8s Service, yielding the local URL."""
     if local_port is None:
-        local_port = find_free_port()
+        local_port = find_free_port(start=10000)
 
     proc = kubectl.popen(
         ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
