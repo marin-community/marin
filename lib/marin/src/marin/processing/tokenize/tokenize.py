@@ -431,7 +431,6 @@ def tokenize(config: TokenizeConfigBase):
             resources=config.worker_resources,
             max_workers=min(config.max_workers, len(train_groups)),
             name="tokenize-train",
-            no_workers_timeout=20 * 60,
         )
         run_pipeline(ctx, train_groups, "train")
 
@@ -441,7 +440,6 @@ def tokenize(config: TokenizeConfigBase):
             resources=config.worker_resources,
             max_workers=min(config.max_workers, len(validation_groups)),
             name="tokenize-validation",
-            no_workers_timeout=20 * 60,
         )
         run_pipeline(ctx, validation_groups, "validation")
 
