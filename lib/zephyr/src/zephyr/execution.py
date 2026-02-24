@@ -267,6 +267,7 @@ class ZephyrCoordinator:
         self._worker_handles: dict[str, ActorHandle] = {}
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown: bool = False
+        self._is_last_stage: bool = False
         self._initialized: bool = False
 
         # Lock for accessing coordinator state from background thread
@@ -403,6 +404,8 @@ class ZephyrCoordinator:
                 return None
 
             if not self._task_queue:
+                if self._is_last_stage:
+                    return "SHUTDOWN"
                 return None
 
             task = self._task_queue.popleft()
@@ -488,7 +491,7 @@ class ZephyrCoordinator:
         with self._lock:
             return self._fatal_error
 
-    def _start_stage(self, stage_name: str, tasks: list[ShardTask]) -> None:
+    def _start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue."""
         with self._lock:
             self._task_queue = deque(tasks)
@@ -500,6 +503,7 @@ class ZephyrCoordinator:
             self._in_flight = {}
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._fatal_error = None
+            self._is_last_stage = is_last_stage
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
@@ -580,6 +584,15 @@ class ZephyrCoordinator:
         if not shards:
             return []
 
+        # Identify the last stage that dispatches work to workers (non-RESHARD).
+        # On that stage, idle workers receive SHUTDOWN once all tasks are
+        # in-flight, so they exit eagerly instead of polling until
+        # coordinator.shutdown().
+        last_worker_stage_idx = max(
+            (i for i, s in enumerate(plan.stages) if s.stage_type != StageType.RESHARD),
+            default=-1,
+        )
+
         for stage_idx, stage in enumerate(plan.stages):
             stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
 
@@ -593,7 +606,7 @@ class ZephyrCoordinator:
             # Build and submit tasks
             tasks = _compute_tasks_from_shards(shards, stage, hints, aux_per_shard, stage_name=stage_label)
             logger.info("Starting stage %s with %d tasks", stage_label, len(tasks))
-            self._start_stage(stage_label, tasks)
+            self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
             # Wait for stage completion
             self._wait_for_stage()
@@ -690,9 +703,9 @@ class ZephyrCoordinator:
                 "execution_id": self._execution_id,
             }
 
-    def start_stage(self, stage_name: str, tasks: list[ShardTask]) -> None:
+    def start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue (legacy compat)."""
-        self._start_stage(stage_name, tasks)
+        self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
 
     def check_heartbeats(self, timeout: float = 30.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
