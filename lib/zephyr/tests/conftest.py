@@ -99,6 +99,18 @@ def fray_client(request):
 
 
 @pytest.fixture
+def actor_context():
+    """Provide a fake actor context so ZephyrCoordinator can call current_actor()."""
+    from unittest.mock import MagicMock
+
+    from fray.v2.actor import ActorContext, _reset_current_actor, _set_current_actor
+
+    token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
+    yield
+    _reset_current_actor(token)
+
+
+@pytest.fixture
 def sample_data():
     """Sample data for testing."""
     return list(range(1, 11))  # [1, 2, 3, ..., 10]

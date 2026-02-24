@@ -132,7 +132,7 @@ def test_chunk_cleanup(fray_client, tmp_path):
         assert len(files) == 0, f"Expected cleanup but found: {files}"
 
 
-def test_status_reports_alive_workers_not_total(tmp_path):
+def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     """After heartbeat timeout, get_status workers dict reflects FAILED state,
     and the status log distinguishes alive from total workers.
 
@@ -206,7 +206,7 @@ def test_status_reports_alive_workers_not_total(tmp_path):
     assert len(coord._task_queue) == 1  # task was requeued
 
 
-def test_no_duplicate_results_on_heartbeat_timeout(fray_client, tmp_path):
+def test_no_duplicate_results_on_heartbeat_timeout(actor_context, fray_client, tmp_path):
     """When a task is requeued after heartbeat timeout, the original worker's
     stale result (from a previous attempt) is rejected by the coordinator."""
     from zephyr.execution import Shard, ShardTask, TaskResult, ZephyrCoordinator
@@ -274,7 +274,7 @@ def test_disk_chunk_write_uses_unique_paths(tmp_path):
         assert ref.read() == [i]
 
 
-def test_coordinator_accepts_winner_ignores_stale(tmp_path):
+def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
     """Coordinator accepts the winning result and ignores stale ones.
 
     Stale chunk files are left for context-dir cleanup (no per-chunk deletion).
@@ -366,7 +366,7 @@ def test_chunk_streaming_low_memory(tmp_path):
     assert list(shard) == [0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24]
 
 
-def test_wait_for_stage_fails_when_all_workers_die(tmp_path):
+def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
     """When all registered workers become dead/failed, _wait_for_stage raises
     after the no_workers_timeout instead of waiting forever."""
     from unittest.mock import MagicMock
@@ -405,7 +405,7 @@ def test_wait_for_stage_fails_when_all_workers_die(tmp_path):
         coord._wait_for_stage()
 
 
-def test_wait_for_stage_resets_dead_timer_on_recovery(tmp_path):
+def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     """When a worker recovers (re-registers) after all workers died,
     the dead timer resets and execution can continue."""
     import threading
@@ -573,18 +573,11 @@ def test_pipeline_id_increments(fray_client, tmp_path):
     assert ctx._pipeline_id == 1
 
 
-def test_pull_task_returns_shutdown_on_last_stage_empty_queue(tmp_path):
+def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp_path):
     """When the last stage's tasks are all in-flight or done, pull_task returns SHUTDOWN."""
-    from unittest.mock import MagicMock
-
-    from fray.v2.actor import ActorContext, _set_current_actor, _reset_current_actor
     from zephyr.execution import Shard, ShardTask, TaskResult, ZephyrCoordinator
 
-    token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
-    try:
-        coord = ZephyrCoordinator()
-    finally:
-        _reset_current_actor(token)
+    coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
     coord.set_shared_data({})
 
