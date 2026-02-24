@@ -338,6 +338,70 @@ class CoreweavePlatform:
         if self._s3_enabled:
             logger.info("S3 credentials detected in environment; enabling S3 env injection")
 
+    # -- RBAC / Namespace Prerequisites ----------------------------------------
+
+    def ensure_rbac(self) -> None:
+        """Create the namespace, ServiceAccount, ClusterRole, and ClusterRoleBinding.
+
+        Idempotent (kubectl apply). These were previously manual operator
+        prerequisites; now they're auto-applied at cluster start so a single
+        ``iris cluster start`` is sufficient.
+        """
+        namespace_manifest = {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": self._namespace}}
+
+        sa_manifest = {
+            "apiVersion": "v1",
+            "kind": "ServiceAccount",
+            "metadata": {"name": "iris-controller", "namespace": self._namespace},
+        }
+
+        role_manifest = {
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "ClusterRole",
+            "metadata": {"name": "iris-controller"},
+            "rules": [
+                {
+                    "apiGroups": ["compute.coreweave.com"],
+                    "resources": ["nodepools"],
+                    "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
+                },
+                {
+                    "apiGroups": [""],
+                    "resources": ["pods", "pods/exec", "pods/log"],
+                    "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
+                },
+                {
+                    "apiGroups": [""],
+                    "resources": ["nodes"],
+                    "verbs": ["get", "list", "watch"],
+                },
+                {
+                    "apiGroups": [""],
+                    "resources": ["configmaps"],
+                    "verbs": ["get"],
+                },
+            ],
+        }
+
+        binding_manifest = {
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "ClusterRoleBinding",
+            "metadata": {"name": "iris-controller"},
+            "subjects": [
+                {"kind": "ServiceAccount", "name": "iris-controller", "namespace": self._namespace},
+            ],
+            "roleRef": {
+                "kind": "ClusterRole",
+                "name": "iris-controller",
+                "apiGroup": "rbac.authorization.k8s.io",
+            },
+        }
+
+        for manifest in [namespace_manifest, sa_manifest, role_manifest, binding_manifest]:
+            self._kubectl.apply_json(manifest)
+
+        logger.info("RBAC prerequisites applied (namespace=%s)", self._namespace)
+
     # -- Storage Detection ----------------------------------------------------
 
     def _uses_s3_storage(self, config: config_pb2.IrisClusterConfig) -> bool:
@@ -941,6 +1005,9 @@ class CoreweavePlatform:
                 f"Controller scale_group {cw.scale_group!r} not found in scale_groups: "
                 f"{list(config.scale_groups.keys())}"
             )
+
+        # Ensure namespace, ServiceAccount, ClusterRole, ClusterRoleBinding exist
+        self.ensure_rbac()
 
         # Create S3 credentials secret if S3 storage is configured
         self._s3_enabled = self._uses_s3_storage(config)
