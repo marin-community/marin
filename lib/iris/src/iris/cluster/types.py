@@ -655,6 +655,7 @@ class NormalizedConstraints:
 
     preemptible: bool | None
     required_regions: frozenset[str] | None
+    required_zones: frozenset[str] | None
 
 
 def preemptible_preference_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
@@ -730,11 +731,53 @@ def required_regions_from_constraints(constraints: Sequence[cluster_pb2.Constrai
     return frozenset(regions) if regions else None
 
 
+def required_zones_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> frozenset[str] | None:
+    """Extract required zones from constraints.
+
+    Returns:
+        Set of required zones when specified, otherwise None.
+
+    Raises:
+        ValueError: If zone constraints use invalid operators/values or contain
+            conflicting EQ values.
+    """
+    zones: set[str] = set()
+    has_in = False
+    for constraint in constraints:
+        if constraint.key != ZONE_ATTRIBUTE_KEY:
+            continue
+        if constraint.op == cluster_pb2.CONSTRAINT_OP_IN:
+            if not constraint.values:
+                raise ValueError("IN zone constraint requires at least one value")
+            for av in constraint.values:
+                if not av.HasField("string_value"):
+                    raise ValueError("zone constraint requires string value")
+                zone = av.string_value.strip()
+                if not zone:
+                    raise ValueError("zone constraint must be non-empty")
+                zones.add(zone)
+            has_in = True
+        elif constraint.op == cluster_pb2.CONSTRAINT_OP_EQ:
+            if not constraint.value.HasField("string_value"):
+                raise ValueError("zone constraint requires string value")
+            zone = constraint.value.string_value.strip()
+            if not zone:
+                raise ValueError("zone constraint must be non-empty")
+            zones.add(zone)
+        else:
+            raise ValueError(f"zone constraint must use EQ or IN, got {constraint.op}")
+
+    if not has_in and len(zones) > 1:
+        raise ValueError("conflicting zone constraints")
+    return frozenset(zones) if zones else None
+
+
 def normalize_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> NormalizedConstraints:
     """Normalize canonical placement constraints from protobuf constraints."""
     return NormalizedConstraints(
         preemptible=preemptible_preference_from_constraints(constraints),
         required_regions=required_regions_from_constraints(constraints),
+        required_zones=required_zones_from_constraints(constraints),
     )
 
 
