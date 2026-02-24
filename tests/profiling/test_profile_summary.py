@@ -70,7 +70,7 @@ def test_query_and_compare_helpers(tmp_path: Path) -> None:
 
     report = build_markdown_report(before, top_k=2)
     assert "# Profile Report (profile_summary.v1)" in report
-    assert "## Time Breakdown (Exclusive)" in report
+    assert "## Time Breakdown (`exclusive_duration_per_track`)" in report
     assert "## Pre-Op Gaps" in report
     assert "## Gap Context (By Region)" in report
     assert "## Hierarchical Regions" in report

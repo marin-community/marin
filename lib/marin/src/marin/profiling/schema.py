@@ -187,7 +187,6 @@ class GapRegionContext:
     region_path: str
     count: int
     total_gap_duration: float
-    total_overlap_duration: float
     avg_gap_duration: float
 
 
@@ -506,7 +505,6 @@ def _parse_gap_region_context(data: Mapping[str, Any]) -> GapRegionContext:
         region_path=cast(str, data["region_path"]),
         count=cast(int, data["count"]),
         total_gap_duration=cast(float, data["total_gap_duration"]),
-        total_overlap_duration=cast(float, data["total_overlap_duration"]),
         avg_gap_duration=cast(float, data["avg_gap_duration"]),
     )
 

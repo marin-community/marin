@@ -486,7 +486,6 @@ def _gap_context_to_dict(context: GapRegionContext) -> dict[str, Any]:
         "count": context.count,
         "total_gap_duration": context.total_gap_duration,
         "avg_gap_duration": context.avg_gap_duration,
-        "total_overlap_duration": context.total_overlap_duration,
     }
 
 

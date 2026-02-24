@@ -1048,13 +1048,10 @@ def _summarize_gap_region_contexts(events: list[_CompleteTraceEvent], *, limit: 
                     {
                         "count": 0,
                         "total_gap_duration": 0.0,
-                        "total_overlap_duration": 0.0,
                     },
                 )
                 bucket["count"] = int(bucket["count"]) + 1
                 bucket["total_gap_duration"] = float(bucket["total_gap_duration"]) + gap
-                # We use the op's hierarchical semantic path as a deterministic context label.
-                bucket["total_overlap_duration"] = float(bucket["total_overlap_duration"]) + gap
             end = event.ts + event.dur
             previous_end = end if previous_end is None else max(previous_end, end)
 
@@ -1062,7 +1059,6 @@ def _summarize_gap_region_contexts(events: list[_CompleteTraceEvent], *, limit: 
         aggregate.items(),
         key=lambda item: (
             -float(item[1]["total_gap_duration"]),
-            -float(item[1]["total_overlap_duration"]),
             item[0][0],
             item[0][1],
         ),
@@ -1072,14 +1068,12 @@ def _summarize_gap_region_contexts(events: list[_CompleteTraceEvent], *, limit: 
     for (op_name, region_path), stats in ranked[:limit]:
         count = int(stats["count"])
         total_gap_duration = float(stats["total_gap_duration"])
-        total_overlap_duration = float(stats["total_overlap_duration"])
         result.append(
             GapRegionContext(
                 op_name=op_name,
                 region_path=region_path,
                 count=count,
                 total_gap_duration=total_gap_duration,
-                total_overlap_duration=total_overlap_duration,
                 avg_gap_duration=(total_gap_duration / count) if count else 0.0,
             )
         )
