@@ -48,6 +48,10 @@ Documentation should be kept up-to-date as code changes. When implementing new f
 
 @README.md - Main overview, CLI reference, and quick start
 
+## Operations
+
+When troubleshooting, monitoring, or deploying a live Iris cluster, read [OPS.md](OPS.md) first.
+
 ## Protocols and Testing
 
 Non-trivial public classes should define a protocol which represents their
@@ -167,11 +171,10 @@ it as `/var/lib/containerd`, `/var/lib/kubelet`, `/opt`, etc. The `cache_dir` mu
 NVMe (e.g. `/mnt/local/iris-cache`) — the default `/var/cache/iris` lands on the tiny RAM disk
 and will fill up immediately when installing CUDA packages.
 
-**K8s manifests** (`infra/coreweave/k8s/`):
-- `namespace.yaml`, `service-account.yaml`, `cluster-role.yaml`, `cluster-role-binding.yaml` — RBAC/namespace prerequisites (one-time operator setup)
-
-Controller lifecycle resources (ConfigMap, shared NodePools, Deployment, Service) are created
-automatically by `iris cluster start` via `CoreweavePlatform.start_controller()`.
+All K8s resources (RBAC, ConfigMap, shared NodePools, Deployment, Service) are created
+automatically by `iris cluster start` via `CoreweavePlatform.start_controller()`. RBAC
+manifests (Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding) are defined in
+`CoreweavePlatform.ensure_rbac()` — no separate YAML files needed.
 
 ## Key Modules
 
