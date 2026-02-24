@@ -45,7 +45,6 @@ class WorkerConfig:
     worker_attributes: dict[str, str] = field(default_factory=dict)
     default_task_env: dict[str, str] = field(default_factory=dict)
     default_task_image: str | None = None
-    gcp_project: str = ""
     log_prefix: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
@@ -461,7 +460,6 @@ class Worker:
             controller_address=self._config.controller_address,
             default_task_env=self._config.default_task_env,
             default_task_image=self._config.default_task_image,
-            gcp_project=self._config.gcp_project,
             port_allocator=self._port_allocator,
             report_state=lambda: self._notify_task_update(attempt),
             log_sink=log_sink,

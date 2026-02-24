@@ -584,6 +584,9 @@ class CoreweavePlatform:
 
     # -- Platform Protocol Methods --------------------------------------------
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
+
     def create_vm(self, config: config_pb2.VmConfig) -> StandaloneWorkerHandle:
         raise NotImplementedError("CoreWeave does not use standalone VMs. Controller is an operator-managed Deployment.")
 

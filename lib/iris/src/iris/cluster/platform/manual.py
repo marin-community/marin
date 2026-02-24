@@ -224,6 +224,9 @@ class ManualPlatform:
         self._slices: dict[str, ManualSliceHandle] = {}
         self._vms: dict[str, ManualStandaloneWorkerHandle] = {}
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
+
     def create_vm(self, config: config_pb2.VmConfig) -> ManualStandaloneWorkerHandle:
         """Allocate a host from the pool for a standalone VM (e.g., controller)."""
         manual = config.manual

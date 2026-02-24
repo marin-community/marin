@@ -148,13 +148,36 @@ def test_build_controller_bootstrap_script_from_config_rewrites_ghcr_to_ar() -> 
     config.controller.gcp.port = 10000
     config.platform.gcp.project_id = "hai-gcp-models"
 
-    script = build_controller_bootstrap_script_from_config(config)
+    # With platform — delegates to platform.resolve_image()
+    from unittest.mock import MagicMock
+
+    platform = MagicMock()
+    platform.resolve_image.return_value = (
+        "europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest"
+    )
+    script = build_controller_bootstrap_script_from_config(config, platform=platform)
 
     assert (
         "Pulling image: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest"
         in script
     )
     assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
+
+
+def test_build_controller_bootstrap_script_from_config_legacy_rewrite() -> None:
+    """Legacy inline rewrite when no platform is provided."""
+    config = config_pb2.IrisClusterConfig()
+    config.controller.image = "ghcr.io/marin-community/iris-controller:latest"
+    config.controller.gcp.zone = "europe-west4-b"
+    config.controller.gcp.port = 10000
+    config.platform.gcp.project_id = "hai-gcp-models"
+
+    script = build_controller_bootstrap_script_from_config(config)
+
+    assert (
+        "Pulling image: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest"
+        in script
+    )
 
 
 def test_build_controller_bootstrap_script_from_config_non_ghcr_passthrough() -> None:
@@ -167,3 +190,60 @@ def test_build_controller_bootstrap_script_from_config_non_ghcr_passthrough() ->
     script = build_controller_bootstrap_script_from_config(config)
 
     assert "Pulling image: us-docker.pkg.dev/proj/repo/iris-controller:latest" in script
+
+
+# --- Platform.resolve_image() tests ---
+
+
+def test_gcp_platform_resolve_image_rewrites_ghcr() -> None:
+    """GcpPlatform.resolve_image() rewrites GHCR images for the correct continent."""
+    from iris.cluster.platform.gcp import GcpPlatform
+    from unittest.mock import patch
+
+    # GcpPlatform.__init__ tries to detect project/zones — mock that
+    with patch.object(GcpPlatform, "__init__", lambda self, *a, **kw: None):
+        platform = GcpPlatform.__new__(GcpPlatform)
+        platform._project_id = "my-proj"
+
+    assert platform.resolve_image("ghcr.io/org/img:v1", zone="us-central1-a") == (
+        "us-docker.pkg.dev/my-proj/ghcr-mirror/org/img:v1"
+    )
+    assert platform.resolve_image("ghcr.io/org/img:v1", zone="europe-west4-b") == (
+        "europe-docker.pkg.dev/my-proj/ghcr-mirror/org/img:v1"
+    )
+
+
+def test_gcp_platform_resolve_image_passthrough_non_ghcr() -> None:
+    """GcpPlatform.resolve_image() returns non-GHCR images unchanged."""
+    from iris.cluster.platform.gcp import GcpPlatform
+    from unittest.mock import patch
+
+    with patch.object(GcpPlatform, "__init__", lambda self, *a, **kw: None):
+        platform = GcpPlatform.__new__(GcpPlatform)
+        platform._project_id = "my-proj"
+
+    assert platform.resolve_image("docker.io/library/ubuntu:latest", zone="us-central1-a") == (
+        "docker.io/library/ubuntu:latest"
+    )
+
+
+def test_gcp_platform_resolve_image_requires_zone_for_ghcr() -> None:
+    """GcpPlatform.resolve_image() raises when zone is missing for GHCR images."""
+    from iris.cluster.platform.gcp import GcpPlatform
+    from unittest.mock import patch
+
+    with patch.object(GcpPlatform, "__init__", lambda self, *a, **kw: None):
+        platform = GcpPlatform.__new__(GcpPlatform)
+        platform._project_id = "my-proj"
+
+    with pytest.raises(ValueError, match="zone is required"):
+        platform.resolve_image("ghcr.io/org/img:v1")
+
+
+def test_local_platform_resolve_image_passthrough() -> None:
+    """LocalPlatform.resolve_image() always returns the image unchanged."""
+    from iris.cluster.platform.local import LocalPlatform
+
+    platform = LocalPlatform(label_prefix="test")
+    assert platform.resolve_image("ghcr.io/org/img:v1", zone="us-central1-a") == "ghcr.io/org/img:v1"
+    assert platform.resolve_image("docker.io/library/ubuntu:latest") == "docker.io/library/ubuntu:latest"

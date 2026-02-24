@@ -91,16 +91,14 @@ def serve(
                 # Serialize full cluster config so workers can read task_image etc.
                 bootstrap_config.config_json = json.dumps(config_to_dict(cluster_config))
 
-            gcp_project = ""
-            if cluster_config.platform.HasField("gcp"):
-                gcp_project = cluster_config.platform.gcp.project_id
+            default_task_image = cluster_config.defaults.default_task_image or ""
             autoscaler = create_autoscaler(
                 platform=platform,
                 autoscaler_config=cluster_config.defaults.autoscaler,
                 scale_groups=cluster_config.scale_groups,
                 label_prefix=cluster_config.platform.label_prefix or "iris",
                 bootstrap_config=bootstrap_config,
-                gcp_project=gcp_project,
+                default_task_image=default_task_image,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:

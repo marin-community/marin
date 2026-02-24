@@ -176,10 +176,33 @@ def make_mock_slice_handle(
     return handle
 
 
-def make_mock_platform(slices_to_discover: list[MagicMock] | None = None) -> MagicMock:
-    """Create a mock Platform for testing."""
+def make_mock_platform(
+    slices_to_discover: list[MagicMock] | None = None,
+    gcp_project: str = "",
+) -> MagicMock:
+    """Create a mock Platform for testing.
+
+    Args:
+        slices_to_discover: Pre-existing slices returned by list_slices.
+        gcp_project: When set, resolve_image rewrites GHCR images to AR
+            remote repos (mimics GcpPlatform behaviour).
+    """
+    from iris.cluster.platform.bootstrap import rewrite_ghcr_to_ar_remote, zone_to_multi_region
+
     platform = MagicMock()
     platform.list_slices.return_value = slices_to_discover or []
+
+    def resolve_image(image: str, zone: str | None = None) -> str:
+        if not gcp_project or not image.startswith("ghcr.io/"):
+            return image
+        if not zone:
+            return image
+        multi_region = zone_to_multi_region(zone)
+        if not multi_region:
+            return image
+        return rewrite_ghcr_to_ar_remote(image, multi_region, gcp_project)
+
+    platform.resolve_image.side_effect = resolve_image
 
     create_count = [0]
 
@@ -267,7 +290,7 @@ def make_autoscaler(
     config: config_pb2.AutoscalerConfig | None = None,
     platform: MagicMock | None = None,
     bootstrap_config: config_pb2.BootstrapConfig | None = None,
-    gcp_project: str = "",
+    default_task_image: str = "",
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
     mock_platform = platform or make_mock_platform()
@@ -278,7 +301,7 @@ def make_autoscaler(
             config=config,
             platform=mock_platform,
             bootstrap_config=bootstrap_config,
-            gcp_project=gcp_project,
+            default_task_image=default_task_image,
         )
     else:
         return Autoscaler(
@@ -286,7 +309,7 @@ def make_autoscaler(
             evaluation_interval=Duration.from_seconds(0.1),
             platform=mock_platform,
             bootstrap_config=bootstrap_config,
-            gcp_project=gcp_project,
+            default_task_image=default_task_image,
         )
 
 
@@ -2077,8 +2100,9 @@ class TestPerGroupBootstrapConfig:
         )
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
 
-        group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
+        mock_plat = make_mock_platform(gcp_project="proj")
+        group = ScalingGroup(sg_config, mock_plat)
+        autoscaler = make_autoscaler({"eu-group": group}, platform=mock_plat, bootstrap_config=base_bc)
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
@@ -2096,8 +2120,9 @@ class TestPerGroupBootstrapConfig:
         )
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
 
-        group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
+        mock_plat = make_mock_platform(gcp_project="proj")
+        group = ScalingGroup(sg_config, mock_plat)
+        autoscaler = make_autoscaler({"eu-group": group}, platform=mock_plat, bootstrap_config=base_bc)
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
@@ -2113,8 +2138,9 @@ class TestPerGroupBootstrapConfig:
         )
         sg_config = make_scale_group_config(name="west-group", max_slices=5, zones=["us-west4-a"])
 
-        group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc, gcp_project="proj")
+        mock_plat = make_mock_platform(gcp_project="proj")
+        group = ScalingGroup(sg_config, mock_plat)
+        autoscaler = make_autoscaler({"west-group": group}, platform=mock_plat, bootstrap_config=base_bc)
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
@@ -2133,8 +2159,9 @@ class TestPerGroupBootstrapConfig:
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
         sg_config.worker.attributes["region"] = "europe-west4"
 
-        group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
+        mock_plat = make_mock_platform(gcp_project="proj")
+        group = ScalingGroup(sg_config, mock_plat)
+        autoscaler = make_autoscaler({"eu-group": group}, platform=mock_plat, bootstrap_config=base_bc)
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
@@ -2142,6 +2169,51 @@ class TestPerGroupBootstrapConfig:
         assert bc.docker_image == "europe-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-worker:latest"
         attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
         assert attrs["region"] == "europe-west4"
+
+    def test_injects_resolved_task_image_env_var(self):
+        """When default_task_image is set, IRIS_RESOLVED_TASK_IMAGE is injected."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
+
+        mock_plat = make_mock_platform(gcp_project="proj")
+        group = ScalingGroup(sg_config, mock_plat)
+        autoscaler = make_autoscaler(
+            {"eu-group": group},
+            platform=mock_plat,
+            bootstrap_config=base_bc,
+            default_task_image="ghcr.io/marin-community/iris-task:latest",
+        )
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is not None
+        assert bc.env_vars["IRIS_RESOLVED_TASK_IMAGE"] == (
+            "europe-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-task:latest"
+        )
+        assert bc.env_vars["IRIS_AR_HOST"] == "europe-docker.pkg.dev"
+
+    def test_no_task_image_env_vars_when_no_default_task_image(self):
+        """IRIS_RESOLVED_TASK_IMAGE is not injected when no default_task_image."""
+        base_bc = config_pb2.BootstrapConfig(
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
+            worker_port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
+
+        mock_plat = make_mock_platform(gcp_project="proj")
+        group = ScalingGroup(sg_config, mock_plat)
+        autoscaler = make_autoscaler({"eu-group": group}, platform=mock_plat, bootstrap_config=base_bc)
+
+        bc = autoscaler._per_group_bootstrap_config(group)
+
+        assert bc is not None
+        assert "IRIS_RESOLVED_TASK_IMAGE" not in bc.env_vars
+        assert "IRIS_AR_HOST" not in bc.env_vars
 
 
 class TestGpuScaleGroupBugs:
