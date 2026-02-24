@@ -23,7 +23,8 @@ from fray.v2 import ResourceConfig
 from levanter.data.text import DNALmDatasetFormat, TextLmDatasetFormat
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.qwen3 import qwen3_0_6b_hd128, qwen3_1_7b
+from experiments.llama import llama_50m
+from experiments.qwen3 import qwen3_0_6b_hd128, qwen3_1_7b, qwen3_4b_hd128
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep
 
@@ -43,13 +44,21 @@ DNA_WINDOW_SIZE_BYTES_V1 = 50_000_000
 PROMOTERS_DATASET_V1 = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v1_512_256"
 MRNA_PLUS_PROMOTERS_DATASET_V1 = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v2_512_256"
 CDS_DATASET_V1 = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v3_512_256"
+PROMOTERS_MRNA_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-intervals-v1_512_256"
+PROMOTERS_MRNA_256_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-intervals-v1_256_128"
+PROMOTERS_MRNA_NCRNA_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-intervals-v4_512_256"
 
 # =============================================================================
 # Model configs with DNA seq len (V1)
 # =============================================================================
 
 dna_qwen3_0_6b_v1 = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=DNA_SEQ_LEN_V1)
+dna_qwen3_0_6b_256_v1 = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=256)
 dna_qwen3_1_7b_v1 = dataclasses.replace(qwen3_1_7b, max_seq_len=DNA_SEQ_LEN_V1)
+dna_qwen3_1_7b_256_v1 = dataclasses.replace(qwen3_1_7b, max_seq_len=256)
+dna_qwen3_4b_256_v1 = dataclasses.replace(qwen3_4b_hd128, max_seq_len=256)
+dna_llama_50m_v1 = dataclasses.replace(llama_50m, max_seq_len=DNA_SEQ_LEN_V1)
+dna_llama_50m_256_v1 = dataclasses.replace(llama_50m, max_seq_len=256)
 
 # =============================================================================
 # Preset train configs (V1)
@@ -80,6 +89,20 @@ YOLO_RUN_CONFIG_V1 = SimpleTrainConfig(
     steps_per_eval=2000,
     num_train_steps=1_000_000,
     steps_per_export=2000,
+    data_seed=42,
+)
+
+FAST_RUN_CONFIG_V1 = SimpleTrainConfig(
+    resources=DNA_RESOURCES_V1,
+    train_batch_size=2048,
+    learning_rate=1e-3,
+    lr_schedule="inv",
+    warmup=0.9,
+    decay=0.1,
+    cycle_length=1000,
+    steps_per_eval=1000,
+    num_train_steps=10_000,
+    steps_per_export=1000,
     data_seed=42,
 )
 
