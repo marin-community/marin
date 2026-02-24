@@ -2000,3 +2000,92 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - First secure a healthy TPU execution lane (fresh dev TPU alias or healthy Ray queue), then re-run Macro G end-to-end with immediate exp-op and train-path closed-call delta capture.
   - If infra stabilizes but Macro G still under-delivers, escalate to **Macro Move H** (shared-RHS matmul batching) next.
+
+### Iteration 38 - Macro Move G / exp-diff centered outer-product (regression, reverted)
+
+- Date: 2026-02-24T03:32:30Z
+- Commit: none (failed attempt)
+- Loop session/local index: `1/10`
+- Starting commit: `32c3823ac8072e489ba7d375cf63ab6131f9a945`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` bucket: `78.098 ms` (dominant), with top closed-call sources at `gated_deltanet.py:2486` (`41.324 ms`) and `gated_deltanet.py:3972` (`26.266 ms`).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` across prepare/recurrent/backward to remove Ct x Ct exponentials (`+10-20%`, medium numerical/compiler risk).
+  2. **Macro Move H**: shared-RHS matmul batching for `QK/KKT` and `inter/v_prime` (`+8-18%`, medium integration/VMEM risk).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) in recurrent/backward train path (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: add `_exp_diff_and_mask_from_g` and route train-path flash prepare/recurrent/backward kernels through centered-outer fast path when chunk-range is clip-safe.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `_exp_diff_and_mask_from_g` (centered outer-product fast path + exact fallback).
+  - Added train-path safety gating (`_all_chunks_centered_exp_safe`) and threaded `use_centered_exp` through flash prepare/recurrent/bwd train kernels.
+  - Updated full-sequence train dispatch to select centered-exp mode only when clip-safe.
+  - Regression observed on profiled train run; speculative kernel changes were reverted to the starting commit state.
+
+- Correctness checks:
+  - Local smoke (success):
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> passed.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> passed.
+  - Dev TPU validation attempt (blocked by lock contention):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - failure: `ABORTED: The TPU is already in use by another process...`
+  - Ray fallback TPU validation (success):
+    - `uv run lib/marin/src/marin/run/ray_run.py --cluster us-east5-a --tpu auto -e EQX_ON_ERROR=nan -e WANDB_MODE=offline -- bash -lc 'cd lib/levanter && unset MARIN_PREFIX && uv sync --extra=tpu --group test && uv pip install torch --index-url https://download.pytorch.org/whl/cpu && EQX_ON_ERROR=nan WANDB_MODE=offline uv run pytest tests/test_gdn_kernels.py tests/test_gdn_layer.py -v'`
+    - job: `ray-run-calvinxu-levanter-20260224-031706`
+    - result: `49 passed, 40 skipped`.
+
+- Profile runs:
+  - Dev TPU profile attempt (failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter1_macroG_outer --no-sync`
+    - failure: `FileNotFoundError` writing executor info under `gs://marin-us-east5-a/...`.
+  - Ray fallback profile (completed):
+    - submit: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter1_macroG_outer_ray --no-wait`
+    - job: `ray-run-calvinxu-bash-20260224-032150`
+    - wait: `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-east5-a ray-run-calvinxu-bash-20260224-032150 --show-logs --tail 400`
+    - status: `SUCCEEDED`.
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter1_macroG_outer_ray_130m_ch128_seg16_20step-6dbb74`
+  - W&B artifact: `run-gdn_loop_iter1_macroG_outer_ray_130m_ch128_seg16_20step-6dbb74-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_loop_iter1_macroG_outer_ray_130m_ch128_seg16_20step-6dbb74/plugins/profile/2026_02_23_19_27_16/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`):
+  - Dominant hotspot family remained `shard_map/custom-call`.
+  - Bucket totals:
+    - `shard_map`: `78.098 ms -> 39.014 ms` (`-50.05%`)
+    - `fusion`: `45.618 ms -> 34.902 ms` (`-23.49%`)
+    - `all-gather`: `20.158 ms -> 10.084 ms` (`-49.98%`)
+  - Forward/backward closed-call shard-map buckets (`tf_op` labels preserved):
+    - Forward closed-call `jit(_train_step)/jvp(...)/closed_call/shard_map/pallas_call`: `41.324 ms -> 20.661 ms` (`-50.00%`).
+    - Backward closed-call `jit(_train_step)/transpose(jvp(...))/closed_call/shard_map/pallas_call`: `26.266 ms -> 13.130 ms` (`-50.01%`).
+  - Caveat: trace event volume halved (`11761 -> 6596`), so absolute per-trace bucket times are not directly predictive of end-to-end throughput here.
+
+- MFU/throughput delta (vs baseline `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.787594 -> 5.277688` (`-8.81%`).
+  - `throughput/tokens_per_second`: `187227.57 -> 170732.20` (`-8.81%`).
+  - `throughput/duration`: `0.175017s -> 0.191926s` (`+9.66%`).
+  - Vs governance champion (`5.748507`): `-8.19%` (regression beyond `1.000%` threshold).
+
+- Macro G exp-op reduction note (trace-derived):
+  - No reduction observed. On TPU:0 XLA Ops thread, exp-related events increased:
+    - `exp*` event count: `10 -> 21`
+    - `exp*` total time: `0.0055 ms -> 1.6938 ms`
+  - New dominant exp-related bucket: `exponential_reduce_fusion.2` (`1.691 ms`).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run lib/marin/src/marin/run/ray_run.py --cluster us-east5-a --tpu auto ... uv run pytest tests/test_gdn_kernels.py tests/test_gdn_layer.py -v` -> `49 passed, 40 skipped` (job `ray-run-calvinxu-levanter-20260224-031706`).
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call`: `41.324 ms -> 20.661 ms` (`-50.00%`) [trace bucket].
+    - Backward closed-call `shard_map/pallas_call`: `26.266 ms -> 13.130 ms` (`-50.01%`) [trace bucket].
+    - `throughput/mfu -8.81%`, `throughput/tokens_per_second -8.81%`, `throughput/duration +9.66%`.
+    - Macro G exp-op reduction: **not observed** (exp-related trace time increased).
+  - Governance:
+    - MFU gain `<3%` and dominant hotspot family unchanged (`shard_map/custom-call`), with major end-to-end regression; attempt marked **low-impact failed** and kernel changes reverted.
+
+- Assessment: **failed attempt / regression**. Despite lower per-trace closed-call bucket totals, end-to-end throughput regressed substantially and Macro G did not reduce exp-heavy work in trace-derived counts.
+- Governance/escalation action:
+  - Reverted speculative kernel changes; working tree restored to starting commit state.
+  - Recorded attempt as failed (`Commit: none (failed attempt)`).
+- Next bold hypothesis:
+  - Escalate to **Macro Move H** with explicit stacked shared-RHS matmul batching (`[q; k_beta] @ k^T` and `[q_scaled; k_cumdecay] @ S`) using a unified `dot_general` helper, then re-measure closed-call buckets and end-to-end MFU.
