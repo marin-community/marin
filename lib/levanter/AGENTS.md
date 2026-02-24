@@ -6,6 +6,7 @@ Levanter is incorporated into `lib/levanter`. Start with the shared instructions
 
 * Build on the shared practices in `../../AGENTS.md`; this file only captures Levanter-specific expectations.
 * Capture multi-session Levanter work in `.agents/projects/` inside this directory so partial progress is easy to resume.
+* For GDN TPU kernel optimization loops, append progress to `.agents/projects/gdn_pallas_tpu_hillclimb.md`.
 * Keep Levanter-specific recipes in `docs/recipes/` and expand them when you uncover repeatable tasks.
 
 ## Recipes
