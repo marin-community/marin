@@ -101,8 +101,8 @@ def _get_gcp_metadata(path: str) -> str | None:
         return None
 
 
-def _infer_worker_log_prefix() -> str | None:
-    """Infer worker log prefix from GCP metadata."""
+def detect_gcp_zone() -> str | None:
+    """Return the GCP zone name (e.g. 'us-central1-a') or None if not on GCP."""
     if not _is_gcp_vm():
         return None
     zone = _get_gcp_metadata("zone")
@@ -111,6 +111,14 @@ def _infer_worker_log_prefix() -> str | None:
     # zone format: projects/<project>/zones/us-central2-b
     zone_name = zone.split("/")[-1]
     if "-" not in zone_name:
+        return None
+    return zone_name
+
+
+def _infer_worker_log_prefix() -> str | None:
+    """Infer worker log prefix from GCP metadata."""
+    zone_name = detect_gcp_zone()
+    if not zone_name:
         return None
     region = zone_name.rsplit("-", 1)[0]
     bucket = REGION_TO_TMP_BUCKET.get(region)

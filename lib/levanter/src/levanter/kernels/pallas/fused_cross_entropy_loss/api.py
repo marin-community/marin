@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence
-from typing import Literal, Optional, TypeAlias, cast
+from typing import Literal, Optional, TypeAlias, cast, overload
 import warnings
 
 import jax
@@ -19,7 +19,8 @@ Implementation: TypeAlias = Literal["pallas_tpu", "xla", "reference"]
 Reduction: TypeAlias = Literal["sum", "mean"] | None
 
 
-ArrayImpl = Callable[..., tuple[jax.Array, jax.Array]]
+KernelOutput: TypeAlias = tuple[jax.Array, jax.Array] | tuple[jax.Array, jax.Array, jax.Array]
+ArrayImpl = Callable[..., KernelOutput]
 
 
 IMPLEMENTATIONS: dict[str, ArrayImpl] = {
@@ -102,6 +103,7 @@ def _apply_reduction(loss: jax.Array, reduction: Reduction, weight: Optional[jax
     raise ValueError(f"Unsupported reduction: {reduction}")
 
 
+@overload
 def fused_cross_entropy_loss_and_logsumexp_penalty(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -116,7 +118,45 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
-) -> jax.Array:
+    return_argmax: Literal[False] = False,
+) -> jax.Array: ...
+
+
+@overload
+def fused_cross_entropy_loss_and_logsumexp_penalty(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    reduction: Reduction = "mean",
+    weight: Optional[Float[Array, "B"]] = None,
+    logsumexp_weight: Optional[float] = 0.0,
+    block_size: Optional[int] = None,
+    block_sizes: Optional[BlockSizes] = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
+    return_argmax: Literal[True] = True,
+) -> tuple[jax.Array, jax.Array]: ...
+
+
+def fused_cross_entropy_loss_and_logsumexp_penalty(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    reduction: Reduction = "mean",
+    weight: Optional[Float[Array, "B"]] = None,
+    logsumexp_weight: Optional[float] = 0.0,
+    block_size: Optional[int] = None,
+    block_sizes: Optional[BlockSizes] = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
+    return_argmax: bool = False,
+) -> jax.Array | tuple[jax.Array, jax.Array]:
     """Fused cross-entropy + logsumexp penalty on raw arrays.
 
     Args:
@@ -132,9 +172,11 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         logit_soft_cap: Optional tanh soft cap for logits.
         precision: Optional matmul precision override for XLA/reference paths.
         implementation: Backend selector or override implementation list.
+        return_argmax: Whether to additionally return per-example argmax ids.
 
     Returns:
-        Reduced loss (scalar) or per-example loss [B] if reduction is None.
+        If return_argmax=False: reduced loss (scalar) or per-example loss [B] if reduction is None.
+        If return_argmax=True: tuple of (loss, argmax_ids[B]).
     """
     _validate_inputs(x, labels, w)
     explicit_block_sizes = block_size is not None or block_sizes is not None
@@ -162,15 +204,15 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             block_sizes_for_impl = infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
         if callable(impl):
             try:
-                loss, lse = impl(
-                    x,
-                    labels,
-                    w,
+                kwargs = dict(
                     block_sizes=block_sizes_for_impl,
                     dtype=dtype,
                     logit_soft_cap=logit_soft_cap,
                     precision=precision,
                 )
+                if return_argmax:
+                    kwargs["return_argmax"] = True
+                result = impl(x, labels, w, **kwargs)
             except PallasUnsupportedError as e:
                 if explicit:
                     raise
@@ -188,15 +230,15 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             if fn is None:
                 raise ValueError(f"Unsupported implementation: {impl}")
             try:
-                loss, lse = fn(
-                    x,
-                    labels,
-                    w,
+                kwargs = dict(
                     block_sizes=block_sizes_for_impl,
                     dtype=dtype,
                     logit_soft_cap=logit_soft_cap,
                     precision=precision,
                 )
+                if return_argmax:
+                    kwargs["return_argmax"] = True
+                result = fn(x, labels, w, **kwargs)
             except PallasUnsupportedError as e:
                 if explicit:
                     raise
@@ -210,9 +252,23 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 errors.append(e)
                 continue
 
+        if len(result) == 2:
+            loss, lse = result
+            argmax = None
+        elif len(result) == 3:
+            loss, lse, argmax = result
+        else:
+            raise ValueError(f"Implementation returned unexpected output tuple length: {len(result)}")
+
+        if return_argmax and argmax is None:
+            raise ValueError("Implementation does not support return_argmax=True")
+
         if logsumexp_weight is not None and logsumexp_weight != 0.0:
             loss = loss + logsumexp_weight * (lse**2)
-        return _apply_reduction(loss, reduction, weight)
+        reduced_loss = _apply_reduction(loss, reduction, weight)
+        if return_argmax:
+            return reduced_loss, argmax
+        return reduced_loss
 
     raise ExceptionGroup("all implementations failed", errors)
 

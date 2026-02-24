@@ -84,11 +84,13 @@ def compute_demand_entries(state: ControllerState) -> list:
         device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
         preemptible_pref: bool | None = None
         required_regions: frozenset[str] | None = None
+        required_zones: frozenset[str] | None = None
         invalid_reason: str | None = None
         try:
             normalized = normalize_constraints(job.request.constraints)
             preemptible_pref = normalized.preemptible
             required_regions = normalized.required_regions
+            required_zones = normalized.required_zones
         except ValueError as e:
             invalid_reason = f"invalid_constraints: {e}"
 
@@ -103,6 +105,7 @@ def compute_demand_entries(state: ControllerState) -> list:
                 resources=job.request.resources,
                 preemptible=preemptible_pref,
                 required_regions=required_regions,
+                required_zones=required_zones,
                 invalid_reason=invalid_reason,
             )
             demand_entries.append(entry)
@@ -118,6 +121,7 @@ def compute_demand_entries(state: ControllerState) -> list:
                 resources=job.request.resources,
                 preemptible=preemptible_pref,
                 required_regions=required_regions,
+                required_zones=required_zones,
                 invalid_reason=invalid_reason,
             )
             demand_entries.append(entry)

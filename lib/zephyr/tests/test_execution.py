@@ -30,8 +30,11 @@ def test_filter(zephyr_ctx):
     assert sorted(results) == [4, 5]
 
 
-def test_shared_data(fray_client):
-    """Workers can access shared data via zephyr_worker_ctx()."""
+def test_shared_data(fray_client, tmp_path):
+    """Workers can access shared data via zephyr_worker_ctx().
+
+    Shared data is serialized to disk by put() and loaded lazily by workers.
+    """
 
     def use_shared(x):
         multiplier = zephyr_worker_ctx().get_shared("multiplier")
@@ -41,6 +44,7 @@ def test_shared_data(fray_client):
         client=fray_client,
         max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
         name=f"test-execution-{uuid.uuid4().hex[:8]}",
     )
     zctx.put("multiplier", 10)
@@ -145,7 +149,6 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-    coord.set_shared_data({})
 
     task = ShardTask(
         shard_idx=0,
@@ -213,7 +216,6 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, fray_client, t
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-    coord.set_shared_data({})
 
     task = ShardTask(
         shard_idx=0,
@@ -283,7 +285,6 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-    coord.set_shared_data({})
 
     task = ShardTask(
         shard_idx=0,
@@ -375,7 +376,6 @@ def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-    coord.set_shared_data({})
     coord._no_workers_timeout = 0.5  # short timeout for test
 
     task = ShardTask(
@@ -416,7 +416,6 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-    coord.set_shared_data({})
     coord._no_workers_timeout = 2.0
 
     task = ShardTask(
@@ -579,7 +578,6 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-    coord.set_shared_data({})
 
     task = ShardTask(
         shard_idx=0,

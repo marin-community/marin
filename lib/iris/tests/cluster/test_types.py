@@ -16,6 +16,7 @@ from iris.cluster.types import (
     preemptible_preference_from_constraints,
     region_constraint,
     required_regions_from_constraints,
+    required_zones_from_constraints,
 )
 from iris.rpc import cluster_pb2
 
@@ -219,6 +220,36 @@ def test_required_regions_empty_string_raises():
 
 
 # ---------------------------------------------------------------------------
+# required_zones_from_constraints (proto inputs)
+# ---------------------------------------------------------------------------
+
+
+def test_required_zones_single():
+    constraints = [_proto_constraint("zone", "us-central2-b")]
+    assert required_zones_from_constraints(constraints) == frozenset({"us-central2-b"})
+
+
+def test_required_zones_none_when_absent():
+    constraints = [_proto_constraint("preemptible", "true")]
+    assert required_zones_from_constraints(constraints) is None
+
+
+def test_required_zones_conflicting_raises():
+    constraints = [
+        _proto_constraint("zone", "us-central2-a"),
+        _proto_constraint("zone", "us-central2-b"),
+    ]
+    with pytest.raises(ValueError, match="conflicting"):
+        required_zones_from_constraints(constraints)
+
+
+def test_required_zones_empty_string_raises():
+    constraints = [_proto_constraint("zone", "")]
+    with pytest.raises(ValueError, match="non-empty"):
+        required_zones_from_constraints(constraints)
+
+
+# ---------------------------------------------------------------------------
 # normalize_constraints (proto inputs, combines both extractors)
 # ---------------------------------------------------------------------------
 
@@ -227,10 +258,12 @@ def test_normalize_constraints_combines_fields():
     constraints = [
         _proto_constraint("preemptible", "true"),
         _proto_constraint("region", "us-central1"),
+        _proto_constraint("zone", "us-central1-a"),
     ]
     nc = normalize_constraints(constraints)
     assert nc.preemptible is True
     assert nc.required_regions == frozenset({"us-central1"})
+    assert nc.required_zones == frozenset({"us-central1-a"})
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +386,9 @@ def test_normalize_constraints_with_in_region():
     constraints = [
         _proto_constraint("preemptible", "false"),
         _proto_in_constraint("region", ["us-central1", "us-central2"]),
+        _proto_constraint("zone", "us-central2-b"),
     ]
     nc = normalize_constraints(constraints)
     assert nc.preemptible is False
     assert nc.required_regions == frozenset({"us-central1", "us-central2"})
+    assert nc.required_zones == frozenset({"us-central2-b"})
