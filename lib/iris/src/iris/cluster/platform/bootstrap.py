@@ -16,11 +16,57 @@ import shlex
 
 import yaml
 
-from iris.cluster.platform.base import PlatformError, VmHandle
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
+
+
+# GCP multi-region locations used for AR remote repos that proxy GHCR.
+# Each AR remote repo is a pull-through cache for ghcr.io, deployed to a
+# multi-region location. GCP VMs pull from their continent's cache; egress
+# within a multi-region is free.
+_ZONE_PREFIX_TO_MULTI_REGION = {
+    "us": "us",
+    "europe": "europe",
+}
+
+_UNSUPPORTED_ZONE_PREFIXES = {"asia", "me"}
+
+GHCR_MIRROR_REPO = "ghcr-mirror"
+
+
+def zone_to_multi_region(zone: str) -> str | None:
+    """Map a GCP zone to its multi-region location (e.g. 'us-central1-a' → 'us').
+
+    Returns None for unknown prefixes. Raises ValueError for zones in regions
+    where AR remote repos are not yet provisioned (asia, me).
+    """
+    prefix = zone.split("-", 1)[0]
+    if prefix in _UNSUPPORTED_ZONE_PREFIXES:
+        raise ValueError(
+            f"Zone {zone!r} is in region prefix {prefix!r} which has no AR remote repo provisioned. "
+            f"Supported prefixes: {sorted(_ZONE_PREFIX_TO_MULTI_REGION)}"
+        )
+    return _ZONE_PREFIX_TO_MULTI_REGION.get(prefix)
+
+
+def rewrite_ghcr_to_ar_remote(
+    image_tag: str,
+    multi_region: str,
+    project: str,
+    mirror_repo: str = GHCR_MIRROR_REPO,
+) -> str:
+    """Rewrite a ghcr.io image tag to pull from an AR remote repo.
+
+    ghcr.io/marin-community/iris-worker:v1
+    → us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:v1
+
+    Non-GHCR images pass through unchanged.
+    """
+    if not image_tag.startswith("ghcr.io/"):
+        return image_tag
+    path = image_tag.removeprefix("ghcr.io/")
+    return f"{multi_region}-docker.pkg.dev/{project}/{mirror_repo}/{path}"
 
 
 def render_template(template: str, **variables: str | int) -> str:
@@ -61,48 +107,15 @@ def render_template(template: str, **variables: str | int) -> str:
 
 
 # ============================================================================
-# Worker Bootstrap
+# Worker Bootstrap Script
 # ============================================================================
 
 
-class WorkerBootstrap:
-    """Bootstraps individual worker VMs with embedded cluster config.
-
-    Workers receive the full cluster config.yaml and use it to discover
-    the controller themselves via platform.discover_controller().
-    The autoscaler calls bootstrap_vm() for each VM in parallel via
-    bootstrap_slice_vms().
-    """
-
-    def __init__(self, cluster_config: config_pb2.IrisClusterConfig):
-        self._cluster_config = cluster_config
-
-    def bootstrap_vm(self, vm: VmHandle) -> str:
-        """Bootstrap a single VM: wait for connection, validate, run script.
-
-        Returns bootstrap log text. Raises PlatformError on failure.
-        """
-        if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
-            raise PlatformError(f"VM {vm.vm_id} failed to become reachable within timeout.")
-        if not vm.internal_address:
-            raise PlatformError(f"VM {vm.vm_id} has no internal address.")
-        script = build_worker_bootstrap_script(self._cluster_config, vm.internal_address)
-        vm.bootstrap(script)
-        return vm.bootstrap_log
-
-
 # Bootstrap script template for worker VMs.
-#
-# Workers receive the full cluster config.yaml and use platform.discover_controller()
-# to find the controller address themselves. The config is embedded in the script
-# and written to /etc/iris/config.yaml.
 WORKER_BOOTSTRAP_SCRIPT = """
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
-
-# Write config file
-{{ config_setup }}
 
 echo "[iris-init] Phase: prerequisites"
 
@@ -124,24 +137,28 @@ sudo systemctl start docker || true
 sudo mkdir -p {{ cache_dir }}
 
 echo "[iris-init] Phase: docker_pull"
-echo "[iris-init] Configuring docker authentication"
-# Configure docker for common GCP Artifact Registry regions
-sudo gcloud auth configure-docker \\
-  europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
-
 echo "[iris-init] Pulling image: {{ docker_image }}"
+
+# Configure Artifact Registry auth on demand.
+# Must run under sudo because `sudo docker pull` uses root's docker config.
+if echo "{{ docker_image }}" | grep -q -- "-docker.pkg.dev/"; then
+    AR_HOST=$(echo "{{ docker_image }}" | cut -d/ -f1)
+    echo "[iris-init] Configuring docker auth for $AR_HOST"
+    if command -v gcloud &> /dev/null; then
+        sudo gcloud auth configure-docker "$AR_HOST" -q || true
+    else
+        echo "[iris-init] Warning: gcloud not found; AR pull may fail without prior auth"
+    fi
+fi
+
 sudo docker pull {{ docker_image }}
 
-# Pull the pre-built task image (base image for job containers).
-# Derive registry path from the worker image by replacing the image name.
-TASK_IMAGE_REGISTRY=$(echo "{{ docker_image }}" | sed 's|/iris-worker:|/iris-task:|')
-echo "[iris-init] Pulling task image: $TASK_IMAGE_REGISTRY"
-if sudo docker pull "$TASK_IMAGE_REGISTRY"; then
-    sudo docker tag "$TASK_IMAGE_REGISTRY" iris-task:latest
-    echo "[iris-init] Task image tagged as iris-task:latest"
-else
-    echo "[iris-init] WARNING: Failed to pull task image, jobs may fail"
-fi
+echo "[iris-init] Phase: config_setup"
+sudo mkdir -p /etc/iris
+cat > /tmp/iris_config.json << 'IRIS_CONFIG_EOF'
+{{ config_json }}
+IRIS_CONFIG_EOF
+sudo mv /tmp/iris_config.json /etc/iris/config.json
 
 echo "[iris-init] Phase: worker_start"
 
@@ -160,13 +177,14 @@ sudo docker run -d --name iris-worker \\
     --network=host \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
-    {{ config_volume }} \\
+    -v /etc/iris/config.json:/etc/iris/config.json:ro \\
     {{ env_flags }} \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.worker.main serve \\
         --host 0.0.0.0 --port {{ worker_port }} \\
         --cache-dir {{ cache_dir }} \\
-        --config /etc/iris/config.yaml
+        --controller-address {{ controller_address }} \\
+        --config /etc/iris/config.json
 
 echo "[iris-init] Worker container started"
 echo "[iris-init] Phase: registration"
@@ -203,14 +221,19 @@ exit 1
 """
 
 
-def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str:
+def build_worker_env_flags(
+    config: config_pb2.BootstrapConfig,
+    vm_address: str,
+) -> str:
     """Generate docker -e flags with proper escaping.
 
     TPU metadata is probed by the worker process via env_probe.py, so bootstrap
     only forwards explicit bootstrap env vars plus IRIS_VM_ADDRESS.
     """
+    env_vars = dict(config.env_vars)
+
     flags = []
-    for k, v in config.env_vars.items():
+    for k, v in env_vars.items():
         flags.append(f"-e {shlex.quote(k)}={shlex.quote(v)}")
     # Inject VM address so worker can include it in registration for autoscaler tracking
     if vm_address:
@@ -220,37 +243,33 @@ def build_worker_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) 
 
 
 def build_worker_bootstrap_script(
-    cluster_config: config_pb2.IrisClusterConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
     vm_address: str,
 ) -> str:
     """Build the bootstrap script for a worker VM.
 
-    The worker receives the full cluster config.yaml and discovers the controller
-    itself via platform.discover_controller().
-
     Args:
-        cluster_config: Full cluster configuration
+        bootstrap_config: Worker bootstrap settings
         vm_address: VM IP address for autoscaler tracking
     """
-    # Local import to avoid circular dependency (config.py imports WorkerBootstrap)
-    from iris.cluster.config import config_to_dict
-
-    bootstrap_config = cluster_config.defaults.bootstrap
-
-    # Serialize cluster config to YAML and embed it
-    config_yaml = yaml.dump(config_to_dict(cluster_config), default_flow_style=False)
-    config_setup = _build_config_setup(config_yaml, log_prefix="[iris-init]")
-
     env_flags = build_worker_env_flags(bootstrap_config, vm_address)
+    if not bootstrap_config.controller_address:
+        raise ValueError("bootstrap_config.controller_address is required for worker bootstrap")
+    if not bootstrap_config.docker_image:
+        raise ValueError("bootstrap_config.docker_image is required for worker bootstrap")
+    if bootstrap_config.worker_port <= 0:
+        raise ValueError("bootstrap_config.worker_port must be > 0 for worker bootstrap")
+    if not bootstrap_config.cache_dir:
+        raise ValueError("bootstrap_config.cache_dir is required for worker bootstrap")
 
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
-        config_setup=config_setup,
-        cache_dir=bootstrap_config.cache_dir or "/var/cache/iris",
+        cache_dir=bootstrap_config.cache_dir,
         docker_image=bootstrap_config.docker_image,
-        worker_port=bootstrap_config.worker_port or 10001,
-        config_volume="-v /etc/iris/config.yaml:/etc/iris/config.yaml:ro",
+        worker_port=bootstrap_config.worker_port,
+        controller_address=bootstrap_config.controller_address,
         env_flags=env_flags,
+        config_json=bootstrap_config.config_json,
     )
 
 
@@ -290,14 +309,21 @@ else
     exit 1
 fi
 
-# Configure docker for GCP Artifact Registry
-echo "[iris-controller] [3/5] Configuring Docker for GCP Artifact Registry..."
-sudo gcloud auth configure-docker \\
-  europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
-echo "[iris-controller] [3/5] Docker registry configuration complete"
-
-echo "[iris-controller] [4/5] Pulling image: {{ docker_image }}"
+echo "[iris-controller] [3/5] Pulling image: {{ docker_image }}"
 echo "[iris-controller]       This may take several minutes for large images..."
+
+# Configure Artifact Registry auth on demand.
+# Must run under sudo because `sudo docker pull` uses root's docker config.
+if echo "{{ docker_image }}" | grep -q -- "-docker.pkg.dev/"; then
+    AR_HOST=$(echo "{{ docker_image }}" | cut -d/ -f1)
+    echo "[iris-controller] [3/5] Configuring docker auth for $AR_HOST"
+    if command -v gcloud &> /dev/null; then
+        sudo gcloud auth configure-docker "$AR_HOST" -q || true
+    else
+        echo "[iris-controller] [3/5] Warning: gcloud not found; AR pull may fail without prior auth"
+    fi
+fi
+
 if sudo docker pull {{ docker_image }}; then
     echo "[iris-controller] [4/5] Image pull complete"
 else
@@ -428,9 +454,18 @@ def build_controller_bootstrap_script_from_config(
 
     Serializes the config to YAML and embeds it in the bootstrap script.
     """
-    # Local import to avoid circular dependency (config.py imports WorkerBootstrap)
+    # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
 
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
     port = config.controller.gcp.port or config.controller.manual.port or 10000
-    return build_controller_bootstrap_script(config.controller.image, port, config_yaml)
+    image = config.controller.image
+    ctrl = config.controller
+    if ctrl.HasField("gcp") and ctrl.gcp.zone and image.startswith("ghcr.io/"):
+        multi_region = zone_to_multi_region(ctrl.gcp.zone)
+        if multi_region:
+            project = config.platform.gcp.project_id
+            assert project, "platform.gcp.project_id required for GHCR→AR controller image rewrite"
+            image = rewrite_ghcr_to_ar_remote(image, multi_region, project)
+
+    return build_controller_bootstrap_script(image, port, config_yaml)

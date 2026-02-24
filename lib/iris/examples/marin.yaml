@@ -1,0 +1,617 @@
+# Iris production configuration for Marin cluster
+# Usage: uv run iris cluster --config=examples/marin.yaml start
+
+platform:
+  label_prefix: marin
+  gcp:
+    project_id: hai-gcp-models
+
+defaults:
+  default_task_image: ghcr.io/marin-community/iris-task:latest
+  timeouts:
+    boot_timeout:
+      milliseconds: 300000
+    init_timeout:
+      milliseconds: 600000
+    ssh_poll_interval:
+      milliseconds: 5000
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    requesting_timeout:
+      milliseconds: 120000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+  bootstrap:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    worker_port: 10001
+
+storage:
+  bundle_prefix: gs://marin-us-central2/tmp/iris/bundles
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  gcp:
+    zone: us-central1-a
+    machine_type: e2-standard-4
+    port: 10000
+
+scale_groups:
+  # ---------------------------------------------------------------------------
+  # v5e (v5litepod) — europe-west4-b, us-west4-a
+  # ---------------------------------------------------------------------------
+  tpu_v5e_4:
+    zones: [europe-west4-b, us-west4-a]
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-4
+    num_vms: 1
+    priority: 10
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5litepod-4
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5e_8:
+    zones: [europe-west4-b, us-west4-a]
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
+    num_vms: 2
+    priority: 20
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5litepod-8
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5e_16:
+    zones: [europe-west4-b, us-west4-a]
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-16
+    num_vms: 4
+    priority: 30
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5litepod-16
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5e_32:
+    zones: [europe-west4-b, us-west4-a]
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-32
+    num_vms: 8
+    priority: 40
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5litepod-32
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5e_64:
+    zones: [europe-west4-b, us-west4-a]
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-64
+    num_vms: 16
+    priority: 50
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5litepod-64
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5e_128:
+    zones: [europe-west4-b, us-west4-a]
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-128
+    num_vms: 32
+    priority: 60
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5litepod-128
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5e_256:
+    zones: [europe-west4-b, us-west4-a]
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-256
+    num_vms: 64
+    priority: 70
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5litepod-256
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    worker:
+      attributes:
+        preemptible: "true"
+
+  # ---------------------------------------------------------------------------
+  # v6e — europe-west4-a, us-east1-d, us-east5-b
+  # ---------------------------------------------------------------------------
+  tpu_v6e_4:
+    zones: [europe-west4-a, us-east1-d, us-east5-b]
+    accelerator_type: tpu
+    accelerator_variant: v6e-4
+    num_vms: 1
+    priority: 10
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v6e-4
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv6e
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v6e_8:
+    zones: [europe-west4-a, us-east1-d, us-east5-b]
+    accelerator_type: tpu
+    accelerator_variant: v6e-8
+    num_vms: 2
+    priority: 20
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v6e-8
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv6e
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v6e_16:
+    zones: [europe-west4-a, us-east1-d, us-east5-b]
+    accelerator_type: tpu
+    accelerator_variant: v6e-16
+    num_vms: 4
+    priority: 30
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v6e-16
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv6e
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v6e_32:
+    zones: [europe-west4-a, us-east1-d, us-east5-b]
+    accelerator_type: tpu
+    accelerator_variant: v6e-32
+    num_vms: 8
+    priority: 40
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v6e-32
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv6e
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v6e_64:
+    zones: [europe-west4-a, us-east1-d, us-east5-b]
+    accelerator_type: tpu
+    accelerator_variant: v6e-64
+    num_vms: 16
+    priority: 50
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v6e-64
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv6e
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v6e_128:
+    zones: [europe-west4-a, us-east1-d, us-east5-b]
+    accelerator_type: tpu
+    accelerator_variant: v6e-128
+    num_vms: 32
+    priority: 60
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v6e-128
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv6e
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v6e_256:
+    zones: [europe-west4-a, us-east1-d, us-east5-b]
+    accelerator_type: tpu
+    accelerator_variant: v6e-256
+    num_vms: 64
+    priority: 70
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v6e-256
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv6e
+    worker:
+      attributes:
+        preemptible: "true"
+
+  # ---------------------------------------------------------------------------
+  # v5p — us-central1-a, us-east5-a
+  # ---------------------------------------------------------------------------
+  tpu_v5p_8:
+    zones: [us-central1-a, us-east5-a]
+    accelerator_type: tpu
+    accelerator_variant: v5p-8
+    num_vms: 2
+    priority: 20
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5p-8
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5p_16:
+    zones: [us-central1-a, us-east5-a]
+    accelerator_type: tpu
+    accelerator_variant: v5p-16
+    num_vms: 4
+    priority: 30
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5p-16
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5p_32:
+    zones: [us-central1-a, us-east5-a]
+    accelerator_type: tpu
+    accelerator_variant: v5p-32
+    num_vms: 8
+    priority: 40
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5p-32
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5p_64:
+    zones: [us-central1-a, us-east5-a]
+    accelerator_type: tpu
+    accelerator_variant: v5p-64
+    num_vms: 16
+    priority: 50
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5p-64
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5p_128:
+    zones: [us-central1-a, us-east5-a]
+    accelerator_type: tpu
+    accelerator_variant: v5p-128
+    num_vms: 32
+    priority: 60
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5p-128
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5p_256:
+    zones: [us-central1-a, us-east5-a]
+    accelerator_type: tpu
+    accelerator_variant: v5p-256
+    num_vms: 64
+    priority: 70
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5p-256
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5p_512:
+    zones: [us-central1-a, us-east5-a]
+    accelerator_type: tpu
+    accelerator_variant: v5p-512
+    num_vms: 128
+    priority: 80
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5p-512
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5p_1024:
+    zones: [us-central1-a, us-east5-a]
+    accelerator_type: tpu
+    accelerator_variant: v5p-1024
+    num_vms: 256
+    priority: 90
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5p-1024
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v5p_2048:
+    zones: [us-central1-a, us-east5-a]
+    accelerator_type: tpu
+    accelerator_variant: v5p-2048
+    num_vms: 512
+    priority: 100
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v5p-2048
+      preemptible: true
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    worker:
+      attributes:
+        preemptible: "true"
+
+  # ---------------------------------------------------------------------------
+  # v4 — us-central2-b
+  # ---------------------------------------------------------------------------
+  tpu_v4_8:
+    zones: [us-central2-b]
+    accelerator_type: tpu
+    accelerator_variant: v4-8
+    num_vms: 1
+    priority: 20
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v4-8
+      preemptible: true
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v4_16:
+    zones: [us-central2-b]
+    accelerator_type: tpu
+    accelerator_variant: v4-16
+    num_vms: 2
+    priority: 30
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v4-16
+      preemptible: true
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v4_32:
+    zones: [us-central2-b]
+    accelerator_type: tpu
+    accelerator_variant: v4-32
+    num_vms: 4
+    priority: 40
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v4-32
+      preemptible: true
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v4_64:
+    zones: [us-central2-b]
+    accelerator_type: tpu
+    accelerator_variant: v4-64
+    num_vms: 8
+    priority: 50
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v4-64
+      preemptible: true
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v4_128:
+    zones: [us-central2-b]
+    accelerator_type: tpu
+    accelerator_variant: v4-128
+    num_vms: 16
+    priority: 60
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v4-128
+      preemptible: true
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v4_256:
+    zones: [us-central2-b]
+    accelerator_type: tpu
+    accelerator_variant: v4-256
+    num_vms: 32
+    priority: 70
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v4-256
+      preemptible: true
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v4_512:
+    zones: [us-central2-b]
+    accelerator_type: tpu
+    accelerator_variant: v4-512
+    num_vms: 64
+    priority: 80
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v4-512
+      preemptible: true
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v4_1024:
+    zones: [us-central2-b]
+    accelerator_type: tpu
+    accelerator_variant: v4-1024
+    num_vms: 128
+    priority: 90
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v4-1024
+      preemptible: true
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v4_2048:
+    zones: [us-central2-b]
+    accelerator_type: tpu
+    accelerator_variant: v4-2048
+    num_vms: 256
+    priority: 100
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v4-2048
+      preemptible: true
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    worker:
+      attributes:
+        preemptible: "true"
+  tpu_v4_4096:
+    zones: [us-central2-b]
+    accelerator_type: tpu
+    accelerator_variant: v4-4096
+    num_vms: 512
+    priority: 110
+    resources: { cpu: 128, ram: 128GB, disk: 1TB, tpu_count: 4, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 4
+    slice_template:
+      accelerator_variant: v4-4096
+      preemptible: true
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    worker:
+      attributes:
+        preemptible: "true"

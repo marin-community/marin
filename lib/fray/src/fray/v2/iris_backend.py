@@ -31,6 +31,7 @@ from iris.rpc import cluster_pb2
 from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
 from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
+    ActorConfig,
     CpuConfig,
     DeviceConfig,
     EnvironmentConfig,
@@ -89,17 +90,18 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
         memory=resources.ram,
         disk=resources.disk,
         device=_convert_device(resources.device),
-        regions=resources.regions,
     )
 
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     """Build Iris scheduling constraints from fray v2 ResourceConfig."""
-    from iris.cluster.types import preemptible_constraint
+    from iris.cluster.types import preemptible_constraint, region_constraint
 
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
+    if resources.regions:
+        constraints.append(region_constraint(resources.regions))
     return constraints
 
 
@@ -462,6 +464,7 @@ class FrayIrisClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorHandle:
         group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
@@ -474,6 +477,7 @@ class FrayIrisClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> IrisActorGroup:
         """Submit a single Iris job with N replicas, each hosting an instance of actor_class.

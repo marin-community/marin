@@ -23,11 +23,13 @@ import logging
 import os
 import select
 import signal
+import shutil
 import subprocess
 import sys
 import threading
 import uuid
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,11 +42,10 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus, RuntimeLogReader
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +290,22 @@ def _memory_profile_stub(memory_format: int) -> bytes:
         return b'{"error": "memray unavailable in local mode"}'
 
 
+class ProcessLogReader:
+    """Index-based incremental log reader for ProcessContainer._logs."""
+
+    def __init__(self, logs: list[LogLine]) -> None:
+        self._logs = logs
+        self._index: int = 0
+
+    def read(self) -> list[LogLine]:
+        new_lines = self._logs[self._index :]
+        self._index = len(self._logs)
+        return new_lines
+
+    def read_all(self) -> list[LogLine]:
+        return list(self._logs)
+
+
 @dataclass
 class ProcessContainerHandle:
     """Process implementation of ContainerHandle.
@@ -379,14 +396,9 @@ class ProcessContainerHandle:
             error=self._container._error,
         )
 
-    def logs(self, since: Timestamp | None = None) -> list[LogLine]:
-        """Get container logs since timestamp."""
-        if not self._container:
-            return []
-        if since:
-            since_dt = datetime.fromtimestamp(since.epoch_seconds(), tz=timezone.utc)
-            return [log for log in self._container._logs if log.timestamp > since_dt]
-        return self._container._logs
+    def log_reader(self) -> RuntimeLogReader:
+        """Create an incremental log reader for this container."""
+        return ProcessLogReader(self._container._logs if self._container else [])
 
     def stats(self) -> ContainerStats:
         """Get resource usage statistics."""
@@ -502,6 +514,20 @@ class ProcessRuntime:
         handle = ProcessContainerHandle(config=config, runtime=self)
         self._handles.append(handle)
         return handle
+
+    def stage_bundle(
+        self,
+        *,
+        bundle_gcs_path: str,
+        workdir: Path,
+        workdir_files: dict[str, bytes],
+        fetch_bundle: Callable[[str], Path],
+    ) -> None:
+        """Stage bundle and workdir files on worker-local filesystem."""
+        bundle_path = fetch_bundle(bundle_gcs_path)
+        shutil.copytree(bundle_path, workdir, dirs_exist_ok=True)
+        for name, data in workdir_files.items():
+            (workdir / name).write_bytes(data)
 
     def list_containers(self) -> list[ProcessContainerHandle]:
         """List all managed container handles."""

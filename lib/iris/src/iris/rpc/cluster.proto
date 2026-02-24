@@ -180,7 +180,7 @@ message JobStatus {
 
   BuildMetrics build_metrics = 10;
 
-  bytes serialized_result = 13;  // cloudpickle serialized return value (if requested)
+  reserved 13;  // was serialized_result (removed: dead store, never populated)
 
   int32 failure_count = 17;                // Total task failures (aggregated)
   int32 preemption_count = 18;             // Total task preemptions (aggregated)
@@ -248,9 +248,6 @@ message ResourceSpecProto {
 
   // Device configuration
   DeviceConfig device = 5;
-
-  // Scheduling preferences
-  repeated string regions = 8; // Preferred cloud regions
 }
 
 // ============================================================================
@@ -315,6 +312,7 @@ enum ConstraintOp {
   CONSTRAINT_OP_GE = 5;         // Attribute greater than or equal to value (numeric)
   CONSTRAINT_OP_LT = 6;         // Attribute less than value (numeric)
   CONSTRAINT_OP_LE = 7;         // Attribute less than or equal to value (numeric)
+  CONSTRAINT_OP_IN = 8;         // Attribute value is in the provided set (disjunction)
 }
 
 // Constraint for filtering workers by attribute.
@@ -323,6 +321,7 @@ message Constraint {
   string key = 1;           // Attribute key to match (e.g., "tpu-name")
   ConstraintOp op = 2;      // Comparison operator
   AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
+  repeated AttributeValue values = 4; // Set of values for IN operator
 }
 
 // Coscheduling configuration for multi-host jobs.
@@ -444,7 +443,7 @@ message Controller {
 
   message GetJobStatusRequest {
     string job_id = 1;
-    bool include_result = 2;  // If true, include serialized_result in response
+    reserved 2;  // was include_result (removed: serialized_result no longer exists)
   }
 
   message GetJobStatusResponse {
@@ -697,11 +696,12 @@ message Worker {
     iris.time.Duration timeout = 7;
     repeated string ports = 8;
     int32 attempt_id = 9;
+    repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
   }
 
   message GetTaskStatusRequest {
     string task_id = 1;
-    bool include_result = 2;
+    reserved 2;  // was include_result (removed: serialized_result no longer exists)
   }
 
   message ListTasksRequest {}

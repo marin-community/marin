@@ -127,8 +127,8 @@ def test_lm_config_with_gcs_paths_different_region(trainer_config):
         assert "not in the same region" in str(excinfo.value)
 
 
-def test_lm_config_with_allowed_out_of_region_paths(trainer_config):
-    """Test that paths in allow_out_of_region are allowed to be in different regions."""
+def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
+    """Test that train/validation source URLs are allowed to be in different regions."""
     with (
         patch("marin.training.training.get_vm_region") as mock_get_vm_region,
         patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
@@ -138,14 +138,13 @@ def test_lm_config_with_allowed_out_of_region_paths(trainer_config):
         mock_get_vm_region.return_value = "us-central1"
         mock_get_bucket_location.return_value = "us-east1"
 
-        # Create a config with GCS paths in a different region but allowed
+        # Create a config with out-of-region source URL; this should be allowed.
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
-                data=MockDataConfig(cache_dir="gs://bucket/path"),
+                data={"train_urls": ["gs://bucket/path"]},  # type: ignore[arg-type]
                 trainer=trainer_config,
             ),
             resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
-            allow_out_of_region=("data.cache_dir",),
         )
 
         # This should not raise an exception

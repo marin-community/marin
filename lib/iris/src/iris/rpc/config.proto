@@ -36,6 +36,9 @@ message LocalPlatformConfig {}
 
 message CoreweavePlatformConfig {
   string region = 1;
+  string namespace = 2;         // default: "iris"
+  string kubeconfig_path = 3;   // optional, uses in-cluster auth if empty
+  string object_storage_endpoint = 4;  // S3 base endpoint, NOT bucket-specific (e.g. https://cwobject.com)
 }
 
 message PlatformConfig {
@@ -99,7 +102,9 @@ message GcpSliceConfig {
 
 message CoreweaveSliceConfig {
   string region = 1;
-  string instance_type = 2;
+  string instance_type = 2;     // e.g. "gd-8xh100ib-i128"
+  string gpu_class = 4;         // e.g. "H100"
+  bool infiniband = 5;          // request rdma/ib: 1
 }
 
 message ManualSliceConfig {
@@ -117,6 +122,7 @@ message SliceConfig {
   string accelerator_variant = 4;
   map<string, string> labels = 5;
   bool preemptible = 6;
+  int32 gpu_count = 7;          // number of GPUs per VM (populated from ScaleGroupResources)
   oneof platform {
     GcpSliceConfig gcp = 10;
     CoreweaveSliceConfig coreweave = 11;
@@ -150,6 +156,11 @@ message ScaleGroupResources {
   int32 tpu_count = 5;
 }
 
+message WorkerSettings {
+  map<string, string> attributes = 1;
+  map<string, string> env = 2;
+}
+
 // Configuration for a scale group
 message ScaleGroupConfig {
   string name = 1;
@@ -177,6 +188,7 @@ message ScaleGroupConfig {
 
   // What to create when scaling up — the slice template
   SliceConfig slice_template = 50;
+  WorkerSettings worker = 60;
 }
 
 // ============================================================================
@@ -191,6 +203,8 @@ message BootstrapConfig {
   string docker_image = 4;        // Worker image to run
   string cache_dir = 5;           // Default: /var/cache/iris
   map<string, string> env_vars = 6;
+  string runtime = 7;             // "docker" or "kubernetes"
+  string config_json = 8;          // Serialized cluster config JSON for worker
 }
 
 // Timeout configuration for VM lifecycle (SSH timeout is in SshConfig)
@@ -207,6 +221,15 @@ message SshConfig {
   string key_file = 2;                    // Path to SSH private key
   int32 port = 3;                         // Default: 22
   iris.time.Duration connect_timeout = 4;  // Default: 30s
+}
+
+// ============================================================================
+// STORAGE CONFIGURATION
+// ============================================================================
+
+message StorageConfig {
+  string bundle_prefix = 1;  // URI prefix for job bundles (e.g. s3://iris/bundles, gs://bucket/path)
+  string log_prefix = 2;     // URI prefix for task logs (e.g. s3://iris/logs)
 }
 
 // ============================================================================
@@ -232,16 +255,23 @@ message LocalControllerConfig {
   int32 port = 1;               // 0 = auto-assign
 }
 
+// CoreWeave controller configuration (Kubernetes Deployment + Service)
+message CoreweaveControllerConfig {
+  int32 port = 1;               // default: 10000
+  string service_name = 2;      // K8s Service name for discovery
+  string scale_group = 3;       // Scale group whose NodePool the controller runs on (required)
+}
+
 // Controller configuration using oneof for type-safe dispatch
 message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
-  string bundle_prefix = 11;    // URI prefix for job bundles (e.g., gs://bucket/path)
   iris.time.Duration worker_timeout = 12;  // Default: 60s
   int32 heartbeat_failure_threshold = 13;  // Consecutive heartbeat failures before marking worker dead (default: 10)
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;
     LocalControllerConfig local = 3;
+    CoreweaveControllerConfig coreweave = 4;
   }
 }
 
@@ -263,6 +293,7 @@ message DefaultsConfig {
   SshConfig ssh = 2;
   AutoscalerConfig autoscaler = 3;
   BootstrapConfig bootstrap = 4;
+  string default_task_image = 5;  // Task container image (e.g. "ghcr.io/marin-community/iris-task:latest")
 }
 
 // ============================================================================
@@ -271,18 +302,14 @@ message DefaultsConfig {
 
 // Full cluster configuration - single source of truth
 message IrisClusterConfig {
-  reserved 1 to 4;
-
   // Platform settings
   PlatformConfig platform = 10;
   DefaultsConfig defaults = 11;
+  StorageConfig storage = 12;
 
   // Controller settings
   ControllerVmConfig controller = 31;
 
   // Scale groups (name -> config)
   map<string, ScaleGroupConfig> scale_groups = 50;
-
-  reserved 70;  // label_prefix (moved to PlatformConfig)
-  reserved 80 to 83;  // Duplicate fields removed (use defaults.* instead)
 }

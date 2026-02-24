@@ -8,7 +8,6 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import logging
-import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -16,7 +15,6 @@ from pathlib import Path
 
 import click
 from fray.v2.client import current_client
-from fray.v2.local_backend import LocalClient
 from fray.v2.types import ResourceConfig
 
 from zephyr.execution import ZephyrContext
@@ -37,6 +35,7 @@ class CliConfig:
     cluster_config: str | None = None
     entry_point: str = "main"
     dry_run: bool = False
+    worker_start_timeout: float | None = None
 
     ray_options: dict = field(default_factory=dict)
 
@@ -132,31 +131,17 @@ def run_local(
     client = current_client()
     logger.info("Zephyr using fray client: %s", type(client).__name__)
 
-    # For distributed backends (iris, ray), chunk storage must be shared (GCS).
-    # Local /tmp won't work when coordinator and workers run in separate containers.
-    chunk_storage_prefix = None
-    is_distributed = not isinstance(client, LocalClient)
-    if is_distributed:
-        marin_prefix = os.environ.get("MARIN_PREFIX", "")
-        if not marin_prefix:
-            marin_prefix = "gs://marin-us-central2/scratch"
-            logger.warning(
-                "MARIN_PREFIX not set for distributed backend; using default %s",
-                marin_prefix,
-            )
-        chunk_storage_prefix = f"{marin_prefix}/tmp/zephyr"
-
     main_fn = _load_entry_point(script_path, entry_point)
     sys.argv = [script_path, *script_args]
 
-    with ZephyrContext(
+    ZephyrContext(
         client=client,
         max_workers=config.max_parallelism,
         resources=resources,
-        chunk_storage_prefix=chunk_storage_prefix,
         name="cli",
-    ):
-        main_fn()
+        no_workers_timeout=config.worker_start_timeout,
+    )
+    main_fn()
 
 
 def run_ray_cluster(
@@ -205,6 +190,8 @@ def run_ray_cluster(
         entrypoint += ["--num-cpus", str(config.num_cpus)]
     if config.num_gpus:
         entrypoint += ["--num-gpus", str(config.num_gpus)]
+    if config.worker_start_timeout is not None:
+        entrypoint += ["--worker-start-timeout", str(config.worker_start_timeout)]
     if entry_point != "main":
         entrypoint += ["--entry-point", entry_point]
 
@@ -273,6 +260,8 @@ def run_iris_cluster(
         entrypoint += ["--num-cpus", str(config.num_cpus)]
     if config.num_gpus:
         entrypoint += ["--num-gpus", str(config.num_gpus)]
+    if config.worker_start_timeout is not None:
+        entrypoint += ["--worker-start-timeout", str(config.worker_start_timeout)]
     if entry_point != "main":
         entrypoint += ["--entry-point", entry_point]
 
@@ -323,6 +312,12 @@ Examples:
 @click.option("--num-gpus", type=float, help="Number of GPUs per task")
 @click.option("--entry-point", type=str, default="main", help="Entry point function name (default: 'main')")
 @click.option("--dry-run", is_flag=True, help="Show optimization plan without executing")
+@click.option(
+    "--worker-start-timeout",
+    type=float,
+    default=None,
+    help="Seconds to wait for at least one worker before failing (default: 600s)",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -335,6 +330,7 @@ def main(
     num_gpus: float | None,
     entry_point: str,
     dry_run: bool,
+    worker_start_timeout: float,
 ) -> None:
     """Execute data processing pipeline script with configurable backend."""
     script_args = ctx.args
@@ -349,6 +345,7 @@ def main(
         cluster=cluster,
         cluster_config=cluster_config,
         entry_point=entry_point,
+        worker_start_timeout=worker_start_timeout,
     )
 
     validate_backend_config(config)

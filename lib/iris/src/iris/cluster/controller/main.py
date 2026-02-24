@@ -3,7 +3,9 @@
 
 """Click-based CLI for the Iris controller daemon."""
 
+import json
 import logging
+import os
 import signal
 import threading
 from pathlib import Path
@@ -47,13 +49,13 @@ def serve(
     that provisions/terminates VM slices based on pending task demand.
     """
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.config import load_config, create_autoscaler
-    from iris.cluster.platform.bootstrap import WorkerBootstrap
+    from iris.cluster.config import load_config, create_autoscaler, config_to_dict
     from iris.cluster.platform.factory import create_platform
+    from iris.rpc import config_pb2
 
     configure_logging(level=getattr(logging, log_level))
 
-    logger.info("Initializing Iris controller")
+    logger.info("Initializing Iris controller (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
 
     # Load cluster config first to extract bundle_prefix if not provided via CLI
     autoscaler: Autoscaler | None = None
@@ -68,8 +70,8 @@ def serve(
             raise click.ClickException(f"Failed to load cluster config: {e}") from e
 
         # Extract bundle_prefix from config if not provided via CLI
-        if bundle_prefix is None and cluster_config.controller.bundle_prefix:
-            bundle_prefix = cluster_config.controller.bundle_prefix
+        if bundle_prefix is None and cluster_config.storage.bundle_prefix:
+            bundle_prefix = cluster_config.storage.bundle_prefix
             logger.info("Using bundle_prefix from config: %s", bundle_prefix)
 
         try:
@@ -79,28 +81,31 @@ def serve(
             )
             logger.info("Platform created")
 
-            worker_bootstrap = (
-                WorkerBootstrap(cluster_config) if cluster_config.defaults.bootstrap.docker_image else None
-            )
+            # Pass only BootstrapConfig through to platform.create_slice().
+            bootstrap_config = None
+            if cluster_config.defaults.bootstrap.docker_image:
+                bootstrap_config = config_pb2.BootstrapConfig()
+                bootstrap_config.CopyFrom(cluster_config.defaults.bootstrap)
+                if not bootstrap_config.controller_address:
+                    bootstrap_config.controller_address = platform.discover_controller(cluster_config.controller)
+                # Serialize full cluster config so workers can read task_image etc.
+                bootstrap_config.config_json = json.dumps(config_to_dict(cluster_config))
 
+            gcp_project = ""
+            if cluster_config.platform.HasField("gcp"):
+                gcp_project = cluster_config.platform.gcp.project_id
             autoscaler = create_autoscaler(
                 platform=platform,
                 autoscaler_config=cluster_config.defaults.autoscaler,
                 scale_groups=cluster_config.scale_groups,
                 label_prefix=cluster_config.platform.label_prefix or "iris",
-                worker_bootstrap=worker_bootstrap,
+                bootstrap_config=bootstrap_config,
+                gcp_project=gcp_project,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
             logger.exception("Failed to create autoscaler from config")
             raise click.ClickException(f"Failed to create autoscaler: {e}") from e
-
-        try:
-            autoscaler.reconcile()
-            logger.info("Autoscaler initial reconcile completed")
-        except Exception as e:
-            logger.exception("Autoscaler initial reconcile failed")
-            raise click.ClickException(f"Autoscaler reconcile failed: {e}") from e
     else:
         logger.info("No cluster config provided, autoscaler disabled")
 

@@ -18,26 +18,33 @@
 """ManualPlatform implementation for pre-existing hosts.
 
 Implements the full Platform interface for manually managed hosts. Hosts are
-drawn from a configured pool and returned on slice termination. SSH connections
-use DirectSshConnection (raw ssh, no gcloud).
+drawn from a configured pool and returned on slice termination. Remote execution
+uses DirectSshRemoteExec (raw ssh, no gcloud).
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 
-from iris.cluster.platform._vm_base import SshVmBase
+from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
+from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
+from iris.cluster.platform._worker_base import RemoteExecWorkerBase
 from iris.cluster.platform.base import (
     CloudSliceState,
-    CloudVmState,
+    CloudWorkerState,
+    Labels,
+    PlatformError,
     SliceStatus,
-    VmStatus,
+    WorkerStatus,
+    default_stop_all,
 )
-from iris.cluster.platform.ssh import (
-    DirectSshConnection,
+from iris.cluster.platform.bootstrap import build_worker_bootstrap_script
+from iris.cluster.platform.remote_exec import (
+    DirectSshRemoteExec,
 )
 from iris.rpc import config_pb2
 from iris.time_utils import Duration, Timestamp
@@ -51,22 +58,22 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class ManualVmHandle(SshVmBase):
-    """Handle to a VM on a manual (pre-existing) host.
+class ManualWorkerHandle(RemoteExecWorkerBase):
+    """Handle to a worker on a manual (pre-existing) host.
 
-    Uses DirectSshConnection for SSH. Thread-safe: each run_command() spawns
+    Uses DirectSshRemoteExec for SSH. Thread-safe: each run_command() spawns
     a new SSH process.
     """
 
-    def status(self) -> VmStatus:
-        return VmStatus(state=CloudVmState.RUNNING)
+    def status(self) -> WorkerStatus:
+        return WorkerStatus(state=CloudWorkerState.RUNNING)
 
 
 @dataclass
-class ManualStandaloneVmHandle(SshVmBase):
-    """Handle to a standalone VM on a manual host (e.g., controller).
+class ManualStandaloneWorkerHandle(RemoteExecWorkerBase):
+    """Handle to a standalone worker on a manual host (e.g., controller).
 
-    Extends ManualVmHandle with terminate, set_labels, and set_metadata.
+    Extends ManualWorkerHandle with terminate, set_labels, and set_metadata.
     Labels and metadata are tracked in-memory since manual hosts don't have
     a cloud metadata service.
     """
@@ -83,8 +90,8 @@ class ManualStandaloneVmHandle(SshVmBase):
     def metadata(self) -> dict[str, str]:
         return dict(self._metadata)
 
-    def status(self) -> VmStatus:
-        return VmStatus(state=CloudVmState.RUNNING)
+    def status(self) -> WorkerStatus:
+        return WorkerStatus(state=CloudWorkerState.RUNNING)
 
     def terminate(self) -> None:
         if self._on_terminate:
@@ -97,22 +104,40 @@ class ManualStandaloneVmHandle(SshVmBase):
         self._metadata.update(metadata)
 
 
-@dataclass
 class ManualSliceHandle:
     """Handle to a slice of manual hosts.
 
     Hosts are pre-existing and not destroyed on terminate — they are returned
-    to the pool instead.
+    to the pool instead. When bootstrap is requested, describe() composites
+    the bootstrap state with the base state.
     """
 
-    _slice_id: str
-    _hosts: list[str]
-    _labels: dict[str, str]
-    _created_at: Timestamp
-    _label_prefix: str
-    _ssh_connections: list[DirectSshConnection]
-    _on_terminate: Callable[[list[str]], None] | None = None
-    _terminated: bool = False
+    def __init__(
+        self,
+        *,
+        _slice_id: str,
+        _hosts: list[str],
+        _labels: dict[str, str],
+        _created_at: Timestamp,
+        _label_prefix: str,
+        _ssh_connections: list[DirectSshRemoteExec],
+        _on_terminate: Callable[[list[str]], None] | None = None,
+        _bootstrapping: bool = False,
+    ):
+        self._slice_id = _slice_id
+        self._hosts = _hosts
+        self._labels = _labels
+        self._created_at = _created_at
+        self._label_prefix = _label_prefix
+        self._iris_labels = Labels(_label_prefix)
+        self._ssh_connections = _ssh_connections
+        self._on_terminate = _on_terminate
+        self._terminated = False
+        self._bootstrapping = _bootstrapping
+        # Bootstrap state: None means bootstrap not yet completed.
+        # Set by the platform's internal bootstrap thread.
+        self._bootstrap_state: CloudSliceState | None = None
+        self._bootstrap_lock = threading.Lock()
 
     @property
     def slice_id(self) -> str:
@@ -124,7 +149,7 @@ class ManualSliceHandle:
 
     @property
     def scale_group(self) -> str:
-        return self._labels.get(f"{self._label_prefix}-scale-group", "")
+        return self._labels.get(self._iris_labels.iris_scale_group, "")
 
     @property
     def labels(self) -> dict[str, str]:
@@ -136,16 +161,32 @@ class ManualSliceHandle:
 
     def describe(self) -> SliceStatus:
         if self._terminated:
-            return SliceStatus(state=CloudSliceState.DELETING, vm_count=0)
-        vms = [
-            ManualVmHandle(
+            return SliceStatus(state=CloudSliceState.DELETING, worker_count=0)
+        workers = [
+            ManualWorkerHandle(
                 _vm_id=f"{self._slice_id}-{host.replace('.', '-').replace(':', '-')}",
                 _internal_address=host,
-                _ssh=ssh,
+                _remote_exec=ssh,
             )
             for host, ssh in zip(self._hosts, self._ssh_connections, strict=True)
         ]
-        return SliceStatus(state=CloudSliceState.READY, vm_count=len(self._hosts), vms=vms)
+
+        # Composite state: if bootstrap was requested, reflect its progress
+        if self._bootstrapping:
+            with self._bootstrap_lock:
+                bs = self._bootstrap_state
+            if bs is None:
+                state = CloudSliceState.BOOTSTRAPPING
+            elif bs == CloudSliceState.READY:
+                state = CloudSliceState.READY
+            elif bs == CloudSliceState.FAILED:
+                state = CloudSliceState.FAILED
+            else:
+                state = CloudSliceState.READY
+        else:
+            state = CloudSliceState.READY
+
+        return SliceStatus(state=state, worker_count=len(self._hosts), workers=workers)
 
     def terminate(self) -> None:
         if self._terminated:
@@ -165,7 +206,7 @@ class ManualPlatform:
     """Platform for pre-existing hosts managed without cloud provisioning.
 
     Hosts are drawn from a configured pool. On slice termination, hosts are
-    returned to the pool for reuse. SSH uses DirectSshConnection.
+    returned to the pool for reuse. SSH uses DirectSshRemoteExec.
     """
 
     def __init__(
@@ -175,14 +216,15 @@ class ManualPlatform:
         hosts: list[str] | None = None,
     ):
         self._label_prefix = label_prefix
+        self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._all_hosts = list(hosts or [])
         self._available_hosts: set[str] = set(self._all_hosts)
         self._allocated_hosts: set[str] = set()
         self._slices: dict[str, ManualSliceHandle] = {}
-        self._vms: dict[str, ManualStandaloneVmHandle] = {}
+        self._vms: dict[str, ManualStandaloneWorkerHandle] = {}
 
-    def create_vm(self, config: config_pb2.VmConfig) -> ManualStandaloneVmHandle:
+    def create_vm(self, config: config_pb2.VmConfig) -> ManualStandaloneWorkerHandle:
         """Allocate a host from the pool for a standalone VM (e.g., controller)."""
         manual = config.manual
         host = manual.host
@@ -198,16 +240,16 @@ class ManualPlatform:
             raise RuntimeError("No hosts available in manual platform pool")
 
         self._allocated_hosts.add(host)
-        ssh = self._create_ssh_connection(host, manual)
+        remote_exec = self._create_remote_exec(host, manual)
 
         def on_terminate() -> None:
             self._return_hosts([host])
             self._vms.pop(config.name, None)
 
-        handle = ManualStandaloneVmHandle(
+        handle = ManualStandaloneWorkerHandle(
             _vm_id=config.name,
             _internal_address=host,
-            _ssh=ssh,
+            _remote_exec=remote_exec,
             _labels=dict(config.labels),
             _metadata=dict(config.metadata),
             _on_terminate=on_terminate,
@@ -215,8 +257,17 @@ class ManualPlatform:
         self._vms[config.name] = handle
         return handle
 
-    def create_slice(self, config: config_pb2.SliceConfig) -> ManualSliceHandle:
-        """Allocate hosts from the pool for a slice."""
+    def create_slice(
+        self,
+        config: config_pb2.SliceConfig,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+    ) -> ManualSliceHandle:
+        """Allocate hosts from the pool for a slice.
+
+        When bootstrap_config is provided, spawns a background thread that runs
+        the bootstrap script on each worker. The handle's describe() composites
+        bootstrap state with the base state.
+        """
         manual = config.manual
         slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
 
@@ -235,7 +286,7 @@ class ManualPlatform:
             hosts = [self._available_hosts.pop() for _ in range(needed)]
 
         self._allocated_hosts.update(hosts)
-        ssh_connections = [self._create_ssh_connection(h, manual) for h in hosts]
+        ssh_connections = [self._create_remote_exec(h, manual) for h in hosts]
 
         def on_terminate(terminated_hosts: list[str]) -> None:
             self._return_hosts(terminated_hosts)
@@ -249,9 +300,78 @@ class ManualPlatform:
             _label_prefix=self._label_prefix,
             _ssh_connections=ssh_connections,
             _on_terminate=on_terminate,
+            _bootstrapping=bootstrap_config is not None,
         )
         self._slices[slice_id] = handle
+
+        if bootstrap_config:
+
+            def _bootstrap_worker():
+                try:
+                    self._run_bootstrap(handle, bootstrap_config)
+                except Exception as e:
+                    logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
+                    with handle._bootstrap_lock:
+                        handle._bootstrap_state = CloudSliceState.FAILED
+
+            threading.Thread(
+                target=_bootstrap_worker,
+                name=f"bootstrap-{handle.slice_id}",
+                daemon=True,
+            ).start()
+
         return handle
+
+    def _run_bootstrap(
+        self,
+        handle: ManualSliceHandle,
+        bootstrap_config: config_pb2.BootstrapConfig,
+    ) -> None:
+        """Bootstrap all workers in the slice in parallel.
+
+        Manual hosts are already reachable (no cloud provisioning wait), so we
+        bootstrap all workers concurrently via wait_for_connection + bootstrap().
+        """
+        status = handle.describe()
+        workers = status.workers
+        logger.info("Bootstrapping %d workers for slice %s", len(workers), handle.slice_id)
+        errors: list[tuple[str, Exception]] = []
+
+        def _bootstrap_one(worker: RemoteExecWorkerBase) -> None:
+            try:
+                if not worker.internal_address:
+                    raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
+                if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
+                    raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
+                script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
+                worker.bootstrap(script)
+            except Exception as e:
+                errors.append((worker.worker_id, e))
+
+        threads: list[threading.Thread] = []
+        for worker in workers:
+            t = threading.Thread(
+                target=_bootstrap_one,
+                args=(worker,),
+                name=f"bootstrap-{worker.worker_id}",
+                daemon=True,
+            )
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        if errors:
+            failed_ids = [wid for wid, _ in errors]
+            raise PlatformError(
+                f"Bootstrap failed for {len(errors)}/{len(workers)} workers in slice {handle.slice_id}: "
+                f"{', '.join(failed_ids)}: {errors[0][1]}"
+            )
+
+        logger.info("Bootstrap completed for slice %s (%d workers)", handle.slice_id, len(workers))
+        with handle._bootstrap_lock:
+            handle._bootstrap_state = CloudSliceState.READY
 
     def list_slices(
         self,
@@ -275,7 +395,7 @@ class ManualPlatform:
         self,
         zones: list[str],
         labels: dict[str, str] | None = None,
-    ) -> list[ManualStandaloneVmHandle]:
+    ) -> list[ManualStandaloneWorkerHandle]:
         """List all manual standalone VMs, optionally filtered by labels.
 
         The zones parameter is accepted for interface compatibility but ignored —
@@ -302,14 +422,41 @@ class ManualPlatform:
         port = manual.port or 10000
         return f"{manual.host}:{port}"
 
+    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Start or discover existing controller on a manual host. Returns address (host:port)."""
+        address, _vm = vm_start_controller(self, config)
+        return address
+
+    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
+        """Stop the controller on the manual host."""
+        vm_stop_controller(self, config)
+
+    def stop_all(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        dry_run: bool = False,
+        label_prefix: str | None = None,
+    ) -> list[str]:
+        return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
+
+    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
+        label_prefix = config.platform.label_prefix or "iris"
+        labels = Labels(label_prefix)
+        all_slices = self.list_all_slices(labels={labels.iris_managed: "true"})
+        for s in all_slices:
+            logger.info("Terminating slice %s for reload", s.slice_id)
+            s.terminate()
+        self.stop_controller(config)
+        return self.start_controller(config)
+
     # ========================================================================
     # Internal helpers
     # ========================================================================
 
-    def _create_ssh_connection(
+    def _create_remote_exec(
         self, host: str, manual_config: config_pb2.ManualVmConfig | config_pb2.ManualSliceConfig | None = None
-    ) -> DirectSshConnection:
-        """Create an SSH connection for the given host.
+    ) -> DirectSshRemoteExec:
+        """Create a remote execution connection for the given host.
 
         Uses SSH config from the manual_config if provided (per-VM/slice overrides),
         falling back to the platform-level ssh_config.
@@ -336,7 +483,7 @@ class ManualPlatform:
             if ssh_key:
                 key_file = ssh_key
 
-        return DirectSshConnection(
+        return DirectSshRemoteExec(
             host=host,
             user=user,
             key_file=key_file,

@@ -54,7 +54,7 @@ from levanter.inference.engine import Request as GenRequest
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
 from levanter.models.gpt2 import Gpt2Config
-from levanter.models.loss import next_token_loss
+from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.py_utils import set_global_rng_seeds
@@ -266,24 +266,34 @@ class _LmEvalHarnessWorker:
             if self.mp is not None:
                 model = self.mp.cast_to_compute(model)
 
-            logits = model(packed_example.tokens, attn_mask=packed_example.attn_mask)
-            logits = logits.astype(jnp.float32)
-            Pos = logits.resolve_axis(self.EvalPos.name)
+            activations = model.activations(packed_example.tokens, attn_mask=packed_example.attn_mask)
+            if isinstance(activations, tuple):
+                activations, _ = activations
 
-            loss = next_token_loss(
-                Pos=Pos,
-                Vocab=model.Vocab,
-                logits=logits,
-                true_ids=packed_example.tokens,
-                loss_weight=packed_example.loss_weight,
+            pred_embeddings = activations.astype(jnp.float32)
+            pred_lm_head = model.get_lm_head().astype(jnp.float32)
+            Pos = pred_embeddings.resolve_axis(self.EvalPos.name)
+
+            target_y = hax.roll(packed_example.tokens, -1, Pos)
+            not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
+            loss_weight = packed_example.loss_weight.astype(jnp.float32) * not_last_mask.astype(jnp.float32)
+
+            loss, pred_targets = fused_cross_entropy_loss_and_logsumexp_penalty(
+                pred_embeddings,
+                pred_lm_head,
+                Contract=model.Embed,
+                Label=model.Vocab,
+                target_y=target_y,
                 reduction=None,
+                weight=loss_weight,
+                logsumexp_weight=0.0,
+                return_argmax=True,
+                implementation="xla",
             )
 
             # We need to compute losses and also whether or not the completion is correct
             # (i.e. the greedy prediction is the target)
-            pred_targets = hax.argmax(logits, axis=model.Vocab)
-            targets = hax.roll(packed_example.tokens, -1, axis=Pos)
-            is_correct = targets == pred_targets
+            is_correct = target_y == pred_targets
 
             # we need + 1 because we use -1 as a padding value for segments
             max_Segments = hax.Axis("Segments", size=self.max_packed_segments + 1)

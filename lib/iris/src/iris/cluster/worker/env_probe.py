@@ -3,6 +3,7 @@
 
 """Environment probing for worker registration."""
 
+import json
 import logging
 import os
 import re
@@ -16,20 +17,57 @@ from typing import Protocol
 
 from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.rpc import cluster_pb2
+from iris.temp_buckets import REGION_TO_TMP_BUCKET
 
 logger = logging.getLogger(__name__)
 
 _GCP_METADATA_ROOT = "http://metadata.google.internal/computeMetadata/v1/instance"
 _GCP_METADATA_HEADERS = {"Metadata-Flavor": "Google"}
-_REGION_TO_TMP_BUCKET = {
-    "asia-northeast1": "marin-tmp-asia-northeast-1",
-    "us-central1": "marin-tmp-us-central1",
-    "us-central2": "marin-tmp-us-central2",
-    "europe-west4": "marin-tmp-eu-west4",
-    "us-west4": "marin-tmp-us-west4",
-    "us-east1": "marin-tmp-us-east1",
-    "us-east5": "marin-tmp-us-east5",
-}
+
+
+def _device_from_env() -> tuple[cluster_pb2.DeviceConfig | None, int, str]:
+    """Build device information from explicit worker env overrides.
+
+    Returns:
+        Tuple of (device_config, gpu_count, gpu_name). If no accelerator env is
+        set, returns (None, 0, "") so probe callers can fall back to runtime
+        probing (e.g. nvidia-smi).
+    """
+    accel_type = os.environ.get("IRIS_ACCELERATOR_TYPE", "").strip().lower()
+    accel_variant = os.environ.get("IRIS_ACCELERATOR_VARIANT", "").strip()
+    gpu_count_raw = os.environ.get("IRIS_GPU_COUNT", "").strip()
+
+    if not accel_type and not accel_variant and not gpu_count_raw:
+        return None, 0, ""
+
+    gpu_count = 0
+    if gpu_count_raw:
+        try:
+            gpu_count = int(gpu_count_raw)
+        except ValueError as e:
+            raise ValueError(f"IRIS_GPU_COUNT must be an integer, got {gpu_count_raw!r}") from e
+        if gpu_count < 0:
+            raise ValueError(f"IRIS_GPU_COUNT must be >= 0, got {gpu_count}")
+
+    if not accel_type:
+        accel_type = "gpu" if gpu_count > 0 else "cpu"
+
+    device = cluster_pb2.DeviceConfig()
+    if accel_type == "gpu":
+        if gpu_count <= 0:
+            raise ValueError("IRIS_ACCELERATOR_TYPE=gpu requires IRIS_GPU_COUNT > 0")
+        device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant=accel_variant or "auto", count=gpu_count))
+        return device, gpu_count, accel_variant or "auto"
+
+    if accel_type == "tpu":
+        device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=accel_variant, count=0))
+        return device, 0, ""
+
+    if accel_type == "cpu":
+        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant=accel_variant or "cpu"))
+        return device, 0, ""
+
+    raise ValueError(f"Unsupported IRIS_ACCELERATOR_TYPE={accel_type!r}; expected one of cpu/gpu/tpu")
 
 
 @lru_cache(maxsize=1)
@@ -63,8 +101,8 @@ def _get_gcp_metadata(path: str) -> str | None:
         return None
 
 
-def _infer_worker_log_prefix() -> str | None:
-    """Infer worker log prefix from GCP metadata."""
+def detect_gcp_zone() -> str | None:
+    """Return the GCP zone name (e.g. 'us-central1-a') or None if not on GCP."""
     if not _is_gcp_vm():
         return None
     zone = _get_gcp_metadata("zone")
@@ -74,8 +112,16 @@ def _infer_worker_log_prefix() -> str | None:
     zone_name = zone.split("/")[-1]
     if "-" not in zone_name:
         return None
+    return zone_name
+
+
+def _infer_worker_log_prefix() -> str | None:
+    """Infer worker log prefix from GCP metadata."""
+    zone_name = detect_gcp_zone()
+    if not zone_name:
+        return None
     region = zone_name.rsplit("-", 1)[0]
-    bucket = _REGION_TO_TMP_BUCKET.get(region)
+    bucket = REGION_TO_TMP_BUCKET.get(region)
     if not bucket:
         logger.warning("No tmp bucket mapping for region %s", region)
         return None
@@ -238,28 +284,16 @@ def _detect_preemptible(extra_attributes: dict[str, str]) -> bool:
 def _get_extra_attributes() -> dict[str, str]:
     """Get extra worker attributes from IRIS_WORKER_ATTRIBUTES env var.
 
-    Format: key1=value1,key2=value2,...
-    Example: taint:maintenance=true,pool=large-jobs
-
-    Values are always strings; the caller is responsible for type conversion if needed.
+    Format: JSON object, e.g. {"region":"us-west4","pool":"large-jobs"}.
+    Values are stringified.
     """
     attrs_env = os.environ.get("IRIS_WORKER_ATTRIBUTES", "")
     if not attrs_env:
         return {}
-    result: dict[str, str] = {}
-    for pair in attrs_env.split(","):
-        pair = pair.strip()
-        if not pair:
-            continue
-        if "=" not in pair:
-            logger.warning("Skipping malformed attribute (no '='): %s", pair)
-            continue
-        key, value = pair.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key:
-            result[key] = value
-    return result
+    parsed = json.loads(attrs_env)
+    if not isinstance(parsed, dict):
+        raise ValueError("IRIS_WORKER_ATTRIBUTES must decode to a dictionary")
+    return {str(key): str(value) for key, value in parsed.items() if str(key)}
 
 
 def _build_worker_attributes(
@@ -297,6 +331,10 @@ def _build_worker_attributes(
             except ValueError:
                 # Unknown topology - don't add vm-count attribute
                 logger.warning("Unknown TPU topology: %s", tpu_variant)
+
+    if device.HasField("gpu"):
+        attributes["gpu-variant"] = cluster_pb2.AttributeValue(string_value=device.gpu.variant)
+        attributes["gpu-count"] = cluster_pb2.AttributeValue(int_value=device.gpu.count)
 
     # Add extra attributes from environment
     for key, value in extra_attributes.items():
@@ -364,8 +402,14 @@ class DefaultEnvironmentProvider:
         # TPU metadata is resolved from env first, then GCP metadata endpoint.
         tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds = _probe_tpu_metadata()
 
-        # GPU info via nvidia-smi
-        gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
+        # Explicit accelerator settings from bootstrap config are authoritative.
+        configured_device, configured_gpu_count, configured_gpu_name = _device_from_env()
+        gpu_memory_mb = 0
+        probe_source = "env"
+        if configured_device is None:
+            # GPU info via nvidia-smi as fallback only.
+            configured_gpu_count, configured_gpu_name, gpu_memory_mb = _probe_gpu_info()
+            probe_source = "nvidia-smi"
 
         # Build device config using TPU_TYPE for topology lookup
         device = cluster_pb2.DeviceConfig()
@@ -383,11 +427,17 @@ class DefaultEnvironmentProvider:
                     count=tpu_chip_count,
                 )
             )
-        elif gpu_count > 0:
+            configured_gpu_count = 0
+            configured_gpu_name = ""
+            gpu_memory_mb = 0
+            probe_source = "tpu-metadata"
+        elif configured_device is not None:
+            device.CopyFrom(configured_device)
+        elif configured_gpu_count > 0:
             device.gpu.CopyFrom(
                 cluster_pb2.GpuDevice(
-                    variant=gpu_name or "auto",
-                    count=gpu_count,
+                    variant=configured_gpu_name or "auto",
+                    count=configured_gpu_count,
                 )
             )
         else:
@@ -398,19 +448,25 @@ class DefaultEnvironmentProvider:
 
         memory_gb = memory_bytes // (1024**3)
         logger.info(
-            "Worker environment: hostname=%s ip=%s cpu=%d memory=%dGB gpu=%d tpu=%s extra_attributes=%s",
+            "Worker environment: hostname=%s ip=%s cpu=%d memory=%dGB gpu=%d tpu=%s probe_source=%s extra_attributes=%s",
             hostname,
             ip_address,
             cpu_count,
             memory_gb,
-            gpu_count,
+            configured_gpu_count,
             tpu_name or "none",
+            probe_source,
             extra_attributes or "none",
         )
 
         # Build worker attributes for constraint-based scheduling.
         # TPU_NAME is the slice name, used for coscheduling (group_by="tpu-name" groups workers by slice)
         attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
+        logger.info(
+            "Worker attributes: keys=%s preemptible=%s",
+            sorted(attributes.keys()),
+            attributes.get(PREEMPTIBLE_ATTRIBUTE_KEY),
+        )
 
         # VM address from environment (injected by Platform bootstrap)
         vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
@@ -425,8 +481,8 @@ class DefaultEnvironmentProvider:
             tpu_worker_hostnames=tpu_worker_hostnames,
             tpu_worker_id=tpu_worker_id,
             tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
-            gpu_count=gpu_count,
-            gpu_name=gpu_name,
+            gpu_count=configured_gpu_count,
+            gpu_name=configured_gpu_name,
             gpu_memory_mb=gpu_memory_mb,
             device=device,
             attributes=attributes,

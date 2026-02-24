@@ -21,8 +21,8 @@ from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import NamedTuple
 from threading import RLock
+from typing import NamedTuple
 
 from iris.cluster.controller.events import (
     Event,
@@ -40,8 +40,8 @@ from iris.cluster.types import (
     AttributeValue,
     JobName,
     WorkerId,
-    get_device_variant,
     get_device_type,
+    get_device_variant,
     get_gpu_count,
     get_tpu_count,
 )
@@ -92,19 +92,16 @@ WORKER_REPORTED_TERMINAL_STATES: frozenset[int] = frozenset(
 
 
 class TaskTransitionResult(Enum):
-    """Result of a task state transition."""
+    """Result of a task state transition.
 
-    COMPLETE = "complete"
+    APPLIED: Transition processed. No special caller action needed.
+    SHOULD_RETRY: Task failed but has retry budget. Caller should requeue.
+    EXCEEDED_RETRY_LIMIT: Task failed and exhausted retries. Terminal.
+    """
+
+    APPLIED = "applied"
     SHOULD_RETRY = "should_retry"
     EXCEEDED_RETRY_LIMIT = "exceeded_retry_limit"
-
-
-class JobTransitionResult(Enum):
-    """Result of a state transition."""
-
-    COMPLETE = "complete"  # Transition succeeded, no action needed
-    SHOULD_RETRY = "should_retry"  # Job should be re-queued for retry
-    EXCEEDED_RETRY_LIMIT = "exceeded_retry_limit"  # Exceeded retry limit, stay in terminal state
 
 
 # =============================================================================
@@ -324,7 +321,7 @@ class ControllerTask:
 
         Updates both the attempt and task-level state. Handles retry logic:
         - If retriable failure: returns SHOULD_RETRY, task state reflects failure but is schedulable
-        - If terminal success: returns COMPLETE, task state is terminal
+        - If terminal success: returns APPLIED, task state is terminal
         - If exhausted retries: returns EXCEEDED_RETRY_LIMIT, task state is terminal
 
         Does NOT create new attempts - that's the scheduler's job.
@@ -347,7 +344,7 @@ class ControllerTask:
                 self.finished_at = Timestamp.now()
                 self.error = error
                 self.exit_code = exit_code
-            return TaskTransitionResult.COMPLETE
+            return TaskTransitionResult.APPLIED
 
         attempt = self.attempts[-1]
 
@@ -385,7 +382,7 @@ class ControllerTask:
             self.exit_code = final_exit_code
             self.error = error
             self.finished_at = Timestamp.now()
-            return TaskTransitionResult.COMPLETE
+            return TaskTransitionResult.APPLIED
 
         # For other terminal states (KILLED, UNSCHEDULABLE)
         if new_state in (cluster_pb2.TASK_STATE_KILLED, cluster_pb2.TASK_STATE_UNSCHEDULABLE):
@@ -402,7 +399,7 @@ class ControllerTask:
             self.error = actual_error
             self.exit_code = exit_code
             self.finished_at = Timestamp.now()
-            return TaskTransitionResult.COMPLETE
+            return TaskTransitionResult.APPLIED
 
         # Non-terminal states (BUILDING, RUNNING)
         attempt.transition(
@@ -412,7 +409,7 @@ class ControllerTask:
         )
         # Update task-level state for non-terminal transitions
         self.state = new_state
-        return TaskTransitionResult.COMPLETE
+        return TaskTransitionResult.APPLIED
 
     def _handle_failure(self, new_state: int) -> TaskTransitionResult:
         """Determine if task should retry after a failure.
@@ -480,32 +477,16 @@ class ControllerTask:
 
 @dataclass
 class ControllerJob:
-    """Job with self-contained state transitions.
+    """Controller representation of a job.
 
-    State transitions are handled via transition(), which updates internal
-    state and returns a JobTransitionResult indicating what the caller should do.
-
-    Example:
-        job = ControllerJob(job_id=..., request=...)
-
-        # Job starts running when first task starts
-        job.mark_dispatched()
-
-        # Task reports failure
-        result = job.transition(JOB_STATE_FAILED, is_worker_failure=False)
-        if result == JobTransitionResult.SHOULD_RETRY:
-            queue.add(job)  # Caller handles re-queueing
+    Job state is derived from task-state counts via on_task_transition()
+    and _compute_job_state(); it is not managed by a standalone job.transition()
+    retry state machine.
     """
 
     job_id: JobName
     request: cluster_pb2.Controller.LaunchJobRequest
     state: int = cluster_pb2.JOB_STATE_PENDING
-
-    # Retry tracking
-    failure_count: int = 0
-    preemption_count: int = 0
-    max_retries_failure: int = 0
-    max_retries_preemption: int = DEFAULT_MAX_RETRIES_PREEMPTION
 
     # Timestamps
     submitted_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
@@ -522,105 +503,6 @@ class ControllerJob:
     # Incremental task state tracking
     num_tasks: int = 0
     task_state_counts: Counter[int] = field(default_factory=Counter)
-
-    # --- State Transitions ---
-
-    def mark_dispatched(self) -> None:
-        """Mark job as running. Called when first task starts."""
-        self.state = cluster_pb2.JOB_STATE_RUNNING
-        self.started_at = Timestamp.now()
-
-    def revert_dispatch(self) -> None:
-        """Revert dispatch if no tasks actually started."""
-        self.state = cluster_pb2.JOB_STATE_PENDING
-        self.started_at = None
-
-    def transition(
-        self,
-        new_state: int,
-        *,
-        is_worker_failure: bool = False,
-        error: str | None = None,
-        exit_code: int | None = None,
-    ) -> JobTransitionResult:
-        """Transition to a new state.
-
-        For failure states, handles retry logic internally:
-        - Increments appropriate counter (failure_count or preemption_count)
-        - If retries remaining: resets to PENDING, returns SHOULD_RETRY
-        - If no retries: stays in failure state, returns EXCEEDED_RETRY_LIMIT
-
-        Args:
-            new_state: Target state
-            is_worker_failure: True if failure due to worker death (preemption)
-            error: Error message for failure states
-            exit_code: Exit code for completed jobs
-
-        Returns:
-            JobTransitionResult indicating what caller should do
-        """
-        # Handle failure states with retry logic
-        if new_state == cluster_pb2.JOB_STATE_FAILED:
-            return self._handle_failure(is_worker_failure, error, exit_code)
-
-        now = Timestamp.now()
-
-        # Non-failure terminal states
-        if new_state == cluster_pb2.JOB_STATE_SUCCEEDED:
-            self.state = new_state
-            self.finished_at = now
-            self.exit_code = exit_code or 0
-            return JobTransitionResult.COMPLETE
-
-        if new_state == cluster_pb2.JOB_STATE_KILLED:
-            self.state = new_state
-            self.finished_at = now
-            self.error = error
-            return JobTransitionResult.COMPLETE
-
-        if new_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE:
-            self.state = new_state
-            self.finished_at = now
-            if self.request.HasField("scheduling_timeout"):
-                timeout = Duration.from_proto(self.request.scheduling_timeout)
-            else:
-                timeout = None
-            self.error = error or f"Scheduling timeout exceeded ({timeout})"
-            return JobTransitionResult.COMPLETE
-
-        # Non-terminal states (BUILDING, RUNNING)
-        self.state = new_state
-        return JobTransitionResult.COMPLETE
-
-    def _handle_failure(
-        self,
-        is_worker_failure: bool,
-        error: str | None,
-        exit_code: int | None,
-    ) -> JobTransitionResult:
-        """Handle failure with retry logic. Either resets for retry or marks as terminal failure."""
-        if is_worker_failure:
-            self.preemption_count += 1
-            can_retry = self.preemption_count <= self.max_retries_preemption
-        else:
-            self.failure_count += 1
-            can_retry = self.failure_count <= self.max_retries_failure
-
-        if can_retry:
-            # Reset state for retry
-            self.state = cluster_pb2.JOB_STATE_PENDING
-            self.started_at = None
-            self.finished_at = None
-            self.error = None
-            self.exit_code = None
-            return JobTransitionResult.SHOULD_RETRY
-        else:
-            # Terminal failure
-            self.state = cluster_pb2.JOB_STATE_FAILED
-            self.finished_at = Timestamp.now()
-            self.error = error
-            self.exit_code = exit_code
-            return JobTransitionResult.EXCEEDED_RETRY_LIMIT
 
     # --- Task State Tracking ---
 
@@ -690,17 +572,6 @@ class ControllerJob:
             cluster_pb2.JOB_STATE_UNSCHEDULABLE,
         )
 
-    def can_retry_failure(self) -> bool:
-        return self.failure_count < self.max_retries_failure
-
-    def can_retry_preemption(self) -> bool:
-        return self.preemption_count < self.max_retries_preemption
-
-    @property
-    def total_attempts(self) -> int:
-        """Total number of retries (failure + preemption retries)."""
-        return self.failure_count + self.preemption_count
-
     @property
     def is_coscheduled(self) -> bool:
         """Whether this job uses coscheduling (all tasks assigned atomically)."""
@@ -748,8 +619,8 @@ def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
         task = ControllerTask(
             task_id=task_id,
             job_id=job.job_id,
-            max_retries_failure=job.max_retries_failure,
-            max_retries_preemption=job.max_retries_preemption,
+            max_retries_failure=job.request.max_retries_failure,
+            max_retries_preemption=job.request.max_retries_preemption,
             submitted_at=job.submitted_at,
         )
         tasks.append(task)
@@ -1105,6 +976,14 @@ class ControllerState:
             )
             self._workers[event.worker_id] = worker
             txn.log("worker_registered", event.worker_id, address=event.address)
+        logger.info(
+            "Worker registered: id=%s addr=%s gpu_count=%d gpu_name=%s attrs=%s",
+            event.worker_id,
+            event.address,
+            event.metadata.gpu_count,
+            event.metadata.gpu_name,
+            sorted(attributes.keys()),
+        )
 
     def _on_worker_heartbeat(self, txn: TransactionLog, event: WorkerHeartbeatEvent) -> None:
         worker = self._workers[event.worker_id]
@@ -1177,16 +1056,10 @@ class ControllerState:
     # -------------------------------------------------------------------------
 
     def _on_job_submitted(self, txn: TransactionLog, event: JobSubmittedEvent) -> None:
-        # Read retry limits from request, using defaults if not set
-        max_retries_failure = event.request.max_retries_failure  # proto default: 0
-        max_retries_preemption = event.request.max_retries_preemption
-
         job = ControllerJob(
             job_id=event.job_id,
             request=event.request,
             submitted_at=event.timestamp,
-            max_retries_failure=max_retries_failure,
-            max_retries_preemption=max_retries_preemption,
         )
         if job.request.HasField("scheduling_timeout") and job.request.scheduling_timeout.milliseconds > 0:
             job.scheduling_deadline = Deadline.from_now(Duration.from_proto(job.request.scheduling_timeout))
@@ -1924,11 +1797,22 @@ class ControllerState:
                     continue
                 task_id = JobName.from_wire(entry.task_id)
                 task = self._tasks.get(task_id)
-                if task and task.state != entry.state and not task.is_finished():
-                    self._process_task_state_change(task_id, entry.state, entry.attempt_id)
-                    # Store log_directory from worker
-                    if task and entry.attempt_id < len(task.attempts) and entry.log_directory:
-                        task.attempts[entry.attempt_id].log_directory = entry.log_directory
+                if task and not task.is_finished():
+                    # Always persist log_directory as soon as the worker reports it,
+                    # regardless of whether the state changed. This ensures we capture
+                    # it even if the worker crashes before the next heartbeat cycle.
+                    if entry.log_directory and entry.attempt_id < len(task.attempts):
+                        if not task.attempts[entry.attempt_id].log_directory:
+                            task.attempts[entry.attempt_id].log_directory = entry.log_directory
+                    if task.state != entry.state:
+                        # Ignore PENDING reported by the worker: the task thread starts in
+                        # PENDING before transitioning to BUILDING, so the first heartbeat
+                        # after assignment can carry a stale PENDING.  Accepting it would
+                        # regress an ASSIGNED task back to PENDING and silently drop it
+                        # from the building-count backpressure window.
+                        if entry.state == cluster_pb2.TASK_STATE_PENDING:
+                            continue
+                        self._process_task_state_change(task_id, entry.state, entry.attempt_id)
 
             # Process completed tasks
             for entry in response.completed_tasks:

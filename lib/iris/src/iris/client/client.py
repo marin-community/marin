@@ -44,6 +44,7 @@ from iris.cluster.types import (
     JobName,
     Namespace,
     ResourceSpec,
+    merge_constraints,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -621,6 +622,14 @@ class IrisClient:
                     extras=parent_extras,
                     pip_packages=parent_pip,
                 )
+
+            parent_constraints = list(job_info.constraints) if job_info else []
+            if constraints is None:
+                constraints = parent_constraints
+            elif len(constraints) == 0:
+                constraints = []
+            else:
+                constraints = merge_constraints(parent_constraints, constraints)
 
         # Convert to wire format
         resources_proto = resources.to_proto()

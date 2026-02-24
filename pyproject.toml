@@ -27,6 +27,7 @@ override-dependencies = [
     "antlr4-python3-runtime==4.11",
     "python-multipart>=0.0.22",
     "wheel>=0.46.2",
+    "datasets>=3.1.0,<4.0.0",
 ]
 
 [tool.uv.workspace]
@@ -46,9 +47,11 @@ haliax = { workspace = true }
 levanter = { workspace = true }
 marin = { workspace = true }
 zephyr = { workspace = true }
-# NOTE: dupekit is an optional dependency, it could be a workspace member but declaring
-# it as a path dependency makes it less likely to trigger unnecessary build
+# NOTE: dupekit and harbor are optional dependencies. Declaring them as path
+# dependencies (not workspace members) avoids pulling their dev dependency
+# groups into workspace resolution.
 dupekit = { path = "lib/dupekit", editable = true }
+harbor = { path = "lib/harbor", editable = true }
 
 [tool.black]
 line-length = 121
@@ -71,7 +74,7 @@ extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
-ignore = ["F722", "B008", "UP015", "A005", "I001"]
+ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
