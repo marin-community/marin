@@ -44,6 +44,16 @@ from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
 
+MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
+
+
+def compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int:
+    """Compute target group size to produce approximately max_workers groups.
+
+    Applies a floor of MIN_GROUP_BYTES to avoid degenerate tiny shards.
+    """
+    return max(total_input_bytes // max_workers, MIN_GROUP_BYTES)
+
 
 @dataclasses.dataclass(frozen=True)
 class HfDatasetSpec:
@@ -82,9 +92,6 @@ class TokenizeConfig(TokenizeConfigBase):
     The format of the dataset. This is used to determine how to tokenize the data.
     See Levanter's documentation for more details.
     """
-    window_size_bytes: int = 10_000_000_000
-    """Files are bundled into groups up to this size; each group becomes one shard.
-    Smaller values produce more shards and thus more parallelism (up to max_workers)."""
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
     writer_batch_size: int = 65536
@@ -147,9 +154,6 @@ class HfTokenizeConfig(TokenizeConfigBase):
     name: str | None = None  # HF dataset name
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
-    window_size_bytes: int = 10_000_000_000
-    """Files are bundled into groups up to this size; each group becomes one shard.
-    Smaller values produce more shards and thus more parallelism (up to max_workers)."""
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
     writer_batch_size: int = 65536
@@ -346,10 +350,11 @@ def tokenize(config: TokenizeConfigBase):
             )
         )
         total_input_bytes = sum(f["size"] for f in file_stats)
-        file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
+        target_group_bytes = compute_target_group_bytes(total_input_bytes, config.max_workers)
+        file_groups = list(_bundle_files_by_size(file_stats, target_group_bytes))
         logger.info(
             f"Grouped {len(paths):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
-            f"in {time.monotonic() - filescan_start:.1f}s."
+            f"(target {target_group_bytes / 1e9:.2f} GB/group) in {time.monotonic() - filescan_start:.1f}s."
         )
         return file_groups
 

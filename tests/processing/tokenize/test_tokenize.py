@@ -10,7 +10,14 @@ from levanter.data.mixture import MixtureDataset
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
 from marin.execution import InputName
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, tokenize
+from marin.processing.tokenize.tokenize import (
+    MIN_GROUP_BYTES,
+    HfTokenizeConfig,
+    TokenizeConfig,
+    _bundle_files_by_size,
+    compute_target_group_bytes,
+    tokenize,
+)
 
 # Dummy values for other required TokenizeConfig fields
 DUMMY_CACHE_PATH = "/dummy/cache"
@@ -113,6 +120,54 @@ def test_mixed_paths_one_invalid_inputname():
     assert "gs://bucket/data/test/file2.jsonl" in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    "total_bytes, max_workers, expected",
+    [
+        # Normal: 100 GB across 100 workers → 1 GB per group
+        (100_000_000_000, 100, 1_000_000_000),
+        # Floor kicks in: 1 GB across 100 workers → would be 10 MB, but MIN_GROUP_BYTES = 100 MB
+        (1_000_000_000, 100, MIN_GROUP_BYTES),
+        # Single worker: entire dataset in one group
+        (50_000_000_000, 1, 50_000_000_000),
+        # Tiny dataset: floor still applies
+        (10_000_000, 4096, MIN_GROUP_BYTES),
+        # Exact division
+        (4_000_000_000, 4, 1_000_000_000),
+    ],
+)
+def test_compute_target_group_bytes(total_bytes, max_workers, expected):
+    assert compute_target_group_bytes(total_bytes, max_workers) == expected
+
+
+def test_bundle_files_produces_expected_groups():
+    """Auto-computed grouping should produce approximately max_workers groups."""
+    file_infos = [{"filename": f"file_{i}.jsonl", "size": 500_000_000} for i in range(20)]
+    total_bytes = sum(f["size"] for f in file_infos)  # 10 GB total
+    max_workers = 4
+    target = compute_target_group_bytes(total_bytes, max_workers)  # 2.5 GB per group
+
+    groups = list(_bundle_files_by_size(file_infos, target))
+    # _bundle_files_by_size yields a group when adding the next file would reach
+    # the target (uses >=). With target=2.5 GB and 500 MB files, each group fits
+    # 4 files (2 GB < 2.5 GB), yielding 5 groups.
+    assert len(groups) == 5
+    for group in groups:
+        assert len(group) == 4
+
+
+def test_bundle_files_single_large_file():
+    """A single file larger than target_group_bytes gets its own group."""
+    file_infos = [
+        {"filename": "big.jsonl", "size": 5_000_000_000},
+        {"filename": "small1.jsonl", "size": 100_000_000},
+        {"filename": "small2.jsonl", "size": 100_000_000},
+    ]
+    target = 1_000_000_000  # 1 GB
+    groups = list(_bundle_files_by_size(file_infos, target))
+    assert groups[0] == ["big.jsonl"]
+    assert groups[1] == ["small1.jsonl", "small2.jsonl"]
+
+
 @pytest.mark.slow
 def test_tokenize_full_pipeline_integration(tmp_path):
     """Integration test for the full tokenization pipeline."""
@@ -121,7 +176,6 @@ def test_tokenize_full_pipeline_integration(tmp_path):
         cache_path=str(tmp_path / "cache"),
         tokenizer="gpt2",
         sample_count=100,
-        window_size_bytes=1_000_000,
         format=TextLmDatasetFormat(),
     )
 
