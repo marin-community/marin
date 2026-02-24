@@ -575,10 +575,16 @@ def test_pipeline_id_increments(fray_client, tmp_path):
 
 def test_pull_task_returns_shutdown_on_last_stage_empty_queue(tmp_path):
     """When the last stage's tasks are all in-flight or done, pull_task returns SHUTDOWN."""
+    from unittest.mock import MagicMock
 
+    from fray.v2.actor import ActorContext, _set_current_actor, _reset_current_actor
     from zephyr.execution import Shard, ShardTask, TaskResult, ZephyrCoordinator
 
-    coord = ZephyrCoordinator()
+    token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
+    try:
+        coord = ZephyrCoordinator()
+    finally:
+        _reset_current_actor(token)
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
     coord.set_shared_data({})
 

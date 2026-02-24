@@ -246,6 +246,8 @@ class ZephyrCoordinator:
     """
 
     def __init__(self):
+        from fray.v2 import current_actor
+
         # Task management state
         self._task_queue: deque[ShardTask] = deque()
         self._results: dict[int, TaskResult] = {}
@@ -272,6 +274,9 @@ class ZephyrCoordinator:
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
+
+        actor_ctx = current_actor()
+        self._name = f"{actor_ctx.group_name}"
 
     def initialize(
         self,
@@ -669,6 +674,9 @@ class ZephyrCoordinator:
             for shard_idx in range(len(shard_refs))
         ]
 
+    def __repr__(self) -> str:
+        return f"ZephyrCoordinator(name={self._name})"
+
     def shutdown(self) -> None:
         """Signal workers to exit. Worker group is managed by ZephyrContext."""
         logger.info("[coordinator.shutdown] Starting shutdown")
@@ -911,6 +919,9 @@ class ZephyrWorker:
 
         logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, chunk_idx)
         return TaskResult(chunks=results)
+
+    def __repr__(self) -> str:
+        return f"ZephyrWorker(id={self._worker_id})"
 
     def shutdown(self) -> None:
         """Stop the worker's polling loop."""
