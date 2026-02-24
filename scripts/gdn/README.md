@@ -67,19 +67,21 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --reasoning-effort xhigh \
   --resilient \
   --hold-dev-tpu \
-  --dev-tpu-cluster us-central1 \
-  --dev-tpu-fallback-cluster us-east5-a \
+  --dev-tpu-cluster us-east5-a \
+  --dev-tpu-fallback-cluster us-central1 \
   --dev-tpu-name "$USER-gdn" \
   --dev-tpu-type v5p-8 \
   --dev-tpu-allocate-attempts 2 \
   --dev-tpu-allocate-retry-sleep 20 \
-  --validation-ray-cluster us-central1 \
-  --validation-ray-cluster us-east5-a \
-  --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name $USER-gdn --tests both"
+  --validation-ray-cluster-auto \
+  --validation-ray-cluster-exclude vllm \
+  --validation-ray-cluster-exclude big-run \
+  --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name $USER-gdn --tests both"
 ```
 
 When `--hold-dev-tpu` is enabled, `gdnctl` injects a session directive that prefers dev TPU validation/profile commands (`dev-tpu-test` / `dev-tpu-profile`) and allows Ray fallback when needed.
 Keep `--post-check` cluster/name aligned to the held allocation (`--cluster` + `--tpu-name`) so checks run on the active dev TPU.
+`--validation-ray-cluster-auto` discovers fallback clusters from `infra/marin-*.yaml` and filters them by required TPU type (`--validation-profile-tpu` when profiling is enabled). By default it excludes cluster names containing `vllm` and `big-run`.
 
 Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`

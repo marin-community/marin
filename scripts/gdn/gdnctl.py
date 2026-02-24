@@ -44,6 +44,7 @@ TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 DEFAULT_HF_TRACE_PATTERN = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$)"
 DEFAULT_HF_TRACE_PATTERN_WITH_XPLANE = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$|xplane\\.pb$)"
 DEFAULT_HILLCLIMB_LOG = REPO_ROOT / "lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md"
+DEFAULT_VALIDATION_CLUSTER_EXCLUDE_SUBSTRINGS = ("vllm", "big-run")
 
 SESSION_DIRECTIVE_PRESET_FILES = {
     "training-chunk-kernel-focus": REPO_ROOT / "scripts/gdn/session_directives/training-chunk-kernel-focus.md",
@@ -1623,6 +1624,56 @@ def _dedupe_clusters(clusters: Sequence[str]) -> list[str]:
     return deduped
 
 
+def _cluster_supports_tpu_slice(config_path: Path, *, slice_key: str | None) -> bool:
+    try:
+        text = config_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    if "tpu_slice_" not in text:
+        return False
+    if slice_key is None:
+        return True
+    return slice_key in text
+
+
+def _normalize_tpu_slice_key(tpu_type: str | None) -> str | None:
+    if not tpu_type:
+        return None
+    normalized = tpu_type.strip().lower()
+    if not normalized or normalized == "auto":
+        return None
+    normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
+    if not normalized:
+        return None
+    return f"tpu_slice_{normalized}"
+
+
+def _required_validation_tpu_type(args: argparse.Namespace) -> str | None:
+    if args.validation_mode in {"required", "profile-only"}:
+        return args.validation_profile_tpu
+    return args.validation_ray_tpu
+
+
+def _discover_validation_ray_clusters(args: argparse.Namespace) -> list[str]:
+    excludes = [token.lower() for token in args.validation_ray_cluster_exclude]
+    slice_key = _normalize_tpu_slice_key(_required_validation_tpu_type(args))
+
+    discovered: list[str] = []
+    for config_path in sorted((REPO_ROOT / "infra").glob("marin-*.yaml")):
+        stem = config_path.stem
+        if not stem.startswith("marin-"):
+            continue
+        cluster = stem[len("marin-") :]
+        cluster_lower = cluster.lower()
+        if any(token in cluster_lower for token in excludes):
+            continue
+        if not _cluster_supports_tpu_slice(config_path, slice_key=slice_key):
+            continue
+        discovered.append(cluster)
+
+    return discovered
+
+
 def _validation_bad_ray_clusters(args: argparse.Namespace) -> set[str]:
     bad = getattr(args, "_validation_bad_ray_clusters", None)
     if bad is None:
@@ -1634,6 +1685,23 @@ def _validation_bad_ray_clusters(args: argparse.Namespace) -> set[str]:
 def _validation_ray_clusters(args: argparse.Namespace) -> list[str]:
     if args.validation_ray_cluster:
         clusters = _dedupe_clusters(args.validation_ray_cluster)
+    elif args.validation_ray_cluster_auto:
+        active_cluster = getattr(args, "active_dev_tpu_cluster", None)
+        discovered = _discover_validation_ray_clusters(args)
+        if not getattr(args, "_validation_auto_cluster_reported", False):
+            print(
+                "[gdnctl] auto-discovered validation Ray clusters: "
+                f"{', '.join(discovered) if discovered else '(none)'}"
+            )
+            args._validation_auto_cluster_reported = True
+        clusters = _dedupe_clusters(
+            [
+                active_cluster,
+                args.dev_tpu_cluster,
+                *args.dev_tpu_fallback_cluster,
+                *discovered,
+            ]
+        )
     else:
         active_cluster = getattr(args, "active_dev_tpu_cluster", None)
         candidates = [active_cluster, args.dev_tpu_cluster, *args.dev_tpu_fallback_cluster]
@@ -1920,6 +1988,8 @@ def _apply_resilient_defaults(args: argparse.Namespace) -> None:
         args.perf_regression_policy = "revert-count-failure"
     if args.validation_max_attempts >= 0:
         args.validation_max_attempts = -1
+    if not args.validation_ray_cluster:
+        args.validation_ray_cluster_auto = True
 
 
 def _last_iteration_bounds(lines: Sequence[str]) -> tuple[int, int] | None:
@@ -2101,6 +2171,10 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
     if args.validation_retry_sleep < 0:
         raise SystemExit("[gdnctl] --validation-retry-sleep must be >= 0.")
+
+    args.validation_ray_cluster_exclude = [
+        token.strip() for token in args.validation_ray_cluster_exclude if token and token.strip()
+    ]
 
     if args.perf_mode == "required" and args.validation_mode == "off":
         raise SystemExit("[gdnctl] --perf-mode=required requires --validation-mode=required or profile-only.")
@@ -2575,6 +2649,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Ray cluster candidate for validation fallback (repeatable). Defaults to dev cluster candidates.",
+    )
+    codex_loop.add_argument(
+        "--validation-ray-cluster-auto",
+        action="store_true",
+        help=(
+            "Auto-discover validation Ray fallback clusters from infra/marin-*.yaml, "
+            "filtered by required TPU type and --validation-ray-cluster-exclude."
+        ),
+    )
+    codex_loop.add_argument(
+        "--validation-ray-cluster-exclude",
+        action="append",
+        default=list(DEFAULT_VALIDATION_CLUSTER_EXCLUDE_SUBSTRINGS),
+        help=(
+            "Cluster-name substring excluded from auto-discovered validation Ray clusters "
+            "(repeatable, case-insensitive)."
+        ),
     )
     codex_loop.add_argument(
         "--validation-ray-tpu",
