@@ -25,6 +25,7 @@ def maybe_restore_checkpoint(
         allow_partial=allow_partial,
     )
 
+
 def save_checkpoint_on_step(checkpointer: Checkpointer | None, train_state: PyTree, *, force: bool = False) -> None:
     if checkpointer is None:
         return

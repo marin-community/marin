@@ -44,7 +44,9 @@ def build_tagged_evaluator(
     compute_axis_mapping = trainer_runtime.compute_axis_mapping
     batch_axis_resource = compute_axis_mapping.get(
         trainer_runtime.EvalBatch.name,
-        compute_axis_mapping.get(trainer_runtime.batch_axis_name or "batch", compute_axis_mapping.get("batch", "data")),
+        compute_axis_mapping.get(
+            trainer_runtime.batch_axis_name or "batch", compute_axis_mapping.get("batch", "data")
+        ),
     )
     eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
 

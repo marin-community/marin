@@ -307,7 +307,11 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
 
                 save_checkpoint_on_step(checkpointer, state)
 
-                if profiler_enabled and profiler_ctx is not None and step == profiler_start_step + profiler_num_steps - 1:
+                if (
+                    profiler_enabled
+                    and profiler_ctx is not None
+                    and step == profiler_start_step + profiler_num_steps - 1
+                ):
                     profiler_ctx.__exit__(None, None, None)
                     profiler_ctx = None
         finally:
