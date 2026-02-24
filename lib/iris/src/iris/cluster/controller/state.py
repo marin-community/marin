@@ -21,8 +21,8 @@ from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import NamedTuple
 from threading import RLock
+from typing import NamedTuple
 
 from iris.cluster.controller.events import (
     Event,
@@ -40,8 +40,8 @@ from iris.cluster.types import (
     AttributeValue,
     JobName,
     WorkerId,
-    get_device_variant,
     get_device_type,
+    get_device_variant,
     get_gpu_count,
     get_tpu_count,
 )

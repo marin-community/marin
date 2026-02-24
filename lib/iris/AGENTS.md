@@ -212,32 +212,28 @@ in any zone and serve workers across all regions.
 
 **When changing the controller zone**, update in `examples/marin.yaml`:
 - `controller.gcp.zone` — the GCE zone
-- `controller.image` and `defaults.bootstrap.docker_image` — use a registry in
-  the same region (see below). `cluster start` auto-builds and pushes images to
-  the region parsed from the image tag, so no manual push is needed.
+- Image tags use `ghcr.io/marin-community/...` format. The controller and
+  autoscaler automatically rewrite these to AR remote repos for the VM's
+  continent at boot time.
 
-**Docker registries** are configured in `platform/bootstrap.py` (both worker and
-controller bootstrap scripts). If you add a new region's Artifact Registry, add
-it to both `gcloud auth configure-docker` lines. List existing repos with:
-`gcloud artifacts repositories list --project=hai-gcp-models`
+**Docker registries**: Bootstrap scripts in `platform/bootstrap.py` auto-detect
+AR image tags and configure `gcloud auth configure-docker`. AR remote repos
+proxy GHCR — see `docs/image-push.md` for setup.
 
 ### Multi-Region Image Push/Pull
 
-For production deployments, use GCP Artifact Registry (AR) instead of GHCR.
-AR images pull quickly within GCP; GHCR pulls from GCP VMs are often slow.
+Images are pushed only to **GHCR** (`ghcr.io/marin-community/`). GCP VMs pull
+from **Artifact Registry remote repositories** that act as pull-through caches
+for GHCR. See `docs/image-push.md` for full details.
 
-**Push**: When `--config` is provided, `iris build push` auto-derives GCP regions:
+**Push**: `iris build push` and `iris cluster start` push to GHCR only.
 
-`iris --config examples/marin.yaml build push iris-worker:v1 --registry gcp`
+**Pull**: The autoscaler and controller bootstrap automatically rewrite GHCR
+image tags to the AR remote repo for the VM's continent:
+- `ghcr.io/org/image:v1` → `us-docker.pkg.dev/project/ghcr-mirror/org/image:v1`
 
-`iris cluster start` also auto-pushes all three image types (worker, controller,
-task) to every discovered cluster region when the image tags are AR format.
-
-**Pull**: The autoscaler rewrites AR image tags to match each scale group's zone
-region automatically. Set `defaults.bootstrap.docker_image` to any AR region tag
-(for example `us-central2-docker.pkg.dev/project/marin/iris-worker:v1`) and the
-per-group rewrite handles the rest. Non-AR tags (`ghcr.io`, `docker.io`) pass
-through unchanged and are not rewritten.
+Set `defaults.bootstrap.docker_image` to a `ghcr.io/...` tag. Non-GHCR tags
+(`docker.io`, existing AR tags) pass through unchanged.
 
 **Bundle storage** (`controller.bundle_prefix`) is a GCS URI with no zone
 affinity — globally accessible.
