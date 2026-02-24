@@ -4,8 +4,8 @@
 """
 Tokenize pre-tokenized TokLIP image-caption data into unified sequences for pre-training.
 
-Reads parquet shards from GCS containing TokLIP image tokens and captions,
-produces dual-ordering (image-first + text-first) token sequences with per-token
+Reads parquet shards from GCS containing TokLIP image tokens and captions.
+Upload/download use gcloud storage cp (command line). Produces dual-ordering (image-first + text-first) token sequences with per-token
 loss weights, and writes them to Levanter cache format.
 
 Supports two parquet schemas:
@@ -38,9 +38,9 @@ Usage:
     # Shuffled mode, small test run
     uv run experiments/unified/vlm_tokenize_captions.py \
         --input_path gs://marin-vlm/hf_85m_tokenized \
-        --output_path gs://marin-vlm/hf_85m_levanter_cache_test \
-        --shuffle true --max_batch_gb 1 --rows_per_shard 8000 \
-        --start_shard 0 --end_shard 100 --num_workers 16
+        --output_path gs://marin-vlm/hf_85m_levanter_cache \
+        --shuffle true --max_batch_gb 100 --rows_per_shard 8000 \
+        --start_shard 0 --end_shard 10000 --num_workers 128
 
     # Ratio-controlled: 30% generation (text-first), 70% understanding (image-first)
     uv run experiments/unified/vlm_tokenize_captions.py \
@@ -86,11 +86,26 @@ VISION_END_ID = 128_005  # <|vision_end|> (repurposed reserved_special_token_3)
 ENDOFTEXT_ID = 128_001  # <|end_of_text|> (Llama3 EOS)
 
 
-# --- GCS helpers (subprocess-based, no gcsfs) ---
+# --- GCS transfer via gcloud storage (command line) ---
+# gcloud storage cp has built-in parallelism for multiple files; we do not add our own.
+
+
+def gcs_download_batch(remote_paths: list[str], local_dir: str) -> None:
+    """Download multiple GCS objects to local_dir in one gcloud storage cp call.
+    gcloud uses its own multi-worker parallelism; we do not spawn multiple processes."""
+    if not remote_paths:
+        return
+    gcs_paths = [p if p.startswith("gs://") else f"gs://{p}" for p in remote_paths]
+    cmd = ["gcloud", "storage", "cp", "--quiet"] + gcs_paths + [local_dir]
+    # Allow enough time for all files (e.g. 10 min per file cap, or 2h total)
+    timeout = min(7200, 600 * len(remote_paths))
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"gcloud storage cp failed: {result.stderr.strip()}")
 
 
 def gcs_download(remote_path: str, local_path: str) -> None:
-    """Download a file from GCS using gcloud storage cp."""
+    """Download a single file from GCS using gcloud storage cp."""
     result = subprocess.run(
         ["gcloud", "storage", "cp", "--quiet", remote_path, local_path],
         capture_output=True,
@@ -466,13 +481,11 @@ def _list_shard_paths(input_path: str, start_shard: int | None, end_shard: int |
     if not all_paths:
         raise ValueError(f"No parquet shards found at {input_path}")
     logger.info("Found %d total shards at %s", len(all_paths), input_path)
-
     if start_shard is not None or end_shard is not None:
         start = start_shard or 0
         end = end_shard if end_shard is not None else len(all_paths)
         all_paths = all_paths[start:end]
         logger.info("Selected shards [%d, %d) (%d shards)", start, end, len(all_paths))
-
     return all_paths
 
 
@@ -505,7 +518,7 @@ class TokenizeVLMConfig:
     """Directory for temporary parquet downloads (default: /dev/shm for faster I/O)."""
     staging_dir: str = "/run/shards"
     """Directory for staging output shard caches before uploading to GCS."""
-    val_fraction: float = 0.005
+    val_fraction: float = 0.0002
     """Fraction of valid rows to hold out for validation (0.0 to disable).
     Val rows produce separate understanding (image-first) and generation (text-first)
     caches at {output_path}/val_understanding/validation/ and
@@ -590,12 +603,19 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
         shard_outputs.append((shard_path, out))
 
     # Skip shards that already have a .success sentinel
+    total_parquets = len(shard_outputs)
     pending = []
     for shard_path, out_path in shard_outputs:
         if not fsspec_exists(f"{out_path}/.success"):
             pending.append((shard_path, out_path))
+    already_done = total_parquets - len(pending)
 
-    logger.info("%d shards pending (%d already done)", len(pending), len(shard_outputs) - len(pending))
+    logger.info(
+        "Parquets: total=%d, already done (have .success)=%d, pending (to process)=%d",
+        total_parquets,
+        already_done,
+        len(pending),
+    )
 
     # Track val shard paths for consolidation and counts
     val_und_gcs_paths: list[str] = []
@@ -626,104 +646,114 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
         os.makedirs(config.download_dir, exist_ok=True)
         os.makedirs(config.staging_dir, exist_ok=True)
         total_completed = 0
-        for chunk_idx in tqdm(range(num_chunks), desc="Chunks", unit="chunk"):
-            chunk = pending[chunk_idx * chunk_size : (chunk_idx + 1) * chunk_size]
-            chunk_label = f"Chunk {chunk_idx + 1}/{num_chunks}"
+        with tqdm(
+            total=len(pending),
+            desc="Parquets",
+            unit="parquet",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+        ) as parquet_pbar:
+            for chunk_idx in range(num_chunks):
+                chunk = pending[chunk_idx * chunk_size : (chunk_idx + 1) * chunk_size]
+                chunk_label = f"Chunk {chunk_idx + 1}/{num_chunks}"
 
-            # Parquet downloads go to download_dir, cache output goes to staging_dir
-            parquet_work_dir = tempfile.mkdtemp(prefix=f"vlm_chunk{chunk_idx}_", dir=config.download_dir)
-            local_parquet_dir = os.path.join(parquet_work_dir, "parquets")
-            cache_work_dir = tempfile.mkdtemp(prefix=f"vlm_cache{chunk_idx}_", dir=config.staging_dir)
-            local_cache_dir = os.path.join(cache_work_dir, "caches")
-            os.makedirs(local_parquet_dir)
-            os.makedirs(local_cache_dir)
+                # Parquet downloads go to download_dir, cache output goes to staging_dir
+                parquet_work_dir = tempfile.mkdtemp(prefix=f"vlm_chunk{chunk_idx}_", dir=config.download_dir)
+                local_parquet_dir = os.path.join(parquet_work_dir, "parquets")
+                cache_work_dir = tempfile.mkdtemp(prefix=f"vlm_cache{chunk_idx}_", dir=config.staging_dir)
+                local_cache_dir = os.path.join(cache_work_dir, "caches")
+                os.makedirs(local_parquet_dir)
+                os.makedirs(local_cache_dir)
 
-            # Step 1: Download this chunk's parquet shards from GCS
-            logger.info("[%s] Downloading %d shards ...", chunk_label, len(chunk))
-            chunk_jobs = []
-            for shard_path, gcs_out_path in tqdm(chunk, desc="Downloading", unit="file", leave=False):
-                gcs_shard = shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}"
-                filename = shard_path.rsplit("/", 1)[-1]
-                local_parquet = os.path.join(local_parquet_dir, filename)
-                shard_name = filename.replace(".parquet", "")
-                local_cache = os.path.join(local_cache_dir, f"part-{shard_name}")
+                # Step 1: Download this chunk's parquet shards (one gcloud storage cp; gcloud does parallelism)
+                logger.info("[%s] Downloading %d shards ...", chunk_label, len(chunk))
+                gcs_shards = [
+                    shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}"
+                    for shard_path, _ in chunk
+                ]
+                gcs_download_batch(gcs_shards, local_parquet_dir)
+                chunk_jobs = []
+                for shard_path, gcs_out_path in chunk:
+                    filename = shard_path.rsplit("/", 1)[-1]
+                    local_parquet = os.path.join(local_parquet_dir, filename)
+                    shard_name = filename.replace(".parquet", "")
+                    local_cache = os.path.join(local_cache_dir, f"part-{shard_name}")
+                    chunk_jobs.append((local_parquet, local_cache, gcs_out_path, shard_path))
 
-                gcs_download(gcs_shard, local_parquet)
-                chunk_jobs.append((local_parquet, local_cache, gcs_out_path, shard_path))
+                # Step 2: Process in parallel (workers only touch local files)
+                logger.info("[%s] Processing %d shards with %d workers ...", chunk_label, len(chunk_jobs), num_workers)
+                with ProcessPoolExecutor(max_workers=num_workers) as pool:
+                    futures = {
+                        pool.submit(
+                            process_shard,
+                            local_parquet,
+                            local_cache,
+                            local_tokenizer_path,
+                            config.w_visual,
+                            config.dual_ordering,
+                            config.generation_ratio,
+                            source_shard,
+                            config.val_fraction,
+                        ): (local_cache, source_shard)
+                        for local_parquet, local_cache, _gcs_out, source_shard in chunk_jobs
+                    }
 
-            # Step 2: Process in parallel (workers only touch local files)
-            logger.info("[%s] Processing %d shards with %d workers ...", chunk_label, len(chunk_jobs), num_workers)
-            with ProcessPoolExecutor(max_workers=num_workers) as pool:
-                futures = {
-                    pool.submit(
-                        process_shard,
-                        local_parquet,
-                        local_cache,
-                        local_tokenizer_path,
-                        config.w_visual,
-                        config.dual_ordering,
-                        config.generation_ratio,
-                        source_shard,
-                        config.val_fraction,
-                    ): (local_cache, source_shard)
-                    for local_parquet, local_cache, _gcs_out, source_shard in chunk_jobs
-                }
+                    for future in tqdm(
+                        as_completed(futures),
+                        desc="Processing chunk",
+                        total=len(futures),
+                        unit="shard",
+                        leave=False,
+                    ):
+                        local_cache, source = futures[future]
+                        try:
+                            result = future.result()
+                            total_completed += 1
+                            parquet_pbar.update(1)
+                            parquet_pbar.set_postfix_str(f"done {total_completed}/{len(pending)}")
+                            total_train_records += result["count"]
+                            total_train_tokens += result["token_count"]
+                            total_val_und_records += result.get("val_und_count", 0)
+                            total_val_gen_records += result.get("val_gen_count", 0)
 
-                for future in tqdm(
-                    as_completed(futures),
-                    desc=f"Processing ({total_completed}/{len(pending)})",
-                    total=len(futures),
-                    unit="shard",
-                    leave=False,
+                            # Track val cache paths
+                            if result.get("val_und_path"):
+                                shard_name = local_cache.rsplit("/", 1)[-1]
+                                val_und_gcs = f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
+                                val_und_gcs_paths.append(val_und_gcs)
+                            if result.get("val_gen_path"):
+                                shard_name = local_cache.rsplit("/", 1)[-1]
+                                val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
+                                val_gen_gcs_paths.append(val_gen_gcs)
+                        except Exception:
+                            logger.exception("Failed to process shard %s", source)
+                            raise
+
+                # Step 3: Upload results to GCS (train + val caches)
+                logger.info("[%s] Uploading shard caches ...", chunk_label)
+                for _local_parquet, local_cache, gcs_out_path, _source in tqdm(
+                    chunk_jobs, desc="Uploading", unit="shard", leave=False
                 ):
-                    local_cache, source = futures[future]
-                    try:
-                        result = future.result()
-                        total_completed += 1
-                        total_train_records += result["count"]
-                        total_train_tokens += result["token_count"]
-                        total_val_und_records += result.get("val_und_count", 0)
-                        total_val_gen_records += result.get("val_gen_count", 0)
+                    # Upload train cache
+                    gcs_dest = gcs_out_path if gcs_out_path.startswith("gs://") else f"gs://{gcs_out_path}"
+                    gcs_upload(local_cache, gcs_dest)
 
-                        # Track val cache paths
-                        if result.get("val_und_path"):
-                            shard_name = local_cache.rsplit("/", 1)[-1]
-                            val_und_gcs = f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
-                            val_und_gcs_paths.append(val_und_gcs)
-                        if result.get("val_gen_path"):
-                            shard_name = local_cache.rsplit("/", 1)[-1]
-                            val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
-                            val_gen_gcs_paths.append(val_gen_gcs)
-                    except Exception:
-                        logger.exception("Failed to process shard %s", source)
-                        raise
+                    # Upload val caches if they exist
+                    val_und_local = f"{local_cache}_val_und"
+                    if os.path.isdir(val_und_local):
+                        shard_name = local_cache.rsplit("/", 1)[-1]
+                        val_und_gcs = f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
+                        gcs_upload(val_und_local, val_und_gcs if val_und_gcs.startswith("gs://") else f"gs://{val_und_gcs}")
 
-            # Step 3: Upload results to GCS (train + val caches)
-            logger.info("[%s] Uploading shard caches ...", chunk_label)
-            for _local_parquet, local_cache, gcs_out_path, _source in tqdm(
-                chunk_jobs, desc="Uploading", unit="shard", leave=False
-            ):
-                # Upload train cache
-                gcs_dest = gcs_out_path if gcs_out_path.startswith("gs://") else f"gs://{gcs_out_path}"
-                gcs_upload(local_cache, gcs_dest)
+                    val_gen_local = f"{local_cache}_val_gen"
+                    if os.path.isdir(val_gen_local):
+                        shard_name = local_cache.rsplit("/", 1)[-1]
+                        val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
+                        gcs_upload(val_gen_local, val_gen_gcs if val_gen_gcs.startswith("gs://") else f"gs://{val_gen_gcs}")
 
-                # Upload val caches if they exist
-                val_und_local = f"{local_cache}_val_und"
-                if os.path.isdir(val_und_local):
-                    shard_name = local_cache.rsplit("/", 1)[-1]
-                    val_und_gcs = f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
-                    gcs_upload(val_und_local, val_und_gcs if val_und_gcs.startswith("gs://") else f"gs://{val_und_gcs}")
-
-                val_gen_local = f"{local_cache}_val_gen"
-                if os.path.isdir(val_gen_local):
-                    shard_name = local_cache.rsplit("/", 1)[-1]
-                    val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
-                    gcs_upload(val_gen_local, val_gen_gcs if val_gen_gcs.startswith("gs://") else f"gs://{val_gen_gcs}")
-
-            # Step 4: Clean up local files for this chunk
-            shutil.rmtree(parquet_work_dir)
-            shutil.rmtree(cache_work_dir)
-            logger.info("[%s] Done and cleaned up.", chunk_label)
+                # Step 4: Clean up local files for this chunk
+                shutil.rmtree(parquet_work_dir)
+                shutil.rmtree(cache_work_dir)
+                logger.info("[%s] Done and cleaned up.", chunk_label)
 
     # Consolidate all shard caches
     all_train_paths = [out for _, out in shard_outputs]
@@ -776,7 +806,7 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     random.shuffle(shard_paths)
     logger.info("Shuffled %d input files (seed=%d)", len(shard_paths), config.seed)
 
-    # --- Get file sizes and create size-limited batches ---
+    # --- Get file sizes and create size-limited batches (via fsspec/GCS) ---
     logger.info("Querying file sizes for %d files ...", len(shard_paths))
     fs = _fsspec.filesystem("gs")
     files_with_sizes: list[tuple[str, int]] = []
@@ -833,9 +863,10 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     all_val_und_records: list[dict[str, np.ndarray]] = []
     all_val_gen_records: list[dict[str, np.ndarray]] = []
 
+    total_files = len(shard_paths)
     logger.info(
-        "Shuffle mode: %d files in %d batches, rows_per_shard=%d, num_workers=%d, val_fraction=%.4f",
-        len(shard_paths),
+        "Parquets: total=%d in %d batches. rows_per_shard=%d, num_workers=%d, val_fraction=%.4f",
+        total_files,
         len(batches),
         config.rows_per_shard,
         num_workers,
@@ -843,113 +874,122 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     )
 
     # --- Process each batch ---
-    for batch_idx, batch in tqdm(enumerate(batches), desc="Batches", total=len(batches), unit="batch"):
-        batch_label = f"Batch {batch_idx + 1}/{len(batches)} ({len(batch)} files)"
-        file_records: dict[str, list[dict[str, np.ndarray]]] = {}
+    files_done = 0
+    with tqdm(
+        total=total_files,
+        desc="Parquets",
+        unit="parquet",
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+    ) as parquet_pbar:
+        for batch_idx, batch in enumerate(batches):
+            batch_label = f"Batch {batch_idx + 1}/{len(batches)} ({len(batch)} files)"
+            file_records: dict[str, list[dict[str, np.ndarray]]] = {}
 
-        # Download and tokenize in sub-chunks of num_workers
-        num_sub_chunks = math.ceil(len(batch) / num_workers)
-        for sub_idx in range(num_sub_chunks):
-            sub_chunk = batch[sub_idx * num_workers : (sub_idx + 1) * num_workers]
-            sub_label = f"{batch_label} sub {sub_idx + 1}/{num_sub_chunks}"
+            # Download and tokenize in sub-chunks of num_workers
+            num_sub_chunks = math.ceil(len(batch) / num_workers)
+            for sub_idx in range(num_sub_chunks):
+                sub_chunk = batch[sub_idx * num_workers : (sub_idx + 1) * num_workers]
+                sub_label = f"{batch_label} sub {sub_idx + 1}/{num_sub_chunks}"
 
-            # Download sub-chunk to /dev/shm (or configured download_dir)
-            work_dir = tempfile.mkdtemp(prefix=f"vlm_batch{batch_idx}_sub{sub_idx}_", dir=config.download_dir)
-            local_parquet_dir = os.path.join(work_dir, "parquets")
-            os.makedirs(local_parquet_dir)
+                # Download sub-chunk (one gcloud storage cp; gcloud does parallelism)
+                work_dir = tempfile.mkdtemp(prefix=f"vlm_batch{batch_idx}_sub{sub_idx}_", dir=config.download_dir)
+                local_parquet_dir = os.path.join(work_dir, "parquets")
+                os.makedirs(local_parquet_dir)
+                gcs_shards = [
+                    p if p.startswith("gs://") else f"gs://{p}" for p in sub_chunk
+                ]
+                gcs_download_batch(gcs_shards, local_parquet_dir)
+                local_parquets = [
+                    os.path.join(local_parquet_dir, p.rsplit("/", 1)[-1]) for p in sub_chunk
+                ]
 
-            local_parquets = []
-            for shard_path in tqdm(sub_chunk, desc="Downloading", unit="file", leave=False):
-                gcs_shard = shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}"
-                filename = shard_path.rsplit("/", 1)[-1]
-                local_parquet = os.path.join(local_parquet_dir, filename)
-                gcs_download(gcs_shard, local_parquet)
-                local_parquets.append(local_parquet)
+                # Tokenize in parallel
+                logger.info("[%s] Tokenizing %d files ...", sub_label, len(local_parquets))
+                with ProcessPoolExecutor(max_workers=min(num_workers, len(local_parquets))) as pool:
+                    futures = {
+                        pool.submit(
+                            tokenize_shard,
+                            lp,
+                            local_tokenizer_path,
+                            config.w_visual,
+                            config.dual_ordering,
+                            config.generation_ratio,
+                            config.val_fraction,
+                        ): lp
+                        for lp in local_parquets
+                    }
 
-            # Tokenize in parallel
-            logger.info("[%s] Tokenizing %d files ...", sub_label, len(local_parquets))
-            with ProcessPoolExecutor(max_workers=min(num_workers, len(local_parquets))) as pool:
-                futures = {
-                    pool.submit(
-                        tokenize_shard,
-                        lp,
-                        local_tokenizer_path,
-                        config.w_visual,
-                        config.dual_ordering,
-                        config.generation_ratio,
-                        config.val_fraction,
-                    ): lp
-                    for lp in local_parquets
-                }
+                    for future in tqdm(
+                        as_completed(futures), desc="Tokenizing", total=len(futures), unit="file", leave=False
+                    ):
+                        source = futures[future]
+                        try:
+                            train_records, val_und, val_gen = future.result()
+                            random.shuffle(train_records)
+                            file_records[source] = train_records
+                            all_val_und_records.extend(val_und)
+                            all_val_gen_records.extend(val_gen)
+                        except Exception:
+                            logger.exception("Failed to tokenize %s", source)
+                            raise
 
-                for future in tqdm(
-                    as_completed(futures), desc="Tokenizing", total=len(futures), unit="file", leave=False
-                ):
-                    source = futures[future]
-                    try:
-                        train_records, val_und, val_gen = future.result()
-                        random.shuffle(train_records)
-                        file_records[source] = train_records
-                        all_val_und_records.extend(val_und)
-                        all_val_gen_records.extend(val_gen)
-                    except Exception:
-                        logger.exception("Failed to tokenize %s", source)
-                        raise
+                # Free disk immediately
+                shutil.rmtree(work_dir)
 
-            # Free disk immediately
-            shutil.rmtree(work_dir)
+            # --- Proportional distribution across output shards ---
+            batch_total = sum(len(r) for r in file_records.values())
+            total_records += batch_total
+            num_shards_in_batch = math.ceil(batch_total / config.rows_per_shard)
 
-        # --- Proportional distribution across output shards ---
-        batch_total = sum(len(r) for r in file_records.values())
-        total_records += batch_total
-        num_shards_in_batch = math.ceil(batch_total / config.rows_per_shard)
+            logger.info(
+                "[%s] Distributing %d records from %d files across %d shards",
+                batch_label,
+                batch_total,
+                len(file_records),
+                num_shards_in_batch,
+            )
 
-        logger.info(
-            "[%s] Distributing %d records from %d files across %d shards",
-            batch_label,
-            batch_total,
-            len(file_records),
-            num_shards_in_batch,
-        )
+            shard_buffers: list[list[dict[str, np.ndarray]]] = [[] for _ in range(num_shards_in_batch)]
 
-        shard_buffers: list[list[dict[str, np.ndarray]]] = [[] for _ in range(num_shards_in_batch)]
+            for _source_path, records in file_records.items():
+                n = len(records)
+                if n == 0:
+                    continue
+                a_i = n / num_shards_in_batch
 
-        for _source_path, records in file_records.items():
-            n = len(records)
-            if n == 0:
-                continue
-            a_i = n / num_shards_in_batch
+                for shard_k in range(num_shards_in_batch):
+                    start = int(shard_k * a_i)
+                    end = int((shard_k + 1) * a_i) if shard_k < num_shards_in_batch - 1 else n
+                    shard_buffers[shard_k].extend(records[start:end])
 
-            for shard_k in range(num_shards_in_batch):
-                start = int(shard_k * a_i)
-                end = int((shard_k + 1) * a_i) if shard_k < num_shards_in_batch - 1 else n
-                shard_buffers[shard_k].extend(records[start:end])
+                records.clear()
 
-            records.clear()
+            file_records.clear()
 
-        file_records.clear()
+            # --- Shuffle each shard buffer, write locally, then upload ---
+            logger.info("[%s] Shuffling and writing %d shards ...", batch_label, num_shards_in_batch)
+            staging_batch_dir = tempfile.mkdtemp(prefix=f"vlm_shards_batch{batch_idx}_", dir=config.staging_dir)
+            for buf in tqdm(shard_buffers, desc="Writing shards", unit="shard", leave=False):
+                if not buf:
+                    continue
+                random.shuffle(buf)
+                shard_name = f"shard-{shard_idx:06d}"
+                local_out = os.path.join(staging_batch_dir, shard_name)
+                write_levanter_cache(iter(buf), local_out, metadata)
 
-        # --- Shuffle each shard buffer, write locally, then upload ---
-        logger.info("[%s] Shuffling and writing %d shards ...", batch_label, num_shards_in_batch)
-        staging_batch_dir = tempfile.mkdtemp(prefix=f"vlm_shards_batch{batch_idx}_", dir=config.staging_dir)
-        for buf in tqdm(shard_buffers, desc="Writing shards", unit="shard", leave=False):
-            if not buf:
-                continue
-            random.shuffle(buf)
-            shard_name = f"shard-{shard_idx:06d}"
-            local_out = os.path.join(staging_batch_dir, shard_name)
-            write_levanter_cache(iter(buf), local_out, metadata)
+                gcs_out = f"{config.output_path}/train/{shard_name}"
+                gcs_upload(local_out, gcs_out if gcs_out.startswith("gs://") else f"gs://{gcs_out}")
+                all_output_paths.append(gcs_out)
+                logger.info("Wrote and uploaded shard %06d (%d records)", shard_idx, len(buf))
+                shard_idx += 1
+                buf.clear()
 
-            gcs_out = f"{config.output_path}/train/{shard_name}"
-            gcs_upload(local_out, gcs_out if gcs_out.startswith("gs://") else f"gs://{gcs_out}")
-            all_output_paths.append(gcs_out)
-            logger.info("Wrote and uploaded shard %06d (%d records)", shard_idx, len(buf))
-            shard_idx += 1
-            buf.clear()
-
-        del shard_buffers
-        shutil.rmtree(staging_batch_dir)
-        logger.info("[%s] Done. Total records so far: %d", batch_label, total_records)
+            del shard_buffers
+            shutil.rmtree(staging_batch_dir)
+            files_done += len(batch)
+            parquet_pbar.update(len(batch))
+            parquet_pbar.set_postfix_str(f"done {files_done}/{total_files}")
+            logger.info("[%s] Done. Total records so far: %d", batch_label, total_records)
 
     logger.info("Wrote %d shuffled shards (%d total records)", len(all_output_paths), total_records)
 
