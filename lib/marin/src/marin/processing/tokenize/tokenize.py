@@ -7,6 +7,9 @@ Tokenize datasets using zephyr pipeline and write to Levanter cache format.
 Supports both regular file paths and HuggingFace datasets. For HF datasets, downloads
 them first then tokenizes the downloaded files.
 """
+from marin.utilities.time_logger import log_time
+from marin.execution.disk_cache import disk_cache
+from functools import cache
 
 import abc
 import dataclasses
@@ -33,7 +36,7 @@ from levanter.data.text import (
 )
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
-from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
+from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
@@ -255,7 +258,7 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[Sequence[dict]]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = zephyr_worker_ctx().get_shared("tokenizer")
+    tokenizer: transformers.PreTrainedTokenizer = get_tokenizer(config.tokenizer)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     batch_count = 0
@@ -287,6 +290,12 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
         f"Tokenization done: {batch_count:,} batches, {record_count:,} docs, {token_count:,} tokens in {elapsed:.1f}s "
         f"({tok_per_sec:,.0f} tokens/s, {doc_per_sec:,.1f} docs/s, {avg_tok_per_doc:,.0f} avg tokens/doc)"
     )
+
+
+@cache
+@disk_cache
+def get_tokenizer(tokenizer: str) -> transformers.PreTrainedTokenizer:
+    return transformers.AutoTokenizer.from_pretrained(tokenizer)
 
 
 def tokenize(config: TokenizeConfigBase):
@@ -376,8 +385,8 @@ def tokenize(config: TokenizeConfigBase):
             )
         )
 
-        # Broadcast the tokenizer to all workers via ZephyrContext
-        ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+        with log_time(f"Warming up tokenizer cache for {split_name} split, tokenizer: {config.tokenizer}"):
+            get_tokenizer(config.tokenizer)
 
         tokenize_start = time.monotonic()
         shard_paths = ctx.execute(temp_shards)
