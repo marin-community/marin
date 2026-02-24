@@ -153,11 +153,12 @@ echo "[iris-init] Phase: docker_pull"
 echo "[iris-init] Pulling image: {{ docker_image }}"
 
 # Configure Artifact Registry auth on demand.
+# Must run under sudo because `sudo docker pull` uses root's docker config.
 if echo "{{ docker_image }}" | grep -q -- "-docker.pkg.dev/"; then
     AR_HOST=$(echo "{{ docker_image }}" | cut -d/ -f1)
     echo "[iris-init] Configuring docker auth for $AR_HOST"
     if command -v gcloud &> /dev/null; then
-        gcloud auth configure-docker "$AR_HOST" -q || true
+        sudo gcloud auth configure-docker "$AR_HOST" -q || true
     else
         echo "[iris-init] Warning: gcloud not found; AR pull may fail without prior auth"
     fi
@@ -325,11 +326,12 @@ echo "[iris-controller] [3/5] Pulling image: {{ docker_image }}"
 echo "[iris-controller]       This may take several minutes for large images..."
 
 # Configure Artifact Registry auth on demand.
+# Must run under sudo because `sudo docker pull` uses root's docker config.
 if echo "{{ docker_image }}" | grep -q -- "-docker.pkg.dev/"; then
     AR_HOST=$(echo "{{ docker_image }}" | cut -d/ -f1)
     echo "[iris-controller] [3/5] Configuring docker auth for $AR_HOST"
     if command -v gcloud &> /dev/null; then
-        gcloud auth configure-docker "$AR_HOST" -q || true
+        sudo gcloud auth configure-docker "$AR_HOST" -q || true
     else
         echo "[iris-controller] [3/5] Warning: gcloud not found; AR pull may fail without prior auth"
     fi

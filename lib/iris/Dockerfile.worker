@@ -38,19 +38,6 @@ RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kub
     && chmod +x /usr/local/bin/kubectl \
     && kubectl version --client
 
-# Install uv from official image
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
-
-WORKDIR /app
-
-# Copy pyproject.toml first and sync dependencies (cached layer)
-COPY pyproject.toml ./
-RUN uv sync --no-install-project
-
-# Copy source and install the project
-COPY src/ ./src/
-RUN uv sync
-
 # Install Docker CLI and buildx from official Docker repo (buildx required for BuildKit).
 RUN install -m 0755 -d /etc/apt/keyrings && \
     curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
@@ -59,6 +46,20 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
     apt-get update && \
     apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin && \
     rm -rf /var/lib/apt/lists/*
+
+# Install uv from official image
+COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+
+WORKDIR /app
+
+# Copy pyproject first so the heavy dependency install is cached
+# independently of source changes.
+COPY pyproject.toml ./
+RUN uv sync --no-install-project
+
+# Copy source and install the project itself (fast, deps already installed above)
+COPY src/ ./src/
+RUN uv sync
 
 # Default cache directory
 RUN mkdir -p /var/cache/iris

@@ -187,13 +187,16 @@ def push_to_gcp_registries(
         if tag_result.returncode != 0:
             return r, False, f"Failed to tag image for {r}"
 
-        push_result = subprocess.run(["docker", "push", "--quiet", dest_tag], capture_output=True, text=True)
+        if verbose:
+            push_result = subprocess.run(["docker", "push", dest_tag], check=False)
+            stdout, stderr = "", ""
+        else:
+            push_result = subprocess.run(
+                ["docker", "push", "--quiet", dest_tag], capture_output=True, text=True, check=False
+            )
+            stdout, stderr = push_result.stdout, push_result.stderr
         if push_result.returncode != 0:
-            details = [f"Failed to push to {r}"]
-            if push_result.stdout:
-                details.append(push_result.stdout.strip())
-            if push_result.stderr:
-                details.append(push_result.stderr.strip())
+            details = [f"Failed to push to {r}", stdout.strip(), stderr.strip()]
             return r, False, "\n".join(x for x in details if x)
 
         return r, True, f"Successfully pushed to {dest_tag}"
@@ -591,6 +594,7 @@ def build_push(
             resolved_project,
             image_name=image_name,
             version=version,
+            verbose=verbose,
         )
         return
 
