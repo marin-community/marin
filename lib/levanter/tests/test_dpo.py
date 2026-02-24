@@ -409,6 +409,7 @@ def test_vmapped_init_with_sharding_handles_layer_axis():
     )
     env = os.environ.copy()
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    env["JAX_PLATFORMS"] = "cpu"
     env.setdefault("JAX_PLATFORM_NAME", "cpu")
     repo_root = Path(__file__).resolve().parents[2]
     pythonpath = os.pathsep.join(
