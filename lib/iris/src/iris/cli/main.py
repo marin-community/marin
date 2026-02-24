@@ -108,6 +108,7 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     """Iris cluster management."""
     ctx.ensure_object(dict)
     ctx.obj["traceback"] = show_traceback
+    ctx.obj["verbose"] = verbose
 
     if verbose:
         configure_logging(level=_logging_module.DEBUG)

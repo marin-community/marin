@@ -8,7 +8,9 @@ from __future__ import annotations
 import pytest
 
 from iris.cluster.platform.bootstrap import (
+    build_controller_bootstrap_script_from_config,
     build_worker_bootstrap_script,
+    collect_all_regions,
     parse_artifact_registry_tag,
     render_template,
     rewrite_artifact_registry_region,
@@ -35,6 +37,18 @@ def test_build_worker_bootstrap_script_includes_controller_address() -> None:
     assert "--config /etc/iris/config.yaml" not in script
     assert "gcr.io/test/iris-worker:latest" in script
     assert "IRIS_VM_ADDRESS=10.0.0.2" in script
+
+
+def test_build_worker_bootstrap_script_configures_ar_auth() -> None:
+    cfg = _bootstrap_config(docker_image="us-central1-docker.pkg.dev/test-project/marin/iris-worker:latest")
+
+    script = build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
+
+    assert (
+        'if echo "us-central1-docker.pkg.dev/test-project/marin/iris-worker:latest" | grep -q -- "-docker.pkg.dev/"'
+        in script
+    )
+    assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
 
 
 def test_build_worker_bootstrap_script_requires_controller_address() -> None:
@@ -109,3 +123,28 @@ class TestRewriteArtifactRegistryRegion:
         original = "us-central1-docker.pkg.dev/hai-gcp-models/marin/iris-worker:abc123"
         result = rewrite_artifact_registry_region(original, "europe-west4")
         assert result == "europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:abc123"
+
+
+def test_collect_all_regions_includes_scale_groups_and_controller() -> None:
+    config = config_pb2.IrisClusterConfig()
+    config.scale_groups["west"].slice_template.gcp.zone = "us-west4-a"
+    config.scale_groups["central"].slice_template.gcp.zone = "us-central1-f"
+    # Duplicate region in another zone should still deduplicate.
+    config.scale_groups["west-2"].slice_template.gcp.zone = "us-west4-b"
+    # Non-GCP groups are ignored.
+    config.scale_groups["manual"].slice_template.manual.hosts.append("10.0.0.1")
+    config.controller.gcp.zone = "europe-west4-c"
+
+    assert collect_all_regions(config) == {"us-west4", "us-central1", "europe-west4"}
+
+
+def test_build_controller_bootstrap_script_from_config_rewrites_ar_region() -> None:
+    config = config_pb2.IrisClusterConfig()
+    config.controller.image = "us-central1-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest"
+    config.controller.gcp.zone = "europe-west4-b"
+    config.controller.gcp.port = 10000
+
+    script = build_controller_bootstrap_script_from_config(config)
+
+    assert "Pulling image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest" in script
+    assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
