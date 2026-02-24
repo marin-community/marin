@@ -2089,3 +2089,63 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - Recorded attempt as failed (`Commit: none (failed attempt)`).
 - Next bold hypothesis:
   - Escalate to **Macro Move H** with explicit stacked shared-RHS matmul batching (`[q; k_beta] @ k^T` and `[q_scaled; k_cumdecay] @ S`) using a unified `dot_general` helper, then re-measure closed-call buckets and end-to-end MFU.
+
+### Iteration 39 - Macro Move H / shared-RHS matmul batching (infra-blocked, reverted)
+
+- Date: 2026-02-24T23:23:39Z
+- Commit: none (failed attempt)
+- Loop session/local index: `1/10`
+- Starting commit: `65df652eeef57fd6ce57591cdff17cfe6fd98868`
+- Dominant bottleneck carried in (from latest successful baseline trace used by Iteration 38):
+  - train-path `shard_map/custom-call` bucket remained dominant (`78.098 ms` on TPU:0 XLA Ops thread), with closed-call hotspots at `gated_deltanet.py:2486` (`41.324 ms`) and `gated_deltanet.py:3972` (`26.266 ms`).
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move H**: batch shared-RHS matmuls (`QK/KKT`, `inter/v_prime`) in train kernels to reduce dot-call count (`+10-20%`, medium integration/VMEM risk).
+  2. **Macro Move G**: centered outer-product `exp_diff` with exact fallback (`+10-20%`, medium numerical/compiler risk; prior regressions).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) in recurrent/backward (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **H) Batch matmuls by stacking left operands that share the same right operand**.
+- Selected hypothesis: apply shared-RHS batching in the train chunk path (forward + backward chunk kernels), then validate on TPU and profile for `shard_map/pallas_call` deltas.
+
+- Change attempt summary:
+  - Implemented Macro-H batching edits in `lib/levanter/src/levanter/layers/gated_deltanet.py` for train-path matmul pairs.
+  - Local smoke tests passed (`test_gdn_kernels` flash subset + `test_gdn_layer` GDN subset).
+  - Reverted all speculative kernel edits because TPU validation/profiling lanes remained infra-blocked and no validated performance result could be produced.
+
+- Correctness checks:
+  - Local smoke (success):
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation attempts (blocked):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both`
+      - failed repeatedly during collection with TPU lock contention: `TPU initialization failed: open(/dev/vfio/*): Device or resource busy`.
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+      - job `ray-run-calvinxu-levanter-20260224-224933` failed: `JOB_SUPERVISOR_ACTOR_START_TIMEOUT` (`Job supervisor actor failed to start within 900.0 seconds`).
+    - Additional Ray fallbacks submitted while triaging capacity remained non-starting/pending during this window:
+      - `ray-run-calvinxu-levanter-20260224-231038` (`us-central1`, pending)
+      - `ray-run-calvinxu-levanter-20260224-231728` (`us-west4`, pending)
+
+- Profile run:
+  - Not started. Required TPU correctness gate for modified kernel state could not be completed.
+  - Trace artifact: N/A.
+
+- Hotspots observed:
+  - No new validated before/after hotspot comparison (no completed profile on validated code).
+  - Carry-in dominant hotspot remains train-path `shard_map/custom-call`.
+
+- MFU/throughput delta:
+  - Unavailable (no completed profiled run).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command attempted: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both` (blocked by `/dev/vfio/*` busy), with Ray fallbacks attempted and not reaching a successful test completion.
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: unavailable.
+    - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`: unavailable.
+    - Macro-H call-count reduction evidence: unavailable (no validated profile run).
+  - Governance:
+    - Infra-blocked iteration; speculative code reverted and recorded as failed (`Commit: none (failed attempt)`).
+
+- Assessment: **infra-blocked failed attempt**. Could not complete required TPU validation + profile cycle due persistent dev TPU VFIO lock contention and Ray job start-capacity failures.
+- Next bold hypothesis:
+  - Re-attempt Macro Move H immediately once a healthy TPU lane is available (fresh dev TPU alias not sharing locked VFIO devices, or a Ray cluster where job supervisor starts promptly), then capture forward/backward closed-call deltas and end-to-end MFU deltas in the same run.
