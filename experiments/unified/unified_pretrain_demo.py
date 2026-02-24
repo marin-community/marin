@@ -59,7 +59,7 @@ VISION_START_ID = 128_004  # <|reserved_special_token_2|> → <|vision_start|>
 VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 
 UNIFIED_TOKENIZER_PATH = "gs://marin-us-central2/tokenizers/llama3-unified-144k"
-UNIFIED_CACHE_PATH = "gs://marin-vlm/hf_85m_levanter_cache_test"
+UNIFIED_CACHE_PATH = "gs://marin-vlm/hf_85m_levanter_cache_test2"
 UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
 
 # Eval benchmark categories (used for tagging in eval metrics)
@@ -240,7 +240,7 @@ def unified_data_config(
 # --- Train Configs ---
 
 # 1 epoch ≈ 1,582,102 records / 256 batch_size ≈ 6,180 steps
-DEMO_TRAIN_STEPS = 6_180
+DEMO_TRAIN_STEPS = 10_000
 TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
 
