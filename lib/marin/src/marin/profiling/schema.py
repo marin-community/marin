@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, cast
 
@@ -43,6 +44,15 @@ class TraceOverview:
     profile_start_ts: float | None
     profile_end_ts: float | None
     duration_basis: str
+
+
+@dataclass(frozen=True)
+class TraceProvenance:
+    """Identity/provenance signals for deduplicating and validating traces."""
+
+    trace_sha256: str | None
+    run_ids: list[str] = field(default_factory=list)
+    source_file_hints: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -83,6 +93,20 @@ class StepTimeSummary:
     warmup_steps_ignored: int
     all_steps: DurationStats
     steady_state_steps: DurationStats
+    classes: list[StepClassSummary] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class StepClassSummary:
+    """One detected step-time class (for example, light/heavy)."""
+
+    name: str
+    count: int
+    fraction_of_steady: float
+    duration_stats: DurationStats
+    representative_step: int | None
+    representative_duration: float | None
+    periodicity: int | None
 
 
 @dataclass(frozen=True)
@@ -111,11 +135,16 @@ class HotOp:
     """Per-op aggregate useful for ranking hotspots."""
 
     name: str
+    canonical_name: str
     category: str
     count: int
     total_duration: float
     exclusive_duration: float
     avg_duration: float
+    shape_signature: str | None = None
+    source_file: str | None = None
+    tf_op_path: str | None = None
+    flop_proxy_per_invocation: float | None = None
 
 
 @dataclass(frozen=True)
@@ -163,6 +192,23 @@ class GapRegionContext:
 
 
 @dataclass(frozen=True)
+class SemanticFamilyAggregate:
+    """Aggregate metrics for an op semantic family (attention/loss/copy/etc)."""
+
+    family: str
+    count: int
+    total_duration: float
+    exclusive_duration: float
+    share_of_total: float
+    avg_duration: float
+    avg_exclusive_duration: float
+    example_op: str | None
+    dominant_shape_signature: str | None
+    flop_proxy_total: float | None
+    time_per_flop_proxy: float | None
+
+
+@dataclass(frozen=True)
 class OptimizationCandidate:
     """Actionable hypothesis generated from the profile summary."""
 
@@ -183,9 +229,11 @@ class ProfileSummary:
     source_path: str
     run_metadata: RunMetadata
     trace_overview: TraceOverview
+    trace_provenance: TraceProvenance
     step_time: StepTimeSummary
     time_breakdown: TimeBreakdown
     hot_ops: list[HotOp]
+    semantic_families: list[SemanticFamilyAggregate]
     communication_ops: list[CommunicationOp]
     gap_before_ops: list[GapBeforeOp]
     hierarchical_regions: list[RegionAggregate]
@@ -208,9 +256,11 @@ class ProfileSummary:
         source_path: str,
         run_metadata: RunMetadata,
         trace_overview: TraceOverview,
+        trace_provenance: TraceProvenance,
         step_time: StepTimeSummary,
         time_breakdown: TimeBreakdown,
         hot_ops: list[HotOp],
+        semantic_families: list[SemanticFamilyAggregate],
         communication_ops: list[CommunicationOp],
         gap_before_ops: list[GapBeforeOp],
         hierarchical_regions: list[RegionAggregate],
@@ -226,9 +276,11 @@ class ProfileSummary:
             source_path=source_path,
             run_metadata=run_metadata,
             trace_overview=trace_overview,
+            trace_provenance=trace_provenance,
             step_time=step_time,
             time_breakdown=time_breakdown,
             hot_ops=hot_ops,
+            semantic_families=semantic_families,
             communication_ops=communication_ops,
             gap_before_ops=gap_before_ops,
             hierarchical_regions=hierarchical_regions,
@@ -242,9 +294,14 @@ def profile_summary_from_dict(data: Mapping[str, Any]) -> ProfileSummary:
 
     run_metadata = _parse_run_metadata(cast(Mapping[str, Any], data["run_metadata"]))
     trace_overview = _parse_trace_overview(cast(Mapping[str, Any], data["trace_overview"]))
+    trace_provenance = _parse_trace_provenance(cast(Mapping[str, Any], data.get("trace_provenance", {})))
     step_time = _parse_step_time(cast(Mapping[str, Any], data["step_time"]))
     time_breakdown = _parse_time_breakdown(cast(Mapping[str, Any], data["time_breakdown"]))
     hot_ops = [_parse_hot_op(cast(Mapping[str, Any], op)) for op in cast(list[Mapping[str, Any]], data["hot_ops"])]
+    semantic_families = [
+        _parse_semantic_family_aggregate(cast(Mapping[str, Any], family))
+        for family in cast(list[Mapping[str, Any]], data.get("semantic_families", []))
+    ]
     communication_ops = [
         _parse_communication_op(cast(Mapping[str, Any], op))
         for op in cast(list[Mapping[str, Any]], data["communication_ops"])
@@ -272,9 +329,11 @@ def profile_summary_from_dict(data: Mapping[str, Any]) -> ProfileSummary:
         source_path=cast(str, data["source_path"]),
         run_metadata=run_metadata,
         trace_overview=trace_overview,
+        trace_provenance=trace_provenance,
         step_time=step_time,
         time_breakdown=time_breakdown,
         hot_ops=hot_ops,
+        semantic_families=semantic_families,
         communication_ops=communication_ops,
         gap_before_ops=gap_before_ops,
         hierarchical_regions=hierarchical_regions,
@@ -311,6 +370,14 @@ def _parse_trace_overview(data: Mapping[str, Any]) -> TraceOverview:
     )
 
 
+def _parse_trace_provenance(data: Mapping[str, Any]) -> TraceProvenance:
+    return TraceProvenance(
+        trace_sha256=cast(str | None, data.get("trace_sha256")),
+        run_ids=list(cast(list[str], data.get("run_ids", []))),
+        source_file_hints=list(cast(list[str], data.get("source_file_hints", []))),
+    )
+
+
 def _parse_duration_stats(data: Mapping[str, Any]) -> DurationStats:
     return DurationStats(
         count=cast(int, data["count"]),
@@ -327,6 +394,22 @@ def _parse_step_time(data: Mapping[str, Any]) -> StepTimeSummary:
         warmup_steps_ignored=cast(int, data["warmup_steps_ignored"]),
         all_steps=_parse_duration_stats(cast(Mapping[str, Any], data["all_steps"])),
         steady_state_steps=_parse_duration_stats(cast(Mapping[str, Any], data["steady_state_steps"])),
+        classes=[
+            _parse_step_class_summary(cast(Mapping[str, Any], step_class))
+            for step_class in cast(list[Mapping[str, Any]], data.get("classes", []))
+        ],
+    )
+
+
+def _parse_step_class_summary(data: Mapping[str, Any]) -> StepClassSummary:
+    return StepClassSummary(
+        name=cast(str, data["name"]),
+        count=cast(int, data["count"]),
+        fraction_of_steady=cast(float, data["fraction_of_steady"]),
+        duration_stats=_parse_duration_stats(cast(Mapping[str, Any], data["duration_stats"])),
+        representative_step=cast(int | None, data.get("representative_step")),
+        representative_duration=cast(float | None, data.get("representative_duration")),
+        periodicity=cast(int | None, data.get("periodicity")),
     )
 
 
@@ -350,13 +433,41 @@ def _parse_time_breakdown(data: Mapping[str, Any]) -> TimeBreakdown:
 
 
 def _parse_hot_op(data: Mapping[str, Any]) -> HotOp:
+    name = cast(str, data["name"])
     return HotOp(
-        name=cast(str, data["name"]),
+        name=name,
+        canonical_name=cast(str, data.get("canonical_name") or _canonical_name(name)),
         category=cast(str, data["category"]),
         count=cast(int, data["count"]),
         total_duration=cast(float, data["total_duration"]),
         exclusive_duration=cast(float, data["exclusive_duration"]),
         avg_duration=cast(float, data["avg_duration"]),
+        shape_signature=cast(str | None, data.get("shape_signature")),
+        source_file=cast(str | None, data.get("source_file")),
+        tf_op_path=cast(str | None, data.get("tf_op_path")),
+        flop_proxy_per_invocation=cast(
+            float | None,
+            data.get("flop_proxy_per_invocation", data.get("work_proxy_per_invocation")),
+        ),
+    )
+
+
+def _parse_semantic_family_aggregate(data: Mapping[str, Any]) -> SemanticFamilyAggregate:
+    return SemanticFamilyAggregate(
+        family=cast(str, data["family"]),
+        count=cast(int, data["count"]),
+        total_duration=cast(float, data["total_duration"]),
+        exclusive_duration=cast(float, data["exclusive_duration"]),
+        share_of_total=cast(float, data["share_of_total"]),
+        avg_duration=cast(float, data["avg_duration"]),
+        avg_exclusive_duration=cast(float, data["avg_exclusive_duration"]),
+        example_op=cast(str | None, data.get("example_op")),
+        dominant_shape_signature=cast(str | None, data.get("dominant_shape_signature")),
+        flop_proxy_total=cast(float | None, data.get("flop_proxy_total", data.get("work_proxy_total"))),
+        time_per_flop_proxy=cast(
+            float | None,
+            data.get("time_per_flop_proxy", data.get("normalized_exclusive_per_work")),
+        ),
     )
 
 
@@ -421,3 +532,7 @@ def _quantile(values: list[float], quantile: float) -> float:
     upper = min(lower + 1, len(values) - 1)
     weight = position - lower
     return values[lower] * (1.0 - weight) + values[upper] * weight
+
+
+def _canonical_name(name: str) -> str:
+    return re.sub(r"\.\d+$", "", name.strip().lstrip("%"))

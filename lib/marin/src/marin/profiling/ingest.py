@@ -9,15 +9,23 @@ import gzip
 import hashlib
 import json
 import logging
+import math
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import wandb
 
+from marin.profiling.semantics import (
+    canonical_op_name,
+    classify_semantic_family,
+    estimate_flop_proxy,
+    extract_shape_signature,
+)
 from marin.profiling.schema import (
     BreakdownPart,
     CommunicationOp,
@@ -29,8 +37,11 @@ from marin.profiling.schema import (
     ProfileSummary,
     RegionAggregate,
     RunMetadata,
+    SemanticFamilyAggregate,
+    StepClassSummary,
     StepTimeSummary,
     TimeBreakdown,
+    TraceProvenance,
     TraceOverview,
 )
 
@@ -99,13 +110,18 @@ class DownloadedProfileArtifact:
 @dataclass(frozen=True)
 class _CompleteTraceEvent:
     name: str
+    canonical_name: str
+    deduplicated_name: str | None
     pid: int
     tid: int
     ts: float
     dur: float
     tf_op: str | None
     source: str | None
+    source_stack: str | None
     hlo_category: str | None
+    long_name: str | None
+    run_id: str | None
     process_name: str | None
     thread_name: str | None
 
@@ -207,6 +223,7 @@ def summarize_profile_artifact(
     run_metadata: RunMetadata | None = None,
     warmup_steps: int = 5,
     hot_op_limit: int = 25,
+    breakdown_mode: str = "exclusive_per_track",
 ) -> ProfileSummary:
     """
     Summarize a downloaded profile artifact into the normalized schema.
@@ -223,6 +240,7 @@ def summarize_profile_artifact(
         run_metadata=run_metadata,
         warmup_steps=warmup_steps,
         hot_op_limit=hot_op_limit,
+        breakdown_mode=breakdown_mode,
     )
 
 
@@ -232,6 +250,7 @@ def summarize_trace(
     run_metadata: RunMetadata | None = None,
     warmup_steps: int = 5,
     hot_op_limit: int = 25,
+    breakdown_mode: str = "exclusive_per_track",
 ) -> ProfileSummary:
     """
     Summarize a single trace file into the normalized profile schema.
@@ -250,6 +269,7 @@ def summarize_trace(
 
     parsed_events, process_names, thread_names = _parse_complete_events(all_events)
     exclusive_durations = _compute_exclusive_durations(parsed_events)
+    trace_sha256 = _sha256_for_path(trace_path)
 
     trace_overview = _make_trace_overview(
         display_time_unit=display_time_unit if isinstance(display_time_unit, str) else None,
@@ -258,9 +278,15 @@ def summarize_trace(
         process_names=process_names,
         thread_names=thread_names,
     )
+    trace_provenance = _make_trace_provenance(parsed_events, trace_sha256=trace_sha256)
     step_time = _summarize_step_times(parsed_events, warmup_steps=warmup_steps)
-    time_breakdown = _summarize_breakdown(parsed_events, exclusive_durations)
+    time_breakdown = _summarize_breakdown(parsed_events, exclusive_durations, mode=breakdown_mode)
     hot_ops = _summarize_hot_ops(parsed_events, exclusive_durations, limit=hot_op_limit)
+    semantic_families = _summarize_semantic_families(
+        hot_ops,
+        total_duration=time_breakdown.total_duration,
+        limit=max(hot_op_limit, 50),
+    )
     communication_ops = _summarize_communication(parsed_events, exclusive_durations)
     gap_before_ops = _summarize_pre_op_gaps(parsed_events, limit=max(hot_op_limit, 500))
     hierarchical_regions = _summarize_hierarchical_regions(
@@ -278,9 +304,11 @@ def summarize_trace(
         source_path=str(trace_path),
         run_metadata=run_metadata or RunMetadata(),
         trace_overview=trace_overview,
+        trace_provenance=trace_provenance,
         step_time=step_time,
         time_breakdown=time_breakdown,
         hot_ops=hot_ops,
+        semantic_families=semantic_families,
         communication_ops=communication_ops,
         gap_before_ops=gap_before_ops,
         hierarchical_regions=hierarchical_regions,
@@ -296,9 +324,11 @@ def summarize_trace(
         source_path=summary.source_path,
         run_metadata=summary.run_metadata,
         trace_overview=summary.trace_overview,
+        trace_provenance=summary.trace_provenance,
         step_time=summary.step_time,
         time_breakdown=summary.time_breakdown,
         hot_ops=summary.hot_ops,
+        semantic_families=summary.semantic_families,
         communication_ops=summary.communication_ops,
         gap_before_ops=summary.gap_before_ops,
         hierarchical_regions=summary.hierarchical_regions,
@@ -482,13 +512,18 @@ def _parse_complete_events(
         complete_events.append(
             _CompleteTraceEvent(
                 name=name,
+                canonical_name=canonical_op_name(name),
+                deduplicated_name=_string_arg(event.get("args"), "deduplicated_name"),
                 pid=pid,
                 tid=tid,
                 ts=float(ts),
                 dur=float(dur),
                 tf_op=_string_arg(event.get("args"), "tf_op"),
                 source=_string_arg(event.get("args"), "source"),
+                source_stack=_string_arg(event.get("args"), "source_stack"),
                 hlo_category=_string_arg(event.get("args"), "hlo_category"),
+                long_name=_string_arg(event.get("args"), "long_name"),
+                run_id=_string_like_arg(event.get("args"), "run_id"),
                 process_name=process_names.get(pid),
                 thread_name=thread_names.get((pid, tid)),
             )
@@ -527,6 +562,17 @@ def _compute_exclusive_durations(events: list[_CompleteTraceEvent]) -> list[floa
     return exclusive
 
 
+def _sha256_for_path(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _make_trace_overview(
     *,
     display_time_unit: str | None,
@@ -551,6 +597,16 @@ def _make_trace_overview(
         profile_start_ts=start,
         profile_end_ts=end,
         duration_basis="exclusive_duration_per_track",
+    )
+
+
+def _make_trace_provenance(events: list[_CompleteTraceEvent], *, trace_sha256: str) -> TraceProvenance:
+    run_ids = Counter(event.run_id for event in events if event.run_id)
+    source_files = Counter(event.source for event in events if event.source)
+    return TraceProvenance(
+        trace_sha256=trace_sha256,
+        run_ids=[name for name, _ in run_ids.most_common(20)],
+        source_file_hints=[name for name, _ in source_files.most_common(20)],
     )
 
 
@@ -581,10 +637,24 @@ def _summarize_step_times(events: list[_CompleteTraceEvent], *, warmup_steps: in
         warmup_steps_ignored=warmup_steps,
         all_steps=DurationStats.from_values(all_values),
         steady_state_steps=DurationStats.from_values(steady_values),
+        classes=_classify_step_patterns(averaged_steps, warmup_steps=warmup_steps),
     )
 
 
-def _summarize_breakdown(events: list[_CompleteTraceEvent], exclusive: list[float]) -> TimeBreakdown:
+def _summarize_breakdown(
+    events: list[_CompleteTraceEvent],
+    exclusive: list[float],
+    *,
+    mode: str,
+) -> TimeBreakdown:
+    if mode == "exclusive_per_track":
+        return _summarize_breakdown_per_track(events, exclusive)
+    if mode == "exclusive_global":
+        return _summarize_breakdown_global(events)
+    raise ValueError(f"Unsupported breakdown mode: {mode}")
+
+
+def _summarize_breakdown_per_track(events: list[_CompleteTraceEvent], exclusive: list[float]) -> TimeBreakdown:
     totals = {
         "compute": 0.0,
         "communication": 0.0,
@@ -613,13 +683,75 @@ def _summarize_breakdown(events: list[_CompleteTraceEvent], exclusive: list[floa
     )
 
 
+def _summarize_breakdown_global(events: list[_CompleteTraceEvent]) -> TimeBreakdown:
+    totals = {
+        "compute": 0.0,
+        "communication": 0.0,
+        "host": 0.0,
+        "stall": 0.0,
+        "other": 0.0,
+    }
+    points: list[tuple[float, int, str]] = []
+    for event in events:
+        if event.thread_name == "Steps":
+            continue
+        category = _event_category(event)
+        points.append((event.ts, 1, category))
+        points.append((event.ts + event.dur, -1, category))
+
+    if not points:
+        return TimeBreakdown(
+            duration_basis="exclusive_duration_global_timeline",
+            total_duration=0.0,
+            compute=_breakdown_part(0.0, 0.0),
+            communication=_breakdown_part(0.0, 0.0),
+            host=_breakdown_part(0.0, 0.0),
+            stall=_breakdown_part(0.0, 0.0),
+            other=_breakdown_part(0.0, 0.0),
+        )
+
+    points.sort(key=lambda item: (item[0], item[1]))
+    active = {
+        "compute": 0,
+        "communication": 0,
+        "host": 0,
+        "stall": 0,
+        "other": 0,
+    }
+    previous_ts: float | None = None
+    index = 0
+    while index < len(points):
+        timestamp = points[index][0]
+        if previous_ts is not None and timestamp > previous_ts:
+            category = _active_category(active)
+            if category is not None:
+                totals[category] += timestamp - previous_ts
+
+        while index < len(points) and points[index][0] == timestamp:
+            _, delta, category = points[index]
+            active[category] = max(0, active[category] + delta)
+            index += 1
+        previous_ts = timestamp
+
+    total_duration = sum(totals.values())
+    return TimeBreakdown(
+        duration_basis="exclusive_duration_global_timeline",
+        total_duration=total_duration,
+        compute=_breakdown_part(totals["compute"], total_duration),
+        communication=_breakdown_part(totals["communication"], total_duration),
+        host=_breakdown_part(totals["host"], total_duration),
+        stall=_breakdown_part(totals["stall"], total_duration),
+        other=_breakdown_part(totals["other"], total_duration),
+    )
+
+
 def _summarize_hot_ops(
     events: list[_CompleteTraceEvent],
     exclusive: list[float],
     *,
     limit: int,
 ) -> list[HotOp]:
-    aggregate: dict[str, dict[str, float | int | str]] = {}
+    aggregate: dict[str, dict[str, float | int | str | Counter[str] | list[float]]] = {}
 
     for event, exclusive_duration in zip(events, exclusive, strict=True):
         if not _is_device_event(event):
@@ -631,15 +763,30 @@ def _summarize_hot_ops(
             event.name,
             {
                 "name": event.name,
+                "canonical_name": event.canonical_name,
                 "category": _op_category(event.name),
                 "count": 0,
                 "total_duration": 0.0,
                 "exclusive_duration": 0.0,
+                "shape_counts": Counter(),
+                "source_counts": Counter(),
+                "tf_op_counts": Counter(),
+                "flop_samples": [],
             },
         )
         bucket["count"] = int(bucket["count"]) + 1
         bucket["total_duration"] = float(bucket["total_duration"]) + event.dur
         bucket["exclusive_duration"] = float(bucket["exclusive_duration"]) + exclusive_duration
+        shape_signature = extract_shape_signature(event.long_name)
+        if shape_signature:
+            cast(Counter[str], bucket["shape_counts"])[shape_signature] += 1
+            flop_proxy = estimate_flop_proxy(classify_semantic_family(event.name), shape_signature)
+            if flop_proxy is not None:
+                cast(list[float], bucket["flop_samples"]).append(flop_proxy)
+        if event.source:
+            cast(Counter[str], bucket["source_counts"])[event.source] += 1
+        if event.tf_op:
+            cast(Counter[str], bucket["tf_op_counts"])[event.tf_op] += 1
 
     ranked = sorted(
         aggregate.values(),
@@ -655,17 +802,88 @@ def _summarize_hot_ops(
         count = int(item["count"])
         total_duration = float(item["total_duration"])
         exclusive_duration = float(item["exclusive_duration"])
+        shape_counts = cast(Counter[str], item["shape_counts"])
+        source_counts = cast(Counter[str], item["source_counts"])
+        tf_op_counts = cast(Counter[str], item["tf_op_counts"])
+        flop_samples = cast(list[float], item["flop_samples"])
         result.append(
             HotOp(
                 name=str(item["name"]),
+                canonical_name=str(item["canonical_name"]),
                 category=str(item["category"]),
                 count=count,
                 total_duration=total_duration,
                 exclusive_duration=exclusive_duration,
                 avg_duration=(total_duration / count) if count else 0.0,
+                shape_signature=shape_counts.most_common(1)[0][0] if shape_counts else None,
+                source_file=source_counts.most_common(1)[0][0] if source_counts else None,
+                tf_op_path=tf_op_counts.most_common(1)[0][0] if tf_op_counts else None,
+                flop_proxy_per_invocation=(sum(flop_samples) / len(flop_samples)) if flop_samples else None,
             )
         )
 
+    return result
+
+
+def _summarize_semantic_families(
+    hot_ops: list[HotOp],
+    *,
+    total_duration: float,
+    limit: int,
+) -> list[SemanticFamilyAggregate]:
+    aggregate: dict[str, dict[str, float | int | Counter[str] | str]] = {}
+    for op in hot_ops:
+        family = classify_semantic_family(op.name)
+        bucket = aggregate.setdefault(
+            family,
+            {
+                "count": 0,
+                "total_duration": 0.0,
+                "exclusive_duration": 0.0,
+                "shape_counts": Counter(),
+                "example_op": op.name,
+                "flop_proxy_total": 0.0,
+                "flop_proxy_count": 0,
+            },
+        )
+        bucket["count"] = int(bucket["count"]) + op.count
+        bucket["total_duration"] = float(bucket["total_duration"]) + op.total_duration
+        bucket["exclusive_duration"] = float(bucket["exclusive_duration"]) + op.exclusive_duration
+        if op.shape_signature:
+            cast(Counter[str], bucket["shape_counts"])[op.shape_signature] += op.count
+        if op.flop_proxy_per_invocation is not None and op.count > 0:
+            bucket["flop_proxy_total"] = float(bucket["flop_proxy_total"]) + (op.flop_proxy_per_invocation * op.count)
+            bucket["flop_proxy_count"] = int(bucket["flop_proxy_count"]) + op.count
+
+    ranked = sorted(
+        aggregate.items(),
+        key=lambda item: (-float(item[1]["exclusive_duration"]), item[0]),
+    )
+    result: list[SemanticFamilyAggregate] = []
+    for family, stats in ranked[:limit]:
+        count = int(stats["count"])
+        total = float(stats["total_duration"])
+        exclusive = float(stats["exclusive_duration"])
+        flop_proxy_total = float(stats["flop_proxy_total"])
+        flop_proxy_count = int(stats["flop_proxy_count"])
+        shape_counts = cast(Counter[str], stats["shape_counts"])
+        dominant_shape = shape_counts.most_common(1)[0][0] if shape_counts else None
+        time_per_flop_proxy = (exclusive / flop_proxy_total) if flop_proxy_total > 0 else None
+        result.append(
+            SemanticFamilyAggregate(
+                family=family,
+                count=count,
+                total_duration=total,
+                exclusive_duration=exclusive,
+                share_of_total=(exclusive / total_duration) if total_duration > 0 else 0.0,
+                avg_duration=(total / count) if count else 0.0,
+                avg_exclusive_duration=(exclusive / count) if count else 0.0,
+                example_op=cast(str, stats["example_op"]),
+                dominant_shape_signature=dominant_shape,
+                flop_proxy_total=flop_proxy_total if flop_proxy_count > 0 else None,
+                time_per_flop_proxy=time_per_flop_proxy,
+            )
+        )
     return result
 
 
@@ -1004,6 +1222,172 @@ def _derive_optimization_candidates(summary: ProfileSummary) -> list[Optimizatio
     return candidates
 
 
+def _classify_step_patterns(averaged_steps: list[tuple[int, float]], *, warmup_steps: int) -> list[StepClassSummary]:
+    steady = [(step, duration) for step, duration in averaged_steps if step >= warmup_steps]
+    if not steady:
+        return []
+
+    if len(steady) < 6:
+        stats = DurationStats.from_values([duration for _, duration in steady])
+        representative_step, representative_duration = _representative_step(steady, stats.median)
+        return [
+            StepClassSummary(
+                name="typical",
+                count=len(steady),
+                fraction_of_steady=1.0,
+                duration_stats=stats,
+                representative_step=representative_step,
+                representative_duration=representative_duration,
+                periodicity=None,
+            )
+        ]
+
+    clusters = _kmeans_two_clusters(steady)
+    if clusters is None:
+        stats = DurationStats.from_values([duration for _, duration in steady])
+        representative_step, representative_duration = _representative_step(steady, stats.median)
+        return [
+            StepClassSummary(
+                name="typical",
+                count=len(steady),
+                fraction_of_steady=1.0,
+                duration_stats=stats,
+                representative_step=representative_step,
+                representative_duration=representative_duration,
+                periodicity=None,
+            )
+        ]
+
+    low_cluster, high_cluster = clusters
+    low_stats = DurationStats.from_values([duration for _, duration in low_cluster])
+    high_stats = DurationStats.from_values([duration for _, duration in high_cluster])
+    if (
+        low_stats.median is None
+        or high_stats.median is None
+        or low_stats.median <= 0
+        or (high_stats.median / low_stats.median) < 1.5
+    ):
+        stats = DurationStats.from_values([duration for _, duration in steady])
+        representative_step, representative_duration = _representative_step(steady, stats.median)
+        return [
+            StepClassSummary(
+                name="typical",
+                count=len(steady),
+                fraction_of_steady=1.0,
+                duration_stats=stats,
+                representative_step=representative_step,
+                representative_duration=representative_duration,
+                periodicity=None,
+            )
+        ]
+
+    light_rep_step, light_rep_duration = _representative_step(low_cluster, low_stats.median)
+    heavy_rep_step, heavy_rep_duration = _representative_step(high_cluster, high_stats.median)
+    heavy_periodicity = _estimate_periodicity([step for step, _ in high_cluster])
+    total = len(steady)
+    return [
+        StepClassSummary(
+            name="light",
+            count=len(low_cluster),
+            fraction_of_steady=(len(low_cluster) / total),
+            duration_stats=low_stats,
+            representative_step=light_rep_step,
+            representative_duration=light_rep_duration,
+            periodicity=None,
+        ),
+        StepClassSummary(
+            name="heavy",
+            count=len(high_cluster),
+            fraction_of_steady=(len(high_cluster) / total),
+            duration_stats=high_stats,
+            representative_step=heavy_rep_step,
+            representative_duration=heavy_rep_duration,
+            periodicity=heavy_periodicity,
+        ),
+    ]
+
+
+def _kmeans_two_clusters(
+    step_durations: list[tuple[int, float]],
+) -> tuple[list[tuple[int, float]], list[tuple[int, float]]] | None:
+    values = [duration for _, duration in step_durations]
+    if len(step_durations) < 6:
+        return None
+    minimum = min(values)
+    maximum = max(values)
+    if minimum <= 0 or maximum / minimum < 1.25:
+        return None
+
+    logs = [math.log(value) for value in values]
+    center_a = min(logs)
+    center_b = max(logs)
+    labels = [0 for _ in step_durations]
+    for _ in range(40):
+        changed = False
+        for index, value in enumerate(logs):
+            dist_a = abs(value - center_a)
+            dist_b = abs(value - center_b)
+            label = 0 if dist_a <= dist_b else 1
+            if label != labels[index]:
+                labels[index] = label
+                changed = True
+        group_a = [value for value, label in zip(logs, labels, strict=True) if label == 0]
+        group_b = [value for value, label in zip(logs, labels, strict=True) if label == 1]
+        if not group_a or not group_b:
+            return None
+        next_a = sum(group_a) / len(group_a)
+        next_b = sum(group_b) / len(group_b)
+        if abs(next_a - center_a) < 1e-9 and abs(next_b - center_b) < 1e-9 and not changed:
+            break
+        center_a = next_a
+        center_b = next_b
+
+    group_a_pairs = [
+        (index, value) for index, (value, label) in enumerate(zip(values, labels, strict=True)) if label == 0
+    ]
+    group_b_pairs = [
+        (index, value) for index, (value, label) in enumerate(zip(values, labels, strict=True)) if label == 1
+    ]
+    if len(group_a_pairs) < 2 or len(group_b_pairs) < 2:
+        return None
+    if (len(group_a_pairs) / len(step_durations)) < 0.1 or (len(group_b_pairs) / len(step_durations)) < 0.1:
+        return None
+    cluster_a = [step_durations[index] for index, _ in group_a_pairs]
+    cluster_b = [step_durations[index] for index, _ in group_b_pairs]
+    if center_a <= center_b:
+        return cluster_a, cluster_b
+    return cluster_b, cluster_a
+
+
+def _representative_step(steps: list[tuple[int, float]], target: float | None) -> tuple[int | None, float | None]:
+    if not steps or target is None:
+        return None, None
+    step, duration = min(steps, key=lambda pair: (abs(pair[1] - target), pair[0]))
+    return step, duration
+
+
+def _estimate_periodicity(steps: list[int]) -> int | None:
+    if len(steps) < 3:
+        return None
+    sorted_steps = sorted(steps)
+    differences = [current - previous for previous, current in pairwise(sorted_steps)]
+    positive = [difference for difference in differences if difference > 1]
+    if len(positive) < 2:
+        return None
+    counts = Counter(positive)
+    best_diff, best_count = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0]
+    if best_count < 2:
+        return None
+    return best_diff
+
+
+def _active_category(active: dict[str, int]) -> str | None:
+    for category in ("communication", "compute", "stall", "host", "other"):
+        if active[category] > 0:
+            return category
+    return None
+
+
 def _event_category(event: _CompleteTraceEvent) -> str:
     if _STALL_PATTERN.search(event.name):
         return "stall"
@@ -1265,3 +1649,16 @@ def _string_arg(args_value: Any, key: str) -> str | None:
         return None
     value = args_value.get(key)
     return value if isinstance(value, str) and value else None
+
+
+def _string_like_arg(args_value: Any, key: str) -> str | None:
+    if not isinstance(args_value, dict):
+        return None
+    value = args_value.get(key)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value if value else None
+    if isinstance(value, (int, float)):
+        return str(value)
+    return None

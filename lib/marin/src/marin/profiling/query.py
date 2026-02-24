@@ -9,7 +9,16 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from marin.profiling.schema import GapBeforeOp, GapRegionContext, HotOp, ProfileSummary, RegionAggregate
+from marin.profiling.semantics import classify_semantic_family, estimate_flop_proxy
+from marin.profiling.schema import (
+    GapBeforeOp,
+    GapRegionContext,
+    HotOp,
+    ProfileSummary,
+    RegionAggregate,
+    SemanticFamilyAggregate,
+    StepClassSummary,
+)
 
 
 @dataclass(frozen=True)
@@ -151,9 +160,19 @@ def compare_profile_summaries(before: ProfileSummary, after: ProfileSummary, *, 
         key=lambda delta: (delta.delta, delta.name),
     )[:top_k]
 
+    before_step_classes = _step_class_rows(before.step_time.classes)
+    after_step_classes = _step_class_rows(after.step_time.classes)
+    step_class_delta = _compare_step_classes(before.step_time.classes, after.step_time.classes)
+    semantic_family_delta = _compare_semantic_families(
+        _semantic_families_for_summary(before),
+        _semantic_families_for_summary(after),
+    )
+    provenance_checks = _compare_provenance(before, after)
+
     return {
         "before_source": before.source_path,
         "after_source": after.source_path,
+        "provenance_checks": provenance_checks,
         "step_time": {
             "steady_state_median_before": before.step_time.steady_state_steps.median,
             "steady_state_median_after": after.step_time.steady_state_steps.median,
@@ -166,6 +185,11 @@ def compare_profile_summaries(before: ProfileSummary, after: ProfileSummary, *, 
                 before.step_time.steady_state_steps.p90, after.step_time.steady_state_steps.p90
             ),
         },
+        "step_classes": {
+            "before": before_step_classes,
+            "after": after_step_classes,
+            "delta": step_class_delta,
+        },
         "time_breakdown_share_delta": {
             "compute": after.time_breakdown.compute.share_of_total - before.time_breakdown.compute.share_of_total,
             "communication": (
@@ -175,6 +199,7 @@ def compare_profile_summaries(before: ProfileSummary, after: ProfileSummary, *, 
             "stall": after.time_breakdown.stall.share_of_total - before.time_breakdown.stall.share_of_total,
             "other": after.time_breakdown.other.share_of_total - before.time_breakdown.other.share_of_total,
         },
+        "semantic_family_delta": semantic_family_delta,
         "regressed_ops": [delta.__dict__ for delta in regressed],
         "improved_ops": [delta.__dict__ for delta in improved],
     }
@@ -183,11 +208,201 @@ def compare_profile_summaries(before: ProfileSummary, after: ProfileSummary, *, 
 def _hot_op_to_dict(op: HotOp) -> dict[str, Any]:
     return {
         "name": op.name,
+        "canonical_name": op.canonical_name,
         "category": op.category,
         "count": op.count,
         "exclusive_duration": op.exclusive_duration,
         "total_duration": op.total_duration,
         "avg_duration": op.avg_duration,
+        "shape_signature": op.shape_signature,
+        "source_file": op.source_file,
+        "tf_op_path": op.tf_op_path,
+        "flop_proxy_per_invocation": op.flop_proxy_per_invocation,
+    }
+
+
+def _step_class_rows(step_classes: list[StepClassSummary]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for step_class in step_classes:
+        rows.append(
+            {
+                "name": step_class.name,
+                "count": step_class.count,
+                "fraction_of_steady": step_class.fraction_of_steady,
+                "median_duration": step_class.duration_stats.median,
+                "p90_duration": step_class.duration_stats.p90,
+                "representative_step": step_class.representative_step,
+                "representative_duration": step_class.representative_duration,
+                "periodicity": step_class.periodicity,
+            }
+        )
+    return rows
+
+
+def _compare_step_classes(before: list[StepClassSummary], after: list[StepClassSummary]) -> list[dict[str, Any]]:
+    before_by_name = {row.name: row for row in before}
+    after_by_name = {row.name: row for row in after}
+    rows: list[dict[str, Any]] = []
+    for name in sorted(set(before_by_name) | set(after_by_name)):
+        before_row = before_by_name.get(name)
+        after_row = after_by_name.get(name)
+        before_median = before_row.duration_stats.median if before_row is not None else None
+        after_median = after_row.duration_stats.median if after_row is not None else None
+        rows.append(
+            {
+                "name": name,
+                "before_count": before_row.count if before_row else 0,
+                "after_count": after_row.count if after_row else 0,
+                "before_fraction": before_row.fraction_of_steady if before_row else 0.0,
+                "after_fraction": after_row.fraction_of_steady if after_row else 0.0,
+                "median_before": before_median,
+                "median_after": after_median,
+                "median_delta": _delta(before_median, after_median),
+                "median_regression_pct": _pct_delta(before_median, after_median),
+            }
+        )
+    return rows
+
+
+def _semantic_families_for_summary(summary: ProfileSummary) -> list[SemanticFamilyAggregate]:
+    if summary.semantic_families:
+        return summary.semantic_families
+
+    # Backward-compatible fallback for older summaries.
+    aggregate: dict[str, dict[str, float | int | str | None]] = {}
+    total_duration = summary.time_breakdown.total_duration
+    for op in summary.hot_ops:
+        family = classify_semantic_family(op.name)
+        bucket = aggregate.setdefault(
+            family,
+            {
+                "count": 0,
+                "total_duration": 0.0,
+                "exclusive_duration": 0.0,
+                "example_op": op.name,
+                "flop_proxy_total": 0.0,
+                "flop_proxy_count": 0,
+            },
+        )
+        bucket["count"] = int(bucket["count"]) + op.count
+        bucket["total_duration"] = float(bucket["total_duration"]) + op.total_duration
+        bucket["exclusive_duration"] = float(bucket["exclusive_duration"]) + op.exclusive_duration
+        flop_proxy = op.flop_proxy_per_invocation
+        if flop_proxy is None and op.shape_signature:
+            flop_proxy = estimate_flop_proxy(family, op.shape_signature)
+        if flop_proxy is not None and op.count > 0:
+            bucket["flop_proxy_total"] = float(bucket["flop_proxy_total"]) + (flop_proxy * op.count)
+            bucket["flop_proxy_count"] = int(bucket["flop_proxy_count"]) + op.count
+
+    rows: list[SemanticFamilyAggregate] = []
+    for family, stats in sorted(aggregate.items(), key=lambda item: (-float(item[1]["exclusive_duration"]), item[0])):
+        count = int(stats["count"])
+        total = float(stats["total_duration"])
+        exclusive = float(stats["exclusive_duration"])
+        flop_proxy_total = float(stats["flop_proxy_total"])
+        rows.append(
+            SemanticFamilyAggregate(
+                family=family,
+                count=count,
+                total_duration=total,
+                exclusive_duration=exclusive,
+                share_of_total=(exclusive / total_duration) if total_duration > 0 else 0.0,
+                avg_duration=(total / count) if count else 0.0,
+                avg_exclusive_duration=(exclusive / count) if count else 0.0,
+                example_op=str(stats["example_op"]),
+                dominant_shape_signature=None,
+                flop_proxy_total=flop_proxy_total if flop_proxy_total > 0 else None,
+                time_per_flop_proxy=(exclusive / flop_proxy_total) if flop_proxy_total > 0 else None,
+            )
+        )
+    return rows
+
+
+def _compare_semantic_families(
+    before: list[SemanticFamilyAggregate],
+    after: list[SemanticFamilyAggregate],
+) -> list[dict[str, Any]]:
+    before_by_family = {row.family: row for row in before}
+    after_by_family = {row.family: row for row in after}
+    rows: list[dict[str, Any]] = []
+    for family in sorted(set(before_by_family) | set(after_by_family)):
+        before_row = before_by_family.get(family)
+        after_row = after_by_family.get(family)
+        before_exclusive = before_row.exclusive_duration if before_row else 0.0
+        after_exclusive = after_row.exclusive_duration if after_row else 0.0
+        before_time_per_flop = before_row.time_per_flop_proxy if before_row else None
+        after_time_per_flop = after_row.time_per_flop_proxy if after_row else None
+        before_flops = before_row.flop_proxy_total if before_row else None
+        after_flops = after_row.flop_proxy_total if after_row else None
+        time_ratio = _ratio(before_exclusive, after_exclusive)
+        flop_ratio = _ratio(before_flops, after_flops)
+        rows.append(
+            {
+                "family": family,
+                "before_exclusive_duration": before_exclusive,
+                "after_exclusive_duration": after_exclusive,
+                "exclusive_duration_delta": after_exclusive - before_exclusive,
+                "exclusive_regression_pct": _pct_delta(before_exclusive, after_exclusive),
+                "before_flop_proxy_total": before_flops,
+                "after_flop_proxy_total": after_flops,
+                "flop_proxy_ratio": flop_ratio,
+                "before_time_per_flop_proxy": before_time_per_flop,
+                "after_time_per_flop_proxy": after_time_per_flop,
+                "time_per_flop_regression_pct": _pct_delta(before_time_per_flop, after_time_per_flop),
+                "time_ratio": time_ratio,
+                "work_ratio": flop_ratio,
+                "efficiency_ratio": (time_ratio / flop_ratio) if time_ratio is not None and flop_ratio else None,
+                "example_before": before_row.example_op if before_row else None,
+                "example_after": after_row.example_op if after_row else None,
+                "shape_signature_before": before_row.dominant_shape_signature if before_row else None,
+                "shape_signature_after": after_row.dominant_shape_signature if after_row else None,
+            }
+        )
+    return rows
+
+
+def _compare_provenance(before: ProfileSummary, after: ProfileSummary) -> dict[str, Any]:
+    messages: list[str] = []
+    severity = "pass"
+
+    before_hash = before.trace_provenance.trace_sha256
+    after_hash = after.trace_provenance.trace_sha256
+    if before_hash and after_hash and before_hash == after_hash:
+        severity = "fail"
+        messages.append("Before and after summaries point to identical trace content (matching SHA256).")
+
+    if before.source_path == after.source_path:
+        if severity != "fail":
+            severity = "warn"
+        messages.append("Before and after summaries have the same source_path.")
+
+    if (
+        before.run_metadata.run_id
+        and after.run_metadata.run_id
+        and before.run_metadata.run_id == after.run_metadata.run_id
+    ):
+        if severity != "fail":
+            severity = "warn"
+        messages.append("Before and after summaries have the same W&B run_id.")
+
+    if before.run_metadata.artifact_ref and after.run_metadata.artifact_ref:
+        if before.run_metadata.artifact_ref == after.run_metadata.artifact_ref:
+            if severity != "fail":
+                severity = "warn"
+            messages.append("Before and after summaries reference the same W&B artifact.")
+
+    if not before_hash or not after_hash:
+        if severity == "pass":
+            severity = "warn"
+        messages.append("One or both summaries are missing trace SHA256 provenance.")
+
+    return {
+        "status": severity,
+        "messages": messages,
+        "before_trace_sha256": before_hash,
+        "after_trace_sha256": after_hash,
+        "before_run_id": before.run_metadata.run_id,
+        "after_run_id": after.run_metadata.run_id,
     }
 
 
@@ -195,6 +410,22 @@ def _delta(before: float | None, after: float | None) -> float | None:
     if before is None or after is None:
         return None
     return after - before
+
+
+def _pct_delta(before: float | None, after: float | None) -> float | None:
+    if before is None or after is None:
+        return None
+    if before <= 0:
+        return None
+    return ((after - before) / before) * 100.0
+
+
+def _ratio(before: float | None, after: float | None) -> float | None:
+    if before is None or after is None:
+        return None
+    if before <= 0:
+        return None
+    return after / before
 
 
 def _extract_target_after_keyword(question: str, keyword: str) -> str | None:

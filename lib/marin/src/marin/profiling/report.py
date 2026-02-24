@@ -25,13 +25,29 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
     lines.append(f"- Git SHA: `{metadata.git_sha or 'unknown'}`")
     lines.append(f"- Generated At (UTC): `{summary.generated_at_utc}`")
     lines.append("")
+    lines.append("## Trace Provenance")
+    lines.append(f"- Trace SHA256: `{summary.trace_provenance.trace_sha256 or 'unknown'}`")
+    lines.append(f"- Observed run_ids: `{', '.join(summary.trace_provenance.run_ids[:8]) or 'unknown'}`")
+    lines.append("")
     lines.append("## Step Time (Steady State)")
     lines.append(f"- Steps counted: `{step.count}`")
     lines.append(f"- Median: `{_fmt(step.median)}`")
     lines.append(f"- P90: `{_fmt(step.p90)}`")
     lines.append(f"- Mean: `{_fmt(step.mean)}`")
     lines.append("")
-    lines.append("## Time Breakdown (Exclusive)")
+    if summary.step_time.classes:
+        lines.append("## Step Classes")
+        lines.append("| Class | Count | Fraction | Median | P90 | Representative Step | Periodicity |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|")
+        for step_class in summary.step_time.classes:
+            lines.append(
+                f"| `{step_class.name}` | {step_class.count} | {_pct(step_class.fraction_of_steady)} | "
+                f"{_fmt(step_class.duration_stats.median)} | {_fmt(step_class.duration_stats.p90)} | "
+                f"{step_class.representative_step if step_class.representative_step is not None else 'n/a'} | "
+                f"{step_class.periodicity if step_class.periodicity is not None else 'n/a'} |"
+            )
+        lines.append("")
+    lines.append(f"## Time Breakdown (`{summary.time_breakdown.duration_basis}`)")
     lines.append("| Category | Duration | Share |")
     lines.append("|---|---:|---:|")
     lines.append(f"| Compute | {_fmt(breakdown.compute.total_duration)} | {_pct(breakdown.compute.share_of_total)} |")
@@ -43,11 +59,26 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
     lines.append(f"| Other | {_fmt(breakdown.other.total_duration)} | {_pct(breakdown.other.share_of_total)} |")
     lines.append("")
     lines.append("## Top Ops")
-    lines.append("| Op | Category | Count | Exclusive | Avg |")
-    lines.append("|---|---|---:|---:|---:|")
+    lines.append("| Op | Canonical | Category | Count | Exclusive | Avg | Shape Signature |")
+    lines.append("|---|---|---|---:|---:|---:|---|")
     for op in summary.hot_ops[:top_k]:
         lines.append(
-            f"| `{op.name}` | {op.category} | {op.count} | {_fmt(op.exclusive_duration)} | {_fmt(op.avg_duration)} |"
+            f"| `{op.name}` | `{op.canonical_name}` | {op.category} | {op.count} | "
+            f"{_fmt(op.exclusive_duration)} | {_fmt(op.avg_duration)} | `{op.shape_signature or 'n/a'}` |"
+        )
+    lines.append("")
+    lines.append("## Semantic Families")
+    lines.append("_Note: FLOP proxy metrics are relative scaling heuristics from trace shapes, not hardware MFU._")
+    lines.append(
+        "| Family | Count | Exclusive | Share | Avg Exclusive | FLOP Proxy Total | " "Time/FLOP Proxy | Example Op |"
+    )
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---|")
+    for family in summary.semantic_families[:top_k]:
+        lines.append(
+            f"| `{family.family}` | {family.count} | {_fmt(family.exclusive_duration)} | "
+            f"{_pct(family.share_of_total)} | "
+            f"{_fmt(family.avg_exclusive_duration)} | {_fmt(family.flop_proxy_total)} | "
+            f"{_fmt_sci(family.time_per_flop_proxy)} | `{family.example_op or 'n/a'}` |"
         )
     lines.append("")
     lines.append("## Communication Collectives")
@@ -113,3 +144,9 @@ def _pct(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{value * 100:.2f}%"
+
+
+def _fmt_sci(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.3e}"

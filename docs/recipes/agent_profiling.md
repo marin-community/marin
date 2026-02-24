@@ -48,6 +48,7 @@ Examples:
 uv run python lib/marin/tools/profile_summary.py summarize \
   --run-target marin-community/marin/<run_id> \
   --download-root /tmp/marin-profiles \
+  --breakdown-mode exclusive_global \
   --output /tmp/profile_summary.json
 
 # in-repo scratch (kept with your workspace)
@@ -55,6 +56,7 @@ mkdir -p scratch/profiles
 uv run python lib/marin/tools/profile_summary.py summarize \
   --run-target marin-community/marin/<run_id> \
   --download-root scratch/profiles \
+  --breakdown-mode exclusive_global \
   --output scratch/profile_summary.json
 ```
 
@@ -169,7 +171,8 @@ Use a strict workflow:
 ```bash
 uv run python lib/marin/tools/profile_summary.py compare \
   --before /tmp/profile_before.json \
-  --after /tmp/profile_after.json
+  --after /tmp/profile_after.json \
+  --strict-provenance
 ```
 
 5. **Track** (thresholded pass/warn/fail + history):
@@ -210,7 +213,10 @@ uv run python lib/marin/tools/profile_summary.py publish \
 
 The comparison reports:
 - steady-state step-time delta,
+- step class deltas (light/heavy when detected),
 - compute/comm/host/stall share deltas,
+- semantic family deltas with workload-normalized metrics (from trace-derived shape signatures),
+- provenance checks (trace hash/run identity),
 - regressed/improved ops by exclusive duration.
 
 ## First Workloads

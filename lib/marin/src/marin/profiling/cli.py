@@ -29,6 +29,8 @@ from marin.profiling.tracking import (
     summarize_regression_history,
 )
 
+_BREAKDOWN_MODES = ("exclusive_per_track", "exclusive_global")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest and query JAX/xprof profile artifacts.")
@@ -58,6 +60,12 @@ def parse_args() -> argparse.Namespace:
     summarize.add_argument("--trace-file", type=Path, help="Path to an explicit trace JSON(.gz) file.")
     summarize.add_argument("--warmup-steps", type=int, default=5, help="Initial steps ignored for steady-state stats.")
     summarize.add_argument("--hot-op-limit", type=int, default=25, help="Maximum number of hot ops in the summary.")
+    summarize.add_argument(
+        "--breakdown-mode",
+        choices=_BREAKDOWN_MODES,
+        default="exclusive_per_track",
+        help="Time-breakdown attribution mode.",
+    )
     summarize.add_argument("--output", type=Path, help="Optional output JSON path. Defaults to stdout.")
 
     query = subparsers.add_parser("query", help="Run a structured query against a summary JSON.")
@@ -69,6 +77,11 @@ def parse_args() -> argparse.Namespace:
     compare.add_argument("--before", type=Path, required=True, help="Baseline profile summary JSON.")
     compare.add_argument("--after", type=Path, required=True, help="Candidate profile summary JSON.")
     compare.add_argument("--top-k", type=int, default=10, help="Maximum number of improved/regressed ops to report.")
+    compare.add_argument(
+        "--strict-provenance",
+        action="store_true",
+        help="Fail if provenance checks indicate before/after are likely the same trace.",
+    )
 
     track = subparsers.add_parser(
         "track",
@@ -77,6 +90,11 @@ def parse_args() -> argparse.Namespace:
     track.add_argument("--before", type=Path, required=True, help="Baseline profile summary JSON.")
     track.add_argument("--after", type=Path, required=True, help="Candidate profile summary JSON.")
     track.add_argument("--top-k", type=int, default=10, help="Maximum number of improved/regressed ops to report.")
+    track.add_argument(
+        "--strict-provenance",
+        action="store_true",
+        help="Fail if provenance checks indicate before/after are likely the same trace.",
+    )
     track.add_argument(
         "--max-step-median-regression-pct",
         type=float,
@@ -133,7 +151,18 @@ def parse_args() -> argparse.Namespace:
     bundle.add_argument("--download-root", type=Path, help="Optional root directory for downloaded artifacts.")
     bundle.add_argument("--warmup-steps", type=int, default=5, help="Warmup steps ignored in summary generation.")
     bundle.add_argument("--hot-op-limit", type=int, default=25, help="Maximum hot ops in generated summaries.")
+    bundle.add_argument(
+        "--breakdown-mode",
+        choices=_BREAKDOWN_MODES,
+        default="exclusive_per_track",
+        help="Time-breakdown attribution mode for generated summaries.",
+    )
     bundle.add_argument("--top-k", type=int, default=10, help="Top-k rows for compare/reports.")
+    bundle.add_argument(
+        "--strict-provenance",
+        action="store_true",
+        help="Fail if provenance checks indicate before/after are likely the same trace.",
+    )
     bundle.add_argument(
         "--max-step-median-regression-pct",
         type=float,
@@ -205,6 +234,7 @@ def main() -> None:
         before = _load_summary(args.before)
         after = _load_summary(args.after)
         response = compare_profile_summaries(before, after, top_k=args.top_k)
+        _enforce_provenance_policy(response, strict=args.strict_provenance)
         print(json.dumps(response, indent=2, sort_keys=True))
         return
 
@@ -218,6 +248,7 @@ def main() -> None:
             max_stall_share_regression_abs=args.max_stall_share_regression_abs,
         )
         assessment = assess_profile_regression(before, after, thresholds=thresholds, top_k=args.top_k)
+        _enforce_provenance_policy(assessment["comparison"], strict=args.strict_provenance)
         record = make_regression_record(
             before=before,
             after=after,
@@ -268,6 +299,7 @@ def main() -> None:
             download_root=args.download_root,
             warmup_steps=args.warmup_steps,
             hot_op_limit=args.hot_op_limit,
+            breakdown_mode=args.breakdown_mode,
         )
         after = _resolve_bundle_summary(
             summary_path=args.after_summary,
@@ -278,6 +310,7 @@ def main() -> None:
             download_root=args.download_root,
             warmup_steps=args.warmup_steps,
             hot_op_limit=args.hot_op_limit,
+            breakdown_mode=args.breakdown_mode,
         )
 
         thresholds = RegressionThresholds(
@@ -286,6 +319,8 @@ def main() -> None:
             max_communication_share_regression_abs=args.max_communication_share_regression_abs,
             max_stall_share_regression_abs=args.max_stall_share_regression_abs,
         )
+        preflight_comparison = compare_profile_summaries(before, after, top_k=args.top_k)
+        _enforce_provenance_policy(preflight_comparison, strict=args.strict_provenance)
         result = run_profile_comparison_bundle(
             before=before,
             after=after,
@@ -336,6 +371,7 @@ def _handle_summarize(args: argparse.Namespace):
             args.trace_file,
             warmup_steps=args.warmup_steps,
             hot_op_limit=args.hot_op_limit,
+            breakdown_mode=args.breakdown_mode,
         )
 
     if args.artifact:
@@ -345,6 +381,7 @@ def _handle_summarize(args: argparse.Namespace):
             run_metadata=downloaded.run_metadata,
             warmup_steps=args.warmup_steps,
             hot_op_limit=args.hot_op_limit,
+            breakdown_mode=args.breakdown_mode,
         )
 
     if args.run_target:
@@ -360,6 +397,7 @@ def _handle_summarize(args: argparse.Namespace):
             run_metadata=downloaded.run_metadata,
             warmup_steps=args.warmup_steps,
             hot_op_limit=args.hot_op_limit,
+            breakdown_mode=args.breakdown_mode,
         )
 
     if args.profile_dir:
@@ -367,6 +405,7 @@ def _handle_summarize(args: argparse.Namespace):
             args.profile_dir,
             warmup_steps=args.warmup_steps,
             hot_op_limit=args.hot_op_limit,
+            breakdown_mode=args.breakdown_mode,
         )
 
     raise ValueError("Specify one of --trace-file, --profile-dir, --artifact, or --run-target.")
@@ -389,6 +428,7 @@ def _resolve_bundle_summary(
     download_root: Path | None,
     warmup_steps: int,
     hot_op_limit: int,
+    breakdown_mode: str,
 ):
     if summary_path is not None:
         return _load_summary(summary_path)
@@ -405,8 +445,24 @@ def _resolve_bundle_summary(
             run_metadata=downloaded.run_metadata,
             warmup_steps=warmup_steps,
             hot_op_limit=hot_op_limit,
+            breakdown_mode=breakdown_mode,
         )
     raise ValueError("Bundle requires either a summary path or a run target for both before and after.")
+
+
+def _enforce_provenance_policy(comparison: dict, *, strict: bool) -> None:
+    if not strict:
+        return
+    checks = comparison.get("provenance_checks")
+    if not isinstance(checks, dict):
+        return
+    if checks.get("status") != "fail":
+        return
+    messages = checks.get("messages")
+    if isinstance(messages, list) and messages:
+        details = " ".join(str(message) for message in messages)
+        raise ValueError(f"Provenance checks failed. {details}")
+    raise ValueError("Provenance checks failed.")
 
 
 if __name__ == "__main__":
