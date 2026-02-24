@@ -246,6 +246,8 @@ class ZephyrCoordinator:
     """
 
     def __init__(self):
+        from fray.v2 import current_actor
+
         # Task management state
         self._task_queue: deque[ShardTask] = deque()
         self._results: dict[int, TaskResult] = {}
@@ -272,6 +274,9 @@ class ZephyrCoordinator:
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
+
+        actor_ctx = current_actor()
+        self._name = f"{actor_ctx.group_name}"
 
     def initialize(
         self,
@@ -562,12 +567,6 @@ class ZephyrCoordinator:
         with self._lock:
             return dict(self._results)
 
-    def set_execution_config(self, shared_data: dict[str, Any], execution_id: str) -> None:
-        """Set config for the current execution."""
-        with self._lock:
-            self._shared_data = shared_data
-            self._execution_id = execution_id
-
     def run_pipeline(
         self,
         plan: PhysicalPlan,
@@ -668,6 +667,9 @@ class ZephyrCoordinator:
             {op_idx: right_refs[shard_idx] for op_idx, right_refs in all_right_shard_refs.items()}
             for shard_idx in range(len(shard_refs))
         ]
+
+    def __repr__(self) -> str:
+        return f"ZephyrCoordinator(name={self._name})"
 
     def shutdown(self) -> None:
         """Signal workers to exit. Worker group is managed by ZephyrContext."""
@@ -835,7 +837,14 @@ class ZephyrWorker:
 
             logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
             try:
+                t_0 = time.monotonic()
                 result = self._execute_shard(task, config)
+                logger.info(
+                    "[%s] Task for shard %d completed in %.2f seconds",
+                    self._worker_id,
+                    task.shard_idx,
+                    time.monotonic() - t_0,
+                )
                 # Block until coordinator records the result. This ensures
                 # report_result is fully processed before the next pull_task,
                 # preventing _in_flight tracking races.
@@ -911,6 +920,9 @@ class ZephyrWorker:
 
         logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, chunk_idx)
         return TaskResult(chunks=results)
+
+    def __repr__(self) -> str:
+        return f"ZephyrWorker(id={self._worker_id})"
 
     def shutdown(self) -> None:
         """Stop the worker's polling loop."""
@@ -1038,8 +1050,9 @@ class ZephyrContext:
         Application errors (``ZephyrWorkerError``) are never retried.
         """
         plan = compute_plan(dataset, hints)
-        if dry_run:
+        if verbose or dry_run:
             _print_plan(dataset.operations, plan)
+        if dry_run:
             return []
 
         # NOTE: pipeline ID incremented on clean completion only
