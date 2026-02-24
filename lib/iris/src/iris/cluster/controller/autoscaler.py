@@ -33,7 +33,7 @@ from iris.cluster.platform.base import (
     RemoteWorkerHandle,
     SliceHandle,
 )
-from iris.cluster.platform.bootstrap import rewrite_artifact_registry_region
+from iris.cluster.platform.bootstrap import rewrite_ghcr_to_ar_remote, zone_to_multi_region
 from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap, ZONE_ATTRIBUTE_KEY
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -41,14 +41,6 @@ from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
-
-
-def _zone_to_region(group: ScalingGroup) -> str | None:
-    """Extract the cloud region from a scale group's GCP zone (e.g. 'europe-west4-b' -> 'europe-west4')."""
-    template = group.config.slice_template
-    if template.HasField("gcp") and template.gcp.zone:
-        return template.gcp.zone.rsplit("-", 1)[0]
-    return None
 
 
 @dataclass
@@ -342,6 +334,7 @@ class Autoscaler:
         platform: Platform,
         threads: ThreadContainer | None = None,
         bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        gcp_project: str = "",
     ):
         """Create autoscaler with explicit parameters.
 
@@ -352,11 +345,13 @@ class Autoscaler:
             threads: Optional thread container for testing
             bootstrap_config: Worker bootstrap settings passed to platform.create_slice().
                 None disables bootstrap (test/local mode).
+            gcp_project: GCP project ID for AR remote repo image rewriting.
         """
         self._groups = scale_groups
         self._platform = platform
         self.evaluation_interval = evaluation_interval
         self._bootstrap_config = bootstrap_config
+        self._gcp_project = gcp_project
 
         # Centralized per-worker state indexed by worker_id
         self._workers: dict[str, TrackedWorker] = {}
@@ -378,6 +373,7 @@ class Autoscaler:
         platform: Platform,
         threads: ThreadContainer | None = None,
         bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        gcp_project: str = "",
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
@@ -387,6 +383,7 @@ class Autoscaler:
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
             bootstrap_config: Worker bootstrap settings passed to platform.create_slice()
+            gcp_project: GCP project ID for AR remote repo image rewriting.
 
         Returns:
             Configured Autoscaler instance
@@ -397,6 +394,7 @@ class Autoscaler:
             platform=platform,
             threads=threads,
             bootstrap_config=bootstrap_config,
+            gcp_project=gcp_project,
         )
 
     def _wait_for_inflight(self) -> None:
@@ -653,10 +651,10 @@ class Autoscaler:
             return False
 
     def _per_group_bootstrap_config(self, group: ScalingGroup) -> config_pb2.BootstrapConfig | None:
-        """Build a per-group BootstrapConfig by merging worker attributes, image region, and accelerator settings.
+        """Build a per-group BootstrapConfig by merging worker attributes, image rewrite, and accelerator settings.
 
         Copies the base bootstrap config and:
-        1. Rewrites docker_image's AR region to match the group's GCP zone
+        1. Rewrites GHCR docker_image to an AR remote repo for the group's continent
         2. Injects IRIS_WORKER_ATTRIBUTES, IRIS_TASK_DEFAULT_ENV_JSON, and
            IRIS_SCALE_GROUP from the group's worker settings into env_vars.
         3. Injects accelerator type/variant/GPU count env vars for the group.
@@ -664,22 +662,19 @@ class Autoscaler:
         if not self._bootstrap_config:
             return None
 
-        # Determine target region from the group's GCP zone
-        target_region = _zone_to_region(group)
-
         has_worker = group.config.HasField("worker")
-        needs_image_rewrite = (
-            target_region is not None
-            and self._bootstrap_config.docker_image
-            and rewrite_artifact_registry_region(self._bootstrap_config.docker_image, target_region)
-            != self._bootstrap_config.docker_image
-        )
 
         bc = config_pb2.BootstrapConfig()
         bc.CopyFrom(self._bootstrap_config)
 
-        if needs_image_rewrite:
-            bc.docker_image = rewrite_artifact_registry_region(bc.docker_image, target_region)
+        # Rewrite GHCR image to AR remote repo for this group's continent
+        template = group.config.slice_template
+        if template.HasField("gcp") and template.gcp.zone and bc.docker_image.startswith("ghcr.io/"):
+            multi_region = zone_to_multi_region(template.gcp.zone)
+            if multi_region:
+                project = self._gcp_project
+                assert project, "gcp_project required for GHCR→AR worker image rewrite"
+                bc.docker_image = rewrite_ghcr_to_ar_remote(bc.docker_image, multi_region, project)
 
         if has_worker:
             attributes = dict(group.config.worker.attributes)

@@ -206,6 +206,7 @@ class TaskAttempt:
         controller_address: str | None,
         default_task_env: dict[str, str],
         default_task_image: str | None,
+        gcp_project: str,
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
         log_sink: LogSink,
@@ -222,6 +223,7 @@ class TaskAttempt:
             controller_address: Controller address for env injection
             default_task_env: Worker-level default env vars injected into task containers
             default_task_image: Fully-qualified task container image from cluster config
+            gcp_project: GCP project ID for GHCR→AR image rewrite (empty if not on GCP)
             port_allocator: Port allocator for retry logic
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
@@ -234,6 +236,7 @@ class TaskAttempt:
         self._controller_address = controller_address
         self._default_task_env = default_task_env
         self._default_task_image = default_task_image
+        self._gcp_project = gcp_project
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
@@ -456,10 +459,25 @@ class TaskAttempt:
 
         No per-job Docker build — the pre-built base image has a pre-warmed
         uv cache. The remote client wraps the entrypoint with uv sync.
+
+        On GCP, rewrites ghcr.io/ images to the AR remote repo for this
+        worker's continent so pulls go through the pull-through cache.
         """
         if not self._default_task_image:
             raise ValueError("No task image configured. Set defaults.default_task_image in cluster config.")
         self.image_tag = self._default_task_image
+
+        if self.image_tag.startswith("ghcr.io/"):
+            from iris.cluster.worker.env_probe import detect_gcp_zone
+            from iris.cluster.platform.bootstrap import zone_to_multi_region, rewrite_ghcr_to_ar_remote
+
+            zone = detect_gcp_zone()
+            if zone:
+                multi_region = zone_to_multi_region(zone)
+                assert multi_region, f"Unknown GCP zone prefix for task image rewrite: {zone}"
+                assert self._gcp_project, "gcp_project required for GHCR→AR task image rewrite"
+                self.image_tag = rewrite_ghcr_to_ar_remote(self.image_tag, multi_region, self._gcp_project)
+
         logger.info("Using task image %s for task %s", self.image_tag, self.task_id)
 
     def _create_container(self) -> None:

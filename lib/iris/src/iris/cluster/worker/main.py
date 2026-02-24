@@ -83,11 +83,14 @@ def serve(
 
     log_prefix = None
     default_task_image = None
+    gcp_project = ""
     cluster_config = None
     if config_file:
         cluster_config = load_config(Path(config_file))
         log_prefix = cluster_config.storage.log_prefix or None
         default_task_image = cluster_config.defaults.default_task_image or None
+        if cluster_config.platform.HasField("gcp"):
+            gcp_project = cluster_config.platform.gcp.project_id
 
     if controller_address:
         resolved_controller_address = f"http://{controller_address}"
@@ -117,6 +120,7 @@ def serve(
         worker_attributes=_load_worker_attributes(),
         default_task_env=_load_task_default_env(),
         default_task_image=default_task_image,
+        gcp_project=gcp_project,
         log_prefix=log_prefix,
     )
 
