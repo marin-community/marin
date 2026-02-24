@@ -918,6 +918,10 @@ class TestWaterfallRouting:
 
         assert len(decisions) == 1
         assert decisions[0].scale_group == "fallback"
+        status_by_group = {s.group: s for s in autoscaler._last_routing_decision.group_statuses}
+        assert status_by_group["primary"].decision == "blocked"
+        assert "backoff" in status_by_group["primary"].reason
+        assert status_by_group["fallback"].decision == "selected"
 
     def test_backoff_group_with_ready_slices_still_falls_through(self):
         """Even with ready slices, a BACKOFF group rejects demand so it falls through."""
@@ -1607,6 +1611,8 @@ class TestAutoscalerActionLogging:
         assert status.current_demand["test-group"] == 1
         assert len(status.recent_actions) >= 1
         assert status.recent_actions[0].action_type == "scale_up"
+        assert status.last_evaluation.epoch_ms > 0
+        assert status.groups[0].availability_status != ""
 
     def test_action_log_includes_timestamp(self, empty_autoscaler: Autoscaler):
         """Verify actions include valid timestamps."""
@@ -1704,6 +1710,10 @@ class TestScalingGroupRequestingState:
         assert len(result.routed_entries["group-1"]) == 2
         assert result.routed_entries.get("group-2") is None
         assert result.unmet_entries == []
+        status_by_group = {s.group: s for s in result.group_statuses}
+        assert status_by_group["group-1"].decision == "selected"
+        assert status_by_group["group-1"].launch == 1
+        assert status_by_group["group-2"].decision == "idle"
 
 
 class TestAutoscalerAsyncScaleUp:

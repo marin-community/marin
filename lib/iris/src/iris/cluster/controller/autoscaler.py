@@ -120,6 +120,17 @@ class RoutingDecision:
     routed_entries: dict[str, list[DemandEntry]]
     unmet_entries: list[UnmetDemand]
     group_reasons: dict[str, str]
+    group_statuses: list[GroupRoutingStatus]
+
+
+@dataclass
+class GroupRoutingStatus:
+    group: str
+    priority: int
+    assigned: int
+    launch: int
+    decision: str
+    reason: str
 
 
 def _diagnose_no_matching_group(
@@ -345,11 +356,46 @@ def route_demand(
         needed = max(0, len(pg.assigned_entries) - pg.pending_slices)
         group_to_launch[name] = needed
 
+    group_statuses: list[GroupRoutingStatus] = []
+    for group in sorted_groups:
+        name = group.name
+        availability = group.availability(ts)
+        assigned = len(routed.get(name, []))
+        launch = group_to_launch.get(name, 0)
+
+        if assigned > 0:
+            decision = "selected"
+            reason = group_reasons.get(name, "demand-routed")
+        elif availability.status in {GroupAvailability.BACKOFF, GroupAvailability.QUOTA_EXCEEDED}:
+            decision = "blocked"
+            reason = availability.reason
+        elif availability.status == GroupAvailability.REQUESTING:
+            decision = "requesting"
+            reason = availability.reason
+        elif availability.status == GroupAvailability.AT_CAPACITY:
+            decision = "at_capacity"
+            reason = "at max_slices"
+        else:
+            decision = "idle"
+            reason = ""
+
+        group_statuses.append(
+            GroupRoutingStatus(
+                group=name,
+                priority=group.config.priority or 100,
+                assigned=assigned,
+                launch=launch,
+                decision=decision,
+                reason=reason,
+            )
+        )
+
     return RoutingDecision(
         group_to_launch=group_to_launch,
         routed_entries=routed,
         unmet_entries=unmet,
         group_reasons=group_reasons,
+        group_statuses=group_statuses,
     )
 
 
@@ -400,6 +446,7 @@ class Autoscaler:
 
         # Most recent routing decision (for status API)
         self._last_routing_decision: RoutingDecision | None = None
+        self._last_evaluation: Timestamp = Timestamp.from_ms(0)
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
@@ -827,6 +874,7 @@ class Autoscaler:
     ) -> list[ScalingDecision]:
         """CPU phase: evaluate demand and execute scale-up decisions."""
         timestamp = timestamp or Timestamp.now()
+        self._last_evaluation = timestamp
 
         decisions = self.evaluate(demand_entries, timestamp)
         if decisions:
@@ -883,12 +931,10 @@ class Autoscaler:
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
-        from iris.rpc import time_pb2
-
         status = vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation=time_pb2.Timestamp(epoch_ms=0),  # Controlled by controller now
+            last_evaluation=self._last_evaluation.to_proto(),
             recent_actions=list(self._action_log),
         )
         if self._last_routing_decision is not None:
@@ -942,6 +988,17 @@ class Autoscaler:
             group_reasons=decision.group_reasons,
             routed_entries=routed_entries,
             unmet_entries=unmet_entries,
+            group_statuses=[
+                vm_pb2.GroupRoutingStatus(
+                    group=s.group,
+                    priority=s.priority,
+                    assigned=s.assigned,
+                    launch=s.launch,
+                    decision=s.decision,
+                    reason=s.reason,
+                )
+                for s in decision.group_statuses
+            ],
         )
 
     def get_group(self, name: str) -> ScalingGroup | None:
