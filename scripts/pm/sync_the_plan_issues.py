@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -83,6 +86,7 @@ ALLOWED_NODE_KEYS: set[str] = {
     "owner_names",
     "target_date",
     "labels",
+    "source_of_truth",
     "description",
     "dependencies",
     "definition_of_done",
@@ -102,6 +106,7 @@ class PlanNode:
     owner_names: list[str] | None
     target_date: str | None
     labels: list[str] | None
+    source_of_truth: str | None
     description: str | None
     dependencies: list[str] | None
     definition_of_done: str | None
@@ -114,6 +119,8 @@ class PlanNode:
         parts: list[str] = []
         if self.description:
             parts.append(self.description.strip())
+        if self.source_of_truth:
+            parts.append(self.source_of_truth.strip())
         if self.definition_of_done:
             parts.append(self.definition_of_done.strip())
         return "\n\n".join([p for p in parts if p]).strip()
@@ -193,6 +200,7 @@ def load_plan(path: Path) -> tuple[dict[str, Any], dict[str, PlanNode]]:
             owner_names=_as_str_list(payload.get("owner_names"), field=f"{node_id}.owner_names"),
             target_date=_as_optional_str(payload.get("target_date"), field=f"{node_id}.target_date"),
             labels=_as_str_list(payload.get("labels"), field=f"{node_id}.labels"),
+            source_of_truth=_as_optional_str(payload.get("source_of_truth"), field=f"{node_id}.source_of_truth"),
             description=_as_optional_str(payload.get("description"), field=f"{node_id}.description"),
             dependencies=_as_str_list(payload.get("dependencies"), field=f"{node_id}.dependencies"),
             definition_of_done=_as_optional_str(
@@ -310,18 +318,21 @@ def _node_to_issue_body(node: PlanNode, *, id_to_issue: dict[str, int]) -> str:
         lines.append(node.description.rstrip())
         lines.append("")
 
-    lines.append("**Plan Metadata**")
+    metadata: dict[str, Any] = {}
     if node.type:
-        lines.append(f"- Type: `{node.type}`")
+        metadata["type"] = node.type
     if node.status:
-        lines.append(f"- Status: `{node.status}`")
+        metadata["status"] = node.status
     if node.target_date:
-        lines.append(f"- Target date: `{node.target_date}`")
+        metadata["target_date"] = node.target_date
     if node.owners:
-        owners = " ".join([f"@{o.lstrip('@')}" for o in node.owners])
-        lines.append(f"- Owners: {owners}")
+        metadata["owners"] = [o.lstrip("@") for o in node.owners]
     if node.labels:
-        lines.append(f"- Labels: {', '.join([f'`{label}`' for label in node.labels])}")
+        metadata["labels"] = node.labels
+    if node.source_of_truth:
+        metadata["source_of_truth"] = node.source_of_truth
+    if metadata:
+        lines.append(f"<!-- plan-metadata: {json.dumps(metadata, sort_keys=True)} -->")
 
     if node.dependencies:
         lines.append("")
