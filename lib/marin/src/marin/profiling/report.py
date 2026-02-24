@@ -80,8 +80,8 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
     lines.append("|---|---|---|---:|---:|---:|---|")
     for op in summary.hot_ops[:top_k]:
         lines.append(
-            f"| `{op.name}` | `{op.canonical_name}` | {op.category} | {op.count} | "
-            f"{_fmt(op.exclusive_duration)} | {_fmt(op.avg_duration)} | `{op.shape_signature or 'n/a'}` |"
+            f"| {_md_code(op.name)} | {_md_code(op.canonical_name)} | {op.category} | {op.count} | "
+            f"{_fmt(op.exclusive_duration)} | {_fmt(op.avg_duration)} | {_md_code(op.shape_signature or 'n/a')} |"
         )
     lines.append("")
     lines.append("## Semantic Families")
@@ -111,7 +111,7 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
         total_gap = _fmt(gap.total_gap_duration)
         max_gap = _fmt(gap.max_gap_duration)
         avg_gap = _fmt(gap.avg_gap_duration)
-        lines.append(f"| `{gap.name}` | {gap.count} | {total_gap} | {max_gap} | {avg_gap} |")
+        lines.append(f"| {_md_code(gap.name)} | {gap.count} | {total_gap} | {max_gap} | {avg_gap} |")
     lines.append("")
     lines.append("## Gap Context (By Region)")
     lines.append("| Op | Region Path | Count | Total Gap | Avg Gap |")
@@ -119,7 +119,10 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
     for context in summary.gap_region_contexts[:top_k]:
         total_gap = _fmt(context.total_gap_duration)
         avg_gap = _fmt(context.avg_gap_duration)
-        lines.append(f"| `{context.op_name}` | `{context.region_path}` | {context.count} | {total_gap} | {avg_gap} |")
+        lines.append(
+            f"| {_md_code(context.op_name)} | {_md_code(context.region_path)} | "
+            f"{context.count} | {total_gap} | {avg_gap} |"
+        )
     lines.append("")
     lines.append("## Optimization Candidates")
     for candidate in summary.optimization_candidates:
@@ -162,3 +165,8 @@ def _hierarchical_root_totals(summary: ProfileSummary) -> dict[str, float]:
             continue
         totals[region.path] = max(0.0, float(region.inclusive_duration))
     return totals
+
+
+def _md_code(value: str) -> str:
+    escaped = value.replace("`", "\\`").replace("|", "\\|")
+    return f"`{escaped}`"
