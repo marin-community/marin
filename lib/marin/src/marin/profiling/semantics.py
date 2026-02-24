@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterable
 
 _SEMANTIC_FAMILY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("attention_splash", re.compile(r"splash_mha|splash_attention", re.IGNORECASE)),
@@ -90,9 +91,9 @@ def estimate_flop_proxy(family: str, shape_signature: str | None) -> float | Non
     if family.startswith("attention"):
         rank4 = [shape for shape in dims if len(shape) >= 4]
         if rank4:
-            batch = max(shape[0] for shape in rank4 if shape[0] > 0)
-            heads = max(shape[1] for shape in rank4 if shape[1] > 0)
-            seq = max(shape[2] for shape in rank4 if shape[2] > 0)
+            batch = _max_positive(shape[0] for shape in rank4)
+            heads = _max_positive(shape[1] for shape in rank4)
+            seq = _max_positive(shape[2] for shape in rank4)
             head_dims = sorted({shape[3] for shape in rank4 if shape[3] > 0})
             if batch > 0 and heads > 0 and seq > 0 and head_dims:
                 if len(head_dims) >= 2:
@@ -107,8 +108,8 @@ def estimate_flop_proxy(family: str, shape_signature: str | None) -> float | Non
     if family == "loss_xent":
         rank2_or_more = [shape for shape in dims if len(shape) >= 2]
         if rank2_or_more:
-            rows = max(shape[0] for shape in rank2_or_more if shape[0] > 0)
-            cols = max(shape[1] for shape in rank2_or_more if shape[1] > 0)
+            rows = _max_positive(shape[0] for shape in rank2_or_more)
+            cols = _max_positive(shape[1] for shape in rank2_or_more)
             if rows > 0 and cols > 0:
                 return float(2 * rows * cols)
 
@@ -134,6 +135,11 @@ def _shape_product(shape: tuple[int, ...]) -> int:
             return 0
         product *= dim
     return product
+
+
+def _max_positive(values: Iterable[int]) -> int:
+    positive = [value for value in values if value > 0]
+    return max(positive, default=0)
 
 
 __all__ = [
