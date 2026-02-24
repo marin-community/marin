@@ -173,20 +173,25 @@ class RemoteClusterClient:
             status = self.get_job_status(job_id)
             state_name = cluster_pb2.JobState.Name(status.state)
 
-            log_response = self._fetch_task_logs_rpc(
-                job_id,
-                include_children=include_children,
-                since_ms=last_timestamp_ms,
-            )
+            try:
+                log_response = self._fetch_task_logs_rpc(
+                    job_id,
+                    include_children=include_children,
+                    since_ms=last_timestamp_ms,
+                )
+            except Exception:
+                logger.warning("Failed to fetch logs for %s, will retry next poll", job_id, exc_info=True)
+                log_response = None
 
-            if log_response.last_timestamp_ms > last_timestamp_ms:
-                last_timestamp_ms = log_response.last_timestamp_ms
+            if log_response is not None:
+                if log_response.last_timestamp_ms > last_timestamp_ms:
+                    last_timestamp_ms = log_response.last_timestamp_ms
 
-            if on_logs is not None:
-                on_logs(log_response)
+                if on_logs is not None:
+                    on_logs(log_response)
 
             if is_job_finished(status.state):
-                total_lines = sum(len(b.logs) for b in log_response.task_logs)
+                total_lines = sum(len(b.logs) for b in log_response.task_logs) if log_response else 0
                 logger.info(
                     "job=%s finished with state=%s, draining logs (total_lines=%d)",
                     job_id,
