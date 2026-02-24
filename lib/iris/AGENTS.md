@@ -48,6 +48,10 @@ Documentation should be kept up-to-date as code changes. When implementing new f
 
 @README.md - Main overview, CLI reference, and quick start
 
+## Operations
+
+When troubleshooting, monitoring, or deploying a live Iris cluster, read [OPS.md](OPS.md) first.
+
 ## Protocols and Testing
 
 Non-trivial public classes should define a protocol which represents their
