@@ -45,6 +45,7 @@ DEFAULT_HF_TRACE_PATTERN = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|pro
 DEFAULT_HF_TRACE_PATTERN_WITH_XPLANE = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$|xplane\\.pb$)"
 DEFAULT_HILLCLIMB_LOG = REPO_ROOT / "lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md"
 DEFAULT_VALIDATION_CLUSTER_EXCLUDE_SUBSTRINGS = ("vllm", "big-run")
+DEFAULT_MODERN_TPU_FAMILIES = ("v5p", "v5e", "v6e")
 
 SESSION_DIRECTIVE_PRESET_FILES = {
     "training-chunk-kernel-focus": REPO_ROOT / "scripts/gdn/session_directives/training-chunk-kernel-focus.md",
@@ -1636,6 +1637,23 @@ def _cluster_supports_tpu_slice(config_path: Path, *, slice_key: str | None) -> 
     return slice_key in text
 
 
+def _cluster_supports_any_tpu_family(config_path: Path, *, families: Sequence[str]) -> bool:
+    try:
+        text = config_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    if "tpu_slice_" not in text:
+        return False
+
+    for family in families:
+        token = family.strip().lower()
+        if not token:
+            continue
+        if f"tpu_slice_{token}_" in text:
+            return True
+    return False
+
+
 def _normalize_tpu_slice_key(tpu_type: str | None) -> str | None:
     if not tpu_type:
         return None
@@ -1648,15 +1666,14 @@ def _normalize_tpu_slice_key(tpu_type: str | None) -> str | None:
     return f"tpu_slice_{normalized}"
 
 
-def _required_validation_tpu_type(args: argparse.Namespace) -> str | None:
-    if args.validation_mode in {"required", "profile-only"}:
-        return args.validation_profile_tpu
-    return args.validation_ray_tpu
-
-
-def _discover_validation_ray_clusters(args: argparse.Namespace) -> list[str]:
+def _discover_validation_ray_clusters(
+    args: argparse.Namespace,
+    *,
+    required_tpu_type: str | None,
+    modern_only: bool,
+) -> list[str]:
     excludes = [token.lower() for token in args.validation_ray_cluster_exclude]
-    slice_key = _normalize_tpu_slice_key(_required_validation_tpu_type(args))
+    slice_key = _normalize_tpu_slice_key(required_tpu_type)
 
     discovered: list[str] = []
     for config_path in sorted((REPO_ROOT / "infra").glob("marin-*.yaml")):
@@ -1667,8 +1684,12 @@ def _discover_validation_ray_clusters(args: argparse.Namespace) -> list[str]:
         cluster_lower = cluster.lower()
         if any(token in cluster_lower for token in excludes):
             continue
-        if not _cluster_supports_tpu_slice(config_path, slice_key=slice_key):
-            continue
+        if modern_only:
+            if not _cluster_supports_any_tpu_family(config_path, families=DEFAULT_MODERN_TPU_FAMILIES):
+                continue
+        else:
+            if not _cluster_supports_tpu_slice(config_path, slice_key=slice_key):
+                continue
         discovered.append(cluster)
 
     return discovered
@@ -1682,18 +1703,41 @@ def _validation_bad_ray_clusters(args: argparse.Namespace) -> set[str]:
     return bad
 
 
-def _validation_ray_clusters(args: argparse.Namespace) -> list[str]:
+def _validation_ray_clusters(args: argparse.Namespace, *, purpose: str) -> list[str]:
+    if purpose not in {"test", "profile"}:
+        raise ValueError(f"Invalid validation cluster purpose: {purpose!r}")
+
     if args.validation_ray_cluster:
         clusters = _dedupe_clusters(args.validation_ray_cluster)
     elif args.validation_ray_cluster_auto:
         active_cluster = getattr(args, "active_dev_tpu_cluster", None)
-        discovered = _discover_validation_ray_clusters(args)
-        if not getattr(args, "_validation_auto_cluster_reported", False):
+        if purpose == "profile":
+            discovered = _discover_validation_ray_clusters(
+                args,
+                required_tpu_type=args.validation_profile_tpu,
+                modern_only=False,
+            )
+            report_attr = "_validation_auto_cluster_reported_profile"
+            report_label = "profile"
+        else:
+            allow_cross = bool(args.validation_cross_tpu_test_fallback)
+            discovered = _discover_validation_ray_clusters(
+                args,
+                required_tpu_type=None if allow_cross else args.validation_profile_tpu,
+                modern_only=allow_cross,
+            )
+            report_attr = "_validation_auto_cluster_reported_test"
+            if allow_cross:
+                report_label = "test-modern"
+            else:
+                report_label = "test"
+
+        if not getattr(args, report_attr, False):
             print(
-                "[gdnctl] auto-discovered validation Ray clusters: "
+                f"[gdnctl] auto-discovered validation Ray clusters ({report_label}): "
                 f"{', '.join(discovered) if discovered else '(none)'}"
             )
-            args._validation_auto_cluster_reported = True
+            setattr(args, report_attr, True)
         clusters = _dedupe_clusters(
             [
                 active_cluster,
@@ -1762,7 +1806,7 @@ def _run_validation_tests_once(args: argparse.Namespace) -> tuple[int, bool]:
             file=sys.stderr,
         )
 
-    clusters = _validation_ray_clusters(args)
+    clusters = _validation_ray_clusters(args, purpose="test")
     if not clusters:
         print(
             "[gdnctl] no valid Ray clusters remain for validation tests.",
@@ -1878,7 +1922,7 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             file=sys.stderr,
         )
 
-    clusters = _validation_ray_clusters(args)
+    clusters = _validation_ray_clusters(args, purpose="profile")
     if not clusters:
         print(
             "[gdnctl] no valid Ray clusters remain for validation profile.",
@@ -1990,6 +2034,7 @@ def _apply_resilient_defaults(args: argparse.Namespace) -> None:
         args.validation_max_attempts = -1
     if not args.validation_ray_cluster:
         args.validation_ray_cluster_auto = True
+    args.validation_cross_tpu_test_fallback = True
 
 
 def _last_iteration_bounds(lines: Sequence[str]) -> tuple[int, int] | None:
@@ -2665,6 +2710,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Cluster-name substring excluded from auto-discovered validation Ray clusters "
             "(repeatable, case-insensitive)."
+        ),
+    )
+    codex_loop.add_argument(
+        "--validation-cross-tpu-test-fallback",
+        action="store_true",
+        help=(
+            "When auto-discovery is enabled, allow Ray test fallback on modern TPU families "
+            "(v5p/v5e/v6e) even if they differ from --validation-profile-tpu. "
+            "Profile fallback remains pinned to --validation-profile-tpu."
         ),
     )
     codex_loop.add_argument(

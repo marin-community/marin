@@ -82,6 +82,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
 When `--hold-dev-tpu` is enabled, `gdnctl` injects a session directive that prefers dev TPU validation/profile commands (`dev-tpu-test` / `dev-tpu-profile`) and allows Ray fallback when needed.
 Keep `--post-check` cluster/name aligned to the held allocation (`--cluster` + `--tpu-name`) so checks run on the active dev TPU.
 `--validation-ray-cluster-auto` discovers fallback clusters from `infra/marin-*.yaml` and filters them by required TPU type (`--validation-profile-tpu` when profiling is enabled). By default it excludes cluster names containing `vllm` and `big-run`.
+With `--resilient`, tests can fall back across modern TPU families (`v5p`/`v5e`/`v6e`) when needed, while profile fallback remains pinned to `--validation-profile-tpu` (for consistent MFU comparisons).
 
 Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`
