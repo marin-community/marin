@@ -87,7 +87,7 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
     lines.append("## Semantic Families")
     lines.append("_Note: FLOP proxy metrics are relative scaling heuristics from trace shapes, not hardware MFU._")
     lines.append(
-        "| Family | Count | Exclusive | Share | Avg Exclusive | FLOP Proxy Total | " "Time/FLOP Proxy | Example Op |"
+        "| Family | Count | Exclusive | Share | Avg Exclusive | FLOP Proxy Total | " "FLOP Proxy/s | Example Op |"
     )
     lines.append("|---|---:|---:|---:|---:|---:|---:|---|")
     for family in summary.semantic_families[:top_k]:
@@ -95,7 +95,7 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
             f"| `{family.family}` | {family.count} | {_fmt(family.exclusive_duration)} | "
             f"{_pct(family.share_of_total)} | "
             f"{_fmt(family.avg_exclusive_duration)} | {_fmt(family.flop_proxy_total)} | "
-            f"{_fmt_sci(family.time_per_flop_proxy)} | `{family.example_op or 'n/a'}` |"
+            f"{_fmt_sci(_inverse_positive(family.time_per_flop_proxy))} | `{family.example_op or 'n/a'}` |"
         )
     lines.append("")
     lines.append("## Communication Collectives")
@@ -157,6 +157,12 @@ def _fmt_sci(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{value:.3e}"
+
+
+def _inverse_positive(value: float | None) -> float | None:
+    if value is None or value <= 0:
+        return None
+    return 1.0 / value
 
 
 def _hierarchical_root_totals(summary: ProfileSummary) -> dict[str, float]:
