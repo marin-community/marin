@@ -43,8 +43,6 @@ dependencies = [
     "resiliparse>=0.17.2",
     "s3fs>=2024",
     "toml",
-    "torch>=2.7.0",
-    "torchvision==0.24.0",
     "tqdm",
     "tqdm-loggable",
     "wandb",
