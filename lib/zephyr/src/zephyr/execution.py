@@ -760,8 +760,18 @@ class ZephyrWorker:
         if name not in self._shared_data_cache:
             path = _shared_data_path(self._chunk_prefix, name)
             logger.info("[%s] Loading shared data '%s' from %s", self._worker_id, name, path)
+            t0 = time.monotonic()
             with fsspec.open(path, "rb") as f:
-                self._shared_data_cache[name] = cloudpickle.load(f)
+                data = f.read()
+            elapsed = time.monotonic() - t0
+            self._shared_data_cache[name] = cloudpickle.loads(data)
+            logger.info(
+                "[%s] Loaded shared data '%s' in %.2fs (%d bytes)",
+                self._worker_id,
+                name,
+                elapsed,
+                len(data),
+            )
         return self._shared_data_cache[name]
 
     def _run_polling(self, coordinator: ActorHandle) -> None:
@@ -1032,9 +1042,18 @@ class ZephyrContext:
         """
         path = _shared_data_path(self.chunk_storage_prefix, name)
         ensure_parent_dir(path)
+        t0 = time.monotonic()
+        data = cloudpickle.dumps(obj)
+        elapsed = time.monotonic() - t0
         with fsspec.open(path, "wb") as f:
-            cloudpickle.dump(obj, f)
-        logger.info("Shared data '%s' written to %s", name, path)
+            f.write(data)
+        logger.info(
+            "Shared data '%s' written to %s (serialized %d bytes in %.2fs)",
+            name,
+            path,
+            len(data),
+            elapsed,
+        )
 
     def execute(
         self,
