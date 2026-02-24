@@ -906,7 +906,6 @@ def create_autoscaler(
     label_prefix: str,
     bootstrap_config: config_pb2.BootstrapConfig | None = None,
     threads: ThreadContainer | None = None,
-    default_task_image: str = "",
 ):
     """Create autoscaler from Platform and explicit config.
 
@@ -918,8 +917,6 @@ def create_autoscaler(
         bootstrap_config: Worker bootstrap settings passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
         threads: Thread container for background threads. Uses global default if not provided.
-        default_task_image: Default task container image from cluster config.
-            Resolved per-group via ``platform.resolve_image()``.
 
     Returns:
         Configured Autoscaler instance
@@ -968,5 +965,4 @@ def create_autoscaler(
         config=autoscaler_config,
         platform=platform,
         bootstrap_config=bootstrap_config,
-        default_task_image=default_task_image,
     )

@@ -9,7 +9,6 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 
 import json
 import logging
-import os
 import shutil
 import socket
 import threading
@@ -207,6 +206,7 @@ class TaskAttempt:
         controller_address: str | None,
         default_task_env: dict[str, str],
         default_task_image: str | None,
+        resolve_image: Callable[[str], str],
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
         log_sink: LogSink,
@@ -223,6 +223,8 @@ class TaskAttempt:
             controller_address: Controller address for env injection
             default_task_env: Worker-level default env vars injected into task containers
             default_task_image: Fully-qualified task container image from cluster config
+            resolve_image: Resolves image tags for the current platform
+                (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
             port_allocator: Port allocator for retry logic
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
@@ -235,6 +237,7 @@ class TaskAttempt:
         self._controller_address = controller_address
         self._default_task_env = default_task_env
         self._default_task_image = default_task_image
+        self._resolve_image_fn = resolve_image
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
@@ -458,16 +461,12 @@ class TaskAttempt:
         No per-job Docker build — the pre-built base image has a pre-warmed
         uv cache. The remote client wraps the entrypoint with uv sync.
 
-        Image rewriting (e.g. GHCR→AR) is handled by the autoscaler via
-        ``Platform.resolve_image()`` and injected as ``IRIS_RESOLVED_TASK_IMAGE``.
+        Image rewriting (e.g. GHCR→AR) is delegated to ``resolve_image``
+        which was bound to the platform and zone at worker startup.
         """
-        resolved = os.environ.get("IRIS_RESOLVED_TASK_IMAGE", "")
-        if resolved:
-            self.image_tag = resolved
-        elif self._default_task_image:
-            self.image_tag = self._default_task_image
-        else:
+        if not self._default_task_image:
             raise ValueError("No task image configured. Set defaults.default_task_image in cluster config.")
+        self.image_tag = self._resolve_image_fn(self._default_task_image)
 
         logger.info("Using task image %s for task %s", self.image_tag, self.task_id)
 

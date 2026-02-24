@@ -142,14 +142,13 @@ def test_rewrite_ghcr_to_ar_remote_custom_mirror_repo() -> None:
 
 
 def test_build_controller_bootstrap_script_from_config_rewrites_ghcr_to_ar() -> None:
+    from unittest.mock import MagicMock
+
     config = config_pb2.IrisClusterConfig()
     config.controller.image = "ghcr.io/marin-community/iris-controller:latest"
     config.controller.gcp.zone = "europe-west4-b"
     config.controller.gcp.port = 10000
     config.platform.gcp.project_id = "hai-gcp-models"
-
-    # With platform — delegates to platform.resolve_image()
-    from unittest.mock import MagicMock
 
     platform = MagicMock()
     platform.resolve_image.return_value = (
@@ -157,6 +156,9 @@ def test_build_controller_bootstrap_script_from_config_rewrites_ghcr_to_ar() -> 
     )
     script = build_controller_bootstrap_script_from_config(config, platform=platform)
 
+    platform.resolve_image.assert_called_once_with(
+        "ghcr.io/marin-community/iris-controller:latest", zone="europe-west4-b"
+    )
     assert (
         "Pulling image: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest"
         in script
@@ -164,30 +166,18 @@ def test_build_controller_bootstrap_script_from_config_rewrites_ghcr_to_ar() -> 
     assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
 
 
-def test_build_controller_bootstrap_script_from_config_legacy_rewrite() -> None:
-    """Legacy inline rewrite when no platform is provided."""
-    config = config_pb2.IrisClusterConfig()
-    config.controller.image = "ghcr.io/marin-community/iris-controller:latest"
-    config.controller.gcp.zone = "europe-west4-b"
-    config.controller.gcp.port = 10000
-    config.platform.gcp.project_id = "hai-gcp-models"
-
-    script = build_controller_bootstrap_script_from_config(config)
-
-    assert (
-        "Pulling image: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest"
-        in script
-    )
-
-
 def test_build_controller_bootstrap_script_from_config_non_ghcr_passthrough() -> None:
     """Non-GHCR images are not rewritten."""
+    from unittest.mock import MagicMock
+
     config = config_pb2.IrisClusterConfig()
     config.controller.image = "us-docker.pkg.dev/proj/repo/iris-controller:latest"
     config.controller.gcp.zone = "europe-west4-b"
     config.controller.gcp.port = 10000
 
-    script = build_controller_bootstrap_script_from_config(config)
+    platform = MagicMock()
+    platform.resolve_image.side_effect = lambda image, zone=None: image
+    script = build_controller_bootstrap_script_from_config(config, platform=platform)
 
     assert "Pulling image: us-docker.pkg.dev/proj/repo/iris-controller:latest" in script
 

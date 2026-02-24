@@ -372,7 +372,6 @@ class Autoscaler:
         platform: Platform,
         threads: ThreadContainer | None = None,
         bootstrap_config: config_pb2.BootstrapConfig | None = None,
-        default_task_image: str = "",
     ):
         """Create autoscaler with explicit parameters.
 
@@ -383,15 +382,11 @@ class Autoscaler:
             threads: Optional thread container for testing
             bootstrap_config: Worker bootstrap settings passed to platform.create_slice().
                 None disables bootstrap (test/local mode).
-            default_task_image: Default task container image from cluster config.
-                Resolved per-group via ``platform.resolve_image()`` and injected
-                into worker env as ``IRIS_RESOLVED_TASK_IMAGE``.
         """
         self._groups = scale_groups
         self._platform = platform
         self.evaluation_interval = evaluation_interval
         self._bootstrap_config = bootstrap_config
-        self._default_task_image = default_task_image
 
         # Centralized per-worker state indexed by worker_id
         self._workers: dict[str, TrackedWorker] = {}
@@ -413,7 +408,6 @@ class Autoscaler:
         platform: Platform,
         threads: ThreadContainer | None = None,
         bootstrap_config: config_pb2.BootstrapConfig | None = None,
-        default_task_image: str = "",
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
@@ -423,7 +417,6 @@ class Autoscaler:
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
             bootstrap_config: Worker bootstrap settings passed to platform.create_slice()
-            default_task_image: Default task container image from cluster config.
 
         Returns:
             Configured Autoscaler instance
@@ -434,7 +427,6 @@ class Autoscaler:
             platform=platform,
             threads=threads,
             bootstrap_config=bootstrap_config,
-            default_task_image=default_task_image,
         )
 
     def _wait_for_inflight(self) -> None:
@@ -695,11 +687,9 @@ class Autoscaler:
 
         Copies the base bootstrap config and:
         1. Rewrites GHCR docker_image via ``platform.resolve_image()``
-        2. Resolves the default task image for this group's zone and injects
-           ``IRIS_RESOLVED_TASK_IMAGE`` and ``IRIS_AR_HOST`` into env_vars.
-        3. Injects IRIS_WORKER_ATTRIBUTES, IRIS_TASK_DEFAULT_ENV_JSON, and
+        2. Injects IRIS_WORKER_ATTRIBUTES, IRIS_TASK_DEFAULT_ENV_JSON, and
            IRIS_SCALE_GROUP from the group's worker settings into env_vars.
-        4. Injects accelerator type/variant/GPU count env vars for the group.
+        3. Injects accelerator type/variant/GPU count env vars for the group.
         """
         if not self._bootstrap_config:
             return None
@@ -719,13 +709,6 @@ class Autoscaler:
 
         # Rewrite worker image via platform
         bc.docker_image = self._platform.resolve_image(bc.docker_image, zone=zone)
-
-        # Resolve and inject task image so the worker can read it from env
-        if self._default_task_image:
-            resolved_task = self._platform.resolve_image(self._default_task_image, zone=zone)
-            bc.env_vars["IRIS_RESOLVED_TASK_IMAGE"] = resolved_task
-            if resolved_task != self._default_task_image and "-docker.pkg.dev/" in resolved_task:
-                bc.env_vars["IRIS_AR_HOST"] = resolved_task.split("/")[0]
 
         if has_worker:
             attributes = dict(group.config.worker.attributes)
