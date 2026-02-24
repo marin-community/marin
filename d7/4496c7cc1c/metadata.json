@@ -3,7 +3,7 @@
   "checkpoint_id": "d74496c7cc1c",
   "strategy": "manual-commit",
   "branch": "kevin/harbor",
-  "checkpoints_count": 0,
+  "checkpoints_count": 12,
   "files_touched": [
     "lib/harbor/.github/workflows/claude.yml",
     "lib/harbor/.github/workflows/ty.yml",
@@ -693,13 +693,20 @@
       "context": "/d7/4496c7cc1c/1/context.md",
       "content_hash": "/d7/4496c7cc1c/1/content_hash.txt",
       "prompt": "/d7/4496c7cc1c/1/prompt.txt"
+    },
+    {
+      "metadata": "/d7/4496c7cc1c/2/metadata.json",
+      "transcript": "/d7/4496c7cc1c/2/full.jsonl",
+      "context": "/d7/4496c7cc1c/2/context.md",
+      "content_hash": "/d7/4496c7cc1c/2/content_hash.txt",
+      "prompt": "/d7/4496c7cc1c/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 112,
-    "cache_creation_tokens": 90711,
-    "cache_read_tokens": 4309962,
-    "output_tokens": 6627,
-    "api_call_count": 104
+    "input_tokens": 227,
+    "cache_creation_tokens": 176965,
+    "cache_read_tokens": 11331034,
+    "output_tokens": 11371,
+    "api_call_count": 191
   }
 }
