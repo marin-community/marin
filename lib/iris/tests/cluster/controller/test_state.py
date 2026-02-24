@@ -31,7 +31,7 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, DeviceType, JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from iris.time_utils import Duration, Timestamp
 
 # =============================================================================
 # Test Helpers
@@ -272,6 +272,27 @@ def test_task_failure_with_retry_requeues(job_request, worker_metadata):
     pending = state.peek_pending_tasks()
     assert len(pending) == 1
     assert pending[0].task_id == task.task_id
+
+
+def test_unschedulable_task_finalizes_job_with_timeout_error(job_request, worker_metadata):
+    """E2E: Task UNSCHEDULABLE propagates timeout-style error to final job state."""
+    state = ControllerState()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.scheduling_timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+    job = state.get_job(JobName.root("j1"))
+
+    dispatch_task(state, task, worker_id)
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_UNSCHEDULABLE)
+
+    assert task.state == cluster_pb2.TASK_STATE_UNSCHEDULABLE
+    assert task.error == "Scheduling timeout exceeded"
+    assert job.state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
+    assert job.error == "Scheduling timeout exceeded"
 
 
 def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
@@ -1016,7 +1037,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
         meta.attributes["tpu-worker-id"].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
-    # Use max_retries_preemption=1 (not 0 because 0 gets defaulted to 100)
+    # Use max_retries_preemption=1 so second worker failure is terminal.
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
