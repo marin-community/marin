@@ -76,6 +76,14 @@ _VLM_HLO_DUMP_XLA_FLAGS = [
     "--xla_dump_hlo_module_re=.*vlm_eval_loglikelihood.*",
 ]
 
+# --- Train Configs ---
+
+# 1 epoch ≈ 1,582,102 records / 256 batch_size ≈ 6,180 steps
+DEMO_TRAIN_STEPS = 10_000
+TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
+EXP_NAME = os.environ.get("EXP_NAME", "")
+TEXT_WEIGHT = float(os.environ.get("TEXT_WEIGHT", "1.0"))
+MULTIMODAL_WEIGHT = float(os.environ.get("MULTIMODAL_WEIGHT", "2.0"))
 
 def _merge_xla_flags(existing: str, required_flags: list[str]) -> str:
     merged = existing.strip()
@@ -237,12 +245,7 @@ def unified_data_config(
     return data_config
 
 
-# --- Train Configs ---
 
-# 1 epoch ≈ 1,582,102 records / 256 batch_size ≈ 6,180 steps
-DEMO_TRAIN_STEPS = 10_000
-TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
-EXP_NAME = os.environ.get("EXP_NAME", "")
 
 
 def _demo_train_config(learning_rate: float = 3e-4) -> SimpleTrainConfig:
@@ -344,9 +347,9 @@ def make_unified_4b(
 
 
 if __name__ == "__main__":
-    # steps = [make_unified_0_6b()]
-    # steps = [make_unified_1_7b()]
-    steps = [make_unified_4b()]
+    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT)]
+    steps = [make_unified_1_7b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT)]
+    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT)]
     executor_main(
         steps,
         description="Unified image-text model pre-training with Qwen3 architecture",
