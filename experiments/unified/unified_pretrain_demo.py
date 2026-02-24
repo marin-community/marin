@@ -345,7 +345,8 @@ def make_unified_4b(
 
 if __name__ == "__main__":
     # steps = [make_unified_0_6b()]
-    steps = [make_unified_1_7b()]
+    # steps = [make_unified_1_7b()]
+    steps = [make_unified_4b()]
     executor_main(
         steps,
         description="Unified image-text model pre-training with Qwen3 architecture",
