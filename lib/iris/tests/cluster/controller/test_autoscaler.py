@@ -1039,7 +1039,8 @@ class TestRegionRouting:
 
         assert result.routed_entries.get("eu") is None
         assert len(result.unmet_entries) == 1
-        assert "required_regions=['us-west4']" in result.unmet_entries[0].reason
+        assert "no groups in region" in result.unmet_entries[0].reason
+        assert "us-west4" in result.unmet_entries[0].reason
 
     def test_route_demand_combined_region_and_preemptible(self):
         """Demand requiring both region=us-west4 and preemptible=True only routes to the matching group."""
@@ -1110,7 +1111,69 @@ class TestZoneRouting:
 
         assert result.routed_entries.get("zone-a") is None
         assert len(result.unmet_entries) == 1
-        assert "required_zones=['us-central2-b']" in result.unmet_entries[0].reason
+        assert "no groups in zone" in result.unmet_entries[0].reason
+        assert "us-central2-b" in result.unmet_entries[0].reason
+
+    def test_zone_typo_suggests_close_match(self):
+        """A zone typo like 'europe-west4b' triggers a 'did you mean' suggestion."""
+        config = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
+        config.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+        config.worker.attributes[ZONE_ATTRIBUTE_KEY] = "europe-west4-b"
+        eu = ScalingGroup(config, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_zones = frozenset({"europe-west4b"})
+
+        result = route_demand([eu], demand)
+
+        assert len(result.unmet_entries) == 1
+        reason = result.unmet_entries[0].reason
+        assert "did you mean" in reason
+        assert "europe-west4-b" in reason
+
+    def test_device_mismatch_shows_available(self):
+        """When device doesn't match, the reason mentions the requested device."""
+        config = make_scale_group_config(
+            name="gpu-group",
+            max_slices=5,
+            priority=10,
+            zones=["us-central1-a"],
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="a100",
+        )
+        gpu_group = ScalingGroup(config, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+
+        result = route_demand([gpu_group], demand)
+
+        assert len(result.unmet_entries) == 1
+        reason = result.unmet_entries[0].reason
+        assert "no groups with device" in reason
+        assert "tpu" in reason
+
+    def test_reason_string_is_concise(self):
+        """The no_matching_group reason stays under 200 chars even with many groups."""
+        groups = []
+        for i in range(60):
+            zone = f"us-east{i % 5 + 1}-{'abc'[i % 3]}"
+            config = make_scale_group_config(
+                name=f"tpu_v6e_4-{zone}",
+                max_slices=2,
+                priority=10,
+                zones=[zone],
+            )
+            config.worker.attributes[ZONE_ATTRIBUTE_KEY] = zone
+            groups.append(ScalingGroup(config, make_mock_platform()))
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_zones = frozenset({"nonexistent-zone-z"})
+
+        result = route_demand(groups, demand)
+
+        assert len(result.unmet_entries) == 1
+        reason = result.unmet_entries[0].reason
+        assert len(reason) < 200, f"Reason too long ({len(reason)} chars): {reason}"
 
 
 class TestAutoscalerWaterfallEndToEnd:
