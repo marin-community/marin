@@ -1017,7 +1017,7 @@ class ZephyrContext:
                 self.max_workers = int(env_val) if env_val else 128
 
         if self.no_workers_timeout is None:
-            self.no_workers_timeout = 600.0
+            self.no_workers_timeout = 6 * 60 * 60  # 6 hours
 
         if self.chunk_storage_prefix is None:
             temp_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")
