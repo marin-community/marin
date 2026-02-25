@@ -120,14 +120,26 @@ class VmConfig(_message.Message):
     def __init__(self, name: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., gcp: _Optional[_Union[GcpVmConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualVmConfig, _Mapping]] = ...) -> None: ...
 
 class GcpSliceConfig(_message.Message):
-    __slots__ = ("zone", "runtime_version", "topology")
+    __slots__ = ("mode", "zone", "runtime_version", "topology", "machine_type", "boot_disk_size_gb")
+    class GcpSliceMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        GCP_SLICE_MODE_TPU: _ClassVar[GcpSliceConfig.GcpSliceMode]
+        GCP_SLICE_MODE_VM: _ClassVar[GcpSliceConfig.GcpSliceMode]
+    GCP_SLICE_MODE_TPU: GcpSliceConfig.GcpSliceMode
+    GCP_SLICE_MODE_VM: GcpSliceConfig.GcpSliceMode
+    MODE_FIELD_NUMBER: _ClassVar[int]
     ZONE_FIELD_NUMBER: _ClassVar[int]
     RUNTIME_VERSION_FIELD_NUMBER: _ClassVar[int]
     TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
+    MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
+    mode: GcpSliceConfig.GcpSliceMode
     zone: str
     runtime_version: str
     topology: str
-    def __init__(self, zone: _Optional[str] = ..., runtime_version: _Optional[str] = ..., topology: _Optional[str] = ...) -> None: ...
+    machine_type: str
+    boot_disk_size_gb: int
+    def __init__(self, mode: _Optional[_Union[GcpSliceConfig.GcpSliceMode, str]] = ..., zone: _Optional[str] = ..., runtime_version: _Optional[str] = ..., topology: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ...) -> None: ...
 
 class CoreweaveSliceConfig(_message.Message):
     __slots__ = ("region", "instance_type", "gpu_class", "infiniband")

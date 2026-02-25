@@ -93,11 +93,19 @@ message VmConfig {
 // ============================================================================
 
 message GcpSliceConfig {
+  enum GcpSliceMode {
+    GCP_SLICE_MODE_TPU = 0;
+    GCP_SLICE_MODE_VM = 1;
+  }
+
+  GcpSliceMode mode = 6;
   string zone = 1;
   string runtime_version = 2;
   reserved 3;  // was: preemptible (moved to SliceConfig)
   string topology = 4;
   reserved 5;  // was: zones (each slice/scaling group operates in a single zone)
+  string machine_type = 7;      // Required for mode=GCP_SLICE_MODE_VM
+  int32 boot_disk_size_gb = 8;  // Optional for mode=GCP_SLICE_MODE_VM (default in platform)
 }
 
 message CoreweaveSliceConfig {

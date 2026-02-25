@@ -60,6 +60,8 @@ from iris.cluster.types import (
     EnvironmentSpec,
     ResourceSpec,
     gpu_device,
+    is_job_finished,
+    preemptible_constraint,
     region_constraint,
     tpu_device,
 )
@@ -70,7 +72,7 @@ logger = logging.getLogger("smoke-test")
 IRIS_ROOT = Path(__file__).parent.parent
 DEFAULT_CONFIG_PATH = IRIS_ROOT / "examples" / "smoke.yaml"
 
-DEFAULT_JOB_TIMEOUT = 60  # 1 minute; node pools are pre-provisioned
+DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; allows autoscaling/scheduling slack in CI
 DEFAULT_BOOT_TIMEOUT = 300  # 5 minutes; cluster start + connection
 
 
@@ -900,6 +902,11 @@ class SmokeTestRunner:
 
     def _log_autoscaler_status(self):
         """Log current cluster state via `iris cluster status`."""
+        if self.config.local:
+            # `iris cluster status` resolves controller discovery through the config platform
+            # (GCP/manual/coreweave). In local smoke mode we intentionally run a local
+            # controller against the same config, so this command is not meaningful.
+            return
         try:
             result = _run_iris("cluster", "status", config_path=self.config.config_path)
             for line in result.stdout.splitlines():
@@ -937,6 +944,8 @@ class SmokeTestRunner:
             (f"Simple GPU job ({a.label()})", self._run_simple_gpu_job),
             (f"Concurrent GPU jobs (3x {a.label()})", self._run_concurrent_gpu_jobs),
         ]
+        if self._has_non_preemptible_cpu_group():
+            tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
         if not self.config.local:
             tests.append((f"Multi-GPU device check ({a.label()})", self._run_gpu_check_job))
         if a.region and not self.config.local:
@@ -998,19 +1007,52 @@ class SmokeTestRunner:
 
     def _run_tpu_tests(self, client: IrisClient):
         a = self._accel
-        tests = [
-            (f"[Test 1/6] Simple TPU job ({a.variant})", self._run_simple_tpu_job),
-            (f"[Test 2/6] Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs),
-            (f"[Test 3/6] Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job),
-            (f"[Test 4/6] JAX TPU job ({a.variant})", self._run_jax_tpu_job),
-        ]
-        if a.region:
-            tests.append((f"[Test 5/6] Region-constrained job ({a.region})", self._run_region_constrained_job))
-            tests.append((f"[Test 6/6] Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
+        if self.config.local:
+            tests = [
+                (f"Simple TPU job ({a.variant})", self._run_simple_tpu_job, True),
+                (f"Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs, True),
+                (f"Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job, True),
+            ]
+            if self._has_non_preemptible_cpu_group():
+                tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job, False))
+            if a.region:
+                tests.append((f"Region-constrained job ({a.region})", self._run_region_constrained_job, True))
+                tests.append((f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job, True))
 
-        for label, method in tests:
-            if not self._run_test_step(client, label, method):
+            total = len(tests)
+            for i, (label, method, scheduling_only) in enumerate(tests, 1):
+                if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method, scheduling_only):
+                    return
+            return
+
+        tests = [
+            (f"Simple TPU job ({a.variant})", self._run_simple_tpu_job),
+            (f"Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs),
+            (f"Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job),
+            (f"JAX TPU job ({a.variant})", self._run_jax_tpu_job),
+        ]
+        if self._has_non_preemptible_cpu_group():
+            tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
+        if a.region:
+            tests.append((f"Region-constrained job ({a.region})", self._run_region_constrained_job))
+            tests.append((f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
+
+        total = len(tests)
+        for i, (label, method) in enumerate(tests, 1):
+            if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method):
                 return
+
+    def _has_non_preemptible_cpu_group(self) -> bool:
+        """Return True when config contains an active non-preemptible CPU group."""
+        for sg in self._cluster_config.scale_groups.values():
+            if sg.HasField("max_slices") and sg.max_slices <= 0:
+                continue
+            if sg.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+                continue
+            if sg.slice_template.preemptible:
+                continue
+            return True
+        return False
 
     def _run_job_test(
         self,
@@ -1024,6 +1066,7 @@ class SmokeTestRunner:
         constraints: list[Constraint] | None = None,
         replicas: int = 1,
         timeout: int | None = None,
+        scheduling_only: bool = False,
     ) -> TestResult:
         """Generic job runner that handles submission, waiting, and result collection."""
         job_timeout = timeout or self.config.job_timeout_seconds
@@ -1039,6 +1082,22 @@ class SmokeTestRunner:
                 replicas=replicas,
             )
             logger.info("  Job submitted: %s", job.job_id)
+
+            if scheduling_only:
+                scheduled, detail, status = self._wait_for_scheduling(job, timeout=min(job_timeout, 30))
+                duration = time.monotonic() - start
+                if not is_job_finished(status.state):
+                    try:
+                        job.terminate()
+                    except Exception as e:
+                        logger.warning("  Could not terminate scheduled-only job %s: %s", job.job_id, e)
+
+                if scheduled:
+                    logger.info("  [PASS] %s in %.1fs", detail, duration)
+                    return TestResult(test_name, True, detail, duration)
+
+                logger.error("  [FAIL] %s", detail)
+                return TestResult(test_name, False, detail, duration)
 
             status = job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
             duration = time.monotonic() - start
@@ -1065,6 +1124,7 @@ class SmokeTestRunner:
         client: IrisClient,
         jobs_config: list[tuple[Entrypoint, str, ResourceSpec]],
         test_name: str = "Concurrent jobs",
+        scheduling_only: bool = False,
     ) -> tuple[float, list[str]]:
         """Submit multiple jobs and wait for all to complete.
 
@@ -1085,15 +1145,54 @@ class SmokeTestRunner:
             logger.info("  Job submitted: %s", job.job_id)
 
         failed_jobs = []
-        for job in jobs:
-            status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False, stream_logs=True)
-            if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
-                state_name = cluster_pb2.JobState.Name(status.state)
-                failed_jobs.append(f"{job.job_id}: {state_name}")
+        if scheduling_only:
+            for job in jobs:
+                scheduled, detail, status = self._wait_for_scheduling(
+                    job, timeout=min(self.config.job_timeout_seconds, 30)
+                )
+                if not scheduled:
+                    failed_jobs.append(f"{job.job_id}: {detail}")
+                if not is_job_finished(status.state):
+                    try:
+                        job.terminate()
+                    except Exception as e:
+                        logger.warning("  Could not terminate scheduled-only job %s: %s", job.job_id, e)
+        else:
+            for job in jobs:
+                status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False, stream_logs=True)
+                if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
+                    state_name = cluster_pb2.JobState.Name(status.state)
+                    failed_jobs.append(f"{job.job_id}: {state_name}")
 
         return time.monotonic() - start, failed_jobs
 
-    def _run_simple_tpu_job(self, client: IrisClient) -> TestResult:
+    def _wait_for_scheduling(self, job, timeout: int) -> tuple[bool, str, cluster_pb2.JobStatus]:
+        """Wait until a job reaches a schedulable state or terminal failure."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            status = job.status()
+            state_name = cluster_pb2.JobState.Name(status.state)
+            if status.state in (
+                cluster_pb2.JOB_STATE_PENDING,
+                cluster_pb2.JOB_STATE_BUILDING,
+                cluster_pb2.JOB_STATE_RUNNING,
+                cluster_pb2.JOB_STATE_SUCCEEDED,
+            ):
+                return True, f"Scheduled (state={state_name})", status
+            if status.state in (
+                cluster_pb2.JOB_STATE_FAILED,
+                cluster_pb2.JOB_STATE_KILLED,
+                cluster_pb2.JOB_STATE_WORKER_FAILED,
+                cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+            ):
+                return False, f"Failed before scheduling (state={state_name}, error={status.error})", status
+            time.sleep(0.5)
+
+        status = job.status()
+        state_name = cluster_pb2.JobState.Name(status.state)
+        return False, f"Did not reach schedulable state in {timeout}s (state={state_name})", status
+
+    def _run_simple_tpu_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
         """Run a simple TPU job that just prints and returns."""
         return self._run_job_test(
             client=client,
@@ -1101,9 +1200,10 @@ class SmokeTestRunner:
             entrypoint=Entrypoint.from_callable(_hello_tpu_job),
             job_name=f"smoke-simple-{self._run_id}",
             resources=ResourceSpec(device=self._accel.make_device()),
+            scheduling_only=scheduling_only,
         )
 
-    def _run_concurrent_tpu_jobs(self, client: IrisClient) -> TestResult:
+    def _run_concurrent_tpu_jobs(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
         """Submit 3 concurrent TPU jobs to test parallel provisioning and queueing."""
         resources = ResourceSpec(device=self._accel.make_device())
         test_name = f"Concurrent TPU jobs (3x {self._accel.variant})"
@@ -1113,9 +1213,14 @@ class SmokeTestRunner:
         ]
 
         try:
-            duration, failed_jobs = self._submit_and_wait_multiple(client, jobs_config, test_name)
+            duration, failed_jobs = self._submit_and_wait_multiple(
+                client, jobs_config, test_name, scheduling_only=scheduling_only
+            )
 
             if not failed_jobs:
+                if scheduling_only:
+                    logger.info("  [PASS] All 3 jobs scheduled in %.1fs", duration)
+                    return TestResult(test_name, True, f"All scheduled in {duration:.1f}s", duration)
                 logger.info("  [PASS] All 3 jobs completed in %.1fs", duration)
                 return TestResult(test_name, True, f"All completed in {duration:.1f}s", duration)
             else:
@@ -1126,7 +1231,7 @@ class SmokeTestRunner:
             logger.error("  [FAIL] Timed out waiting for jobs")
             return TestResult(test_name, False, f"Timed out after {self.config.job_timeout_seconds}s", 0.0)
 
-    def _run_coscheduled_job(self, client: IrisClient) -> TestResult:
+    def _run_coscheduled_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
         """Run a coscheduled multi-task job on TPU workers."""
         return self._run_job_test(
             client=client,
@@ -1136,6 +1241,7 @@ class SmokeTestRunner:
             resources=ResourceSpec(device=self._accel.make_device()),
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
             replicas=self._accel.num_vms,
+            scheduling_only=scheduling_only,
         )
 
     def _run_jax_tpu_job(self, client: IrisClient) -> TestResult:
@@ -1153,10 +1259,9 @@ class SmokeTestRunner:
             environment=EnvironmentSpec(pip_packages=["jax[tpu]"]),
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
             replicas=self._accel.num_vms,
-            timeout=120,
         )
 
-    def _run_region_constrained_job(self, client: IrisClient) -> TestResult:
+    def _run_region_constrained_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
         """Run a job with an explicit region constraint."""
         return self._run_job_test(
             client=client,
@@ -1165,9 +1270,10 @@ class SmokeTestRunner:
             job_name=f"smoke-region-{self._run_id}",
             resources=ResourceSpec(device=self._accel.make_device()),
             constraints=[region_constraint([self._accel.region])],
+            scheduling_only=scheduling_only,
         )
 
-    def _run_nested_constraint_job(self, client: IrisClient) -> TestResult:
+    def _run_nested_constraint_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
         """Submit a parent job with a region constraint whose body submits a child.
 
         The child inherits the parent's region constraint and asserts it.
@@ -1180,6 +1286,19 @@ class SmokeTestRunner:
             job_name=f"smoke-nested-{self._run_id}",
             resources=ResourceSpec(device=a.make_device()),
             constraints=[region_constraint([a.region])],
+            scheduling_only=scheduling_only,
+        )
+
+    def _run_non_preemptible_cpu_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
+        """Run a CPU-only job constrained to non-preemptible workers."""
+        return self._run_job_test(
+            client=client,
+            test_name="Non-preemptible CPU job",
+            entrypoint=Entrypoint.from_callable(_quick_task_job, 1),
+            job_name=f"smoke-non-preemptible-cpu-{self._run_id}",
+            resources=ResourceSpec(cpu=1, memory="1GB", disk="1GB"),
+            constraints=[preemptible_constraint(False)],
+            scheduling_only=scheduling_only,
         )
 
     # ----- Diagnostics and cleanup -----

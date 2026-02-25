@@ -143,8 +143,34 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
         if platform == "gcp":
             if not template.gcp.zone:
                 raise ValueError(f"Scale group '{name}': slice_template.gcp.zone must be non-empty.")
-            if not template.gcp.runtime_version:
-                raise ValueError(f"Scale group '{name}': slice_template.gcp.runtime_version must be non-empty.")
+            gcp_mode = template.gcp.mode
+            if gcp_mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
+                if template.preemptible:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices do not support preemptible instances.")
+                if sg_config.num_vms != 1:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices require num_vms=1.")
+                if sg_config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+                    raise ValueError(
+                        f"Scale group '{name}': VM-backed GCP slices currently require accelerator_type=cpu."
+                    )
+                if template.accelerator_type not in (
+                    config_pb2.ACCELERATOR_TYPE_UNSPECIFIED,
+                    config_pb2.ACCELERATOR_TYPE_CPU,
+                ):
+                    raise ValueError(
+                        f"Scale group '{name}': VM-backed GCP slices require slice_template.accelerator_type=cpu."
+                    )
+                if template.accelerator_variant:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices do not support accelerator_variant.")
+                if not template.gcp.machine_type:
+                    raise ValueError(
+                        f"Scale group '{name}': slice_template.gcp.machine_type must be non-empty for VM mode."
+                    )
+                if sg_config.resources.tpu_count > 0 or sg_config.resources.gpu_count > 0:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices currently support CPU-only resources.")
+            else:
+                if not template.gcp.runtime_version:
+                    raise ValueError(f"Scale group '{name}': slice_template.gcp.runtime_version must be non-empty.")
         elif platform == "manual":
             if not template.manual.hosts:
                 raise ValueError(f"Scale group '{name}': slice_template.manual.hosts must be non-empty.")

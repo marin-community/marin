@@ -39,6 +39,26 @@ controller:
     port: 10000
 
 scale_groups:
+  # Low-priority fallback CPU VM group for non-preemptible scheduling.
+  # Intentionally lower priority than accelerator groups.
+  cpu_vm_e2_standard_4_ondemand:
+    zones: [us-central1-a]
+    accelerator_type: cpu
+    num_vms: 1
+    priority: 1000
+    resources: { cpu: 4, ram: 16GB, disk: 100GB, tpu_count: 0, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 16
+    slice_template:
+      accelerator_type: cpu
+      preemptible: false
+      gcp:
+        mode: GCP_SLICE_MODE_VM
+        machine_type: e2-standard-4
+    worker:
+      attributes:
+        preemptible: "false"
+
   # ---------------------------------------------------------------------------
   # v5e (v5litepod) — europe-west4-b, us-west4-a
   # ---------------------------------------------------------------------------
