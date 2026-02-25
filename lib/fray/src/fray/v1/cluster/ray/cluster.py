@@ -17,6 +17,7 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
+from fray.platform_env_defaults import apply_platform_default_env_vars
 from fray.v1.cluster.base import (
     Cluster,
     CpuConfig,
@@ -27,7 +28,6 @@ from fray.v1.cluster.base import (
     JobRequest,
     JobStatus,
     TpuConfig,
-    with_default_tpu_env_vars,
 )
 from fray.v1.cluster.ray.config import find_config_by_region
 from fray.v1.cluster.ray.deps import build_python_path, build_runtime_env_for_packages
@@ -266,7 +266,7 @@ class RayCluster(Cluster):
                 environment.extras.append("gpu")
             env_vars["JAX_PLATFORMS"] = ""
 
-        env_vars = with_default_tpu_env_vars(request.resources.device, env_vars)
+        env_vars = apply_platform_default_env_vars(request.resources.device, env_vars)
 
         logger.info(
             "Building environment for device: %s/%s", request.resources.device.kind, request.resources.device.variant
