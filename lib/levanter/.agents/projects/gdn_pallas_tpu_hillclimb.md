@@ -2456,3 +2456,91 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / regression**. Macro G helper could not be made both TPU-Mosaic-compatible and numerically robust in this iteration without harming end-to-end throughput.
 - Next bold hypothesis:
   - Escalate to a more radical decomposition move that avoids `scf.if`-style control flow in Pallas (for example **Macro Move E** V-tiling with shared-K precompute in train recurrent/backward paths), rather than another centered-exp branch rewrite.
+
+### Iteration 44 - Macro Move G / static centered-exp dispatch with outer-product fast path (regression, reverted)
+
+- Date: 2026-02-25T22:10:31Z
+- Commit: none (failed attempt)
+- Loop session/local index: `3/10`
+- Starting commit: `24222d734c313c0099c14e4f1af04f36c207323f`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call`: `78.098 ms` (dominant)
+  - top closed-call hotspots:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call`: `41.324 ms`
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call`: `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` in train prepare/recurrent/fused-forward/backward with exact fallback dispatch outside Pallas (`+10-20%`, medium compiler/control-flow risk).
+  2. **Macro Move H**: shared-RHS matmul batching in train chunk kernels (`+8-18%`, medium/high VMEM/layout risk; prior regressions).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) with shared-K precompute (`+15-30%`, high decomposition/rewrite risk).
+
+- Selected macro-move category: **G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: keep Macro-G centered math, but avoid prior `scf.if` failures by dispatching centered-vs-exact kernels outside Pallas and only enabling centered path for MXU-sized train chunks.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Implemented `_exp_diff_and_mask_from_g` and `_can_use_centered_outer_exp_diff` helpers.
+  - Threaded `use_centered_outer_product` through train-path prepare/recurrent/fused-forward/backward kernels.
+  - Added top-level `lax.cond` dispatch in chunk forward/backward wrappers to select centered or exact path outside Pallas kernel bodies.
+  - First TPU validation run failed one tight parity assertion in small-shape backward HF test (`max abs diff 1.2526e-05` vs `atol=1e-05`); patched by restricting centered path to `Ct >= 128` (target train regime), then TPU validation passed.
+  - Profiled end-to-end run regressed materially; reverted speculative kernel edits and returned code to starting-commit behavior.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation attempt 1 (failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `1 failed, 86 passed, 2 skipped` (`tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[True]`).
+  - TPU validation attempt 2 (after `Ct >= 128` guard):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter3_macroG_centered_gate --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter3_macroG_centered_gate_130m_ch128_seg16_20-2d5213`
+  - W&B artifact: `run-gdn_loop_iter3_macroG_centered_gate_130m_ch128_seg16_20-2d5213-profiler:v0`
+  - Trace download:
+    - `uv run wandb artifact get marin-community/marin/run-gdn_loop_iter3_macroG_centered_gate_130m_ch128_seg16_20-2d5213-profiler:v0 --root .profiles/wandb`
+  - Downloaded trace: `.profiles/wandb/plugins/profile/2026_02_25_22_06_53/perfetto_trace.json.gz`
+  - Throughput source:
+    - `gsutil cat gs://marin-us-east5/checkpoints/speedrun/gdn_loop_iter3_macroG_centered_gate_130m_ch128_seg16_20-2d5213/tracker_metrics.jsonl`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`):
+  - `shard_map`: `78.098 ms -> 39.027 ms` (`-50.03%`)
+  - `fusion`: `45.618 ms -> 34.718 ms` (`-23.89%`)
+  - `all-gather`: `20.158 ms -> 14.710 ms` (`-27.03%`)
+  - New dominant control-flow buckets:
+    - `conditional`: `7.491 ms -> 49.210 ms`
+    - `while`: `0.000 ms -> 31.509 ms`
+  - Forward closed-call `shard_map/pallas_call` (`tf_op`-derived):
+    - `41.324 ms -> 20.647 ms` (`-50.04%`)
+  - Backward closed-call `shard_map/pallas_call` (`tf_op`-derived):
+    - `26.266 ms -> 13.143 ms` (`-49.96%`)
+  - Event volume changed materially (`11755 -> 6546`), and reduced closed-call buckets did not translate to faster end-to-end steps.
+
+- MFU/throughput delta (vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.787594 -> 5.301450` (`-8.40%`)
+  - `throughput/tokens_per_second`: `187227.57 -> 171500.90` (`-8.40%`)
+  - `throughput/duration`: `0.175017s -> 0.191066s` (`+9.17%`)
+  - vs active governance champion (`5.748507`): `-7.78%`.
+
+- Macro G exp-op reduction note (trace-derived):
+  - **No reduction observed.**
+  - `exp*` event count on TPU:0 XLA Ops thread: `10 -> 21`.
+  - `exp*` total time on TPU:0 XLA Ops thread: `0.005513 ms -> 1.697736 ms`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + final result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call`: `41.324 ms -> 20.647 ms` (`-50.04%`).
+    - Backward closed-call `shard_map/pallas_call`: `26.266 ms -> 13.143 ms` (`-49.96%`).
+    - `throughput/mfu -8.40%`, `throughput/tokens_per_second -8.40%`, `throughput/duration +9.17%`.
+    - Macro G exp-op reduction: **not observed** (`exp*` count/time increased).
+  - Governance:
+    - MFU gain `<3%` (regression) and dominant hotspot family remained train-path `shard_map/custom-call` with added control-flow overhead; attempt marked **low-impact/regressive** and speculative kernel edits were reverted.
+
+- Assessment: **failed attempt / regression**. The static-dispatch Macro-G variant reduced per-trace train custom-call buckets but introduced large conditional/while overhead and regressed end-to-end throughput.
+- Next bold hypothesis:
+  - Escalate to **Macro Move E** (V-tiling with shared-K precompute) to reduce recurrent state footprint and improve MXU residency without adding branch-heavy control flow in the train chunk path.
