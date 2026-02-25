@@ -40,6 +40,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+from experiments.kelp.corpus import CORPUS_SEPARATOR
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -254,9 +256,6 @@ def deduplicate_and_filter(programs: list[str], max_length: int) -> list[str]:
         logger.info(f"  Decontamination: blocked {blocked} programs matching eval tasks")
 
     return filtered
-
-
-CORPUS_SEPARATOR = "# ---"
 
 
 def write_corpus(programs: list[str], output_path: Path) -> None:

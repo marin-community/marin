@@ -26,6 +26,7 @@ The reverse (denoising) process iteratively refines programs:
 5. Repeat until max_depth or convergence
 """
 
+import ast
 import logging
 from dataclasses import dataclass
 
@@ -39,7 +40,8 @@ from experiments.kelp.tree.constrained_decoding import (
     validate_edit,
 )
 from experiments.kelp.tree.edit_model import EditModelParams, forward
-from experiments.kelp.tree.mutation import Mutation
+from experiments.kelp.tree.mutation import Mutation, _node_source_span
+from experiments.kelp.tree.subtree_bank import EXTRACTABLE_TYPES
 from experiments.kelp.tree.tokenizer import TreeDiffusionTokenizer
 
 logger = logging.getLogger(__name__)
@@ -234,20 +236,15 @@ def _find_span_end(source: str, start_offset: int) -> int | None:
 
     Returns None if no matching node is found.
     """
-    import ast as _ast
-
-    from experiments.kelp.tree.mutation import _node_source_span
-    from experiments.kelp.tree.subtree_bank import EXTRACTABLE_TYPES
-
     try:
-        tree = _ast.parse(source)
+        tree = ast.parse(source)
     except SyntaxError:
         return None
 
     best_end = None
     best_size = float("inf")
 
-    for node in _ast.walk(tree):
+    for node in ast.walk(tree):
         type_name = type(node).__name__
         if type_name not in EXTRACTABLE_TYPES:
             continue
