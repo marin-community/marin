@@ -814,6 +814,74 @@ class TestConfigValidation:
 
         validate_config(config)  # Should not raise
 
+    def test_rejects_gcp_vm_mode_with_preemptible(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config_pb2.ScaleGroupConfig(
+            name="cpu-vm",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            num_vms=1,
+            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
+        )
+        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_template.preemptible = True
+        sg.slice_template.gcp.zone = "us-central1-a"
+        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+        sg.slice_template.gcp.machine_type = "n2-standard-4"
+        config.scale_groups["cpu-vm"].CopyFrom(sg)
+
+        with pytest.raises(ValueError, match="do not support preemptible"):
+            validate_config(config)
+
+    def test_rejects_gcp_vm_mode_with_num_vms_not_one(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config_pb2.ScaleGroupConfig(
+            name="cpu-vm",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            num_vms=2,
+            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
+        )
+        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_template.gcp.zone = "us-central1-a"
+        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+        sg.slice_template.gcp.machine_type = "n2-standard-4"
+        config.scale_groups["cpu-vm"].CopyFrom(sg)
+
+        with pytest.raises(ValueError, match="require num_vms=1"):
+            validate_config(config)
+
+    def test_rejects_gcp_vm_mode_with_non_cpu_accelerator(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config_pb2.ScaleGroupConfig(
+            name="gpu-vm",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            num_vms=1,
+            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, gpu_count=1),
+        )
+        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_GPU
+        sg.slice_template.gcp.zone = "us-central1-a"
+        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+        sg.slice_template.gcp.machine_type = "n2-standard-4"
+        config.scale_groups["gpu-vm"].CopyFrom(sg)
+
+        with pytest.raises(ValueError, match="require accelerator_type=cpu"):
+            validate_config(config)
+
+    def test_accepts_gcp_vm_mode_cpu_single_vm_non_preemptible(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config_pb2.ScaleGroupConfig(
+            name="cpu-vm",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            num_vms=1,
+            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
+        )
+        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_template.gcp.zone = "us-central1-a"
+        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+        sg.slice_template.gcp.machine_type = "n2-standard-4"
+        config.scale_groups["cpu-vm"].CopyFrom(sg)
+
+        validate_config(config)
+
 
 def _gcp_scale_group(zone: str, *, preemptible: bool = False) -> config_pb2.ScaleGroupConfig:
     """Build a valid GCP-backed ScaleGroupConfig for worker settings validation tests."""

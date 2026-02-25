@@ -246,6 +246,84 @@ def test_gcp_validate_slice_config_reports_all_missing_fields():
     assert "runtime_version" in str(exc_info.value)
 
 
+def test_gcp_validate_vm_slice_config_requires_machine_type():
+    """VM slice mode requires gcp.machine_type."""
+    cfg = config_pb2.SliceConfig(
+        name_prefix="test",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+
+    with pytest.raises(ValueError, match=r"gcp\.machine_type"):
+        _validate_slice_config(cfg)
+
+
+def test_gcp_validate_vm_slice_config_rejects_preemptible():
+    """VM slice mode rejects preemptible instances."""
+    cfg = config_pb2.SliceConfig(
+        name_prefix="test",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        preemptible=True,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+
+    with pytest.raises(ValueError, match="does not support preemptible"):
+        _validate_slice_config(cfg)
+
+
+def test_gcp_validate_vm_slice_config_rejects_num_vms_not_one():
+    """VM slice mode requires exactly one VM."""
+    cfg = config_pb2.SliceConfig(
+        name_prefix="test",
+        num_vms=2,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+
+    with pytest.raises(ValueError, match="num_vms=1"):
+        _validate_slice_config(cfg)
+
+
+def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
+    """VM slice mode creates a single-worker slice that is discoverable and terminable."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "cpu-vm"
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        handle = platform.create_slice(cfg)
+        status = handle.describe()
+        assert status.worker_count == 1
+        assert len(status.workers) == 1
+        assert status.workers[0].internal_address
+        assert handle.scale_group == "cpu-vm"
+
+        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        assert handle.slice_id in {s.slice_id for s in listed}
+
+        handle.terminate()
+        listed_after = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        assert handle.slice_id not in {s.slice_id for s in listed_after}
+
+
 def test_gcp_empty_accelerator_variant_rejected():
     """create_slice with empty accelerator_variant raises ValueError."""
     fake = FakeGcloud()
