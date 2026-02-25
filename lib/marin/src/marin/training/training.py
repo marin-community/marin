@@ -379,6 +379,13 @@ def _add_run_env_variables(env: dict):
     if "WANDB_MODE" not in env and os.environ.get("WANDB_MODE") is not None:
         env["WANDB_MODE"] = os.environ["WANDB_MODE"]
 
+    # Propagate LIBTPU_INIT_ARGS (e.g. scoped vmem limit knobs) from the submitting
+    # environment into the actual TPU training job unless explicitly overridden in
+    # the training config. This avoids mismatches where the Ray driver has
+    # LIBTPU_INIT_ARGS but the pod job does not.
+    if "LIBTPU_INIT_ARGS" not in env and os.environ.get("LIBTPU_INIT_ARGS") is not None:
+        env["LIBTPU_INIT_ARGS"] = os.environ["LIBTPU_INIT_ARGS"]
+
     return env
 
 
