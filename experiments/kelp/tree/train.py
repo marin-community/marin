@@ -110,11 +110,48 @@ class EditTrainingConfig:
     """Probability of using a random program instead of forward diffusion
     (paper's rho). Provides exposure to diverse starting points."""
 
+    corruption_curriculum: str = "constant"
+    """Schedule for ramping corruption difficulty during training.
+    'constant': use max_corruption_steps throughout (original behavior).
+    'linear': linearly ramp from 1 to max_corruption_steps over warmup phase.
+    'cosine': cosine ramp from 1 to max_corruption_steps over warmup phase."""
+
+    curriculum_warmup_fraction: float = 0.3
+    """Fraction of total_steps over which the curriculum ramps from 1 to
+    max_corruption_steps. Only used when corruption_curriculum != 'constant'."""
+
     wandb_project: str | None = None
     """W&B project name. If set, enables W&B logging."""
 
     wandb_run_name: str | None = None
     """W&B run name."""
+
+    def effective_max_corruption_steps(self, step: int) -> int:
+        """Compute the effective max corruption steps at a given training step.
+
+        During the warmup phase, ramps from 1 to max_corruption_steps according
+        to the chosen schedule. After warmup, always returns max_corruption_steps.
+        """
+        if self.corruption_curriculum == "constant" or self.max_corruption_steps <= 1:
+            return self.max_corruption_steps
+
+        warmup_end = int(self.total_steps * self.curriculum_warmup_fraction)
+        if step >= warmup_end or warmup_end == 0:
+            return self.max_corruption_steps
+
+        progress = step / warmup_end  # 0.0 to 1.0
+
+        if self.corruption_curriculum == "linear":
+            fraction = progress
+        elif self.corruption_curriculum == "cosine":
+            import math
+
+            fraction = 0.5 * (1.0 - math.cos(math.pi * progress))
+        else:
+            return self.max_corruption_steps
+
+        # Interpolate from 1 to max_corruption_steps.
+        return max(1, round(1 + fraction * (self.max_corruption_steps - 1)))
 
 
 def _edit_weight_decay_mask(params: EditModelParams) -> EditModelParams:
@@ -216,6 +253,7 @@ def generate_training_example(
     max_seq_len: int,
     config: EditTrainingConfig,
     rng: pyrandom.Random,
+    step: int = 0,
 ) -> tuple[list[int], list[int]] | None:
     """Generate a single training example from a clean program.
 
@@ -226,8 +264,14 @@ def generate_training_example(
     4. Pick a random step along the path
     5. Encode as (token_ids, loss_mask)
 
+    Args:
+        step: Current training step, used for curriculum scheduling of
+            corruption difficulty.
+
     Returns None if no valid training example could be generated.
     """
+    effective_max = config.effective_max_corruption_steps(step)
+
     # Step 1: Generate a corrupted version.
     if rng.random() < config.p_random and len(corpus) > 1:
         # Use a random program from the corpus.
@@ -236,7 +280,7 @@ def generate_training_example(
             corrupted = rng.choice(corpus)
     else:
         # Apply random AST mutations.
-        num_steps = rng.randint(1, config.max_corruption_steps)
+        num_steps = rng.randint(1, effective_max)
         corrupted, _mutations = corrupt_program(
             clean_source,
             num_steps=num_steps,
@@ -297,9 +341,12 @@ def create_edit_data_iter(
 ) -> Iterator[dict[str, Array]]:
     """Create a training data iterator for tree diffusion.
 
-    Yields batches of (token_ids, loss_mask) arrays.
+    Yields batches of (token_ids, loss_mask) arrays. Each batch is tagged
+    with the current step so generate_training_example can use
+    curriculum-based corruption difficulty.
     """
     rng = pyrandom.Random(seed)
+    step = 0
 
     while True:
         batch_token_ids = []
@@ -315,6 +362,7 @@ def create_edit_data_iter(
                 max_seq_len=config.max_seq_len,
                 config=config,
                 rng=rng,
+                step=step,
             )
             if example is None:
                 continue
@@ -333,6 +381,7 @@ def create_edit_data_iter(
             padded_masks = padded_masks.at[i, :seq_len].set(jnp.array(batch_loss_masks[i]))
 
         yield {"token_ids": padded_ids, "loss_mask": padded_masks}
+        step += 1
 
 
 LogCallback = Callable[[int, dict], None]
