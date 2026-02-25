@@ -3,14 +3,15 @@
 
 """Fused linear softmax cross-entropy for grug.
 
-This wraps the shared fused kernel API for TPU and falls back to a full-logits
-reference implementation on non-TPU backends.
+This wraps the shared fused kernel API and allows selecting the implementation
+via environment variable for debugging/perf investigations.
 """
 
 import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 
+import os
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty,
@@ -61,18 +62,17 @@ def fused_linear_softmax_cross_entropy_loss(
 
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
 
+    implementation = os.environ.get("LEVANTER_FUSED_CE_IMPL") or None
+
     def _loss_shard(
         shard_hidden: jax.Array,
         shard_lm_head: jax.Array,
         shard_labels: jax.Array,
         shard_weight: jax.Array,
     ) -> jax.Array:
-        print(f"hid sharding: {jax.typeof(shard_hidden)}")
         flat_hidden = shard_hidden.reshape((-1, hidden_dim))
         flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
         flat_weight = shard_weight.reshape((-1,))
-        print(f"flat sharding: {jax.typeof(flat_hidden)}")
-        print(flat_hidden.shape, flat_labels.shape, flat_weight.shape)
 
         loss = fused_cross_entropy_loss_and_logsumexp_penalty(
             flat_hidden,
@@ -84,8 +84,7 @@ def fused_linear_softmax_cross_entropy_loss(
             dtype=dtype,
             logit_soft_cap=None,
             precision=precision,
-            # implementation="reference"
-            # implementation="xla"
+            implementation=implementation,
         )
 
         if reduction_mode is None:
