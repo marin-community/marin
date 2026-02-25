@@ -35,7 +35,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfigBase
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class SliceCacheConfig(TokenizeConfigBase):
     """Configuration for slicing a Levanter cache."""
 

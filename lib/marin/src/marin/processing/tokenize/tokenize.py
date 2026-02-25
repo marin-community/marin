@@ -59,6 +59,7 @@ class HfDatasetSpec:
     name: str | None = None
 
 
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
