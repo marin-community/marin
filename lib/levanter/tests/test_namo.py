@@ -74,6 +74,14 @@ def test_namo_registration():
     assert OptimizerConfig.get_choice_class("namoD") is NamoDConfig
 
 
+def test_namo_defaults_to_reference_simple_coefficients():
+    assert NamoConfig().coefficient_type == "simple"
+
+
+def test_namod_defaults_to_reference_simple_coefficients():
+    assert NamoDConfig().coefficient_type == "simple"
+
+
 def test_namo_build_and_update_smoke(toy_params_and_grads):
     params, grads = toy_params_and_grads
     config = NamoConfig(
@@ -385,3 +393,46 @@ def test_namo_dual_lr_adamw_path_depends_on_adam_lr_only(toy_params_and_grads):
 
     assert jnp.allclose(linear_a, linear_b)
     assert not jnp.allclose(updates_a["extra"], updates_b["extra"])
+
+
+def test_namo_default_matches_simple_and_differs_from_quintic():
+    in_axis = hax.Axis("In", 4)
+    out_axis = hax.Axis("Out", 3)
+    linear = hax.nn.Linear.init(in_axis, out_axis, key=jax.random.PRNGKey(0), out_first=True)
+
+    params = {
+        "linear": linear,
+        "extra": jnp.ones((2,), dtype=jnp.float32),
+    }
+
+    w_key, b_key = jax.random.split(jax.random.PRNGKey(42))
+    grad_weight = dataclasses.replace(linear.weight, array=jax.random.normal(w_key, linear.weight.array.shape))
+    grad_bias = None
+    if linear.bias is not None:
+        grad_bias = dataclasses.replace(linear.bias, array=jax.random.normal(b_key, linear.bias.array.shape))
+    grads = {
+        "linear": dataclasses.replace(linear, weight=grad_weight, bias=grad_bias),
+        "extra": jnp.ones((2,), dtype=jnp.float32),
+    }
+
+    def linear_update_for(config: NamoConfig):
+        optimizer = config.build(num_train_steps=10)
+        state = optimizer.init(params)
+        updates, _ = optimizer.update(grads, state, params)
+        flat_updates = flatten_linear_layers(updates)
+        return flat_updates["linear"].weight.array
+
+    base_kwargs = dict(
+        learning_rate=1e-2,
+        adam_lr=1e-3,
+        weight_decay=0.1,
+        warmup=0.0,
+        min_lr_ratio=1.0,
+        lr_schedule="constant",
+    )
+    default_update = linear_update_for(NamoConfig(**base_kwargs))
+    simple_update = linear_update_for(NamoConfig(**base_kwargs, coefficient_type="simple"))
+    quintic_update = linear_update_for(NamoConfig(**base_kwargs, coefficient_type="quintic"))
+
+    assert jnp.allclose(default_update, simple_update)
+    assert not jnp.allclose(default_update, quintic_update)

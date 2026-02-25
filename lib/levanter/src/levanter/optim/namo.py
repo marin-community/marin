@@ -10,6 +10,10 @@ This module implements:
 References:
 - Paper: https://arxiv.org/abs/2602.17080
 - Official implementation: https://github.com/minxin-zhg/namo/blob/main/src/namo.py
+
+By default, NAMO/NAMO-D use the reference Newton-Schulz triplet via
+``coefficient_type="simple"``. Other coefficient schedules remain available
+for experimentation.
 """
 
 import dataclasses
@@ -92,7 +96,7 @@ class NamoConfig(OptimizerConfig):
     beta2: float = 0.95
     epsilon: float = 1e-8
     max_grad_norm: float = 1.0
-    coefficient_type: CoefficientType = "quintic"
+    coefficient_type: CoefficientType = "simple"
 
     def build(self, num_train_steps: int) -> optax.GradientTransformation:
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -150,7 +154,7 @@ class NamoDConfig(OptimizerConfig):
     beta2: float = 0.95
     epsilon: float = 1e-8
     max_grad_norm: float = 1.0
-    coefficient_type: CoefficientType = "quintic"
+    coefficient_type: CoefficientType = "simple"
 
     def build(self, num_train_steps: int) -> optax.GradientTransformation:
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -249,7 +253,7 @@ def scale_with_namo(
     weight_decay: float = 0.1,
     adamnorm_eps: float = 1e-8,
     scale_coeff: float = 0.2,
-    coefficient_type: CoefficientType = "quintic",
+    coefficient_type: CoefficientType = "simple",
 ) -> optax.GradientTransformation:
     """Build the NAMO gradient transformation.
 
@@ -371,7 +375,7 @@ def scale_with_namod(
     adamnorm_eps: float = 1e-8,
     scale_coeff: float = 0.2,
     clamp_c: float = 0.75,
-    coefficient_type: CoefficientType = "quintic",
+    coefficient_type: CoefficientType = "simple",
 ) -> optax.GradientTransformation:
     """Build the NAMO-D gradient transformation.
 
