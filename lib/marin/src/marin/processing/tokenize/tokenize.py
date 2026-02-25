@@ -62,6 +62,12 @@ class HfDatasetSpec:
 class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
+    max_workers: int = 4096
+    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
+    writer_batch_size: int = 65536
+    """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
+    overhead. Too large a value increases memory usage and delays progress checkpointing."""
+
     num_shards: int | None = None
     """Override the number tokenize shards. When set, files are grouped to produce approximately
     this many shards instead of deriving the count from max_workers. This can be useful if you want
@@ -93,11 +99,6 @@ class TokenizeConfig(TokenizeConfigBase):
     The format of the dataset. This is used to determine how to tokenize the data.
     See Levanter's documentation for more details.
     """
-    max_workers: int = 4096
-    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
-    writer_batch_size: int = 65536
-    """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
-    overhead. Too large a value increases memory usage and delays progress checkpointing."""
     allow_test_in_train: bool = False
     """
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
@@ -155,11 +156,6 @@ class HfTokenizeConfig(TokenizeConfigBase):
     name: str | None = None  # HF dataset name
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
-    max_workers: int = 4096
-    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
-    writer_batch_size: int = 65536
-    """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
-    overhead. Too large a value increases memory usage and delays progress checkpointing."""
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
