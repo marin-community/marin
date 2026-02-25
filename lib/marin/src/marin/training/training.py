@@ -386,6 +386,12 @@ def _add_run_env_variables(env: dict):
     if "LIBTPU_INIT_ARGS" not in env and os.environ.get("LIBTPU_INIT_ARGS") is not None:
         env["LIBTPU_INIT_ARGS"] = os.environ["LIBTPU_INIT_ARGS"]
 
+    # Respect additional Levanter knobs from the submitting environment so job
+    # submission can steer behavior without patching configs.
+    for key in ("LEVANTER_LOG_MFU_TO_RAY", "LEVANTER_FUSED_CE_IMPL"):
+        if key not in env and os.environ.get(key) is not None:
+            env[key] = os.environ[key]
+
     return env
 
 
