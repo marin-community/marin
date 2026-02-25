@@ -310,7 +310,7 @@ class RayClient:
         else:
             num_gpus = 0
 
-        remote_fn = ray.remote(num_gpus=num_gpus)(entrypoint.callable)
+        remote_fn = ray.remote(num_gpus=num_gpus, max_retries=compute_ray_retry_count(request))(entrypoint.callable)
         ref = remote_fn.options(runtime_env=runtime_env).remote(*entrypoint.args, **entrypoint.kwargs)
         job_id = f"ray-callable-{request.name}-{uuid.uuid4().hex[:8]}"
         return RayJobHandle(job_id, ref=ref)

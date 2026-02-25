@@ -982,7 +982,7 @@ class ZephyrContext:
             Defaults to 600s.
         max_execution_retries: Maximum number of times to retry a pipeline execution after
             an infrastructure failure (e.g., coordinator VM preemption). Application errors
-            (ZephyrWorkerError) are never retried. Defaults to 3.
+            (ZephyrWorkerError) are never retried. Defaults to 100.
     """
 
     client: Client | None = None
@@ -991,7 +991,8 @@ class ZephyrContext:
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
-    max_execution_retries: int = 3
+    # NOTE: 100 is fairly aggressive but it fits the preemptible env better
+    max_execution_retries: int = 100
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
