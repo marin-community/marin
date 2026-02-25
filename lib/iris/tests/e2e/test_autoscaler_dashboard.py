@@ -99,11 +99,14 @@ def _click_autoscaler_tab(page, cluster):
 
 
 def test_autoscaler_tab_shows_scale_groups(cluster, page, screenshot):
-    """Both scale groups appear in the Autoscaler tab's Scale Groups table."""
+    """Both scale groups appear and new routing/status sections render."""
     _click_autoscaler_tab(page, cluster)
 
     assert_visible(page, "text=tpu_v5e_16")
     assert_visible(page, "text=tpu_v5e_32")
+    assert_visible(page, "text=Waterfall Routing")
+    assert_visible(page, "text=Availability")
+    assert_visible(page, "text=Blocker")
 
     screenshot("autoscaler-scale-groups")
 
