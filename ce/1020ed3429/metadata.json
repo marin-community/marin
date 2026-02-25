@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "ce1020ed3429",
+  "strategy": "manual-commit",
+  "branch": "rav-use-shared-data-again",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/marin/src/marin/processing/tokenize/tokenize.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ce/1020ed3429/0/metadata.json",
+      "transcript": "/ce/1020ed3429/0/full.jsonl",
+      "context": "/ce/1020ed3429/0/context.md",
+      "content_hash": "/ce/1020ed3429/0/content_hash.txt",
+      "prompt": "/ce/1020ed3429/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 37522,
+    "cache_read_tokens": 701708,
+    "output_tokens": 1180,
+    "api_call_count": 17
+  }
+}
