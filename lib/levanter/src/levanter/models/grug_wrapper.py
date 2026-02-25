@@ -6,16 +6,14 @@
 from typing import Any, Protocol, cast
 
 import equinox as eqx
-import jax
 import haliax as hax
+import jax
 import jax.numpy as jnp
 from haliax import Axis, NamedArray
-from jaxtyping import PRNGKeyArray, PyTree
+from jaxtyping import PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask
-from levanter.grug.model import activations as grug_activations
-from levanter.grug.model import init_parameters
-from levanter.grug.model import loss_fn as grug_loss_fn
+from levanter.grug.model import Transformer
 from levanter.layers.attention import AttentionMask as LevanterAttentionMask
 from levanter.models.lm_model import LmExample, LmHeadModel
 
@@ -26,27 +24,34 @@ class GrugConfigLike(Protocol):
     hidden_dim: int
 
 
-class GrugForwardFn(Protocol):
+class GrugTransformer(Protocol):
+    output_proj: jax.Array
+
     def __call__(
         self,
-        params: PyTree,
         tokens: jax.Array,
-        cfg: GrugConfigLike,
         *,
         mask: AttentionMask | jax.Array | None = None,
     ) -> jax.Array: ...
 
+    def next_token_loss(
+        self,
+        tokens: jax.Array,
+        loss_weight: jax.Array,
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+    ) -> jax.Array: ...
+
 
 class GrugInitFn(Protocol):
-    def __call__(self, cfg: GrugConfigLike, *, key: PRNGKeyArray) -> PyTree: ...
+    def __call__(self, cfg: GrugConfigLike, *, key: PRNGKeyArray) -> GrugTransformer: ...
 
 
-class GrugLmHeadFn(Protocol):
-    def __call__(self, params: PyTree) -> jax.Array: ...
-
-
-def _default_lm_head_fn(params: PyTree) -> jax.Array:
-    return params.output_proj  # type: ignore[attr-defined]
+def _default_init_fn(cfg: GrugConfigLike, *, key: PRNGKeyArray) -> GrugTransformer:
+    return Transformer.init(cfg, key=key)
 
 
 def _mask_from_levanter(attn_mask: LevanterAttentionMask | NamedArray | None) -> AttentionMask | jax.Array | None:
@@ -75,11 +80,9 @@ def _mask_from_levanter(attn_mask: LevanterAttentionMask | NamedArray | None) ->
 class GrugWrapper(LmHeadModel[Any]):
     """Minimal LmHeadModel wrapper around the standalone Grug transformer."""
 
-    params: PyTree
+    params: GrugTransformer
     grug_config: GrugConfigLike
     init_fn: GrugInitFn = eqx.field(static=True)
-    forward_fn: GrugForwardFn = eqx.field(static=True)
-    lm_head_fn: GrugLmHeadFn = eqx.field(static=True, default=_default_lm_head_fn)
 
     @property
     def config(self) -> GrugConfigLike:
@@ -109,18 +112,15 @@ class GrugWrapper(LmHeadModel[Any]):
         *,
         key: PRNGKeyArray,
         init_fn: GrugInitFn | None = None,
-        forward_fn: GrugForwardFn | None = None,
-        lm_head_fn: GrugLmHeadFn | None = None,
     ) -> "GrugWrapper":
+        del Vocab
         cfg = config
-        chosen_init = init_fn or init_parameters
+        chosen_init = init_fn or _default_init_fn
         params = chosen_init(cfg, key=key)
         return cls(
             params=params,
             grug_config=cfg,
             init_fn=chosen_init,
-            forward_fn=forward_fn or grug_activations,
-            lm_head_fn=lm_head_fn or _default_lm_head_fn,
         )
 
     def activations(
@@ -134,12 +134,7 @@ class GrugWrapper(LmHeadModel[Any]):
         del key, pos_ids  # unused in this lightweight wrapper
         mask = _mask_from_levanter(attn_mask)
 
-        hidden = self.forward_fn(
-            self.params,
-            input_ids.array,
-            self.grug_config,
-            mask=mask,
-        )
+        hidden = self.params(input_ids.array, mask=mask)
 
         # Map raw hidden states to a NamedArray with the existing axes plus Embed.
         axes = (*input_ids.axes, self.Embed)
@@ -170,11 +165,9 @@ class GrugWrapper(LmHeadModel[Any]):
         dtype = jnp.float32 if loss_dtype is None else loss_dtype
 
         if reduction is None:
-            per_pos = grug_loss_fn(
-                self.params,
+            per_pos = self.params.next_token_loss(
                 tokens.array,
                 loss_weight.array,
-                self.grug_config,
                 mask=mask,
                 reduction="none",
                 logsumexp_weight=logsumexp_weight,
@@ -184,33 +177,27 @@ class GrugWrapper(LmHeadModel[Any]):
 
         # Fast path: scalar mean/sum reduction over all axes.
         if reduction_axis is None and reduction is hax.mean:
-            return grug_loss_fn(
-                self.params,
+            return self.params.next_token_loss(
                 tokens.array,
                 loss_weight.array,
-                self.grug_config,
                 mask=mask,
                 reduction="mean",
                 logsumexp_weight=logsumexp_weight,
                 loss_dtype=dtype,
             )
         if reduction_axis is None and reduction is hax.sum:
-            return grug_loss_fn(
-                self.params,
+            return self.params.next_token_loss(
                 tokens.array,
                 loss_weight.array,
-                self.grug_config,
                 mask=mask,
                 reduction="sum",
                 logsumexp_weight=logsumexp_weight,
                 loss_dtype=dtype,
             )
 
-        per_pos = grug_loss_fn(
-            self.params,
+        per_pos = self.params.next_token_loss(
             tokens.array,
             loss_weight.array,
-            self.grug_config,
             mask=mask,
             reduction="none",
             logsumexp_weight=logsumexp_weight,
@@ -221,7 +208,7 @@ class GrugWrapper(LmHeadModel[Any]):
         return reduction(loss, axis=reduction_axis)
 
     def get_lm_head(self) -> NamedArray:
-        return hax.named(self.lm_head_fn(self.params), (self.Embed, self.Vocab))
+        return hax.named(self.params.output_proj, (self.Embed, self.Vocab))
 
     def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "GrugWrapper":
         raise NotImplementedError("GrugWrapper does not yet support resizing the vocabulary.")
