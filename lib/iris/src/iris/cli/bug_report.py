@@ -174,7 +174,7 @@ def _gather(
     state_name = _job_state_name(job.state)
     error = job.error or ""
     error_summary = error[:100] if error else state_name
-    task_count = job.task_count or len(task_reports)
+    task_count = len(task_reports) or job.task_count
 
     return BugReport(
         job_id=job.job_id,
@@ -523,14 +523,21 @@ def file_github_issue(
     labels: list[str],
 ) -> str | None:
     """File a GitHub issue using the gh CLI. Returns the issue URL or None."""
-    cmd = ["gh", "issue", "create", "--title", title, "--body", body]
+    cmd = ["gh", "issue", "create", "--title", title, "--body-file", "-"]
     if repo:
         cmd.extend(["--repo", repo])
     for label in labels:
         label = label.strip()
         if label:
             cmd.extend(["--label", label])
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    try:
+        result = subprocess.run(cmd, input=body, capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        logger.warning("gh CLI not found — install it from https://cli.github.com/")
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning("gh issue create timed out after 30s")
+        return None
     if result.returncode != 0:
         logger.warning("gh issue create failed: %s", result.stderr)
         return None
