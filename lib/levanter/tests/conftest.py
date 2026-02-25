@@ -28,11 +28,8 @@ def local_gpt2_tokenizer(tmp_path_factory):
 @pytest.fixture(autouse=True)
 def _configure_marin_prefix():
     """Set MARIN_PREFIX to a temp directory for tests that rely on it."""
-    if "MARIN_PREFIX" in os.environ:
-        yield
-        return
-
-    with tempfile.TemporaryDirectory(prefix="marin_prefix") as temp_dir:
-        os.environ["MARIN_PREFIX"] = temp_dir
-        yield
-        del os.environ["MARIN_PREFIX"]
+    if "MARIN_PREFIX" not in os.environ:
+        with tempfile.TemporaryDirectory(prefix="marin_prefix") as temp_dir:
+            os.environ["MARIN_PREFIX"] = temp_dir
+            yield
+            del os.environ["MARIN_PREFIX"]
