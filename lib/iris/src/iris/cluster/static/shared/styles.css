@@ -350,18 +350,6 @@ button:not(.tab-btn):disabled { color: #8c959f; cursor: default; background: #f6
   margin-bottom: 20px;
 }
 
-.group-status { display: inline-flex; align-items: center; gap: 5px; }
-
-.group-status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.group-status-dot.available { background: #1a7f37; }
-.group-status-dot.backoff { background: #9a6700; }
-.group-status-dot.disabled { background: #57606a; }
-
 /* === Autoscaler actions log === */
 .actions-log {
   background: white;
