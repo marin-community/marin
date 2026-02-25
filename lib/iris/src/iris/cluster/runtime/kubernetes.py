@@ -30,9 +30,10 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
+from iris.time_utils import Deadline, Duration
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,8 @@ logger = logging.getLogger(__name__)
 # and be at most 63 characters. Task IDs like "/smoke-job/0" contain slashes
 # which are not permitted.
 _K8S_LABEL_MAX_LEN = 63
+_POD_NOT_FOUND_RETRY_COUNT = 3
+_POD_NOT_FOUND_RETRY_WINDOW = Duration.from_seconds(15.0)
 
 
 def _sanitize_label_value(value: str) -> str:
@@ -167,6 +170,8 @@ class KubernetesContainerHandle:
     owner_pod_uid: str = ""
     _pod_name: str = field(default="", repr=False)
     _started: bool = field(default=False, repr=False)
+    _pod_not_found_count: int = field(default=0, repr=False)
+    _pod_not_found_deadline: Deadline | None = field(default=None, repr=False)
 
     @property
     def container_id(self) -> str | None:
@@ -333,7 +338,35 @@ class KubernetesContainerHandle:
 
         pod = self.kubectl.get_json("pod", self._pod_name)
         if pod is None:
-            return ContainerStatus(running=False, error="Pod not found")
+            self._pod_not_found_count += 1
+            if self._pod_not_found_deadline is None:
+                self._pod_not_found_deadline = Deadline.from_now(_POD_NOT_FOUND_RETRY_WINDOW)
+
+            within_retry_window = self._pod_not_found_deadline is not None and not self._pod_not_found_deadline.expired()
+            if self._pod_not_found_count < _POD_NOT_FOUND_RETRY_COUNT and within_retry_window:
+                logger.warning(
+                    "Pod lookup miss for %s (%d/%d) within retry window; treating as transient",
+                    self._pod_name,
+                    self._pod_not_found_count,
+                    _POD_NOT_FOUND_RETRY_COUNT,
+                )
+                return ContainerStatus(running=True)
+
+            attempt = self.config.attempt_id if self.config.attempt_id is not None else -1
+            return ContainerStatus(
+                running=False,
+                error=(
+                    "Task pod not found after retry window: "
+                    f"name={self._pod_name}, namespace={self.kubectl.namespace}, "
+                    f"task_id={self.config.task_id or 'unknown'}, attempt_id={attempt}, "
+                    f"observations={self._pod_not_found_count}"
+                ),
+                error_kind=ContainerErrorKind.INFRA_NOT_FOUND,
+            )
+
+        # Pod is visible again; clear transient miss tracking.
+        self._pod_not_found_count = 0
+        self._pod_not_found_deadline = None
 
         phase = pod.get("status", {}).get("phase", "")
         if phase in ("Pending", "Running"):

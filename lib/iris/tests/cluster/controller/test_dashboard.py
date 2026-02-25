@@ -472,6 +472,9 @@ def mock_autoscaler():
                     ),
                 ],
                 current_demand=3,
+                availability_status="requesting",
+                availability_reason="scale-up in progress",
+                blocked_until=Timestamp.from_ms(0).to_proto(),
             ),
         ],
         current_demand={"test-group": 3},
@@ -506,6 +509,8 @@ def test_get_autoscaler_status_returns_status_when_enabled(client_with_autoscale
     group = data["groups"][0]
     assert group["name"] == "test-group"
     assert group["currentDemand"] == 3
+    assert group["availabilityStatus"] == "requesting"
+    assert group["availabilityReason"] == "scale-up in progress"
 
     # Verify demand tracking
     assert data["currentDemand"] == {"test-group": 3}

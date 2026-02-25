@@ -168,25 +168,44 @@ class RemoteClusterClient:
         deadline = Deadline.from_seconds(timeout)
         last_timestamp_ms = since_ms
         terminal_status: cluster_pb2.JobStatus | None = None
+        log_fetch_backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
+        consecutive_log_failures = 0
+        max_log_failures = 5
 
         while True:
             status = self.get_job_status(job_id)
             state_name = cluster_pb2.JobState.Name(status.state)
 
-            log_response = self._fetch_task_logs_rpc(
-                job_id,
-                include_children=include_children,
-                since_ms=last_timestamp_ms,
-            )
+            try:
+                log_response = self._fetch_task_logs_rpc(
+                    job_id,
+                    include_children=include_children,
+                    since_ms=last_timestamp_ms,
+                )
+                consecutive_log_failures = 0
+                log_fetch_backoff.reset()
+            except Exception:
+                consecutive_log_failures += 1
+                logger.warning(
+                    "Failed to fetch logs for %s (%d/%d), will retry",
+                    job_id,
+                    consecutive_log_failures,
+                    max_log_failures,
+                    exc_info=True,
+                )
+                if consecutive_log_failures >= max_log_failures:
+                    raise
+                log_response = None
 
-            if log_response.last_timestamp_ms > last_timestamp_ms:
-                last_timestamp_ms = log_response.last_timestamp_ms
+            if log_response is not None:
+                if log_response.last_timestamp_ms > last_timestamp_ms:
+                    last_timestamp_ms = log_response.last_timestamp_ms
 
-            if on_logs is not None:
-                on_logs(log_response)
+                if on_logs is not None:
+                    on_logs(log_response)
 
             if is_job_finished(status.state):
-                total_lines = sum(len(b.logs) for b in log_response.task_logs)
+                total_lines = sum(len(b.logs) for b in log_response.task_logs) if log_response else 0
                 logger.info(
                     "job=%s finished with state=%s, draining logs (total_lines=%d)",
                     job_id,
@@ -201,7 +220,8 @@ class RemoteClusterClient:
                 continue
 
             deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")
-            time.sleep(poll_interval)
+            sleep_time = log_fetch_backoff.next_interval() if consecutive_log_failures > 0 else poll_interval
+            time.sleep(sleep_time)
 
     def terminate_job(self, job_id: JobName) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())

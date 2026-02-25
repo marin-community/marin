@@ -5,11 +5,8 @@ on:
     branches:
       - main
   pull_request:
-    paths:
-      - lib/haliax/**
-      - lib/levanter/**
-      - uv.lock
-      - .github/workflows/levanter-tests.yaml
+    branches:
+      - main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -156,9 +153,9 @@ jobs:
 #          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
 
   tpu-tests:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [tpu-ci]
     timeout-minutes: 15
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:

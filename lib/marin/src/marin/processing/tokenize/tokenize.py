@@ -7,10 +7,6 @@ Tokenize datasets using zephyr pipeline and write to Levanter cache format.
 Supports both regular file paths and HuggingFace datasets. For HF datasets, downloads
 them first then tokenizes the downloaded files.
 """
-from marin.utilities.time_logger import log_time
-from marin.execution.disk_cache import disk_cache
-from functools import cache
-
 import abc
 import dataclasses
 import json
@@ -36,13 +32,23 @@ from levanter.data.text import (
 )
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
+
+MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
+
+
+def _compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int:
+    """Compute target group size to produce approximately max_workers groups.
+
+    Applies a floor of MIN_GROUP_BYTES to avoid degenerate tiny shards.
+    """
+    return max(total_input_bytes // max_workers, MIN_GROUP_BYTES)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -82,9 +88,6 @@ class TokenizeConfig(TokenizeConfigBase):
     The format of the dataset. This is used to determine how to tokenize the data.
     See Levanter's documentation for more details.
     """
-    window_size_bytes: int = 10_000_000_000
-    """Files are bundled into groups up to this size; each group becomes one shard.
-    Smaller values produce more shards and thus more parallelism (up to max_workers)."""
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
     writer_batch_size: int = 65536
@@ -147,9 +150,6 @@ class HfTokenizeConfig(TokenizeConfigBase):
     name: str | None = None  # HF dataset name
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
-    window_size_bytes: int = 10_000_000_000
-    """Files are bundled into groups up to this size; each group becomes one shard.
-    Smaller values produce more shards and thus more parallelism (up to max_workers)."""
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
     writer_batch_size: int = 65536
@@ -258,7 +258,7 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[Sequence[dict]]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = get_tokenizer(config.tokenizer)
+    tokenizer: transformers.PreTrainedTokenizer = zephyr_worker_ctx().get_shared("tokenizer")
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     batch_count = 0
@@ -290,12 +290,6 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
         f"Tokenization done: {batch_count:,} batches, {record_count:,} docs, {token_count:,} tokens in {elapsed:.1f}s "
         f"({tok_per_sec:,.0f} tokens/s, {doc_per_sec:,.1f} docs/s, {avg_tok_per_doc:,.0f} avg tokens/doc)"
     )
-
-
-@cache
-@disk_cache
-def get_tokenizer(tokenizer: str) -> transformers.PreTrainedTokenizer:
-    return transformers.AutoTokenizer.from_pretrained(tokenizer)
 
 
 def tokenize(config: TokenizeConfigBase):
@@ -346,10 +340,11 @@ def tokenize(config: TokenizeConfigBase):
             )
         )
         total_input_bytes = sum(f["size"] for f in file_stats)
-        file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
+        target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.max_workers)
+        file_groups = list(_bundle_files_by_size(file_stats, target_group_bytes))
         logger.info(
             f"Grouped {len(paths):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
-            f"in {time.monotonic() - filescan_start:.1f}s."
+            f"(target {target_group_bytes / 1e9:.2f} GB/group) in {time.monotonic() - filescan_start:.1f}s."
         )
         return file_groups
 
@@ -385,8 +380,8 @@ def tokenize(config: TokenizeConfigBase):
             )
         )
 
-        with log_time(f"Warming up tokenizer cache for {split_name} split, tokenizer: {config.tokenizer}"):
-            get_tokenizer(config.tokenizer)
+        # Broadcast the tokenizer to all workers via ZephyrContext
+        ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
 
         tokenize_start = time.monotonic()
         shard_paths = ctx.execute(temp_shards)
