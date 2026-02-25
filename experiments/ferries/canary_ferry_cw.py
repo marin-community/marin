@@ -59,7 +59,7 @@ data_config = lm_data_config(
 )
 
 train_config = SimpleTrainConfig(
-    resources=ResourceConfig.with_gpu(count=8, cpu=128, ram="256g", disk="256g"),
+    resources=ResourceConfig.with_gpu(count=8, cpu=32, ram="256g", disk="256g"),
     train_batch_size=BATCH_SIZE,
     num_train_steps=NUM_STEPS,
     learning_rate=3e-3,
