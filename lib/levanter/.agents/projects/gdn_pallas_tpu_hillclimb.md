@@ -2149,3 +2149,74 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **infra-blocked failed attempt**. Could not complete required TPU validation + profile cycle due persistent dev TPU VFIO lock contention and Ray job start-capacity failures.
 - Next bold hypothesis:
   - Re-attempt Macro Move H immediately once a healthy TPU lane is available (fresh dev TPU alias not sharing locked VFIO devices, or a Ray cluster where job supervisor starts promptly), then capture forward/backward closed-call deltas and end-to-end MFU deltas in the same run.
+
+### Iteration 40 - Macro Move G / centered outer-product exp-diff in train chunk kernels (regressed, reverted)
+
+- Date: 2026-02-25T01:39:36Z
+- Commit: none (failed attempt)
+- Loop session/local index: `2/10`
+- Starting commit: `9545875bd8b729edf2a3d5ce069ec74f7039f887`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` bucket remained dominant (`78.098 ms`), with `fusion` (`45.618 ms`) and `all-gather` (`20.158 ms`) next.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` in prepare/recurrent/backward train kernels (`+10-20%`, medium numerical/control-flow risk).
+  2. **Macro Move H**: shared-RHS matmul batching for `QK/KKT` and `inter/v_prime` (`+8-18%`, medium VMEM/layout risk).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) for recurrent/backward state updates (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: add centered outer-product `exp_diff` construction to train-path prepare/recurrent/backward kernels with exact fallback path preserved, and only use centered mode when chunk ranges are clip-safe.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `_all_chunks_centered_exp_safe` and `_exp_diff_and_mask_from_g` helpers.
+  - Threaded centered-exp mode through train prepare/recurrent/fused-forward/backward chunk kernels.
+  - Used dispatch-level `lax.cond` to choose centered-exp vs exact-exp paths (to avoid in-kernel dynamic branching in Pallas).
+  - Local smoke and TPU correctness passed, but end-to-end profile regressed meaningfully.
+  - Reverted all speculative kernel edits; tree returned to starting commit state.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter2_macroG_centered --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter2_macroG_centered_130m_ch128_seg16_20steps-4ed77c`
+  - W&B artifact: `run-gdn_loop_iter2_macroG_centered_130m_ch128_seg16_20steps-4ed77c-profiler:v0`
+  - Downloaded trace: `.profiles/wandb/gdn_loop_iter2_macroG_centered_130m_ch128_seg16_20steps-4ed77c/plugins/profile/2026_02_25_01_36_09/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`):
+  - `shard_map`: `78.098 ms -> 39.033 ms` (`-50.02%`).
+  - `fusion`: `45.618 ms -> 34.857 ms` (`-23.59%`).
+  - `all-gather`: `20.158 ms -> 14.617 ms` (`-27.49%`).
+  - `while`: `0.000 ms -> 31.687 ms` (new large hotspot family introduced).
+  - `conditional`: `7.491 ms -> 49.128 ms` (now dominant bucket).
+  - Event volume changed materially (`11761 -> 6549`), so trace-bucket time drops did not translate to end-to-end gains.
+  - Forward/backward source-level closed-call `shard_map/pallas_call` separation was unavailable in this trace export (no stable `closed_call` labels).
+
+- MFU/throughput delta (vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.787594 -> 5.289897` (`-8.60%`).
+  - `throughput/tokens_per_second`: `187227.57 -> 171127.14` (`-8.60%`).
+  - `throughput/duration`: `0.175017s -> 0.191483s` (`+9.41%`).
+
+- Macro G exp-op reduction note (trace-derived):
+  - **No reduction observed.**
+  - `exp*` event count on TPU:0 XLA Ops thread: `30 -> 47`.
+  - `exp*` total time: `0.007998 ms -> 1.702356 ms`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: unavailable from this Perfetto export (missing stable source-level `closed_call` labels).
+    - Train-path bucket deltas: `shard_map -50.02%`, `fusion -23.59%`, `all-gather -27.49%`, with new `while` (`31.687 ms`) and dominant `conditional` (`49.128 ms`).
+    - `throughput/mfu -8.60%`, `throughput/tokens_per_second -8.60%`, `throughput/duration +9.41%`.
+    - Macro G exp-op reduction: not observed (`exp*` count/time increased).
+  - Governance:
+    - Regression exceeds active threshold (`1.000%` below champion), so attempt is marked **low-impact/regressive** and speculative kernel edits were reverted.
+
+- Assessment: **failed attempt / regression**. The centered-exp dispatch introduced a costly control-flow hotspot pattern and reduced end-to-end throughput.
+- Next bold hypothesis: escalate to **Macro Move H** (shared-RHS matmul batching) with no runtime `lax.cond` in the hot train path, and keep BF16-input/FP32-accum policy consistent across forward/backward kernels.
