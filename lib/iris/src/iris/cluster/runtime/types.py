@@ -18,11 +18,21 @@ too many concurrent uv sync operations.
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
+
+
+class ContainerErrorKind(StrEnum):
+    """Structured category for container/runtime errors."""
+
+    NONE = "none"
+    USER_CODE = "user_code"
+    INFRA_NOT_FOUND = "infra_not_found"
+    RUNTIME_ERROR = "runtime_error"
 
 
 @dataclass
@@ -38,6 +48,7 @@ class ContainerConfig:
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     network_mode: str = "host"  # e.g. "host" for --network=host
     task_id: str | None = None
+    attempt_id: int | None = None
     job_id: str | None = None
     worker_metadata: cluster_pb2.WorkerMetadata | None = None
 
@@ -83,6 +94,7 @@ class ContainerStatus:
     running: bool
     exit_code: int | None = None
     error: str | None = None
+    error_kind: ContainerErrorKind = ContainerErrorKind.NONE
     oom_killed: bool = False
 
 

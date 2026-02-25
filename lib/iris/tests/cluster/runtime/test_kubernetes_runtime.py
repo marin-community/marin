@@ -14,7 +14,7 @@ import subprocess
 
 
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.runtime.types import ContainerConfig
+from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind
 from iris.rpc import cluster_pb2
 
 
@@ -206,3 +206,62 @@ def test_advertise_host_uses_downward_api(monkeypatch):
     assert advertise[0] == {"name": "IRIS_ADVERTISE_HOST", "valueFrom": {"fieldRef": {"fieldPath": "status.hostIP"}}}
     # The static value from config.env must NOT appear
     assert not any(e.get("value") == "10.0.0.1" for e in env)
+
+
+def test_status_retries_transient_pod_not_found(monkeypatch):
+    manifests = _capture_manifest(monkeypatch)
+
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(_make_config())
+    handle.run()
+    assert manifests  # Ensure pod is initialized before status checks.
+
+    responses = [
+        None,
+        None,
+        {"status": {"phase": "Running"}},
+    ]
+
+    def fake_get_json(resource: str, name: str):
+        assert resource == "pod"
+        assert name
+        return responses.pop(0)
+
+    monkeypatch.setattr(handle.kubectl, "get_json", fake_get_json)
+
+    first = handle.status()
+    second = handle.status()
+    third = handle.status()
+
+    assert first.running is True
+    assert first.error is None
+    assert second.running is True
+    assert second.error is None
+    assert third.running is True
+
+
+def test_status_returns_structured_error_after_persistent_pod_not_found(monkeypatch):
+    manifests = _capture_manifest(monkeypatch)
+
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(_make_config())
+    handle.run()
+    assert manifests
+
+    def fake_get_json(resource: str, name: str):
+        assert resource == "pod"
+        assert name
+        return None
+
+    monkeypatch.setattr(handle.kubectl, "get_json", fake_get_json)
+
+    first = handle.status()
+    second = handle.status()
+    third = handle.status()
+
+    assert first.running is True
+    assert second.running is True
+    assert third.running is False
+    assert third.error_kind == ContainerErrorKind.INFRA_NOT_FOUND
+    assert third.error is not None
+    assert "Task pod not found after retry window" in third.error
