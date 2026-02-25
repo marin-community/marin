@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
+import ray
 from haliax import Axis
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -339,6 +340,11 @@ def _make_train_step(
 
 def run_grug(config: GrugRunConfig) -> None:
     trainer = config.trainer.trainer
+    if ray.is_initialized():
+        trainer = dataclasses.replace(
+            trainer,
+            ray=dataclasses.replace(trainer.ray, auto_start_cluster=False, start_workers=False),
+        )
     trainer.initialize()
     levanter.tracker.log_configuration(config)
 
