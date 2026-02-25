@@ -6,6 +6,7 @@ import importlib.util
 import time
 import sys
 import types
+from itertools import product
 from pathlib import Path
 from typing import Callable
 
@@ -14,6 +15,8 @@ import jax.numpy as jnp
 
 
 def _load_attention_module():
+    # This microbenchmark imports attention in isolation so startup does not pull
+    # in the broader Levanter package graph and distort compile/runtime timing.
     root = Path(__file__).resolve()
     attention_path = root.parents[2] / "src" / "levanter" / "grug" / "attention.py"
     package_root = attention_path.parents[1]
@@ -371,77 +374,75 @@ def main() -> None:
                 gpu_block_kv_dq_values = [None]
 
             config_seen = False
-            for bq in gpu_block_q_values:
-                for bk in gpu_block_k_values:
-                    for bq_dkv in gpu_block_q_dkv_values:
-                        for bk_dkv in gpu_block_kv_dkv_values:
-                            for bq_dq in gpu_block_q_dq_values:
-                                for bk_dq in gpu_block_kv_dq_values:
-                                    if impl == "pallas_gpu" and args.benchmark_backward:
-                                        if not _backward_fused_compatible(
-                                            args.seq,
-                                            args.seq,
-                                            bq,
-                                            bk,
-                                            bq_dkv,
-                                            bk_dkv,
-                                            bq_dq,
-                                            bk_dq,
-                                        ):
-                                            continue
-                                    if impl == "reference" or impl == "pallas_tpu":
-                                        block_sizes = None
-                                    else:
-                                        block_cfg = AttentionBlockSizes(
-                                            block_q=bq,
-                                            block_k=bk,
-                                            block_q_dkv=bq_dkv,
-                                            block_kv_dkv=bk_dkv,
-                                            block_q_dq=bq_dq,
-                                            block_kv_dq=bk_dq,
-                                            num_warps=args.gpu_num_warps,
-                                            num_stages=args.gpu_num_stages,
-                                        )
-                                        block_sizes = {args.gpu_block_size_key: block_cfg}
+            for bq, bk, bq_dkv, bk_dkv, bq_dq, bk_dq in product(
+                gpu_block_q_values,
+                gpu_block_k_values,
+                gpu_block_q_dkv_values,
+                gpu_block_kv_dkv_values,
+                gpu_block_q_dq_values,
+                gpu_block_kv_dq_values,
+            ):
+                if impl == "pallas_gpu" and args.benchmark_backward:
+                    if not _backward_fused_compatible(
+                        args.seq,
+                        args.seq,
+                        bq,
+                        bk,
+                        bq_dkv,
+                        bk_dkv,
+                        bq_dq,
+                        bk_dq,
+                    ):
+                        continue
+                if impl == "reference" or impl == "pallas_tpu":
+                    block_sizes = None
+                else:
+                    block_cfg = AttentionBlockSizes(
+                        block_q=bq,
+                        block_k=bk,
+                        block_q_dkv=bq_dkv,
+                        block_kv_dkv=bk_dkv,
+                        block_q_dq=bq_dq,
+                        block_kv_dq=bk_dq,
+                        num_warps=args.gpu_num_warps,
+                        num_stages=args.gpu_num_stages,
+                    )
+                    block_sizes = {args.gpu_block_size_key: block_cfg}
 
-                                    if impl == "reference":
-                                        fn = lambda q_, k_, v_, m: attention(q_, k_, v_, m, implementation="reference")
-                                        label = f"attention({impl})"
-                                    elif impl == "pallas_gpu":
-                                        fn = lambda q_, k_, v_, m, block_sizes_=block_sizes: attention(
-                                            q_,
-                                            k_,
-                                            v_,
-                                            m,
-                                            implementation="pallas_gpu",
-                                            block_sizes=block_sizes_,
-                                        )
-                                        label = (
-                                            "attention("
-                                            f"{impl}, bq={ 'auto' if bq is None else bq }, "
-                                            f"bk={ 'auto' if bk is None else bk }, "
-                                            f"bq_dkv={ 'auto' if bq_dkv is None else bq_dkv }, "
-                                            f"bk_dkv={ 'auto' if bk_dkv is None else bk_dkv }, "
-                                            f"bq_dq={ 'auto' if bq_dq is None else bq_dq }, "
-                                            f"bk_dq={ 'auto' if bk_dq is None else bk_dq }"
-                                            ")"
-                                        )
-                                    else:
-                                        fn = lambda q_, k_, v_, m, impl_name=impl: attention(
-                                            q_, k_, v_, m, implementation=impl_name
-                                        )
-                                        label = f"attention({impl})"
+                if impl == "reference":
+                    fn = lambda q_, k_, v_, m: attention(q_, k_, v_, m, implementation="reference")
+                    label = f"attention({impl})"
+                elif impl == "pallas_gpu":
+                    fn = lambda q_, k_, v_, m, block_sizes_=block_sizes: attention(
+                        q_,
+                        k_,
+                        v_,
+                        m,
+                        implementation="pallas_gpu",
+                        block_sizes=block_sizes_,
+                    )
+                    label = (
+                        "attention("
+                        f"{impl}, bq={ 'auto' if bq is None else bq }, "
+                        f"bk={ 'auto' if bk is None else bk }, "
+                        f"bq_dkv={ 'auto' if bq_dkv is None else bq_dkv }, "
+                        f"bk_dkv={ 'auto' if bk_dkv is None else bk_dkv }, "
+                        f"bq_dq={ 'auto' if bq_dq is None else bq_dq }, "
+                        f"bk_dq={ 'auto' if bk_dq is None else bk_dq }"
+                        ")"
+                    )
+                else:
+                    fn = lambda q_, k_, v_, m, impl_name=impl: attention(q_, k_, v_, m, implementation=impl_name)
+                    label = f"attention({impl})"
 
-                                    compile_s, steady_s, out = _benchmark_one(
-                                        label, fn, q, k, v, mask, steps=args.steps, do_backward=args.benchmark_backward
-                                    )
-                                    config_seen = True
-                                    if impl == "pallas_gpu":
-                                        pallas_configs.append(
-                                            ((bq, bk, bq_dkv, bk_dkv, bq_dq, bk_dq), compile_s, steady_s)
-                                        )
-                                    else:
-                                        results[impl] = {"compile_s": compile_s, "steady_s": steady_s}
+                compile_s, steady_s, out = _benchmark_one(
+                    label, fn, q, k, v, mask, steps=args.steps, do_backward=args.benchmark_backward
+                )
+                config_seen = True
+                if impl == "pallas_gpu":
+                    pallas_configs.append(((bq, bk, bq_dkv, bk_dkv, bq_dq, bk_dq), compile_s, steady_s))
+                else:
+                    results[impl] = {"compile_s": compile_s, "steady_s": steady_s}
 
             if not config_seen:
                 print("  failed: no valid config combinations")

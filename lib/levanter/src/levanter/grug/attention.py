@@ -389,6 +389,12 @@ def _tpu_splash_attention(
 
 
 def _gpu_block_size(seq_len: int, max_block: int = 128, *, block_override: int | None = None) -> int:
+    """Resolve a divisibility-safe GPU tile size.
+
+    Tuned tables are the primary source for block sizes. This helper is the
+    normalization/fallback layer that enforces divisibility against the runtime
+    sequence length for both explicit overrides and auto-derived caps.
+    """
     if seq_len <= 0:
         raise ValueError(f"seq_len must be positive, got {seq_len}")
 
@@ -516,6 +522,8 @@ def _backend_block_size_keys(backend: Backend) -> list[str]:
         if len(parts) >= 2:
             full_kind_key = f"{parts[0]} {parts[1]}"
             add_candidate(full_kind_key)
+            # TPU-style family extraction (e.g. v5p -> v5). NVIDIA kinds like
+            # "gb10" do not match this branch and rely on exact-kind keys.
             m = re.fullmatch(r"v(\d+)[a-z0-9]*", parts[1])
             if m:
                 family_key = f"{parts[0]} {m.group(1)}"
@@ -610,24 +618,14 @@ def _gpu_splash_attention(
     elif mask is not None:
         raise NotImplementedError("GPU splash attention supports only AttentionMask or None masks.")
 
-    if block_sizes is None:
-        block_sizes = _resolved_gpu_block_sizes(
-            BlockSizes(),
-            batch=B,
-            seq_len=Q,
-            num_heads=Hq,
-            head_dim=D,
-            dtype=q.dtype,
-        )
-    else:
-        block_sizes = _resolved_gpu_block_sizes(
-            block_sizes,
-            batch=B,
-            seq_len=Q,
-            num_heads=Hq,
-            head_dim=D,
-            dtype=q.dtype,
-        )
+    block_sizes = _resolved_gpu_block_sizes(
+        block_sizes if block_sizes is not None else BlockSizes(),
+        batch=B,
+        seq_len=Q,
+        num_heads=Hq,
+        head_dim=D,
+        dtype=q.dtype,
+    )
 
     q_block = _gpu_block_size(Q, block_override=block_sizes.block_q)
     k_block = _gpu_block_size(K, block_override=block_sizes.block_k)

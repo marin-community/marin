@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Optional
 
 import jax
 import jax.numpy as jnp
@@ -103,7 +102,7 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], AttentionBlockSizes]] = {
     "NVIDIA GB10": _GB10_BLOCKS,
 }
 
-
+# Bucket order is significant: first matching bucket wins.
 SHAPE_BUCKETS: list[ShapeBucket] = [
     ShapeBucket(
         name="llama3-ish",
@@ -185,7 +184,7 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
 ]
 
 
-def _device_key(device_kind: Optional[str]) -> Optional[str]:
+def _device_key(device_kind: str | None) -> str | None:
     if device_kind is None and jax.devices():
         device_kind = jax.devices()[0].device_kind
     if not device_kind:
@@ -196,13 +195,13 @@ def _device_key(device_kind: Optional[str]) -> Optional[str]:
     return norm
 
 
-def _dtype_name(dtype: Optional[jnp.dtype]) -> Optional[str]:
+def _dtype_name(dtype: jnp.dtype | None) -> str | None:
     if dtype is None:
         return None
     return jnp.dtype(dtype).name
 
 
-def _shape_bucket(batch: int, seq_len: int, num_heads: int, head_dim: int) -> Optional[str]:
+def _shape_bucket(batch: int, seq_len: int, num_heads: int, head_dim: int) -> str | None:
     for bucket in SHAPE_BUCKETS:
         if bucket.matches(batch, seq_len, num_heads, head_dim):
             return bucket.name
@@ -215,8 +214,8 @@ def infer_block_sizes(
     num_heads: int,
     head_dim: int,
     *,
-    dtype: Optional[jnp.dtype],
-    device_kind: Optional[str] = None,
+    dtype: jnp.dtype | None,
+    device_kind: str | None = None,
 ) -> AttentionBlockSizes:
     """Infer attention block sizes from a tuned table.
 

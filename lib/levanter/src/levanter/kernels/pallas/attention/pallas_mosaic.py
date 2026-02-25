@@ -184,8 +184,7 @@ def mha_forward_kernel(
                 causal_mask = span_q[:, None] >= span_k[None, :]
                 mask = causal_mask if mask is None else jnp.logical_and(mask, causal_mask)
             if sliding_window is not None:
-                window_mask = _apply_window_mask(mask, span_q, span_k, sliding_window=sliding_window)
-                mask = window_mask
+                mask = _apply_window_mask(mask, span_q, span_k, sliding_window=sliding_window)
             qk = jnp.where(mask, qk, DEFAULT_MASK_VALUE)
 
         m_curr = jnp.max(qk, axis=-1)
@@ -660,8 +659,7 @@ def mha_backward_kernel(
                 mask = causal_mask if mask is None else jnp.logical_and(mask, causal_mask)
             if sliding_window is not None:
                 span_q = start_q * block_q_dkv + jnp.arange(block_q_dkv)
-                window_mask = _apply_window_mask(mask, span_q, span_k, sliding_window=sliding_window)
-                mask = window_mask
+                mask = _apply_window_mask(mask, span_q, span_k, sliding_window=sliding_window)
             qk = jnp.where(mask, qk, DEFAULT_MASK_VALUE)
 
         lse = lse_ref[curr_q_slice]
@@ -726,8 +724,7 @@ def mha_backward_kernel(
                 mask = causal_mask if mask is None else jnp.logical_and(mask, causal_mask)
             if sliding_window is not None:
                 span_k = start_k * block_kv_dq + jnp.arange(block_kv_dq)
-                window_mask = _apply_window_mask(mask, span_q, span_k, sliding_window=sliding_window)
-                mask = window_mask
+                mask = _apply_window_mask(mask, span_q, span_k, sliding_window=sliding_window)
             qk = jnp.where(mask, qk, DEFAULT_MASK_VALUE)
 
         p = jnp.exp2(qk - lse[:, None])
