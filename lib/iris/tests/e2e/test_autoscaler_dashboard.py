@@ -5,7 +5,7 @@
 
 Boots a local cluster with two scale groups (v5litepod-16 and v5litepod-32)
 and validates that the autoscaler tab correctly renders scale group info,
-slice state, recent actions, and logs.
+slice state, recent actions, logs, and unmet demand.
 """
 
 import time
@@ -14,6 +14,14 @@ import pytest
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
+from iris.cluster.types import (
+    Entrypoint,
+    EnvironmentSpec,
+    REGION_ATTRIBUTE_KEY,
+    ResourceSpec,
+    ZONE_ATTRIBUTE_KEY,
+    zone_constraint,
+)
 from iris.rpc import config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
@@ -36,6 +44,7 @@ def _add_scale_group(
     name: str,
     variant: str,
     num_vms: int,
+    zone: str = "",
 ) -> None:
     sg = config.scale_groups[name]
     sg.name = name
@@ -52,13 +61,16 @@ def _add_scale_group(
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.slice_template.accelerator_variant = variant
     sg.slice_template.local.SetInParent()
+    if zone:
+        sg.worker.attributes[ZONE_ATTRIBUTE_KEY] = zone
+        sg.worker.attributes[REGION_ATTRIBUTE_KEY] = zone.rsplit("-", 1)[0]
 
 
 def _make_two_group_config() -> config_pb2.IrisClusterConfig:
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups.clear()
-    _add_scale_group(config, "tpu_v5e_16", "v5litepod-16", num_vms=2)
-    _add_scale_group(config, "tpu_v5e_32", "v5litepod-32", num_vms=4)
+    _add_scale_group(config, "tpu_v5e_16", "v5litepod-16", num_vms=2, zone="europe-west4-b")
+    _add_scale_group(config, "tpu_v5e_32", "v5litepod-32", num_vms=4, zone="us-central2-b")
     return make_local_config(config)
 
 
@@ -87,11 +99,14 @@ def _click_autoscaler_tab(page, cluster):
 
 
 def test_autoscaler_tab_shows_scale_groups(cluster, page, screenshot):
-    """Both scale groups appear in the Autoscaler tab's Scale Groups table."""
+    """Both scale groups appear and new routing/status sections render."""
     _click_autoscaler_tab(page, cluster)
 
     assert_visible(page, "text=tpu_v5e_16")
     assert_visible(page, "text=tpu_v5e_32")
+    assert_visible(page, "text=Waterfall Routing")
+    assert_visible(page, "text=Availability")
+    assert_visible(page, "text=Blocker")
 
     screenshot("autoscaler-scale-groups")
 
@@ -139,3 +154,49 @@ def test_autoscaler_tab_logs_section_rendered(cluster, page, screenshot):
         assert content != "Loading logs...", "Logs section still showing loading state"
 
     screenshot("autoscaler-logs")
+
+
+def _noop_task():
+    """A trivial task that sleeps briefly."""
+    import time
+
+    time.sleep(1)
+
+
+def test_autoscaler_tab_unmet_demand_shows_concise_reason(cluster, page, screenshot):
+    """Unmet demand from a bad zone constraint renders a concise diagnostic, not a group dump."""
+    job = cluster.client.submit(
+        entrypoint=Entrypoint.from_callable(_noop_task),
+        name="bad-zone-job",
+        resources=ResourceSpec(cpu=1, memory="1g"),
+        environment=EnvironmentSpec(),
+        constraints=[zone_constraint("europe-west4b")],
+    )
+
+    # Give the autoscaler time to evaluate the demand
+    time.sleep(3)
+
+    _click_autoscaler_tab(page, cluster)
+
+    if not _is_noop_page(page):
+        # Wait for the Unmet Demand table to appear
+        page.wait_for_selector("h3:has-text('Unmet Demand')", timeout=15000)
+        unmet_table = page.locator("h3:has-text('Unmet Demand') + table")
+        unmet_table.wait_for(timeout=10000)
+
+        # The reason column should show the concise diagnostic with a typo suggestion
+        table_text = unmet_table.text_content(timeout=5000)
+        assert table_text is not None
+        assert (
+            "no groups in zone" in table_text
+        ), f"Expected 'no groups in zone' in unmet demand table, got: {table_text}"
+        assert (
+            "did you mean" in table_text
+        ), f"Expected 'did you mean' suggestion in unmet demand table, got: {table_text}"
+        assert "europe-west4-b" in table_text, f"Expected 'europe-west4-b' suggestion, got: {table_text}"
+        assert "available groups=" not in table_text, "Old-style group dump should not appear"
+
+    screenshot("autoscaler-unmet-demand")
+
+    # Clean up the job
+    cluster.kill(job)

@@ -18,7 +18,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from iris.chaos import chaos, chaos_raise
-from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, ContainerRuntime, RuntimeLogReader
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerErrorKind,
+    ContainerHandle,
+    ContainerRuntime,
+    RuntimeLogReader,
+)
 from google.protobuf import json_format
 
 from iris.cluster.types import (
@@ -206,6 +212,7 @@ class TaskAttempt:
         controller_address: str | None,
         default_task_env: dict[str, str],
         default_task_image: str | None,
+        gcp_project: str,
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
         log_sink: LogSink,
@@ -222,6 +229,7 @@ class TaskAttempt:
             controller_address: Controller address for env injection
             default_task_env: Worker-level default env vars injected into task containers
             default_task_image: Fully-qualified task container image from cluster config
+            gcp_project: GCP project ID for GHCR→AR image rewrite (empty if not on GCP)
             port_allocator: Port allocator for retry logic
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
@@ -234,6 +242,7 @@ class TaskAttempt:
         self._controller_address = controller_address
         self._default_task_env = default_task_env
         self._default_task_image = default_task_image
+        self._gcp_project = gcp_project
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
@@ -456,10 +465,25 @@ class TaskAttempt:
 
         No per-job Docker build — the pre-built base image has a pre-warmed
         uv cache. The remote client wraps the entrypoint with uv sync.
+
+        On GCP, rewrites ghcr.io/ images to the AR remote repo for this
+        worker's continent so pulls go through the pull-through cache.
         """
         if not self._default_task_image:
             raise ValueError("No task image configured. Set defaults.default_task_image in cluster config.")
         self.image_tag = self._default_task_image
+
+        if self.image_tag.startswith("ghcr.io/"):
+            from iris.cluster.worker.env_probe import detect_gcp_zone
+            from iris.cluster.platform.bootstrap import zone_to_multi_region, rewrite_ghcr_to_ar_remote
+
+            zone = detect_gcp_zone()
+            if zone:
+                multi_region = zone_to_multi_region(zone)
+                assert multi_region, f"Unknown GCP zone prefix for task image rewrite: {zone}"
+                assert self._gcp_project, "gcp_project required for GHCR→AR task image rewrite"
+                self.image_tag = rewrite_ghcr_to_ar_remote(self.image_tag, multi_region, self._gcp_project)
+
         logger.info("Using task image %s for task %s", self.image_tag, self.task_id)
 
     def _create_container(self) -> None:
@@ -516,6 +540,7 @@ class TaskAttempt:
             timeout_seconds=timeout_seconds,
             mounts=mounts,
             task_id=self.task_id.to_wire(),
+            attempt_id=self.attempt_id,
             job_id=job_id.to_wire(),
             worker_metadata=self._worker_metadata,
         )
@@ -625,11 +650,10 @@ class TaskAttempt:
 
                 # Container has stopped
                 if status.error:
-                    self.transition_to(
-                        cluster_pb2.TASK_STATE_FAILED,
-                        error=status.error,
-                        exit_code=status.exit_code or -1,
-                    )
+                    failure_state = cluster_pb2.TASK_STATE_FAILED
+                    if status.error_kind == ContainerErrorKind.INFRA_NOT_FOUND:
+                        failure_state = cluster_pb2.TASK_STATE_WORKER_FAILED
+                    self.transition_to(failure_state, error=status.error, exit_code=status.exit_code or -1)
                 elif status.exit_code == 0:
                     self.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:

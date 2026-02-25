@@ -19,9 +19,11 @@ The run_once() flow splits into two phases:
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -33,22 +35,14 @@ from iris.cluster.platform.base import (
     RemoteWorkerHandle,
     SliceHandle,
 )
-from iris.cluster.platform.bootstrap import rewrite_artifact_registry_region
-from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap
+from iris.cluster.platform.bootstrap import rewrite_ghcr_to_ar_remote, zone_to_multi_region
+from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap, ZONE_ATTRIBUTE_KEY
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
-
-
-def _zone_to_region(group: ScalingGroup) -> str | None:
-    """Extract the cloud region from a scale group's GCP zone (e.g. 'europe-west4-b' -> 'europe-west4')."""
-    template = group.config.slice_template
-    if template.HasField("gcp") and template.gcp.zone:
-        return template.gcp.zone.rsplit("-", 1)[0]
-    return None
 
 
 @dataclass
@@ -101,6 +95,7 @@ class DemandEntry:
     resources: cluster_pb2.ResourceSpecProto
     preemptible: bool | None = None  # None = no preference
     required_regions: frozenset[str] | None = None
+    required_zones: frozenset[str] | None = None
     invalid_reason: str | None = None
 
 
@@ -125,6 +120,59 @@ class RoutingDecision:
     routed_entries: dict[str, list[DemandEntry]]
     unmet_entries: list[UnmetDemand]
     group_reasons: dict[str, str]
+    group_statuses: list[GroupRoutingStatus]
+
+
+@dataclass
+class GroupRoutingStatus:
+    group: str
+    priority: int
+    assigned: int
+    launch: int
+    decision: str
+    reason: str
+
+
+def _diagnose_no_matching_group(
+    entry: DemandEntry,
+    groups: list[ScalingGroup],
+    group_region: Callable[[ScalingGroup], str | None],
+    group_zone: Callable[[ScalingGroup], str | None],
+) -> str:
+    """Produce a concise, actionable reason when no group matches a demand entry.
+
+    Checks filters in order (device → preemptible → zone → region) and reports
+    the first mismatch with enough context to fix the issue.
+    """
+    device_matches = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
+
+    if not device_matches:
+        return f"no_matching_group: no groups with device {entry.device_type.value}:{entry.device_variant or '*'}"
+
+    if entry.preemptible is not None:
+        preempt_matches = [g for g in device_matches if g.config.slice_template.preemptible == entry.preemptible]
+        if not preempt_matches:
+            want = "preemptible" if entry.preemptible else "non-preemptible"
+            return (
+                f"no_matching_group: no {want} groups for device {entry.device_type.value}:{entry.device_variant or '*'}"
+            )
+        device_matches = preempt_matches
+
+    if entry.required_zones:
+        available_zones = {group_zone(g) for g in device_matches} - {None}
+        requested = sorted(entry.required_zones)
+        msg = f"no_matching_group: no groups in zone {', '.join(requested)}"
+        for req_zone in requested:
+            close = difflib.get_close_matches(req_zone, available_zones, n=1, cutoff=0.7)
+            if close:
+                msg += f" (did you mean {close[0]}?)"
+        return msg
+
+    if entry.required_regions:
+        requested = sorted(entry.required_regions)
+        return f"no_matching_group: no groups in region {', '.join(requested)}"
+
+    return f"no_matching_group: no groups match device={entry.device_type.value}:{entry.device_variant or '*'}"
 
 
 def route_demand(
@@ -154,6 +202,18 @@ def route_demand(
             return template.coreweave.region
         return None
 
+    def group_zone(group: ScalingGroup) -> str | None:
+        if group.config.HasField("worker"):
+            zone = group.config.worker.attributes.get(ZONE_ATTRIBUTE_KEY, "").strip()
+            if zone:
+                return zone
+        template = group.config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
+
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
         if not group.matches_device_requirement(entry.device_type, entry.device_variant):
             return False
@@ -162,6 +222,10 @@ def route_demand(
         if entry.required_regions:
             region = group_region(group)
             if region not in entry.required_regions:
+                return False
+        if entry.required_zones:
+            zone = group_zone(group)
+            if zone not in entry.required_zones:
                 return False
         if entry.invalid_reason:
             return False
@@ -234,13 +298,10 @@ def route_demand(
             if g.matches_device_requirement(entry.device_type, entry.device_variant)
             and (entry.preemptible is None or g.config.slice_template.preemptible == entry.preemptible)
             and (not entry.required_regions or group_region(g) in entry.required_regions)
+            and (not entry.required_zones or group_zone(g) in entry.required_zones)
         ]
         if not matching_groups:
-            reason = (
-                f"no_matching_group: need device={entry.device_type}:{entry.device_variant}"
-                f", required_regions={sorted(entry.required_regions) if entry.required_regions else []}"
-                f", available groups={[g.name for g in sorted_groups]}"
-            )
+            reason = _diagnose_no_matching_group(entry, sorted_groups, group_region, group_zone)
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
@@ -295,11 +356,46 @@ def route_demand(
         needed = max(0, len(pg.assigned_entries) - pg.pending_slices)
         group_to_launch[name] = needed
 
+    group_statuses: list[GroupRoutingStatus] = []
+    for group in sorted_groups:
+        name = group.name
+        availability = group.availability(ts)
+        assigned = len(routed.get(name, []))
+        launch = group_to_launch.get(name, 0)
+
+        if assigned > 0:
+            decision = "selected"
+            reason = group_reasons.get(name, "demand-routed")
+        elif availability.status in {GroupAvailability.BACKOFF, GroupAvailability.QUOTA_EXCEEDED}:
+            decision = "blocked"
+            reason = availability.reason
+        elif availability.status == GroupAvailability.REQUESTING:
+            decision = "requesting"
+            reason = availability.reason
+        elif availability.status == GroupAvailability.AT_CAPACITY:
+            decision = "at_capacity"
+            reason = "at max_slices"
+        else:
+            decision = "idle"
+            reason = ""
+
+        group_statuses.append(
+            GroupRoutingStatus(
+                group=name,
+                priority=group.config.priority or 100,
+                assigned=assigned,
+                launch=launch,
+                decision=decision,
+                reason=reason,
+            )
+        )
+
     return RoutingDecision(
         group_to_launch=group_to_launch,
         routed_entries=routed,
         unmet_entries=unmet,
         group_reasons=group_reasons,
+        group_statuses=group_statuses,
     )
 
 
@@ -323,6 +419,7 @@ class Autoscaler:
         platform: Platform,
         threads: ThreadContainer | None = None,
         bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        gcp_project: str = "",
     ):
         """Create autoscaler with explicit parameters.
 
@@ -333,11 +430,13 @@ class Autoscaler:
             threads: Optional thread container for testing
             bootstrap_config: Worker bootstrap settings passed to platform.create_slice().
                 None disables bootstrap (test/local mode).
+            gcp_project: GCP project ID for AR remote repo image rewriting.
         """
         self._groups = scale_groups
         self._platform = platform
         self.evaluation_interval = evaluation_interval
         self._bootstrap_config = bootstrap_config
+        self._gcp_project = gcp_project
 
         # Centralized per-worker state indexed by worker_id
         self._workers: dict[str, TrackedWorker] = {}
@@ -347,6 +446,7 @@ class Autoscaler:
 
         # Most recent routing decision (for status API)
         self._last_routing_decision: RoutingDecision | None = None
+        self._last_evaluation: Timestamp = Timestamp.from_ms(0)
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
@@ -359,6 +459,7 @@ class Autoscaler:
         platform: Platform,
         threads: ThreadContainer | None = None,
         bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        gcp_project: str = "",
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
@@ -368,6 +469,7 @@ class Autoscaler:
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
             bootstrap_config: Worker bootstrap settings passed to platform.create_slice()
+            gcp_project: GCP project ID for AR remote repo image rewriting.
 
         Returns:
             Configured Autoscaler instance
@@ -378,6 +480,7 @@ class Autoscaler:
             platform=platform,
             threads=threads,
             bootstrap_config=bootstrap_config,
+            gcp_project=gcp_project,
         )
 
     def _wait_for_inflight(self) -> None:
@@ -634,10 +737,10 @@ class Autoscaler:
             return False
 
     def _per_group_bootstrap_config(self, group: ScalingGroup) -> config_pb2.BootstrapConfig | None:
-        """Build a per-group BootstrapConfig by merging worker attributes, image region, and accelerator settings.
+        """Build a per-group BootstrapConfig by merging worker attributes, image rewrite, and accelerator settings.
 
         Copies the base bootstrap config and:
-        1. Rewrites docker_image's AR region to match the group's GCP zone
+        1. Rewrites GHCR docker_image to an AR remote repo for the group's continent
         2. Injects IRIS_WORKER_ATTRIBUTES, IRIS_TASK_DEFAULT_ENV_JSON, and
            IRIS_SCALE_GROUP from the group's worker settings into env_vars.
         3. Injects accelerator type/variant/GPU count env vars for the group.
@@ -645,22 +748,19 @@ class Autoscaler:
         if not self._bootstrap_config:
             return None
 
-        # Determine target region from the group's GCP zone
-        target_region = _zone_to_region(group)
-
         has_worker = group.config.HasField("worker")
-        needs_image_rewrite = (
-            target_region is not None
-            and self._bootstrap_config.docker_image
-            and rewrite_artifact_registry_region(self._bootstrap_config.docker_image, target_region)
-            != self._bootstrap_config.docker_image
-        )
 
         bc = config_pb2.BootstrapConfig()
         bc.CopyFrom(self._bootstrap_config)
 
-        if needs_image_rewrite:
-            bc.docker_image = rewrite_artifact_registry_region(bc.docker_image, target_region)
+        # Rewrite GHCR image to AR remote repo for this group's continent
+        template = group.config.slice_template
+        if template.HasField("gcp") and template.gcp.zone and bc.docker_image.startswith("ghcr.io/"):
+            multi_region = zone_to_multi_region(template.gcp.zone)
+            if multi_region:
+                project = self._gcp_project
+                assert project, "gcp_project required for GHCR→AR worker image rewrite"
+                bc.docker_image = rewrite_ghcr_to_ar_remote(bc.docker_image, multi_region, project)
 
         if has_worker:
             attributes = dict(group.config.worker.attributes)
@@ -774,6 +874,7 @@ class Autoscaler:
     ) -> list[ScalingDecision]:
         """CPU phase: evaluate demand and execute scale-up decisions."""
         timestamp = timestamp or Timestamp.now()
+        self._last_evaluation = timestamp
 
         decisions = self.evaluate(demand_entries, timestamp)
         if decisions:
@@ -830,12 +931,10 @@ class Autoscaler:
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
-        from iris.rpc import time_pb2
-
         status = vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation=time_pb2.Timestamp(epoch_ms=0),  # Controlled by controller now
+            last_evaluation=self._last_evaluation.to_proto(),
             recent_actions=list(self._action_log),
         )
         if self._last_routing_decision is not None:
@@ -889,6 +988,17 @@ class Autoscaler:
             group_reasons=decision.group_reasons,
             routed_entries=routed_entries,
             unmet_entries=unmet_entries,
+            group_statuses=[
+                vm_pb2.GroupRoutingStatus(
+                    group=s.group,
+                    priority=s.priority,
+                    assigned=s.assigned,
+                    launch=s.launch,
+                    decision=s.decision,
+                    reason=s.reason,
+                )
+                for s in decision.group_statuses
+            ],
         )
 
     def get_group(self, name: str) -> ScalingGroup | None:

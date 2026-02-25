@@ -785,7 +785,9 @@ class ScalingGroup:
         """Build a ScaleGroupStatus proto for the status API."""
         with self._slices_lock:
             snapshot = list(self._slices.values())
+        availability = self.availability()
         backoff_ts = self._backoff_until.as_timestamp() if self._backoff_until else Timestamp.from_ms(0)
+        blocked_until = availability.until if availability.until is not None else Timestamp.from_ms(0)
         counts = self.slice_state_counts()
         status = vm_pb2.ScaleGroupStatus(
             name=self.name,
@@ -796,6 +798,9 @@ class ScalingGroup:
             consecutive_failures=self._consecutive_failures,
             last_scale_up=self._last_scale_up.to_proto(),
             last_scale_down=self._last_scale_down.to_proto(),
+            availability_status=availability.status.value,
+            availability_reason=availability.reason,
+            blocked_until=blocked_until.to_proto(),
             slices=[slice_state_to_proto(state) for state in snapshot],
         )
         for state_name, count in counts.items():
