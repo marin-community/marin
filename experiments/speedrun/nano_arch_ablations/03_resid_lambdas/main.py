@@ -25,6 +25,7 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from haliax.jax_utils import named_call
 from levanter.grug.attention import AttentionMask, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -312,7 +313,7 @@ def build_train_config(model_cfg: ModelConfig) -> SimpleTrainConfig:
         train_batch_size=batch_size,
         learning_rate=muon.learning_rate,
         explicit_mesh_axes=True,
-        profiler=True,
+        profiler=ProfilerConfig(enabled=True),
         train_seq_len=model_cfg.max_seq_len,
         num_train_steps=num_train_steps,
         steps_per_hf_export=-1,
