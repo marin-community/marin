@@ -842,7 +842,8 @@ def _sync_branch_from_remote(
     workdir: Path,
     remote: str,
     branch: str,
-) -> None:
+    conflict_policy: str = "fail",
+) -> bool:
     target_ref = f"{remote}/{branch}"
     print(f"[gdnctl] syncing branch with {target_ref}")
 
@@ -864,9 +865,17 @@ def _sync_branch_from_remote(
         print(f"[gdnctl] {merge_output}", file=sink)
 
     if merge_proc.returncode == 0:
-        return
+        return True
 
     _run_git(["merge", "--abort"], cwd=workdir, capture_output=True, check=False)
+    conflict_detected = "CONFLICT" in merge_output or "Automatic merge failed" in merge_output
+    if conflict_detected and conflict_policy == "skip":
+        print(
+            "[gdnctl] WARNING: sync-main merge conflict detected; "
+            "continuing without syncing from main this iteration due policy=skip.",
+            file=sys.stderr,
+        )
+        return False
     raise RuntimeError(
         "[gdnctl] failed to merge "
         f"{target_ref} into current branch (exit={merge_proc.returncode}). "
@@ -2022,6 +2031,8 @@ def _apply_resilient_defaults(args: argparse.Namespace) -> None:
         args.iteration_error_policy = "count-failure"
     if args.hold_dev_tpu_policy == "required":
         args.hold_dev_tpu_policy = "best-effort"
+    if args.sync_main_conflict_policy == "fail":
+        args.sync_main_conflict_policy = "skip"
     args.stash_restore_policy = "warn-keep"
     args.codex_retries = max(args.codex_retries, 2)
     args.post_check_retries = max(args.post_check_retries, 2)
@@ -2291,6 +2302,7 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                             workdir=workdir,
                             remote=args.sync_main_remote,
                             branch=args.sync_main_branch,
+                            conflict_policy=args.sync_main_conflict_policy,
                         )
 
                     head_before = _git_head(workdir)
@@ -2609,6 +2621,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--sync-main-branch",
         default="main",
         help="Remote branch used by --sync-main-policy.",
+    )
+    codex_loop.add_argument(
+        "--sync-main-conflict-policy",
+        choices=["fail", "skip"],
+        default="fail",
+        help="Behavior when sync-main merge conflicts occur.",
     )
     codex_loop.add_argument("--model", default="gpt-5.3-codex", help="Codex model")
     codex_loop.add_argument(
