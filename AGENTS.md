@@ -16,6 +16,7 @@
 - You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
 - For long-running benchmark/research threads, follow [agent_research.md](docs/recipes/agent_research.md).
 - When making significant changes to Grug/Grugformer, follow [change_grug.md](docs/recipes/change_grug.md).
+- For profiling ingestion and agent-driven optimization workflows, follow [agent_profiling.md](docs/recipes/agent_profiling.md).
 - Follow the rules and examples in each recipe to ensure compatibility and automation-friendliness.
 
 ## Shared Coding Practices
