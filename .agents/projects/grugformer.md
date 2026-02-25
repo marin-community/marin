@@ -126,8 +126,8 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
    - Copy-paste the grug core into the file and define a small “gauntlet API” (`init_fn`, `fwd_fn`, `loss_fn`, `train_step`).
    - Include both `reference_attention` and ejkernel block-sparse paths and a tiny correctness check comparing them on small shapes.
 
-3) **Native datasets for grug**
-   - Add “grug-native” dataset analogs for `CausalLmDataset` and `MultiturnChatDataset` that yield plain `jax.Array` batches (`tokens`, `labels`, optional `segment_ids`).
+3) **Native datasets for grug templates**
+   - Add dataset analogs for `CausalLmDataset` and `MultiturnChatDataset` that yield plain `jax.Array` batches (`tokens`, `labels`, optional `segment_ids`).
    - Reuse Levanter ingestion/tokenization internally via adapters until we decide to fully decouple.
 
 4) **Preemption + resume in the grug trainer**
@@ -210,11 +210,11 @@ Grug currently integrates with Levanter via a thin wrapper (`levanter.models.gru
 
 Longer term, we want one of:
 
-1) **A grug-native trainer** (preferred for “hackable” workflows)
+1) **A grug-template trainer** (preferred for “hackable” workflows)
    - Minimal surface: plain pytrees + explicit mesh + small config.
    - Owns data loading, checkpointing, and evaluation in a way that’s easy to copy/paste into speedrun scripts.
 
-2) **Evolve Levanter/Marin to support grug natively**
+2) **Evolve Levanter/Marin to support grug templates natively**
    - Make Levanter’s trainer accept a “grug-style” model (Equinox modules + thin function wrappers) without requiring a wrapper that reifies NamedArray/Haliax concepts.
    - Goal: the core stays `jax.Array`-first, and the training stack becomes more flexible rather than forcing everything into `LmHeadModel`-style interfaces.
 
