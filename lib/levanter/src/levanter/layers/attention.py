@@ -2096,6 +2096,7 @@ def _do_tpu_ragged_paged_attention(
     kv_lens = hax.where(~is_valid(kv_lens), 0, kv_lens)
 
     sm_scale_array = jnp.asarray(sm_scale, dtype=q_flat.array.dtype)
+    q_scaled = q_flat.array * sm_scale_array
 
     def _rpa_with_runtime_scale(
         q_arg: jax.Array,
@@ -2104,7 +2105,6 @@ def _do_tpu_ragged_paged_attention(
         page_indices_arg: jax.Array,
         cu_q_lens_arg: jax.Array,
         num_seqs_arg: jax.Array,
-        sm_scale_arg: jax.Array,
     ) -> jax.Array:
         return kernel(
             q_arg,
@@ -2113,7 +2113,7 @@ def _do_tpu_ragged_paged_attention(
             page_indices_arg,
             cu_q_lens_arg,
             num_seqs_arg,
-            sm_scale=sm_scale_arg,
+            sm_scale=1.0,
             soft_cap=soft_cap,
         )
 
@@ -2127,7 +2127,6 @@ def _do_tpu_ragged_paged_attention(
             haliax.partitioning.pspec_for_axis(page_indices.axes),
             haliax.partitioning.pspec_for_axis(cu_q_lens.axes),
             PartitionSpec(),  # num_seqs
-            PartitionSpec(),  # sm_scale
         ),
         out_specs=pspec_for_axis(
             (
@@ -2138,13 +2137,12 @@ def _do_tpu_ragged_paged_attention(
         ),
         check_rep=False,
     )(
-        q_flat.array,
+        q_scaled,
         kv_pages_padded.array,
         kv_lens.array,
         page_indices.array,
         cu_q_lens.array,
         this_num_seqs,
-        sm_scale_array,
     )
 
     out = hax.named(
