@@ -22,6 +22,7 @@ from collections.abc import Iterator, Sequence
 
 import draccus
 import fsspec
+import humanfriendly
 import transformers
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig

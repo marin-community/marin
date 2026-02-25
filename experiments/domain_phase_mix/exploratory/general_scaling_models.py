@@ -1910,6 +1910,324 @@ def _fit_ceq_washpen(
 
 
 # ---------------------------------------------------------------------------
+# Model: CR-CEQ (Cumulative-Recency CEQ + washpen)
+# ---------------------------------------------------------------------------
+def _fit_ceq_cumrecency(
+    spec: DatasetSpec,
+    *,
+    n_restarts: int = 12,
+    seed: int = 0,
+    maxiter: int = 700,
+    reg: float = 1e-4,
+):
+    """CR-CEQ: Cumulative-Recency CEQ with washout-weighted overfit penalty.
+
+    Instead of computing per-phase CES utilities and linearly combining them,
+    CR-CEQ first weights the *epochs* by phase importance (recency), then takes
+    CES of the aggregate.  This is a static "effective recency-weighted mixture"
+    model: the final model behaves as if trained on F_d = sum_k pi_k * E_{k,d}.
+
+    Parameters: c0, logA, logB, (M-1) domain logits, rho, gamma, tau, lambda
+    = M + 6 total (same as CEQ-Washpen).
+    """
+    rng = np.random.default_rng(seed)
+    W = spec.weights
+    y = spec.y
+    R, N, M = W.shape
+
+    C = _broadcast_epoch_mult(spec.epoch_multipliers, N, M)
+    E = _compute_epochs(W, C)
+
+    S_list = _parse_small(spec.small_domains, M)
+    B_list = [d for d in range(M) if d not in set(S_list)]
+    E_small_total = E[:, :, S_list].sum(axis=(1, 2))
+
+    huber_d = _huber_delta(y)
+
+    # c0, logA, logB, (M-1) logits, rho, gamma, tau, loglambda = M + 6
+    n_params = 3 + (M - 1) + 1 + 1 + 1 + 1
+
+    def _softmax_logits(logits: np.ndarray) -> np.ndarray:
+        z = logits - np.max(logits)
+        e = np.exp(z)
+        return e / e.sum()
+
+    def unpack(p: np.ndarray):
+        idx = 0
+        c0 = float(p[idx])
+        logA = float(p[idx + 1])
+        logB = float(p[idx + 2])
+        idx += 3
+
+        logits = np.zeros(M)
+        if M > 1:
+            logits[: M - 1] = p[idx : idx + (M - 1)]
+            idx += M - 1
+        a = _softmax_logits(logits)
+
+        rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+        idx += 1
+
+        gamma = float(p[idx])
+        idx += 1
+
+        tau = float(np.exp(np.clip(p[idx], -5.0, 8.0)))
+        idx += 1
+
+        lam = float(np.exp(np.clip(p[idx], -8.0, 8.0)))
+        idx += 1
+
+        return c0, logA, logB, a, rho, gamma, tau, lam
+
+    def forward(p: np.ndarray, W_in: np.ndarray) -> np.ndarray:
+        c0, logA, logB, a, rho, gamma, tau, lam = unpack(p)
+        A = float(np.exp(np.clip(logA, -10.0, 10.0)))
+        B = float(np.exp(np.clip(logB, -10.0, 10.0)))
+
+        E_in = _compute_epochs(W_in, C)  # (R_in, N, M)
+
+        # Recency-weighted cumulative exposure
+        pi = _phase_softmax_weights(gamma, N)  # (N,)
+        F = np.sum(E_in * pi[None, :, None], axis=1)  # (R_in, M)
+        U = _ces_mean_stable(
+            np.maximum(np.log1p(F), 1e-12), a[None, :], rho
+        )  # (R_in,)
+
+        # Washout-weighted overfit penalty (identical to CEQ-Washpen)
+        E_small = E_in[:, :, S_list].sum(axis=2)  # (R_in, N)
+        if B_list:
+            E_big = E_in[:, :, B_list].sum(axis=2)
+        else:
+            E_big = E_in.sum(axis=2)
+
+        Big_after = np.zeros_like(E_big)
+        if N > 1:
+            suffix = np.cumsum(E_big[:, ::-1], axis=1)[:, ::-1]
+            Big_after[:, :-1] = suffix[:, 1:]
+
+        omega = np.exp(-lam * Big_after)
+        h = _softplus_scaled(E_small - tau, 1.0)
+        P = np.sum(omega * (h * h), axis=1)
+
+        return c0 - A * U + B * P
+
+    def obj(p: np.ndarray) -> float:
+        yhat = forward(p, W)
+        loss = float(np.sum(_pseudo_huber(yhat - y, huber_d)))
+        loss += float(reg) * float(np.sum(p * p))
+        return loss
+
+    medE = float(np.median(E_small_total) + 1e-6)
+    best_val, best_p = np.inf, None
+
+    for r in range(n_restarts):
+        p0 = np.zeros(n_params)
+        idx = 0
+        p0[idx] = float(np.median(y))
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))   # logB
+        idx += 3
+
+        if M > 1:
+            p0[idx : idx + (M - 1)] = rng.normal(0.0, 0.5, M - 1)
+            idx += M - 1
+
+        p0[idx] = float(rng.normal(0.0, 0.7))  # rho raw
+        idx += 1
+        p0[idx] = float(rng.normal(0.0, 1.0))  # gamma
+        idx += 1
+        p0[idx] = float(np.log(medE) + rng.normal(0.0, 0.3))  # logtau
+        idx += 1
+        p0[idx] = float(rng.normal(-1.0, 1.0))  # loglambda
+        idx += 1
+
+        try:
+            res = minimize(obj, p0, method="L-BFGS-B", options={"maxiter": maxiter, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_val:
+                best_val, best_p = float(res.fun), res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        raise RuntimeError("CR-CEQ optimization failed to converge")
+
+    final_p = best_p.copy()
+
+    def predict(W_new: np.ndarray) -> np.ndarray:
+        sp = _as_3d(W_new)
+        return forward(final_p, sp)
+
+    return predict, {"n_params": n_params}
+
+
+# ---------------------------------------------------------------------------
+# Model: IS-CEQ (Interference-State CEQ + washpen)
+# ---------------------------------------------------------------------------
+def _fit_isceq(
+    spec: DatasetSpec,
+    *,
+    n_restarts: int = 12,
+    seed: int = 0,
+    maxiter: int = 700,
+    reg: float = 1e-4,
+):
+    """IS-CEQ: Interference-State CEQ with washout-weighted overfit penalty.
+
+    Maintains a per-domain "remembered learning state" S_d that decays when
+    other domains are trained:
+        S_{k,d} = S_{k-1,d} * exp(-lambda_learn * (1 - W_{k,d})) + pi_k * log1p(E_{k,d})
+
+    This is a leaky integrator / exponential survival model of memory under
+    interference: early domain signal decays when later phases emphasize other
+    domains.  The decay uses token-mixture weights (not epoch counts), so it
+    models order effects even without epoching.
+
+    Parameters: c0, logA, logB, (M-1) domain logits, rho, gamma, tau,
+                lambda_pen, lambda_learn
+    = M + 7 total (one more than CEQ-Washpen).
+    """
+    rng = np.random.default_rng(seed)
+    W = spec.weights
+    y = spec.y
+    R, N, M = W.shape
+
+    C = _broadcast_epoch_mult(spec.epoch_multipliers, N, M)
+    E = _compute_epochs(W, C)
+
+    S_list = _parse_small(spec.small_domains, M)
+    B_list = [d for d in range(M) if d not in set(S_list)]
+    E_small_total = E[:, :, S_list].sum(axis=(1, 2))
+
+    huber_d = _huber_delta(y)
+
+    # c0, logA, logB, (M-1) logits, rho, gamma, tau, loglam_pen, loglam_learn = M + 7
+    n_params = 3 + (M - 1) + 1 + 1 + 1 + 1 + 1
+
+    def _softmax_logits(logits: np.ndarray) -> np.ndarray:
+        z = logits - np.max(logits)
+        e = np.exp(z)
+        return e / e.sum()
+
+    def unpack(p: np.ndarray):
+        idx = 0
+        c0 = float(p[idx])
+        logA = float(p[idx + 1])
+        logB = float(p[idx + 2])
+        idx += 3
+
+        logits = np.zeros(M)
+        if M > 1:
+            logits[: M - 1] = p[idx : idx + (M - 1)]
+            idx += M - 1
+        a = _softmax_logits(logits)
+
+        rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+        idx += 1
+
+        gamma = float(p[idx])
+        idx += 1
+
+        tau = float(np.exp(np.clip(p[idx], -5.0, 8.0)))
+        idx += 1
+
+        lam_pen = float(np.exp(np.clip(p[idx], -8.0, 8.0)))
+        idx += 1
+
+        lam_learn = float(np.exp(np.clip(p[idx], -8.0, 8.0)))
+        idx += 1
+
+        return c0, logA, logB, a, rho, gamma, tau, lam_pen, lam_learn
+
+    def forward(p: np.ndarray, W_in: np.ndarray) -> np.ndarray:
+        c0, logA, logB, a, rho, gamma, tau, lam_pen, lam_learn = unpack(p)
+        A = float(np.exp(np.clip(logA, -10.0, 10.0)))
+        B = float(np.exp(np.clip(logB, -10.0, 10.0)))
+
+        R_in = W_in.shape[0]
+        E_in = _compute_epochs(W_in, C)  # (R_in, N, M)
+        sat = np.log1p(E_in)  # (R_in, N, M)
+
+        pi = _phase_softmax_weights(gamma, N)  # (N,)
+
+        # Sequential memory state update
+        S = np.zeros((R_in, M))
+        for k in range(N):
+            # Decay: domains with low weight in this phase get forgotten
+            decay = np.exp(-lam_learn * (1.0 - W_in[:, k, :]))  # (R_in, M)
+            S = S * decay + pi[k] * sat[:, k, :]  # (R_in, M)
+
+        U = _ces_mean_stable(np.maximum(S, 1e-12), a[None, :], rho)  # (R_in,)
+
+        # Washout-weighted overfit penalty (identical to CEQ-Washpen)
+        E_small = E_in[:, :, S_list].sum(axis=2)  # (R_in, N)
+        if B_list:
+            E_big = E_in[:, :, B_list].sum(axis=2)
+        else:
+            E_big = E_in.sum(axis=2)
+
+        Big_after = np.zeros_like(E_big)
+        if N > 1:
+            suffix = np.cumsum(E_big[:, ::-1], axis=1)[:, ::-1]
+            Big_after[:, :-1] = suffix[:, 1:]
+
+        omega = np.exp(-lam_pen * Big_after)
+        h = _softplus_scaled(E_small - tau, 1.0)
+        P = np.sum(omega * (h * h), axis=1)
+
+        return c0 - A * U + B * P
+
+    def obj(p: np.ndarray) -> float:
+        yhat = forward(p, W)
+        loss = float(np.sum(_pseudo_huber(yhat - y, huber_d)))
+        loss += float(reg) * float(np.sum(p * p))
+        return loss
+
+    medE = float(np.median(E_small_total) + 1e-6)
+    best_val, best_p = np.inf, None
+
+    for r in range(n_restarts):
+        p0 = np.zeros(n_params)
+        idx = 0
+        p0[idx] = float(np.median(y))
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))   # logB
+        idx += 3
+
+        if M > 1:
+            p0[idx : idx + (M - 1)] = rng.normal(0.0, 0.5, M - 1)
+            idx += M - 1
+
+        p0[idx] = float(rng.normal(0.0, 0.7))  # rho raw
+        idx += 1
+        p0[idx] = float(rng.normal(0.0, 1.0))  # gamma
+        idx += 1
+        p0[idx] = float(np.log(medE) + rng.normal(0.0, 0.3))  # logtau
+        idx += 1
+        p0[idx] = float(rng.normal(-1.0, 1.0))  # loglam_pen
+        idx += 1
+        p0[idx] = float(rng.normal(-1.0, 1.0))  # loglam_learn
+        idx += 1
+
+        try:
+            res = minimize(obj, p0, method="L-BFGS-B", options={"maxiter": maxiter, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_val:
+                best_val, best_p = float(res.fun), res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        raise RuntimeError("IS-CEQ optimization failed to converge")
+
+    final_p = best_p.copy()
+
+    def predict(W_new: np.ndarray) -> np.ndarray:
+        sp = _as_3d(W_new)
+        return forward(final_p, sp)
+
+    return predict, {"n_params": n_params}
+
+
+# ---------------------------------------------------------------------------
 # Model: PCEQ (Phase CES utility + entropy + epoch-overfit quadratic)
 # ---------------------------------------------------------------------------
 def _ces_utility_features_general(
@@ -2116,6 +2434,8 @@ GENERAL_MODELS: list[GeneralModelSpec] = [
     GeneralModelSpec("NCEQ(k)", _fit_nceq_learnk, lambda _: True, "Nested CEQ across phases + learnable k"),
     GeneralModelSpec("FM-CEQ", _fit_fmceq, lambda _: True, "Forgetting Marginal CEQ (sequential + retention)"),
     GeneralModelSpec("CEQ-Washpen", _fit_ceq_washpen, lambda _: True, "CEQ-SUM soft + washout-weighted overfit penalty"),
+    GeneralModelSpec("CR-CEQ", _fit_ceq_cumrecency, lambda _: True, "Cumulative-recency CEQ + washpen"),
+    GeneralModelSpec("IS-CEQ", _fit_isceq, lambda _: True, "Interference-state CEQ + washpen"),
     # Hybrid models: mixture design + economics utility + information theory
     GeneralModelSpec("SHEQ", _fit_sheq, lambda _: True, "Scheffé+log + epoch-entropy + epoch-overfit quadratic"),
     GeneralModelSpec("PCEQ", _fit_pceq, _applicable_pceq, "Phase CES utility + entropy + epoch-overfit quadratic"),
