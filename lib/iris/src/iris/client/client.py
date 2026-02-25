@@ -73,36 +73,42 @@ class TaskLogEntry:
     attempt_id: int = 0
 
 
-def _log_stream_response(response: cluster_pb2.Controller.GetTaskLogsResponse) -> None:
-    """Log stream response entries/errors."""
-    for batch in response.task_logs:
-        task_id = JobName.from_wire(batch.task_id)
-        worker_id = batch.worker_id or "?"
-        if batch.error:
-            logger.warning("task=%s worker=%s | error fetching logs: %s", task_id, worker_id, batch.error)
-        for proto in batch.logs:
-            logger.info(
-                "worker=%s task=%s attempt=%d | %s",
-                worker_id,
-                task_id,
-                proto.attempt_id,
-                proto.data,
-            )
-
-
-def _log_child_terminated(job_id_wire: str, status: cluster_pb2.JobStatus) -> None:
-    """Log when a child job terminates with a failure state.
-
-    This surfaces termination reasons (e.g. OOMKilled, non-zero exit codes) that would
-    otherwise only be visible via `iris job list --json`.
+class DefaultTaskStateLogger:
+    """Default :class:`~iris.cluster.client.remote_client.TaskStateLogger` that
+    logs task lifecycle events and streamed output to the module logger.
     """
-    state_name = cluster_pb2.JobState.Name(status.state)
-    parts = [f"job={job_id_wire} terminated with state={state_name}"]
-    if status.exit_code:
-        parts.append(f"exit_code={status.exit_code}")
-    if status.error:
-        parts.append(f"error={status.error!r}")
-    logger.warning(" | ".join(parts))
+
+    def task_started(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
+        state_name = cluster_pb2.JobState.Name(status.state)
+        logger.info("job=%s started with state=%s", job_id, state_name)
+
+    def task_finished(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
+        """Log terminal state; warnings for failures, info for success."""
+        state_name = cluster_pb2.JobState.Name(status.state)
+        if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
+            logger.info("job=%s completed with state=%s", job_id, state_name)
+        else:
+            parts = [f"job={job_id} terminated with state={state_name}"]
+            if status.exit_code:
+                parts.append(f"exit_code={status.exit_code}")
+            if status.error:
+                parts.append(f"error={status.error!r}")
+            logger.warning(" | ".join(parts))
+
+    def task_logging(self, response: cluster_pb2.Controller.GetTaskLogsResponse) -> None:
+        for batch in response.task_logs:
+            task_id = JobName.from_wire(batch.task_id)
+            worker_id = batch.worker_id or "?"
+            if batch.error:
+                logger.warning("task=%s worker=%s | error fetching logs: %s", task_id, worker_id, batch.error)
+            for proto in batch.logs:
+                logger.info(
+                    "worker=%s task=%s attempt=%d | %s",
+                    worker_id,
+                    task_id,
+                    proto.attempt_id,
+                    proto.data,
+                )
 
 
 class JobFailedError(Exception):
@@ -311,8 +317,7 @@ class Job:
             poll_interval=poll_interval,
             include_children=include_children,
             since_ms=0,
-            on_logs=_log_stream_response,
-            on_child_terminated=_log_child_terminated if include_children else None,
+            state_logger=DefaultTaskStateLogger(),
         )
 
     def terminate(self) -> None:
