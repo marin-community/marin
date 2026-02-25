@@ -811,6 +811,31 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
     )
 
 
+def _load_checkpoint(output_path: str) -> dict | None:
+    """Load checkpoint from GCS. Returns None if no checkpoint exists."""
+    import fsspec as _fsspec
+
+    ckpt_path = f"{output_path}/checkpoint.json"
+    if not fsspec_exists(ckpt_path):
+        return None
+    gcs_path = ckpt_path if ckpt_path.startswith("gs://") else f"gs://{ckpt_path}"
+    fs = _fsspec.filesystem("gs")
+    with fs.open(gcs_path, "r") as f:
+        return json.load(f)
+
+
+def _save_checkpoint(output_path: str, ckpt: dict) -> None:
+    """Atomically write checkpoint to GCS (write temp file locally, then upload)."""
+    staging = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+    try:
+        json.dump(ckpt, staging, indent=2)
+        staging.close()
+        ckpt_path = f"{output_path}/checkpoint.json"
+        gcs_upload(staging.name, ckpt_path if ckpt_path.startswith("gs://") else f"gs://{ckpt_path}")
+    finally:
+        os.unlink(staging.name)
+
+
 def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     """Cross-source shuffled processing with proportional sampling.
 
@@ -822,8 +847,10 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
        slice from every file in the batch, guaranteeing cross-source mixing
     5. Shard-level shuffle: shuffle each output shard buffer before writing
 
-    Val records (~0.5% of data) are accumulated in memory across batches and
-    written as single caches at the end.
+    Supports resume: a checkpoint file at {output_path}/checkpoint.json tracks
+    completed batches. Re-running with the same parameters (especially --seed)
+    produces the same deterministic batches and skips already-completed ones.
+    Val caches are written per-batch so completed batches' val data is preserved.
     """
     import fsspec as _fsspec
 
@@ -882,13 +909,34 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     }
 
     num_workers = min(config.num_workers, len(shard_paths))
-    shard_idx = 0
-    all_output_paths: list[str] = []
-    total_records = 0
+    need_und = config.dual_ordering or config.generation_ratio < 1.0
+    need_gen = config.dual_ordering or config.generation_ratio > 0.0
 
-    # Accumulate val records across batches (small — ~0.5% of data)
-    all_val_und_records: list[dict[str, np.ndarray]] = []
-    all_val_gen_records: list[dict[str, np.ndarray]] = []
+    # --- Resume from checkpoint ---
+    ckpt = _load_checkpoint(config.output_path)
+    if ckpt:
+        completed = ckpt["completed_batches"]
+        shard_idx = ckpt["next_shard_idx"]
+        total_records = ckpt["total_records"]
+        files_done = ckpt["files_done"]
+        all_output_paths: list[str] = []
+        for batch_i in sorted(completed, key=int):
+            info = completed[batch_i]
+            for si in range(info["shard_idx_start"], info["shard_idx_end"]):
+                all_output_paths.append(f"{config.output_path}/train/shard-{si:06d}")
+        logger.info(
+            "Resuming from checkpoint: %d/%d batches done, shard_idx=%d, records=%d",
+            len(completed),
+            len(batches),
+            shard_idx,
+            total_records,
+        )
+    else:
+        ckpt = {"completed_batches": {}, "next_shard_idx": 0, "total_records": 0, "files_done": 0}
+        shard_idx = 0
+        total_records = 0
+        files_done = 0
+        all_output_paths = []
 
     total_files = len(shard_paths)
     logger.info(
@@ -901,16 +949,22 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     )
 
     # --- Process each batch ---
-    files_done = 0
     with tqdm(
         total=total_files,
+        initial=files_done,
         desc="Parquets",
         unit="parquet",
         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
     ) as parquet_pbar:
         for batch_idx, batch in enumerate(batches):
+            if str(batch_idx) in ckpt["completed_batches"]:
+                continue
+
             batch_label = f"Batch {batch_idx + 1}/{len(batches)} ({len(batch)} files)"
+            batch_start_shard_idx = shard_idx
             file_records: dict[str, list[dict[str, np.ndarray]]] = {}
+            batch_val_und: list[dict[str, np.ndarray]] = []
+            batch_val_gen: list[dict[str, np.ndarray]] = []
 
             # Download and tokenize in sub-chunks of num_workers
             num_sub_chunks = math.ceil(len(batch) / num_workers)
@@ -950,8 +1004,8 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
                             train_records, val_und, val_gen = future.result()
                             random.shuffle(train_records)
                             file_records[source] = train_records
-                            all_val_und_records.extend(val_und)
-                            all_val_gen_records.extend(val_gen)
+                            batch_val_und.extend(val_und)
+                            batch_val_gen.extend(val_gen)
                         except Exception:
                             logger.exception("Failed to tokenize %s", source)
                             raise
@@ -1009,52 +1063,77 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
 
             del shard_buffers
             shutil.rmtree(staging_batch_dir)
+
+            # --- Write per-batch val caches ---
+            if config.val_fraction > 0 and (batch_val_und or batch_val_gen):
+                staging_val_dir = tempfile.mkdtemp(prefix=f"vlm_val_batch{batch_idx}_", dir=config.staging_dir)
+
+                if batch_val_und and need_und:
+                    local_val_und = os.path.join(staging_val_dir, "val_und")
+                    write_levanter_cache(
+                        iter(batch_val_und), local_val_und, {**metadata, "split": "val_understanding"}
+                    )
+                    gcs_val_und = f"{config.output_path}/val_understanding/validation/batch-{batch_idx:06d}"
+                    gcs_upload(
+                        local_val_und, gcs_val_und if gcs_val_und.startswith("gs://") else f"gs://{gcs_val_und}"
+                    )
+
+                if batch_val_gen and need_gen:
+                    local_val_gen = os.path.join(staging_val_dir, "val_gen")
+                    write_levanter_cache(
+                        iter(batch_val_gen), local_val_gen, {**metadata, "split": "val_generation"}
+                    )
+                    gcs_val_gen = f"{config.output_path}/val_generation/validation/batch-{batch_idx:06d}"
+                    gcs_upload(
+                        local_val_gen, gcs_val_gen if gcs_val_gen.startswith("gs://") else f"gs://{gcs_val_gen}"
+                    )
+
+                shutil.rmtree(staging_val_dir)
+
+            batch_val_und.clear()
+            batch_val_gen.clear()
+
+            # --- Save checkpoint ---
             files_done += len(batch)
+            ckpt["completed_batches"][str(batch_idx)] = {
+                "shard_idx_start": batch_start_shard_idx,
+                "shard_idx_end": shard_idx,
+                "record_count": batch_total,
+            }
+            ckpt["next_shard_idx"] = shard_idx
+            ckpt["total_records"] = total_records
+            ckpt["files_done"] = files_done
+            _save_checkpoint(config.output_path, ckpt)
+
             parquet_pbar.update(len(batch))
             parquet_pbar.set_postfix_str(f"done {files_done}/{total_files}")
-            logger.info("[%s] Done. Total records so far: %d", batch_label, total_records)
+            logger.info("[%s] Done. Total records so far: %d (checkpoint saved)", batch_label, total_records)
 
     logger.info("Wrote %d shuffled shards (%d total records)", len(all_output_paths), total_records)
 
-    # --- Write val caches ---
+    # --- Collect per-batch val cache paths for consolidation ---
     val_und_gcs_paths: list[str] = []
     val_gen_gcs_paths: list[str] = []
-    total_val_und = len(all_val_und_records)
-    total_val_gen = len(all_val_gen_records)
+    total_val_und = 0
+    total_val_gen = 0
 
-    if config.val_fraction > 0 and (all_val_und_records or all_val_gen_records):
-        logger.info(
-            "Writing val caches: %d understanding, %d generation records",
-            total_val_und,
-            total_val_gen,
-        )
-        staging_val_dir = tempfile.mkdtemp(prefix="vlm_val_", dir=config.staging_dir)
-
-        if all_val_und_records:
-            local_val_und = os.path.join(staging_val_dir, "val_und")
-            write_levanter_cache(iter(all_val_und_records), local_val_und, {**metadata, "split": "val_understanding"})
-            gcs_val_und = f"{config.output_path}/val_understanding/validation/shard-000000"
-            gcs_upload(local_val_und, gcs_val_und if gcs_val_und.startswith("gs://") else f"gs://{gcs_val_und}")
-            val_und_gcs_paths.append(gcs_val_und)
-
-        if all_val_gen_records:
-            local_val_gen = os.path.join(staging_val_dir, "val_gen")
-            write_levanter_cache(iter(all_val_gen_records), local_val_gen, {**metadata, "split": "val_generation"})
-            gcs_val_gen = f"{config.output_path}/val_generation/validation/shard-000000"
-            gcs_upload(local_val_gen, gcs_val_gen if gcs_val_gen.startswith("gs://") else f"gs://{gcs_val_gen}")
-            val_gen_gcs_paths.append(gcs_val_gen)
-
-        shutil.rmtree(staging_val_dir)
-        all_val_und_records.clear()
-        all_val_gen_records.clear()
+    if config.val_fraction > 0:
+        for bi in range(len(batches)):
+            if need_und:
+                und_path = f"{config.output_path}/val_understanding/validation/batch-{bi:06d}"
+                if fsspec_exists(f"{und_path}/.success"):
+                    val_und_gcs_paths.append(und_path)
+            if need_gen:
+                gen_path = f"{config.output_path}/val_generation/validation/batch-{bi:06d}"
+                if fsspec_exists(f"{gen_path}/.success"):
+                    val_gen_gcs_paths.append(gen_path)
+        total_val_und = len(val_und_gcs_paths)
+        total_val_gen = len(val_gen_gcs_paths)
 
     # Consolidate all shard caches
     _consolidate(all_output_paths, f"{config.output_path}/train", "train")
 
     if config.val_fraction > 0:
-        need_und = config.dual_ordering or config.generation_ratio < 1.0
-        need_gen = config.dual_ordering or config.generation_ratio > 0.0
-
         if need_und:
             _consolidate(val_und_gcs_paths, f"{config.output_path}/val_understanding/validation", "val_understanding")
         if need_gen:
@@ -1068,8 +1147,8 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
             "total_batches": len(batches),
             "train_records": total_records,
             "train_shards": len(all_output_paths),
-            "val_understanding_records": total_val_und,
-            "val_generation_records": total_val_gen,
+            "val_understanding_shards": total_val_und,
+            "val_generation_shards": total_val_gen,
         },
     )
 
