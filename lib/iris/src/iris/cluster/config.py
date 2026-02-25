@@ -906,7 +906,6 @@ def create_autoscaler(
     label_prefix: str,
     bootstrap_config: config_pb2.BootstrapConfig | None = None,
     threads: ThreadContainer | None = None,
-    gcp_project: str = "",
 ):
     """Create autoscaler from Platform and explicit config.
 
@@ -918,7 +917,6 @@ def create_autoscaler(
         bootstrap_config: Worker bootstrap settings passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
         threads: Thread container for background threads. Uses global default if not provided.
-        gcp_project: GCP project ID for AR remote repo image rewriting.
 
     Returns:
         Configured Autoscaler instance
@@ -967,5 +965,4 @@ def create_autoscaler(
         config=autoscaler_config,
         platform=platform,
         bootstrap_config=bootstrap_config,
-        gcp_project=gcp_project,
     )
