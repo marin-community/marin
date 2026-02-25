@@ -21,15 +21,13 @@ from fray.v2 import (
     create_environment,
     current_client,
 )
-from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.main import train_dpo
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
-from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
-from iris.temp_buckets import get_temp_bucket_path
+from iris.marin_fs import check_path_in_region, marin_region, marin_temp_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -223,12 +221,8 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        temp_cache_path = get_temp_bucket_path(ttl_days=30, prefix="compilation-cache")
-        if temp_cache_path is not None:
-            env["JAX_COMPILATION_CACHE_DIR"] = temp_cache_path
-            logger.info("JAX compilation cache on temp bucket: %s", temp_cache_path)
-        else:
-            logger.warning("No temp bucket available; JAX compilation cache will not be configured.")
+        env["JAX_COMPILATION_CACHE_DIR"] = marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
@@ -289,12 +283,8 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        marin_prefix = os.environ.get("MARIN_PREFIX")
-        if marin_prefix:
-            env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
-            logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
-        else:
-            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
+        env["JAX_COMPILATION_CACHE_DIR"] = marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
@@ -338,13 +328,12 @@ def _doublecheck_paths(config: TrainOnPodConfigT):
     """
     local_ok = not isinstance(config.resources.device, TpuConfig)
 
-    try:
-        region = get_vm_region()
-    except ValueError as e:
+    region = marin_region()
+    if region is None:
         if local_ok:
             logger.warning("Could not determine the region of the VM. This is fine if you're running locally.")
             return
-        raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
+        raise ValueError("Could not determine the region of the VM. This is required for path checks.")
 
     # Recursively check all paths in the config
     _check_paths_recursively(config.train_config, "", region, local_ok)
@@ -385,7 +374,7 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok):
             # Source URLs are always read-and-cached, so they may be out of region.
             if "train_urls" in path_prefix or "validation_urls" in path_prefix:
                 return
-            _check_path_in_region(
+            check_path_in_region(
                 path_prefix,
                 path_str,
                 region=region,
@@ -470,25 +459,6 @@ def _check_for_wandb_key(env):
                     "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
                     "WANDB_API_KEY=..., or add it to the env dict."
                 )
-
-
-def _check_path_in_region(key, path, region, local_ok):
-
-    if not path.startswith("gs://"):
-        if local_ok:
-            logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")
-            return
-        else:
-            raise ValueError(f"{key} must be a GCS path, not {path}")
-    try:
-        bucket_region = get_bucket_location(path)
-        if region.lower() != bucket_region.lower():
-            raise ValueError(
-                f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
-                f"This can cause performance issues and billing surprises."
-            )
-    except GcpForbiddenException:
-        logger.warning(f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True)
 
 
 if __name__ == "__main__":
