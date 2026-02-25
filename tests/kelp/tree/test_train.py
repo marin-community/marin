@@ -86,6 +86,67 @@ def train_cfg(model_cfg):
     )
 
 
+def test_effective_max_corruption_steps_constant(model_cfg):
+    """Constant schedule returns max_corruption_steps at every step."""
+    cfg = EditTrainingConfig(
+        model=model_cfg,
+        max_corruption_steps=5,
+        corruption_curriculum="constant",
+        total_steps=100,
+    )
+    assert cfg.effective_max_corruption_steps(0) == 5
+    assert cfg.effective_max_corruption_steps(50) == 5
+    assert cfg.effective_max_corruption_steps(100) == 5
+
+
+def test_effective_max_corruption_steps_linear(model_cfg):
+    """Linear schedule ramps from 1 to max over warmup fraction."""
+    cfg = EditTrainingConfig(
+        model=model_cfg,
+        max_corruption_steps=5,
+        corruption_curriculum="linear",
+        curriculum_warmup_fraction=0.5,
+        total_steps=100,
+    )
+    # Step 0: beginning of warmup -> 1
+    assert cfg.effective_max_corruption_steps(0) == 1
+    # Step 25: halfway through warmup (50% of 50 steps) -> ~3
+    assert cfg.effective_max_corruption_steps(25) == 3
+    # Step 50: end of warmup -> 5
+    assert cfg.effective_max_corruption_steps(50) == 5
+    # Step 75: past warmup -> 5
+    assert cfg.effective_max_corruption_steps(75) == 5
+
+
+def test_effective_max_corruption_steps_cosine(model_cfg):
+    """Cosine schedule ramps slower initially, faster at end of warmup."""
+    cfg = EditTrainingConfig(
+        model=model_cfg,
+        max_corruption_steps=5,
+        corruption_curriculum="cosine",
+        curriculum_warmup_fraction=0.5,
+        total_steps=100,
+    )
+    assert cfg.effective_max_corruption_steps(0) == 1
+    # Cosine ramps slower than linear at the midpoint.
+    mid = cfg.effective_max_corruption_steps(25)
+    assert 2 <= mid <= 4
+    assert cfg.effective_max_corruption_steps(50) == 5
+    assert cfg.effective_max_corruption_steps(99) == 5
+
+
+def test_effective_max_corruption_steps_one(model_cfg):
+    """When max_corruption_steps=1, curriculum is a no-op."""
+    cfg = EditTrainingConfig(
+        model=model_cfg,
+        max_corruption_steps=1,
+        corruption_curriculum="linear",
+        total_steps=100,
+    )
+    assert cfg.effective_max_corruption_steps(0) == 1
+    assert cfg.effective_max_corruption_steps(50) == 1
+
+
 def test_generate_training_example(bank, tokenizer, train_cfg):
     rng = random.Random(42)
     result = generate_training_example(
