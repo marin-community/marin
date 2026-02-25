@@ -25,7 +25,7 @@ import jax
 import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
-from jaxtyping import Array
+from jaxtyping import Array, Float
 
 import haliax
 from haliax.nn import Linear
@@ -227,7 +227,7 @@ class ScaleByNamoDState(NamedTuple):
     v: optax.Updates
 
 
-def _clamp_to_mean(col_scale: Array, clamp_c: float) -> Array:
+def _clamp_to_mean(col_scale: Float[Array, "... cols"], clamp_c: float) -> Float[Array, "... cols"]:
     if not (0.0 < float(clamp_c) <= 1.0):
         return col_scale
 
@@ -239,12 +239,12 @@ def _clamp_to_mean(col_scale: Array, clamp_c: float) -> Array:
 
 
 def _orthogonalize_batched(
-    matrix: Array,
+    matrix: Float[Array, "... rows cols"],
     *,
     steps: int,
     muon_eps: float,
     coefficient_type: CoefficientType,
-) -> Array:
+) -> Float[Array, "... rows cols"]:
     """Apply Newton-Schulz orthogonalization to [..., m, n] tensors."""
     if matrix.ndim == 2:
         return zeropower_via_newtonschulz5(matrix, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
