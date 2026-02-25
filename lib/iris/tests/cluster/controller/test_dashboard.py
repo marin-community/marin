@@ -18,7 +18,7 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, vm_pb2
 from iris.time_utils import Timestamp
 
 
@@ -472,6 +472,9 @@ def mock_autoscaler():
                     ),
                 ],
                 current_demand=3,
+                availability_status="requesting",
+                availability_reason="scale-up in progress",
+                blocked_until=Timestamp.from_ms(0).to_proto(),
             ),
         ],
         current_demand={"test-group": 3},
@@ -506,6 +509,8 @@ def test_get_autoscaler_status_returns_status_when_enabled(client_with_autoscale
     group = data["groups"][0]
     assert group["name"] == "test-group"
     assert group["currentDemand"] == 3
+    assert group["availabilityStatus"] == "requesting"
+    assert group["availabilityReason"] == "scale-up in progress"
 
     # Verify demand tracking
     assert data["currentDemand"] == {"test-group": 3}
@@ -535,6 +540,102 @@ def test_get_autoscaler_status_includes_slice_details(client_with_autoscaler):
         assert "vms" in slice_info
         assert len(slice_info["vms"]) == 1
     assert group["config"]["acceleratorVariant"] == "v4-8"
+
+
+def test_pending_reason_uses_autoscaler_hint_for_scale_up(
+    client_with_autoscaler,
+    state,
+    job_request,
+    mock_autoscaler,
+):
+    """Pending jobs surface autoscaler scale-up wait hints in job/detail APIs."""
+    submit_job(state, "pending-scale", job_request)
+
+    task_id = JobName.root("pending-scale").task(0).to_wire()
+    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
+        last_routing_decision=vm_pb2.RoutingDecision(
+            group_to_launch={"tpu_v5e_32": 1},
+            routed_entries={
+                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
+            },
+        )
+    )
+
+    job_resp = rpc_post(client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("pending-scale").to_wire()})
+    pending_reason = job_resp.get("job", {}).get("pendingReason", "")
+    assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in pending_reason
+
+    jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
+    listed = [j for j in jobs_resp.get("jobs", []) if j.get("jobId") == JobName.root("pending-scale").to_wire()]
+    assert listed
+    assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in listed[0].get("pendingReason", "")
+
+
+def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
+    client_with_autoscaler,
+    state,
+    mock_autoscaler,
+    make_worker_metadata,
+):
+    """GetJobStatus should keep scheduler diagnostics when autoscaler has no active launch."""
+    register_worker(state, "w1", "h1:8080", make_worker_metadata())
+
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="diag-constraint",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+        constraints=[
+            cluster_pb2.Constraint(
+                key="nonexistent-attr",
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="x"),
+            )
+        ],
+    )
+    submit_job(state, "diag-constraint", request)
+    task_id = JobName.root("diag-constraint").task(0).to_wire()
+
+    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
+        last_routing_decision=vm_pb2.RoutingDecision(
+            group_to_launch={"tpu_v5e_32": 0},
+            routed_entries={
+                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
+            },
+        )
+    )
+
+    job_resp = rpc_post(client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("diag-constraint").to_wire()})
+    pending_reason = job_resp.get("job", {}).get("pendingReason", "")
+    assert pending_reason
+    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" not in pending_reason
+    assert "constraints" in pending_reason.lower() or "nonexistent-attr" in pending_reason
+
+
+def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
+    client_with_autoscaler,
+    state,
+    job_request,
+    mock_autoscaler,
+):
+    """ListJobs should not override pending diagnostics with non-active wait hints."""
+    submit_job(state, "pending-no-launch", job_request)
+    task_id = JobName.root("pending-no-launch").task(0).to_wire()
+
+    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
+        last_routing_decision=vm_pb2.RoutingDecision(
+            group_to_launch={"tpu_v5e_32": 0},
+            routed_entries={
+                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
+            },
+        )
+    )
+
+    jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
+    listed = [j for j in jobs_resp.get("jobs", []) if j.get("jobId") == JobName.root("pending-no-launch").to_wire()]
+    assert listed
+    assert listed[0].get("pendingReason", "") == ""
 
 
 # =============================================================================

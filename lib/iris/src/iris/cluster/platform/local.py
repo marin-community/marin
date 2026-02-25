@@ -33,7 +33,6 @@ the ThreadContainer.
 from __future__ import annotations
 
 import logging
-import socket
 import subprocess
 import uuid
 from collections.abc import Callable
@@ -45,8 +44,11 @@ from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
     CommandResult,
+    Labels,
     SliceStatus,
     WorkerStatus,
+    default_stop_all,
+    find_free_port,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
@@ -59,13 +61,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Local Providers (in-process implementations for testing)
 # ============================================================================
-
-
-def find_free_port() -> int:
-    """Find an available port."""
-    with socket.socket() as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
 
 class _LocalBundleProvider:
@@ -334,7 +329,7 @@ class LocalSliceHandle:
 
     @property
     def scale_group(self) -> str:
-        return self._labels.get(f"{self._label_prefix}-scale-group", "")
+        return self._labels.get(Labels(self._label_prefix).iris_scale_group, "")
 
     @property
     def labels(self) -> dict[str, str]:
@@ -379,6 +374,10 @@ class LocalPlatform:
 
     shutdown() stops all worker threads via the ThreadContainer. This is
     critical for clean test teardown.
+
+    start_controller()/stop_controller() manage an in-process LocalController
+    (from iris.cluster.controller.local). The import is deferred to avoid a
+    circular dependency: controller/local.py imports LocalPlatform.
     """
 
     def __init__(
@@ -390,8 +389,10 @@ class LocalPlatform:
         fake_bundle: Path | None = None,
         port_allocator: PortAllocator | None = None,
         worker_attributes_by_group: dict[str, dict[str, str | int | float]] | None = None,
+        gpu_count_by_group: dict[str, int] | None = None,
     ):
         self._label_prefix = label_prefix
+        self._iris_labels = Labels(label_prefix)
         self._threads = threads or ThreadContainer(name="local-platform")
         self._slices: dict[str, LocalSliceHandle] = {}
         self._vms: dict[str, _LocalStandaloneWorkerHandle] = {}
@@ -400,6 +401,8 @@ class LocalPlatform:
         self._fake_bundle = fake_bundle
         self._port_allocator = port_allocator
         self._worker_attributes_by_group = worker_attributes_by_group or {}
+        self._gpu_count_by_group = gpu_count_by_group or {}
+        self._local_controller: object | None = None
 
     def create_vm(self, config: config_pb2.VmConfig) -> _LocalStandaloneWorkerHandle:
         """Create an in-process "VM". Used by start_controller() for local mode."""
@@ -452,7 +455,7 @@ class LocalPlatform:
     ) -> LocalSliceHandle:
         """Spawn real Worker threads for a slice."""
         from iris.cluster.runtime.process import ProcessRuntime
-        from iris.cluster.types import get_tpu_topology, tpu_device
+        from iris.cluster.types import get_tpu_topology, gpu_device, tpu_device
         from iris.cluster.worker.worker import Worker, WorkerConfig
 
         workers: list[Worker] = []
@@ -463,7 +466,9 @@ class LocalPlatform:
 
         # Determine worker count from TPU topology if applicable
         worker_count = num_vms
-        if config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU and config.accelerator_variant:
+        is_tpu = config.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        is_gpu = config.accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU
+        if is_tpu and config.accelerator_variant:
             try:
                 topo = get_tpu_topology(config.accelerator_variant)
                 worker_count = topo.vm_count
@@ -478,16 +483,20 @@ class LocalPlatform:
 
             attributes: dict[str, str | int | float] = {}
             device = None
-            if config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU and config.accelerator_variant:
+            if is_tpu and config.accelerator_variant:
                 attributes["tpu-name"] = slice_id
                 attributes["tpu-worker-id"] = tpu_worker_id
                 attributes["tpu-topology"] = config.accelerator_variant
                 topo = get_tpu_topology(config.accelerator_variant)
                 device = tpu_device(config.accelerator_variant, count=topo.chips_per_vm)
+            elif is_gpu and config.accelerator_variant:
+                sg_name = config.labels.get(self._iris_labels.iris_scale_group, "")
+                gpu_count = self._gpu_count_by_group.get(sg_name, 1)
+                device = gpu_device(config.accelerator_variant, count=gpu_count)
 
             # Merge worker attributes from scale group config (e.g. region, preemptible).
             # The scale group name is embedded in slice labels by prepare_slice_config().
-            sg_name = config.labels.get(f"{self._label_prefix}-scale-group", "")
+            sg_name = config.labels.get(self._iris_labels.iris_scale_group, "")
             if sg_name and sg_name in self._worker_attributes_by_group:
                 for k, v in self._worker_attributes_by_group[sg_name].items():
                     attributes.setdefault(k, v)
@@ -505,6 +514,7 @@ class LocalPlatform:
                 cache_dir=self._cache_path,
                 controller_address=self._controller_address,
                 worker_id=worker_id,
+                default_task_image="process-runtime-unused",
                 log_prefix=log_prefix,
                 poll_interval=Duration.from_seconds(0.1),
             )
@@ -592,6 +602,48 @@ class LocalPlatform:
             return self._controller_address
         port = controller_config.local.port or 10000
         return f"localhost:{port}"
+
+    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Start an in-process LocalController. Returns address (host:port).
+
+        Uses a local import to avoid circular dependency:
+        controller/local.py imports LocalPlatform from this module.
+        """
+        from iris.cluster.controller.local import LocalController
+
+        controller = LocalController(config, threads=self._threads)
+        address = controller.start()
+        self._local_controller = controller
+        return address
+
+    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
+        """Stop the in-process LocalController."""
+        from iris.cluster.controller.local import LocalController
+
+        if self._local_controller is not None:
+            assert isinstance(self._local_controller, LocalController)
+            self._local_controller.stop()
+            self._local_controller = None
+
+    def stop_all(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        dry_run: bool = False,
+        label_prefix: str | None = None,
+    ) -> list[str]:
+        return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
+
+    def wait_for_controller(self) -> None:
+        """Block until the local controller is stopped."""
+        from iris.cluster.controller.local import LocalController
+
+        if self._local_controller is not None:
+            assert isinstance(self._local_controller, LocalController)
+            self._local_controller.wait()
+
+    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
+        self.stop_controller(config)
+        return self.start_controller(config)
 
     @property
     def threads(self) -> ThreadContainer:

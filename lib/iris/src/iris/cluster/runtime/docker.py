@@ -16,9 +16,11 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +33,13 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus, ImageInfo
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerErrorKind,
+    ContainerStats,
+    ContainerStatus,
+    ImageInfo,
+)
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
@@ -131,6 +139,84 @@ def _parse_memory_size(size_str: str) -> int:
         return 0
 
 
+def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogLine]:
+    """Get container logs, optionally filtered by timestamp."""
+    logs: list[LogLine] = []
+
+    base_cmd = ["docker", "logs", "--timestamps"]
+    if since:
+        base_cmd.extend(["--since", since.as_formatted_date()])
+    base_cmd.append(container_id)
+
+    # Check if container exists
+    result = subprocess.run(
+        base_cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+
+    # Fetch stdout
+    stdout_result = subprocess.run(
+        base_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+
+    for line in stdout_result.stdout.splitlines():
+        if line:
+            timestamp, data = _parse_docker_log_line(line)
+            logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
+
+    # Fetch stderr
+    stderr_result = subprocess.run(
+        base_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+
+    for line in stderr_result.stderr.splitlines():
+        if line:
+            timestamp, data = _parse_docker_log_line(line)
+            logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
+
+    return logs
+
+
+class DockerLogReader:
+    """Incremental log reader for a Docker container using timestamp-based cursoring.
+
+    Docker's --since flag supports sub-second precision, so advancing the cursor
+    by 1ms after each read is sufficient to avoid duplicate lines.
+    """
+
+    def __init__(self, container_id: str) -> None:
+        self._container_id = container_id
+        self._last_timestamp: Timestamp | None = None
+
+    def read(self) -> list[LogLine]:
+        """Return new log lines since the last read. Advances the cursor by 1ms past the last line."""
+        if not self._container_id:
+            return []
+        lines = _docker_logs(self._container_id, since=self._last_timestamp)
+        if lines:
+            max_ts = max(line.timestamp for line in lines)
+            self._last_timestamp = Timestamp.from_seconds(max_ts.timestamp()).add_ms(1)
+        return lines
+
+    def read_all(self) -> list[LogLine]:
+        """Return all logs from the beginning."""
+        if not self._container_id:
+            return []
+        return _docker_logs(self._container_id)
+
+
 @dataclass
 class DockerContainerHandle:
     """Docker implementation of ContainerHandle.
@@ -192,7 +278,7 @@ class DockerContainerHandle:
                 status = self._docker_inspect(build_container_id)
 
                 # Capture logs incrementally during build
-                new_logs = self._docker_logs(build_container_id, since=last_log_time)
+                new_logs = _docker_logs(build_container_id, since=last_log_time)
                 if new_logs:
                     build_logs.extend(new_logs)
                     last_log_time = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp()).add_ms(1)
@@ -202,7 +288,7 @@ class DockerContainerHandle:
                 time.sleep(0.5)
 
             # Final log fetch after container stops
-            final_logs = self._docker_logs(build_container_id, since=last_log_time)
+            final_logs = _docker_logs(build_container_id, since=last_log_time)
             build_logs.extend(final_logs)
 
             if status.exit_code != 0:
@@ -285,11 +371,9 @@ exec {quoted_cmd}
             return ContainerStatus(running=False, error="Container not started")
         return self._docker_inspect(self._run_container_id)
 
-    def logs(self, since: Timestamp | None = None) -> list[LogLine]:
-        """Get container logs since timestamp."""
-        if not self._run_container_id:
-            return []
-        return self._docker_logs(self._run_container_id, since)
+    def log_reader(self) -> DockerLogReader:
+        """Create an incremental log reader for this container."""
+        return DockerLogReader(self._run_container_id or "")
 
     def stats(self) -> ContainerStats:
         """Get resource usage statistics."""
@@ -504,7 +588,11 @@ exec {quoted_cmd}
         )
 
         if result.returncode != 0:
-            return ContainerStatus(running=False, error="Container not found")
+            return ContainerStatus(
+                running=False,
+                error=f"Container not found: id={container_id}",
+                error_kind=ContainerErrorKind.INFRA_NOT_FOUND,
+            )
 
         try:
             state = json.loads(result.stdout.strip())
@@ -517,59 +605,15 @@ exec {quoted_cmd}
                 running=running,
                 exit_code=exit_code if not running else None,
                 error=error_msg,
+                error_kind=ContainerErrorKind.USER_CODE if error_msg else ContainerErrorKind.NONE,
                 oom_killed=oom_killed,
             )
         except (json.JSONDecodeError, KeyError) as e:
-            return ContainerStatus(running=False, error=f"Failed to parse inspect output: {e}")
-
-    def _docker_logs(self, container_id: str, since: Timestamp | None = None) -> list[LogLine]:
-        """Get container logs."""
-        logs: list[LogLine] = []
-
-        base_cmd = ["docker", "logs", "--timestamps"]
-        if since:
-            base_cmd.extend(["--since", since.as_formatted_date()])
-        base_cmd.append(container_id)
-
-        # Check if container exists
-        result = subprocess.run(
-            base_cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            return []
-
-        # Fetch stdout
-        stdout_result = subprocess.run(
-            base_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-
-        for line in stdout_result.stdout.splitlines():
-            if line:
-                timestamp, data = _parse_docker_log_line(line)
-                logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
-
-        # Fetch stderr
-        stderr_result = subprocess.run(
-            base_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-
-        for line in stderr_result.stderr.splitlines():
-            if line:
-                timestamp, data = _parse_docker_log_line(line)
-                logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
-
-        return logs
+            return ContainerStatus(
+                running=False,
+                error=f"Failed to parse inspect output: {e}",
+                error_kind=ContainerErrorKind.RUNTIME_ERROR,
+            )
 
     def _docker_stats(self, container_id: str) -> ContainerStats:
         """Get container stats."""
@@ -661,6 +705,20 @@ class DockerRuntime:
         handle = DockerContainerHandle(config=config, runtime=self)
         self._handles.append(handle)
         return handle
+
+    def stage_bundle(
+        self,
+        *,
+        bundle_gcs_path: str,
+        workdir: Path,
+        workdir_files: dict[str, bytes],
+        fetch_bundle: Callable[[str], Path],
+    ) -> None:
+        """Stage bundle and workdir files on worker-local filesystem."""
+        bundle_path = fetch_bundle(bundle_gcs_path)
+        shutil.copytree(bundle_path, workdir, dirs_exist_ok=True)
+        for name, data in workdir_files.items():
+            (workdir / name).write_bytes(data)
 
     def _track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""

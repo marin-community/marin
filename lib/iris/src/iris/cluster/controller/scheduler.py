@@ -132,6 +132,17 @@ def device_compatible(job_device_type: str, worker_device_type: str) -> bool:
     return job_device_type == worker_device_type
 
 
+def device_variant_matches(job_variant: str, worker_variant: str | None) -> bool:
+    """Check if a job's requested device variant matches a worker's reported variant.
+
+    Uses case-insensitive substring matching so that short config names (e.g. "H100")
+    match full nvidia-smi names (e.g. "NVIDIA H100 80GB HBM3").
+    """
+    if not worker_variant:
+        return False
+    return job_variant.lower() in worker_variant.lower() or worker_variant.lower() in job_variant.lower()
+
+
 def _compare_ordered(
     attr_value: str | int | float,
     target_value: str | int | float,
@@ -300,7 +311,7 @@ class WorkerCapacity:
             )
 
         job_variant = get_device_variant(res.device)
-        if job_variant and job_variant != "auto" and job_variant != self.device_variant:
+        if job_variant and job_variant != "auto" and not device_variant_matches(job_variant, self.device_variant):
             return RejectionReason(
                 kind=RejectionKind.DEVICE_VARIANT, details={"need": job_variant, "have": self.device_variant}
             )
@@ -444,14 +455,23 @@ class SchedulingContext:
         """Get workers compatible with the given device requirement.
 
         CPU jobs can run on any worker. For accelerator jobs, returns workers
-        matching the exact variant when specified, or all workers of that device
+        matching the variant when specified (substring match to handle short
+        config names vs full nvidia-smi names), or all workers of that device
         type when variant is None or "auto".
         """
         if device_type == "cpu":
             return self.all_worker_ids
-        if device_variant and device_variant != "auto":
-            return self.device_index.get((device_type, device_variant), set())
-        return self.device_index.get((device_type, None), set())
+        all_of_type = self.device_index.get((device_type, None), set())
+        if not device_variant or device_variant == "auto":
+            return all_of_type
+        # Try exact match first (fast path for local/test workers)
+        exact = self.device_index.get((device_type, device_variant))
+        if exact:
+            return exact
+        # Fall back to substring match (nvidia-smi full names vs short config names)
+        return {
+            wid for wid in all_of_type if device_variant_matches(device_variant, self.capacities[wid].device_variant)
+        }
 
     def matching_workers(self, constraints: Sequence[cluster_pb2.Constraint]) -> set[WorkerId]:
         """Get workers matching ALL constraints.

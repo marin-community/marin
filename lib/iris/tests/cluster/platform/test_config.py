@@ -959,6 +959,10 @@ platform:
   gcp:
     project_id: test
 
+defaults:
+  bootstrap:
+    docker_image: ghcr.io/test/iris-worker:latest
+
 scale_groups:
   tpu_v5e_16:
     zones: [europe-west4-b, us-west4-a]
@@ -1000,6 +1004,10 @@ platform:
   gcp:
     project_id: test
 
+defaults:
+  bootstrap:
+    docker_image: ghcr.io/test/iris-worker:latest
+
 scale_groups:
   tpu_group:
     zones: [us-west4-a]
@@ -1023,6 +1031,10 @@ platform:
     project_id: test
     zones: [us-west4-a]
 
+defaults:
+  bootstrap:
+    docker_image: ghcr.io/test/iris-worker:latest
+
 scale_groups:
   static_group:
     accelerator_type: tpu
@@ -1045,6 +1057,10 @@ scale_groups:
 platform:
   gcp:
     project_id: test
+
+defaults:
+  bootstrap:
+    docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
   tpu_group:
@@ -1091,6 +1107,10 @@ platform:
   gcp:
     project_id: test
     zones: [us-central1-a]
+
+defaults:
+  bootstrap:
+    docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
   static_cpu:

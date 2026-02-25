@@ -4,6 +4,7 @@
 # Re-export public API for levanter.data.text
 from .cache import build_lm_dataset_cache, cached_token_count, load_lm_dataset_cache
 from .datasets import (
+    BlockShuffleConfig,
     CausalLmDataset,
     ChatDataset,
     DatasetComponent,
@@ -36,6 +37,16 @@ from .formats import (
     TextLmDatasetFormat,
     preprocessor_for_format,
 )
+from .preference import (
+    DpoExample,
+    PreferenceChatLmDatasetFormat,
+    PreferenceChatProcessor,
+    PreferenceLmDataConfig,
+    PreferencePairDataset,
+    ProcessedPreferenceChatDict,
+    dataset_for_preference_format,
+    preprocessor_for_preference_format,
+)
 from ._batch_tokenizer import BatchTokenizer
 
 __all__ = [
@@ -48,6 +59,7 @@ __all__ = [
     "ProcessedChatDict",
     "preprocessor_for_format",
     "TokenSeqDataset",
+    "BlockShuffleConfig",
     "NamedLmDataset",
     "CausalLmDataset",
     "ChatDataset",
@@ -70,4 +82,13 @@ __all__ = [
     "LmDataConfig",
     "LMMixtureDatasetConfig",
     "count_corpus_sizes",
+    # Preference/DPO exports
+    "DpoExample",
+    "PreferenceChatLmDatasetFormat",
+    "PreferenceChatProcessor",
+    "PreferenceLmDataConfig",
+    "PreferencePairDataset",
+    "ProcessedPreferenceChatDict",
+    "dataset_for_preference_format",
+    "preprocessor_for_preference_format",
 ]

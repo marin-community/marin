@@ -19,6 +19,7 @@ import pytest
 
 from iris.cluster.platform.base import (
     CloudSliceState,
+    Labels,
     QuotaExhaustedError,
 )
 from iris.cluster.platform.gcp import GcpPlatform, _validate_slice_config
@@ -45,7 +46,7 @@ class PlatformEnv:
 
 def _make_slice_config(env: PlatformEnv, group_name: str) -> config_pb2.SliceConfig:
     """Build a SliceConfig appropriate for the platform under test."""
-    label_key = f"{env.label_prefix}-scale-group"
+    labels = Labels(env.label_prefix)
 
     if env.name == "gcp":
         cfg = config_pb2.SliceConfig(
@@ -55,17 +56,17 @@ def _make_slice_config(env: PlatformEnv, group_name: str) -> config_pb2.SliceCon
         )
         cfg.gcp.zone = env.zone
         cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg.labels["iris-managed"] = "true"
-        cfg.labels[label_key] = group_name
+        cfg.labels[labels.iris_managed] = "true"
+        cfg.labels[labels.iris_scale_group] = group_name
         return cfg
     elif env.name == "manual":
         cfg = config_pb2.SliceConfig(name_prefix=f"iris-{group_name}", num_vms=1)
         cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
-        cfg.labels[label_key] = group_name
+        cfg.labels[labels.iris_scale_group] = group_name
         return cfg
     else:
         cfg = config_pb2.SliceConfig(name_prefix=f"test-{group_name}", num_vms=1)
-        cfg.labels[label_key] = group_name
+        cfg.labels[labels.iris_scale_group] = group_name
         return cfg
 
 
@@ -136,14 +137,14 @@ def test_created_slice_appears_in_list_slices(platform_env: PlatformEnv):
 
 def test_list_slices_filters_by_labels(platform_env: PlatformEnv):
     """list_slices with label filter returns only matching slices."""
-    label_key = f"{platform_env.label_prefix}-scale-group"
+    labels = Labels(platform_env.label_prefix)
     cfg_a = _make_slice_config(platform_env, "group-a")
     cfg_b = _make_slice_config(platform_env, "group-b")
 
     platform_env.platform.create_slice(cfg_a)
     platform_env.platform.create_slice(cfg_b)
 
-    slices = platform_env.platform.list_slices(zones=[platform_env.zone], labels={label_key: "group-a"})
+    slices = platform_env.platform.list_slices(zones=[platform_env.zone], labels={labels.iris_scale_group: "group-a"})
     assert len(slices) == 1
     assert slices[0].scale_group == "group-a"
 
@@ -291,7 +292,7 @@ def test_gcp_list_slices_skips_deleting_tpus():
         )
         cfg.gcp.zone = "us-central2-b"
         cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg.labels["iris-managed"] = "true"
+        cfg.labels[Labels("iris").iris_managed] = "true"
 
         handle = platform.create_slice(cfg)
 
@@ -417,8 +418,8 @@ def test_list_all_slices_filters_by_labels(platform_env: PlatformEnv):
     platform_env.platform.create_slice(cfg_a)
     platform_env.platform.create_slice(cfg_b)
 
-    label_key = f"{platform_env.label_prefix}-scale-group"
-    filtered = platform_env.platform.list_all_slices(labels={label_key: "group-a"})
+    labels = Labels(platform_env.label_prefix)
+    filtered = platform_env.platform.list_all_slices(labels={labels.iris_scale_group: "group-a"})
     assert all(s.scale_group == "group-a" for s in filtered)
     assert len(filtered) == 1
 
@@ -440,6 +441,7 @@ def test_gcp_list_all_slices_multi_zone():
     )
     platform = GcpPlatform(gcp_config, label_prefix="iris")
 
+    iris_labels = Labels("iris")
     with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
         cfg_a = config_pb2.SliceConfig(
             name_prefix="iris-tpu",
@@ -448,7 +450,7 @@ def test_gcp_list_all_slices_multi_zone():
         )
         cfg_a.gcp.zone = "zone-a"
         cfg_a.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg_a.labels["iris-managed"] = "true"
+        cfg_a.labels[iris_labels.iris_managed] = "true"
 
         cfg_b = config_pb2.SliceConfig(
             name_prefix="iris-tpu",
@@ -457,7 +459,7 @@ def test_gcp_list_all_slices_multi_zone():
         )
         cfg_b.gcp.zone = "zone-b"
         cfg_b.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg_b.labels["iris-managed"] = "true"
+        cfg_b.labels[iris_labels.iris_managed] = "true"
 
         handle_a = platform.create_slice(cfg_a)
         handle_b = platform.create_slice(cfg_b)

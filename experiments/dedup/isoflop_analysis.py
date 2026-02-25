@@ -8,7 +8,6 @@ on both vanilla fineweb-edu and deduplicated fineweb-edu mixtures.
 """
 
 import logging
-import humanfriendly
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.dedup_commons import DedupMode, DedupConfig, deduplicate
 from marin.processing.tokenize import tokenize
@@ -40,7 +39,6 @@ def _get_vanilla_data_mixture(*, variant: str) -> LMMixtureDatasetConfig:
         validation_paths=versioned([]),
         cache_path=this_output_path(),
         tokenizer=versioned(TOKENIZER),
-        window_size_bytes=humanfriendly.parse_size("512MB", binary=True),
     )
 
     tokenize_step = ExecutorStep(
@@ -65,6 +63,7 @@ def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism:
         name=f"dedup/{variant}_{mode.lower()}",
         fn=deduplicate,
         config=dedup_config,
+        pip_dependency_groups=["dedup"],
     )
 
     dedup_mode_to_filter_type = {
@@ -97,7 +96,6 @@ def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism:
         validation_paths=versioned([]),
         cache_path=this_output_path(),
         tokenizer=versioned(TOKENIZER),
-        window_size_bytes=humanfriendly.parse_size("512MB", binary=True),
     )
 
     tokenize_step = ExecutorStep(

@@ -8,11 +8,16 @@ import pytest
 
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
+from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_gpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
+    linear_softmax_cross_entropy_loss_streaming,
 )
 from levanter.kernels.pallas.fused_cross_entropy_loss.tuned_block_sizes import infer_block_sizes
+from levanter.kernels.pallas.fused_cross_entropy_loss.xla import (
+    _linear_softmax_cross_entropy_loss_streaming_custom_vjp,
+)
 
 
 def _make_toy_inputs():
@@ -44,6 +49,36 @@ def test_fused_cross_entropy_xla_matches_reference():
     )
 
     assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_fused_cross_entropy_xla_return_argmax_matches_reference():
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+
+    loss, argmax = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        logsumexp_weight=0.0,
+        logit_soft_cap=1.3,
+        implementation="xla",
+        return_argmax=True,
+    )
+
+    loss_ref, _ = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        logit_soft_cap=1.3,
+    )
+    logits = jax.lax.dot_general(x, w, (((1,), (0,)), ((), ())))
+    logits = jnp.tanh(logits / 1.3) * 1.3
+    argmax_ref = jnp.argmax(logits, axis=-1).astype(jnp.int32)
+
+    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+    assert jnp.array_equal(argmax, argmax_ref)
 
 
 def test_fused_cross_entropy_reduction_and_penalty():
@@ -101,8 +136,48 @@ def test_fused_cross_entropy_grad_matches_reference():
     gx_api, gw_api = jax.grad(loss_api, argnums=(0, 1))(x, w)
     gx_ref, gw_ref = jax.grad(loss_ref, argnums=(0, 1))(x, w)
 
-    assert jnp.allclose(gx_api, gx_ref, atol=1e-5, rtol=1e-5)
-    assert jnp.allclose(gw_api, gw_ref, atol=1e-5, rtol=1e-5)
+    # TPU reductions can differ by a few ulps vs the reference path; keep
+    # CPU/GPU strict while allowing slight TPU noise.
+    grad_tol = 3e-5 if jax.default_backend() == "tpu" else 1e-5
+
+    assert jnp.allclose(gx_api, gx_ref, atol=grad_tol, rtol=grad_tol)
+    assert jnp.allclose(gw_api, gw_ref, atol=grad_tol, rtol=grad_tol)
+
+
+def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
+    x, w, y = _make_toy_inputs()
+    logsumexp_weight = 0.2
+    logit_soft_cap = 1.5
+    block_size = 4
+
+    def loss_custom(x_raw, w_raw):
+        loss, lse = _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
+            block_size,
+            jnp.float32,
+            logit_soft_cap,
+            None,
+            x_raw.reshape(6, 4),
+            y.reshape(6),
+            w_raw,
+        )
+        return (loss + logsumexp_weight * (lse**2)).mean()
+
+    def loss_streaming(x_raw, w_raw):
+        loss, lse = linear_softmax_cross_entropy_loss_streaming(
+            x_raw.reshape(6, 4),
+            y.reshape(6),
+            w_raw,
+            block_size=block_size,
+            dtype=jnp.float32,
+            logit_soft_cap=logit_soft_cap,
+        )
+        return (loss + logsumexp_weight * (lse**2)).mean()
+
+    gx_custom, gw_custom = jax.grad(loss_custom, argnums=(0, 1))(x, w)
+    gx_stream, gw_stream = jax.grad(loss_streaming, argnums=(0, 1))(x, w)
+
+    assert jnp.allclose(gx_custom, gx_stream, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
 
 
 def test_fused_cross_entropy_pallas_requires_tpu():
@@ -268,6 +343,183 @@ def test_fused_cross_entropy_default_grad_matches_reference():
     assert jnp.allclose(gw_default, gw_ref, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.parametrize(
+    ("implementation", "required_backend", "block_sizes"),
+    [
+        ("pallas_tpu", "tpu", fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)),
+        ("pallas_gpu", "gpu", None),
+    ],
+)
+def test_fused_cross_entropy_pallas_matches_reference(
+    implementation: str,
+    required_backend: str,
+    block_sizes: fused_api.BlockSizes | None,
+):
+    if jax.default_backend() != required_backend:
+        pytest.skip(f"requires {required_backend.upper()} backend")
+
+    x = jnp.zeros((128, 128), dtype=jnp.float32)
+    w = jnp.zeros((128, 128), dtype=jnp.float32)
+    y = jnp.zeros((128,), dtype=jnp.int32)
+
+    loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        implementation=implementation,
+        block_sizes=block_sizes,
+    )
+
+    loss_ref, _ = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_fused_cross_entropy_pallas_gpu_matches_reference_non_multiple():
+    if jax.default_backend() != "gpu":
+        pytest.skip("requires GPU backend")
+
+    key = jax.random.PRNGKey(1)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+
+    x = jax.random.normal(key_x, (6, 7), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (7, 9), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (6,), 0, 9, dtype=jnp.int32)
+    block_sizes = fused_api.BlockSizes(b_block_size=16, h_block_size=16, v_block_size=16)
+
+    loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        implementation="pallas_gpu",
+        block_sizes=block_sizes,
+    )
+
+    loss_ref, _ = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_fused_cross_entropy_pallas_gpu_return_argmax_matches_reference():
+    if jax.default_backend() != "gpu":
+        pytest.skip("requires GPU backend")
+
+    key = jax.random.PRNGKey(5)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+
+    x = jax.random.normal(key_x, (6, 7), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (7, 9), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (6,), 0, 9, dtype=jnp.int32)
+    block_sizes = fused_api.BlockSizes(b_block_size=16, h_block_size=16, v_block_size=16)
+
+    loss, argmax = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        logsumexp_weight=0.0,
+        logit_soft_cap=1.1,
+        implementation="pallas_gpu",
+        block_sizes=block_sizes,
+        return_argmax=True,
+    )
+
+    loss_ref, _ = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        logsumexp_weight=0.0,
+        logit_soft_cap=1.1,
+        implementation="xla",
+        block_sizes=block_sizes,
+        return_argmax=True,
+    )
+    logits = jax.lax.dot_general(x, w, (((1,), (0,)), ((), ())))
+    logits = jnp.tanh(logits / 1.1) * 1.1
+    argmax_ref = jnp.argmax(logits, axis=-1).astype(jnp.int32)
+
+    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+    assert jnp.array_equal(argmax, argmax_ref)
+
+
+def test_fused_cross_entropy_pallas_gpu_requires_gpu():
+    if jax.default_backend() == "gpu":
+        pytest.skip("requires non-GPU backend")
+
+    x = jnp.zeros((128, 128), dtype=jnp.float32)
+    w = jnp.zeros((128, 128), dtype=jnp.float32)
+    y = jnp.zeros((128,), dtype=jnp.int32)
+
+    with pytest.raises(pallas_gpu.PallasUnsupportedError):
+        fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x,
+            y,
+            w,
+            reduction=None,
+            implementation="pallas_gpu",
+        )
+
+
+def test_fused_cross_entropy_pallas_gpu_custom_backward_grad_matches_xla():
+    if jax.default_backend() != "gpu":
+        pytest.skip("requires GPU backend")
+    device_kind = jax.devices()[0].device_kind.lower()
+    if "gb10" not in device_kind:
+        pytest.skip("requires GB10 device to exercise custom backward path")
+
+    batch, hidden, vocab = 1024, 32, 65537
+    key = jax.random.PRNGKey(23)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+    x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.bfloat16)
+    w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.bfloat16)
+    y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
+
+    # Match the v-block used by GB10 pallas_gpu forward fallback for B>=1024, V>=65536.
+    xla_block_sizes = fused_api.BlockSizes(v_block_size=2048)
+
+    def loss_pallas(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            logsumexp_weight=0.2,
+            dtype=jnp.float32,
+            implementation="pallas_gpu",
+        )
+
+    def loss_xla(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            logsumexp_weight=0.2,
+            block_sizes=xla_block_sizes,
+            dtype=jnp.float32,
+            implementation="xla",
+        )
+
+    gx_pallas, gw_pallas = jax.grad(loss_pallas, argnums=(0, 1))(x, w)
+    gx_xla, gw_xla = jax.grad(loss_xla, argnums=(0, 1))(x, w)
+
+    gx_max_abs = jnp.max(jnp.abs(gx_pallas.astype(jnp.float32) - gx_xla.astype(jnp.float32)))
+    gw_max_abs = jnp.max(jnp.abs(gw_pallas.astype(jnp.float32) - gw_xla.astype(jnp.float32)))
+    assert gx_max_abs <= 5e-3
+    assert gw_max_abs <= 5e-3
+
+
 def test_fused_cross_entropy_pallas_bwd_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -336,6 +588,17 @@ def test_infer_block_sizes_respects_local_batch_and_hidden_divisibility():
     assert block_sizes.h_block_size % 128 == 0
     assert 512 % block_sizes.b_block_size == 0
     assert 768 % block_sizes.h_block_size == 0
+
+
+def test_infer_block_sizes_uses_gb10_gpu_tuned_entry():
+    block_sizes = infer_block_sizes(
+        b=128,
+        h=128,
+        v=128,
+        dtype=jnp.float32,
+        device_kind="NVIDIA GB10",
+    )
+    assert block_sizes == fused_api.BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128)
 
 
 def test_infer_block_sizes_huge_batch_without_scoped_vmem_flag_warns_and_uses_safe_v(
