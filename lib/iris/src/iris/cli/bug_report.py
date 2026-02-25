@@ -456,11 +456,11 @@ def format_bug_report(report: BugReport) -> str:
             lines.append(f"| {wid} | `{w.process_log_path}` |")
         lines.append("")
 
-    lines.append("### Controller Logs\n")
-    lines.append("Controller process logs are available via:\n")
-    lines.append("```")
-    lines.append("iris --config cluster.yaml rpc controller GetProcessLogs")
-    lines.append("```\n")
+    if report.log_prefix:
+        controller_log_path = f"{report.log_prefix}/process/controller/logs.jsonl"
+        lines.append("### Controller Logs\n")
+        lines.append(f"| Controller | `{controller_log_path}` |")
+        lines.append("")
 
     # Recent Logs (for non-succeeded tasks)
     failed_tasks = [t for t in report.tasks if t.state not in ("succeeded", "pending") and t.recent_logs]
