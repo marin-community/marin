@@ -111,8 +111,8 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             raise ValueError(f"Scale group '{name}' has invalid num_vms={sg_config.num_vms}.")
 
         resources = sg_config.resources
-        if resources.cpu < 0:
-            raise ValueError(f"Scale group '{name}' has invalid cpu={resources.cpu}.")
+        if resources.cpu_millicores < 0:
+            raise ValueError(f"Scale group '{name}' has invalid cpu_millicores={resources.cpu_millicores}.")
         if resources.memory_bytes < 0:
             raise ValueError(f"Scale group '{name}' has invalid memory_bytes={resources.memory_bytes}.")
         if resources.disk_bytes < 0:
@@ -687,7 +687,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     validate_config(config)
 
     platform_kind = config.platform.WhichOneof("platform") if config.HasField("platform") else "unspecified"
-    logger.info(
+    logger.debug(
         "Config loaded: platform=%s, scale_groups=%s",
         platform_kind,
         list(config.scale_groups.keys()) if config.scale_groups else "(none)",
@@ -727,7 +727,7 @@ def _normalize_scale_group_resources(data: dict) -> None:
 
         cpu = resources.get("cpu")
         if cpu is not None:
-            normalized["cpu"] = int(cpu)
+            normalized["cpu_millicores"] = int(float(cpu) * 1000)
 
         memory = resources.get("ram")
         if memory is not None:
@@ -772,8 +772,8 @@ def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
             if not isinstance(resources, dict):
                 continue
             normalized: dict[str, object] = {}
-            if "cpu" in resources:
-                normalized["cpu"] = resources["cpu"]
+            if "cpu_millicores" in resources:
+                normalized["cpu"] = resources["cpu_millicores"] / 1000
             if "memory_bytes" in resources:
                 normalized["ram"] = resources["memory_bytes"]
             if "disk_bytes" in resources:

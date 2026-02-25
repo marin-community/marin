@@ -53,7 +53,7 @@ def _add_scale_group(
     sg.num_vms = num_vms
     sg.min_slices = 1
     sg.max_slices = 2
-    sg.resources.cpu = 128
+    sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024**3
     sg.resources.disk_bytes = 1024 * 1024**3
     sg.slice_template.preemptible = True

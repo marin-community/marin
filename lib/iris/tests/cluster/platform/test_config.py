@@ -718,7 +718,7 @@ def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
         name="test",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         num_vms=1,
-        resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
+        resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
     )
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
     sg.slice_template.num_vms = 1
@@ -759,7 +759,7 @@ class TestConfigValidation:
         sg = config.scale_groups["test"]
         sg.name = "test"
         sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
-        sg.resources.CopyFrom(config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3))
+        sg.resources.CopyFrom(config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3))
         with pytest.raises(ValueError, match="must set num_vms"):
             validate_config(config)
 
@@ -772,8 +772,10 @@ class TestConfigValidation:
             validate_config(_config_with(accelerator_type=config_pb2.ACCELERATOR_TYPE_UNSPECIFIED))
 
     def test_rejects_negative_cpu(self):
-        with pytest.raises(ValueError, match="invalid cpu"):
-            validate_config(_config_with(resources=config_pb2.ScaleGroupResources(cpu=-1, memory_bytes=16 * 1024**3)))
+        with pytest.raises(ValueError, match="invalid cpu_millicores"):
+            validate_config(
+                _config_with(resources=config_pb2.ScaleGroupResources(cpu_millicores=-1000, memory_bytes=16 * 1024**3))
+            )
 
     def test_rejects_gcp_zone_not_in_platform_zones(self):
         """Validation fails when scale group zone is not in platform.gcp.zones."""
@@ -786,7 +788,7 @@ class TestConfigValidation:
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5litepod-8",
             num_vms=8,
-            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=4),
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=4),
         )
         sg.slice_template.gcp.zone = "zone-b"
         sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
@@ -806,7 +808,7 @@ class TestConfigValidation:
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5litepod-8",
             num_vms=8,
-            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=4),
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=4),
         )
         sg.slice_template.gcp.zone = "zone-a"
         sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
@@ -820,7 +822,7 @@ class TestConfigValidation:
             name="cpu-vm",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
             num_vms=1,
-            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
         )
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.slice_template.preemptible = True
@@ -838,7 +840,7 @@ class TestConfigValidation:
             name="cpu-vm",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
             num_vms=2,
-            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
         )
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.slice_template.gcp.zone = "us-central1-a"
@@ -855,7 +857,7 @@ class TestConfigValidation:
             name="gpu-vm",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
             num_vms=1,
-            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, gpu_count=1),
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, gpu_count=1),
         )
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_GPU
         sg.slice_template.gcp.zone = "us-central1-a"
@@ -872,7 +874,7 @@ class TestConfigValidation:
             name="cpu-vm",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
             num_vms=1,
-            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
         )
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.slice_template.gcp.zone = "us-central1-a"
@@ -889,7 +891,7 @@ def _gcp_scale_group(zone: str, *, preemptible: bool = False) -> config_pb2.Scal
         name="test",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
         num_vms=1,
-        resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=1),
+        resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=1),
     )
     sg.slice_template.gcp.zone = zone
     sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"

@@ -57,7 +57,7 @@ class TestCluster:
         fn,
         name: str,
         *args,
-        cpu: int = 1,
+        cpu: float = 1,
         memory: str = "1g",
         ports: list[str] | None = None,
         scheduling_timeout: Duration | None = None,
@@ -187,7 +187,7 @@ def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
     sg.num_vms = 2
     sg.min_slices = 1
     sg.max_slices = 2
-    sg.resources.cpu = 128
+    sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024 * 1024 * 1024
     sg.resources.disk_bytes = 1024 * 1024 * 1024 * 1024
     sg.slice_template.preemptible = True
@@ -220,7 +220,7 @@ def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     sg.num_vms = 1
     sg.min_slices = num_workers
     sg.max_slices = num_workers
-    sg.resources.cpu = 8
+    sg.resources.cpu_millicores = 8000
     sg.resources.memory_bytes = 16 * 1024**3
     sg.resources.disk_bytes = 50 * 1024**3
     sg.slice_template.local.SetInParent()

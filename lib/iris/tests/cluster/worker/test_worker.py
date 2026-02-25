@@ -213,7 +213,7 @@ def create_run_task_request(
         dockerfile="FROM python:3.11-slim\nRUN echo test",
     )
 
-    resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3)
 
     request = cluster_pb2.Worker.RunTaskRequest(
         task_id=task_id,
@@ -515,7 +515,7 @@ def test_env_merge_precedence(mock_bundle_cache, mock_runtime, tmp_path):
             env_vars={"SHARED_KEY": "job_value", "JOB_ONLY": "from_job"},
         ),
         bundle_gcs_path="gs://bucket/bundle.zip",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
     )
 
     task_id = w.submit_task(request)
@@ -646,7 +646,7 @@ def create_integration_run_task_request(bundle_path: str, task_id: str):
         entrypoint=entrypoint.to_proto(),
         bundle_gcs_path=bundle_path,
         environment=cluster_pb2.EnvironmentConfig(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
     )
 
 

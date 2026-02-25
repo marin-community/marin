@@ -47,7 +47,7 @@ def _make_multi_region_config() -> config_pb2.IrisClusterConfig:
         sg.num_vms = 1
         sg.min_slices = 1
         sg.max_slices = 2
-        sg.resources.cpu = 8
+        sg.resources.cpu_millicores = 8000
         sg.resources.memory_bytes = 16 * 1024**3
         sg.resources.disk_bytes = 50 * 1024**3
         sg.slice_template.local.SetInParent()

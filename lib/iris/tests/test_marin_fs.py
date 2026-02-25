@@ -123,7 +123,7 @@ def test_marin_temp_bucket_local_fallback_when_unresolvable():
         patch("iris.marin_fs.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {}, clear=True),
     ):
-        assert marin_temp_bucket(ttl_days=30, prefix="iris-logs") == "/tmp/marin/tmp/iris-logs"
+        assert marin_temp_bucket(ttl_days=30, prefix="iris-logs") == "file:///tmp/marin/tmp/iris-logs"
 
 
 def test_marin_temp_bucket_no_prefix():

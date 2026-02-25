@@ -37,7 +37,7 @@ def _make_cold_start_scaleup_config() -> config_pb2.IrisClusterConfig:
     sg.num_vms = 1
     sg.min_slices = 0
     sg.max_slices = 2
-    sg.resources.cpu = 128
+    sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024**3
     sg.resources.disk_bytes = 1024 * 1024**3
     sg.slice_template.preemptible = True
