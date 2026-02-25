@@ -99,6 +99,7 @@ import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
 from fray.v2 import client as fray_client
 from fray.v2.types import ResourceConfig
+from iris.marin_fs import marin_prefix
 
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, worker_id
@@ -1000,19 +1001,7 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     time_in = time.time()
 
-    prefix = config.prefix
-    if prefix is None:
-        # infer from the environment
-        if "MARIN_PREFIX" in os.environ:
-            prefix = os.environ["MARIN_PREFIX"]
-        else:
-            raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
-    elif "MARIN_PREFIX" in os.environ:
-        if prefix != os.environ["MARIN_PREFIX"]:
-            logger.warning(
-                f"MARIN_PREFIX environment variable ({os.environ['MARIN_PREFIX']}) is different from the "
-                f"specified prefix ({prefix})"
-            )
+    prefix = config.prefix or marin_prefix()
 
     executor_info_base_path = config.executor_info_base_path
     if executor_info_base_path is None:
