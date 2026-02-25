@@ -2220,3 +2220,80 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 
 - Assessment: **failed attempt / regression**. The centered-exp dispatch introduced a costly control-flow hotspot pattern and reduced end-to-end throughput.
 - Next bold hypothesis: escalate to **Macro Move H** (shared-RHS matmul batching) with no runtime `lax.cond` in the hot train path, and keep BF16-input/FP32-accum policy consistent across forward/backward kernels.
+
+### Iteration 41 - Macro Move H / shared-`k^T` matmul batching in train chunk kernels (regressed, reverted)
+
+- Date: 2026-02-25T04:39:10Z
+- Commit: none (failed attempt)
+- Loop session/local index: `2/10`
+- Starting commit: `20b04f7a497c0979320f43c4adf70c87e5577eb4`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` bucket: `78.098 ms` (dominant), with closed-call train hotspots at:
+    - `jit(_train_step)/jvp(...)/closed_call/shard_map/pallas_call`: `41.324 ms`
+    - `jit(_train_step)/transpose(jvp(...))/closed_call/shard_map/pallas_call`: `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move H**: batch shared-RHS train-path matmuls (`QK/KKT`, `inter/v_prime`) (`+10-20%`, medium layout/compiler risk).
+  2. **Macro Move G**: centered outer-product `exp_diff` with exact fallback (`+10-20%`, medium control-flow/exp-kernel risk; prior regressions).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) in recurrent/backward (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **H) Batch matmuls by stacking left operands sharing the same RHS**.
+- Selected hypothesis: apply shared-RHS batching in train chunk kernels, prioritizing `QK/KKT` in fused forward and backward chunk paths.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `_mxu_matmul_pair_shared_rhs` helper and initially applied batching to `QK/KKT`, `inter/v_prime`, and backward shared-`S_prev^T` matmuls.
+  - Dev TPU profile compile failed on Mosaic layout constraints for in-kernel `concatenate` in shared-`S` batching (`result/input offset mismatch on non-concat dimension`, line around `inter, v_prime` path).
+  - Probe rewrite using `dynamic_update_slice` in the helper failed TPU correctness (`dynamic_update_slice` unimplemented in Pallas TPU lowering).
+  - Narrowed scope to stable Macro-H slice: **shared-`k^T` batching only** (`QK/KKT` in fused forward + backward chunk kernels), removed shared-`S` batching.
+  - Final TPU validation and profile succeeded on this narrowed implementation.
+  - Despite hotspot reductions, end-to-end MFU regressed; all speculative kernel edits were reverted (`git restore`) to keep tree clean.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (final validated state):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+
+- Profile runs:
+  - Failed compile run (intermediate):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter2_macroH_batch --marin-prefix gs://marin-us-east5 --no-sync`
+    - failure: Mosaic TPU compile error for shared-`S` concatenation (`result/input offset mismatch on non-concat dimension`).
+  - Final profiled run (validated narrowed Macro-H patch):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter2_macroH_qkbatch --marin-prefix gs://marin-us-east5 --no-sync`
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter2_macroH_qkbatch_130m_ch128_seg16_20steps-f717af`
+    - W&B artifact: `run-gdn_loop_iter2_macroH_qkbatch_130m_ch128_seg16_20steps-f717af-profiler:v0`
+    - Downloaded trace: `.profiles/wandb/plugins/profile/2026_02_25_04_35_24/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared vs baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`):
+  - Bucket totals:
+    - `shard_map`: `78.098 ms -> 41.057 ms` (`-47.43%`)
+    - `fusion`: `45.618 ms -> 34.868 ms` (`-23.57%`)
+    - `all-gather`: `20.158 ms -> 10.075 ms` (`-50.02%`)
+    - `while`: `0.000 ms -> 31.513 ms` (new major hotspot)
+  - Forward/backward closed-call train buckets (`tf_op` labels):
+    - Forward `jit(_train_step)/jvp(...)/closed_call/shard_map/pallas_call`: `41.324 ms -> 20.847 ms` (`-49.55%`)
+    - Backward `jit(_train_step)/transpose(jvp(...))/closed_call/shard_map/pallas_call`: `26.266 ms -> 14.990 ms` (`-42.93%`)
+  - Trace event volume changed materially (`11761 -> 6596`), so trace-bucket deltas did not predict end-to-end throughput.
+
+- MFU/throughput delta (vs baseline `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.787594 -> 5.374623` (`-7.14%`)
+  - `throughput/tokens_per_second`: `187227.57 -> 173868.01` (`-7.14%`)
+  - `throughput/duration`: `0.175017s -> 0.188465s` (`+7.68%`)
+  - Vs governance champion (`5.748507`): `-6.50%` (regression beyond `1.000%` threshold).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call`: `41.324 ms -> 20.847 ms` (`-49.55%`).
+    - Backward closed-call `shard_map/pallas_call`: `26.266 ms -> 14.990 ms` (`-42.93%`).
+    - `throughput/mfu -7.14%`, `throughput/tokens_per_second -7.14%`, `throughput/duration +7.68%`.
+  - Governance:
+    - MFU gain `<3%` with dominant hotspot family still train-path `shard_map/custom-call` and a new large `while` bucket; attempt marked **low-impact/regressive**.
+    - Per regression policy (`revert-count-failure`), speculative kernel code was reverted and recorded as failed (`Commit: none (failed attempt)`).
+
+- Assessment: **failed attempt / regression**. Shared-`k^T` batching reduced closed-call bucket times in trace, but did not translate to end-to-end throughput gain and introduced unfavorable runtime behavior (`while` hotspot growth).
+- Next bold hypothesis:
+  - Escalate to **Macro Move E** (V-tiling with shared-K precompute) or **Macro Move I** (segment-level prepare+recurrent fusion only after stable heavy-op reductions), prioritizing elimination of the new `while` overhead rather than additional local dot batching.
