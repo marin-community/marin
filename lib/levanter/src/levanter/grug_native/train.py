@@ -12,17 +12,23 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
-from fray.v1.cluster.device_flops import device_flops_for_jax_device
 from jax.tree_util import register_dataclass
 
 import levanter.callbacks as callbacks
 import levanter.tracker
+from levanter.callbacks.tensorstore_callbacks import (
+    build_tensorstore_metrics_logger,
+    tensorstore_metrics_interval_from_env,
+)
+from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.data.mixture import MixtureDataset
 from levanter.eval import construct_log_dict
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.model import GrugModelConfig, GrugModelParameters, init_parameters
 from levanter.grug.model import loss_fn as grug_loss_fn
 from levanter.utils.flop_utils import lm_flops_per_token
-from levanter.utils.jax_utils import parameter_count
+from levanter.utils.jax_utils import estimate_jit_flops, parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from .checkpoint import (
@@ -54,12 +60,20 @@ def _make_train_step(
     *,
     z_loss_weight: float,
     ema_beta: float | None,
+    watch_config: WatchConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
+    if watch_config is not None:
+        if isinstance(watch_config.watch_targets, str):
+            watch_targets = tuple(t.strip() for t in watch_config.watch_targets.split(","))
+        else:
+            watch_targets = tuple(watch_config.watch_targets)
+    else:
+        watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,))
-    def train_step(state: GrugTrainState, batch):
+    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
+    def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return grug_loss_fn(
@@ -83,6 +97,21 @@ def _make_train_step(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new, state.ema_params, params
             )
 
+        watch_stats = None
+        if watch_config is not None and compute_watch:
+            watch_stats = compute_watch_stats(
+                watch_targets=watch_targets,
+                include_norms=watch_config.include_norms,
+                include_per_parameter_norms=watch_config.include_per_parameter_norms,
+                include_histogram=watch_config.include_histograms,
+                split_scan_layers=watch_config.split_scan_layers,
+                params=state.params,
+                grads=grads,
+                updates=updates,
+                opt_state=state.opt_state,
+                model_tree_type=type(state.params),
+            )
+
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
@@ -94,7 +123,7 @@ def _make_train_step(
         metrics = {
             "train/loss": loss,
         }
-        return next_state, metrics
+        return next_state, metrics, watch_stats
 
     return train_step
 
@@ -115,7 +144,9 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
         trainer_runtime.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
+        watch_config=trainer_runtime.watch if trainer_runtime.watch.is_enabled else None,
     )
+    watch_config = trainer_runtime.watch
 
     seed = trainer_runtime.seed
     data_key, model_key, training_key = jax.random.split(jax.random.PRNGKey(seed), 3)
@@ -188,23 +219,47 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
             glu=True,
         )
         flops_per_example = 3 * flops_per_token * config.model.max_seq_len
-        device_count = jax.device_count()
-        device = jax.devices()[0]
-        flops_per_device = device_flops_for_jax_device(device.device_kind)
-        theoretical_flops = None if flops_per_device is None else flops_per_device * device_count
-        levanter.tracker.log_summary(
-            {
-                "throughput/device_kind": device.device_kind,
-                "throughput/flops_per_example": flops_per_example,
-            }
-        )
-        if flops_per_device is not None and theoretical_flops is not None:
-            levanter.tracker.log_summary(
-                {
-                    "throughput/theoretical_flops_per_device": flops_per_device,
-                    "throughput/theoretical_flops": theoretical_flops,
-                }
+        z_loss = config.trainer.z_loss_weight if config.trainer.z_loss_weight > 0 else None
+        token_ids_spec = jax.ShapeDtypeStruct((1, config.model.max_seq_len), jnp.int32)
+        loss_weight_spec = jax.ShapeDtypeStruct((1, config.model.max_seq_len), jnp.float32)
+
+        def _loss_only(params: GrugModelParameters, token_ids: jax.Array, loss_weight: jax.Array) -> jax.Array:
+            return grug_loss_fn(
+                trainer_runtime.mp.cast_to_compute(params),
+                token_ids,
+                loss_weight,
+                config.model,
+                mask=GrugAttentionMask.causal(),
+                reduction="mean",
+                logsumexp_weight=z_loss,
             )
+
+        try:
+            forward_loss_flops_per_example_jax = estimate_jit_flops(
+                _loss_only, state.params, token_ids_spec, loss_weight_spec
+            )
+        except Exception:
+            logger.exception(
+                "Failed to estimate FLOPs with JAX cost_analysis; continuing with analytic estimate only."
+            )
+            forward_loss_flops_per_example_jax = None
+        flops_per_example_jax = (
+            None if forward_loss_flops_per_example_jax is None else 3 * forward_loss_flops_per_example_jax
+        )
+        flops_summary: dict[str, float] = {
+            "throughput/flops_per_token_analytic": flops_per_token,
+            "throughput/flops_per_example_analytic": flops_per_example,
+        }
+        if forward_loss_flops_per_example_jax is not None and flops_per_example_jax is not None:
+            flops_summary["throughput_jax/flops_per_example_forward"] = forward_loss_flops_per_example_jax
+            flops_summary["throughput_jax/flops_per_example_fwd_bwd_est"] = flops_per_example_jax
+            flops_summary["throughput_jax/flops_per_token_forward"] = (
+                forward_loss_flops_per_example_jax / config.model.max_seq_len
+            )
+            flops_summary["throughput_jax/flops_per_token_fwd_bwd_est"] = (
+                flops_per_example_jax / config.model.max_seq_len
+            )
+        levanter.tracker.log_summary(flops_summary)
 
         evaluator = build_tagged_evaluator(
             data_config=config.data,
@@ -232,15 +287,49 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
 
         eval_interval = config.eval.steps_per_eval
 
-        log_every = max(1, config.trainer.log_every)
+        log_every = 1
         last_mixture_stage = -1
         iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
+        tensorstore_metrics_every = tensorstore_metrics_interval_from_env()
+        tensorstore_metrics_logger = None
+        if tensorstore_metrics_every is not None:
+            tensorstore_metrics_logger = build_tensorstore_metrics_logger(tensorstore_metrics_every)
+        state_callbacks = StateCallbackRunner[GrugTrainState](
+            step_getter=lambda s: s.step,
+            model_getter=lambda s: s.params,
+            eval_model_getter=lambda s: s.ema_params,
+            opt_state_getter=lambda s: s.opt_state,
+        )
+        state_callbacks.add_hook(
+            callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
+            every=log_every,
+        )
+        if flops_per_example_jax is not None:
+            state_callbacks.add_hook(
+                callbacks.log_performance_stats(
+                    config.model.max_seq_len,
+                    batch_schedule,
+                    flops_per_example_jax,
+                    prefix="throughput_jax",
+                ),
+                every=log_every,
+            )
+        state_callbacks.add_hook(callbacks.pbar_logger(total=trainer_runtime.num_train_steps), every=log_every)
+        state_callbacks.add_hook(callbacks.log_step_info(trainer_runtime.num_train_steps), every=log_every)
+        if tensorstore_metrics_logger is not None and tensorstore_metrics_every is not None:
+            state_callbacks.add_hook(
+                lambda info: tensorstore_metrics_logger(info.step), every=tensorstore_metrics_every
+            )
 
         try:
             while int(state.step) < trainer_runtime.num_train_steps:
                 batch = next(iterator)
                 step_start = time.perf_counter()
-                state, metrics = train_step(state, batch)
+                current_step = int(state.step)
+                compute_watch = (
+                    watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
+                )
+                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
                 step = int(state.step) - 1
                 seq_index = batch_schedule.global_data_offset_by_step(step)
 
@@ -250,33 +339,16 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
                     )
                     profiler_ctx.__enter__()
 
-                if step % log_every == 0:
-                    # JAX dispatch is asynchronous; block only when logging to avoid per-step stalls.
-                    jax.block_until_ready(metrics["train/loss"])
-                    duration = time.perf_counter() - step_start
-                    tokens_per_example = int(batch.tokens.shape[1])
-                    this_batch_size = int(batch_schedule.batch_size_at_step(step))
-                    batch_tokens = this_batch_size * tokens_per_example
-                    total_examples = int(batch_schedule.global_data_offset_by_step(step + 1))
-                    total_tokens = tokens_per_example * total_examples
-                    inclusive_time = duration + iterator.this_load_time
-                    total_gflops = flops_per_example * total_examples / 1e9
-                    model_flops_instant = flops_per_example * this_batch_size / max(duration, 1e-9)
-                    log_data: dict[str, float | int | jax.Array] = {
-                        "throughput/duration": duration,
-                        "throughput/loading_time": iterator.this_load_time,
-                        "throughput/tokens": batch_tokens,
-                        "throughput/total_tokens": total_tokens,
-                        "throughput/total_gflops": total_gflops,
-                        "throughput/examples_per_second": this_batch_size / max(duration, 1e-9),
-                        "throughput/gflops_per_second": model_flops_instant / 1e9,
-                        "throughput/tokens_per_second": batch_tokens / max(duration, 1e-9),
-                        "throughput/tokens_per_second_with_loading": batch_tokens / max(inclusive_time, 1e-9),
-                    }
-                    if theoretical_flops is not None:
-                        log_data["throughput/mfu"] = model_flops_instant / theoretical_flops * 100.0
-                    log_data.update(metrics)
-                    levanter.tracker.log(log_data, step=step)
+                # JAX dispatch is asynchronous; block every step so step timing is always accurate.
+                jax.block_until_ready(metrics["train/loss"])
+                duration = time.perf_counter() - step_start
+                hook_start = time.perf_counter()
+                state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
+                levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+                levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+
+                if watch_stats is not None:
+                    levanter.tracker.log(watch_stats, step=step)
 
                 block_id = seq_index // train_dataset.block_size
                 stage = train_dataset._get_stage_for_block(block_id)
@@ -320,7 +392,4 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
             save_checkpoint_on_step(checkpointer, state, force=True)
             wait_for_checkpoints(checkpointer)
 
-    try:
-        levanter.tracker.current_tracker().finish()
-    except Exception:
-        logger.exception("Failed to finish tracker cleanly")
+    levanter.tracker.current_tracker().finish()

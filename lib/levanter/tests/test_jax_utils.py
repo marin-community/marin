@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from haliax.partitioning import ResourceAxis
-from levanter.utils.jax_utils import best_effort_sharding, sharded_tree_size
+from levanter.utils.jax_utils import (
+    best_effort_sharding,
+    estimate_jit_flops,
+    flops_from_cost_analysis,
+    sharded_tree_size,
+)
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
 
@@ -236,3 +241,18 @@ def test_tree_broadcast_to_edge_cases():
     target = {"a": [10, 20], "b": [30, 40]}
     result = tree_broadcast_to(prefix, target, is_leaf=is_leaf)
     assert result == {"a": [1, 2], "b": [1, 2]}
+
+
+def test_flops_from_cost_analysis_parses_dict_and_list_forms():
+    assert flops_from_cost_analysis({"flops": 123.0}) == 123.0
+    assert flops_from_cost_analysis([{"flops": 100.0}, {"flops": 23.0}]) == 123.0
+    assert flops_from_cost_analysis({"other": 1.0}) is None
+
+
+def test_estimate_jit_flops_smoke():
+    def f(x):
+        return jax.lax.exp(x @ x)
+
+    x = jax.ShapeDtypeStruct((8, 8), jnp.float32)
+    flops = estimate_jit_flops(f, x)
+    assert flops is None or flops > 0

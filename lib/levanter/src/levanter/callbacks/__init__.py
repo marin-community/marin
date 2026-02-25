@@ -20,6 +20,7 @@ from levanter.callbacks._metrics import (
     logger,
     pbar_logger,
 )
+from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
 from levanter.data import DataLoader
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
@@ -295,4 +296,6 @@ __all__ = [
     "log_performance_stats",
     "log_step_info",
     "pbar_logger",
+    "CallbackStateView",
+    "StateCallbackRunner",
 ]
