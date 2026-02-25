@@ -26,7 +26,7 @@ from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
-from iris.marin_fs import check_gcs_paths_same_region, check_path_in_region, marin_region, marin_temp_bucket
+from iris.marin_fs import check_gcs_paths_same_region, marin_temp_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -330,8 +330,6 @@ def _doublecheck_paths(config: TrainOnPodConfigT):
     check_gcs_paths_same_region(
         config.train_config,
         local_ok=local_ok,
-        region_getter=marin_region,
-        path_checker=check_path_in_region,
     )
     return config
 
