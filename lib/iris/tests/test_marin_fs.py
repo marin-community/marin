@@ -2,9 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from iris.marin_fs import marin_prefix, marin_region, marin_temp_bucket, region_from_metadata, region_from_prefix
+import pytest
+
+from iris.marin_fs import (
+    check_gcs_paths_same_region,
+    marin_prefix,
+    marin_region,
+    marin_temp_bucket,
+    region_from_metadata,
+    region_from_prefix,
+)
 
 
 def _mock_urlopen(zone_bytes: bytes) -> MagicMock:
@@ -126,3 +136,54 @@ def test_marin_temp_bucket_strips_prefix_slashes():
         "iris.marin_fs.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central1-a")
     ):
         assert marin_temp_bucket(ttl_days=3, prefix="/foo/bar/") == "gs://marin-tmp-us-central1/ttl=3d/foo/bar"
+
+
+def test_check_gcs_paths_same_region_accepts_matching_region():
+    config = {"cache_dir": "gs://bucket/path"}
+
+    check_gcs_paths_same_region(
+        config,
+        local_ok=False,
+        region="us-central1",
+        path_checker=lambda _key, _path, _region, _local_ok: None,
+    )
+
+
+def test_check_gcs_paths_same_region_raises_for_mismatch():
+    config = {"cache_dir": Path("gs://bucket/path")}
+
+    def checker(_key: str, _path: str, _region: str, _local_ok: bool) -> None:
+        raise ValueError("not in the same region")
+
+    with pytest.raises(ValueError, match="not in the same region"):
+        check_gcs_paths_same_region(
+            config,
+            local_ok=False,
+            region="us-central1",
+            path_checker=checker,
+        )
+
+
+def test_check_gcs_paths_same_region_skips_train_source_urls():
+    config = {"train_urls": ["gs://bucket/path"], "validation_urls": ["gs://bucket/path"]}
+
+    def checker(_key: str, _path: str, _region: str, _local_ok: bool) -> None:
+        raise AssertionError("source URLs should be skipped")
+
+    check_gcs_paths_same_region(
+        config,
+        local_ok=False,
+        region="us-central1",
+        path_checker=checker,
+    )
+
+
+def test_check_gcs_paths_same_region_allows_unknown_region_for_local_runs():
+    def fail_region_lookup() -> str | None:
+        return None
+
+    check_gcs_paths_same_region(
+        {"cache_dir": "gs://bucket/path"},
+        local_ok=True,
+        region_getter=fail_region_lookup,
+    )

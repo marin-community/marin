@@ -6,7 +6,6 @@ import logging
 import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from pathlib import PurePath
 from typing import TypeVar
 
 import draccus
@@ -27,7 +26,7 @@ from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
-from iris.marin_fs import check_path_in_region, marin_region, marin_temp_bucket
+from iris.marin_fs import check_gcs_paths_same_region, check_path_in_region, marin_region, marin_temp_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -328,71 +327,13 @@ def _doublecheck_paths(config: TrainOnPodConfigT):
     """
     local_ok = not isinstance(config.resources.device, TpuConfig)
 
-    region = marin_region()
-    if region is None:
-        if local_ok:
-            logger.warning("Could not determine the region of the VM. This is fine if you're running locally.")
-            return
-        raise ValueError("Could not determine the region of the VM. This is required for path checks.")
-
-    # Recursively check all paths in the config
-    _check_paths_recursively(config.train_config, "", region, local_ok)
-
+    check_gcs_paths_same_region(
+        config.train_config,
+        local_ok=local_ok,
+        region_getter=marin_region,
+        path_checker=check_path_in_region,
+    )
     return config
-
-
-def _check_paths_recursively(obj, path_prefix, region, local_ok):
-    """
-    Check all strings in the config object that look like GCS paths appear to respect same-region constraints.
-
-    Args:
-        obj: The object to check (could be a dict, list, or other object)
-        path_prefix: The prefix for the current path (e.g., "config.trainer")
-        region: The region of the VM
-        local_ok: Whether local paths are allowed
-    """
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            new_prefix = f"{path_prefix}.{key}" if path_prefix else key
-            _check_paths_recursively(value, new_prefix, region, local_ok)
-    elif isinstance(obj, list | tuple):
-        for i, item in enumerate(obj):
-            new_prefix = f"{path_prefix}[{i}]"
-            _check_paths_recursively(item, new_prefix, region, local_ok)
-    elif isinstance(obj, str | os.PathLike):
-        if isinstance(obj, os.PathLike):
-            path_str = os.fspath(obj)
-            if isinstance(obj, PurePath):
-                parts = obj.parts
-                if parts and parts[0] == "gs:" and not path_str.startswith("gs://"):
-                    remainder = "/".join(parts[1:])
-                    path_str = f"gs://{remainder}" if remainder else "gs://"
-        else:
-            path_str = obj
-
-        if path_str.startswith("gs://"):
-            # Source URLs are always read-and-cached, so they may be out of region.
-            if "train_urls" in path_prefix or "validation_urls" in path_prefix:
-                return
-            check_path_in_region(
-                path_prefix,
-                path_str,
-                region=region,
-                local_ok=local_ok,
-            )
-    elif dataclasses.is_dataclass(obj):
-        for field in dataclasses.fields(obj):
-            new_prefix = f"{path_prefix}.{field.name}" if path_prefix else field.name
-            value = getattr(obj, field.name)
-            _check_paths_recursively(
-                value,
-                new_prefix,
-                region,
-                local_ok,
-            )
-    # allow primitives through, warn on other types
-    elif not isinstance(obj, str | int | float | bool | type(None)):
-        logger.warning(f"Found unexpected type {type(obj)} at {path_prefix}. Skipping.")
 
 
 def _add_default_env_variables(env: dict, default_env: dict | None):
