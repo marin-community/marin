@@ -1042,6 +1042,7 @@ class LmEvalHarnessConfig:
     """
 
     task_spec: list[TaskConfig | str]
+    include_path: str | list[str] | None = None
     max_examples: int | None = None
     max_length: int | None = None
     log_samples: bool = False
@@ -1093,7 +1094,7 @@ class LmEvalHarnessConfig:
         logger.info("Loading tasks...")
         import lm_eval.tasks as tasks
 
-        manager = tasks.TaskManager()
+        manager = tasks.TaskManager(include_path=self.include_path)
         # we need to do it this way b/c i can't figure out how to run e.g. hellaswag 0 shot and 10 shot in a single run
         this_tasks = {}
         for task in tqdm(self.to_task_spec()):
@@ -1585,6 +1586,12 @@ def lm_eval_harness(config: LmEvalHarnessConfig, tokenizer, EvalBatch, axis_reso
 
         if jax.process_index() == 0:
             assert outputs is not None
+
+            # Inject per-subset results from tasks that collect them (e.g., DnaVepLlrEvalTask)
+            for task_name, task_obj in tasks_to_run.items():
+                if hasattr(task_obj, "_subset_results") and task_obj._subset_results:
+                    outputs["results"].setdefault(task_name, {}).update(task_obj._subset_results)
+
             log_report_to_tracker("lm_eval", outputs, levanter.tracker.current_tracker())
             logger.info("Logged report to tracker")
 

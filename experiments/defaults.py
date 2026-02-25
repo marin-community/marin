@@ -320,7 +320,10 @@ def default_train(
     name = _truncate_wandb_name(name)
 
     if eval_harness_tasks:
-        harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
+        harness_config = LmEvalHarnessConfig(
+            task_spec=convert_to_levanter_task_config(eval_harness_tasks),
+            include_path="experiments/evals/custom_tasks",
+        )
     else:
         harness_config = None
 
