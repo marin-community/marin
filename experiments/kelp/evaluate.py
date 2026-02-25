@@ -26,7 +26,6 @@ Usage:
 """
 
 import argparse
-import ast
 import json
 import logging
 import random
@@ -37,6 +36,7 @@ from pathlib import Path
 import jax
 
 from experiments.kelp.checkpointing import find_best_checkpoint, load_checkpoint
+from experiments.kelp.corpus import is_valid_python, load_corpus
 from experiments.kelp.model.config import TreeDiffusionConfig
 from experiments.kelp.tree.beam_search import best_of_n
 from experiments.kelp.tree.edit_model import EditModelParams
@@ -149,13 +149,6 @@ EVAL_TASKS = [
     },
 ]
 
-
-def is_valid_python(source: str) -> bool:
-    try:
-        ast.parse(source)
-        return True
-    except SyntaxError:
-        return False
 
 
 def run_test(program: str, call_expr: str, expected: str) -> bool:
@@ -320,8 +313,6 @@ def main():
 
     # Build subtree bank: prefer training corpus for realistic corruption.
     if args.corpus_file:
-        from experiments.kelp.train import load_corpus
-
         corpus = load_corpus(args.corpus_file)
         logger.info(f"Building subtree bank from training corpus: {len(corpus)} programs")
         bank = SubtreeBank.from_corpus(corpus)

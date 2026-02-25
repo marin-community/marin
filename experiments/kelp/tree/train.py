@@ -22,6 +22,7 @@ Generates training data by:
 """
 
 import logging
+import math
 import random as pyrandom
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -144,8 +145,6 @@ class EditTrainingConfig:
         if self.corruption_curriculum == "linear":
             fraction = progress
         elif self.corruption_curriculum == "cosine":
-            import math
-
             fraction = 0.5 * (1.0 - math.cos(math.pi * progress))
         else:
             return self.max_corruption_steps
