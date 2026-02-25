@@ -14,6 +14,7 @@ import threading
 import unittest.mock
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 
 import pytest
 
@@ -412,6 +413,81 @@ def test_gcp_create_slice_resolves_ghcr_image_in_bootstrap_config():
     assert bc.docker_image == "europe-docker.pkg.dev/my-proj/ghcr-mirror/marin-community/iris-worker:latest"
 
 
+def test_gcp_list_slices_skips_inactive_vm_instances():
+    """list_slices omits VM-backed slices for instances in inactive states."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "cpu-vm"
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        handle = platform.create_slice(cfg)
+        for _key, vm_data in fake._vms.items():
+            if vm_data.get("labels", {}).get(Labels("iris").iris_slice_id) == handle.slice_id:
+                vm_data["status"] = "TERMINATED"
+                break
+
+        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        assert handle.slice_id not in {s.slice_id for s in listed}
+
+
+def test_gcp_list_slices_preserves_vm_creation_timestamp():
+    """VM-backed slices use cloud creation timestamp when rediscovered."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "cpu-vm"
+
+    vm_creation_ts = "2024-01-02T03:04:05.000Z"
+    expected_epoch_ms = int(datetime.fromisoformat(vm_creation_ts.replace("Z", "+00:00")).timestamp() * 1000)
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        handle = platform.create_slice(cfg)
+        for _key, vm_data in fake._vms.items():
+            if vm_data.get("labels", {}).get(Labels("iris").iris_slice_id) == handle.slice_id:
+                vm_data["creationTimestamp"] = vm_creation_ts
+                break
+
+        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        listed_by_id = {s.slice_id: s for s in listed}
+        assert listed_by_id[handle.slice_id].created_at.epoch_ms() == expected_epoch_ms
+
+
+def test_gcp_reload_uses_full_stop_then_start():
+    """reload delegates to stop_all() before starting controller again."""
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+    cfg = config_pb2.IrisClusterConfig()
+
+    with (
+        unittest.mock.patch.object(platform, "stop_all") as stop_all,
+        unittest.mock.patch.object(platform, "start_controller", return_value="10.0.0.1:10000") as start_controller,
+    ):
+        address = platform.reload(cfg)
+
+    stop_all.assert_called_once_with(cfg)
+    start_controller.assert_called_once_with(cfg)
+    assert address == "10.0.0.1:10000"
 # =============================================================================
 # Section 3: Manual-Specific Tests
 #

@@ -48,6 +48,7 @@ from iris.cluster.platform.base import (
     Labels,
     PlatformError,
     QuotaExhaustedError,
+    RemoteWorkerHandle,
     SliceStatus,
     WorkerStatus,
     default_stop_all,
@@ -85,6 +86,8 @@ _VM_STATE_MAP: dict[str, CloudSliceState] = {
     "TERMINATED": CloudSliceState.DELETING,
 }
 
+_ACTIVE_VM_SLICE_STATES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
+
 
 def _format_labels(labels: dict[str, str]) -> str:
     """Format labels as comma-separated key=value pairs for gcloud --labels flag."""
@@ -120,7 +123,22 @@ def _parse_tpu_created_at(tpu_data: dict) -> Timestamp:
 
         dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
         epoch_ms = int(dt.timestamp() * 1000)
-        return Timestamp.from_epoch_ms(epoch_ms)
+        return Timestamp.from_ms(epoch_ms)
+    except (ValueError, AttributeError):
+        return Timestamp.now()
+
+
+def _parse_vm_created_at(vm_data: dict) -> Timestamp:
+    """Parse creationTimestamp from GCE instance JSON into a Timestamp."""
+    create_time = vm_data.get("creationTimestamp", "")
+    if not create_time:
+        return Timestamp.now()
+    try:
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
+        epoch_ms = int(dt.timestamp() * 1000)
+        return Timestamp.from_ms(epoch_ms)
     except (ValueError, AttributeError):
         return Timestamp.now()
 
@@ -937,7 +955,7 @@ class GcpPlatform:
     ) -> None:
         """Wait for VM to be RUNNING, then bootstrap the single worker."""
         deadline = time.monotonic() + cloud_ready_timeout
-        worker: GcpStandaloneWorkerHandle | None = None
+        worker: RemoteWorkerHandle | None = None
         while True:
             cloud_status = handle._describe_cloud()
             if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
@@ -1000,6 +1018,10 @@ class GcpPlatform:
                 )
 
             for vm_data in self._gcloud_list_instances(zone, labels):
+                vm_state = vm_data.get("status", "UNKNOWN")
+                if vm_state not in _ACTIVE_VM_SLICE_STATES:
+                    logger.info("Skipping VM instance %s in state %s", vm_data.get("name", ""), vm_state)
+                    continue
                 vm_labels = vm_data.get("labels", {})
                 slice_id = vm_labels.get(self._iris_labels.iris_slice_id, "")
                 if not slice_id:
@@ -1011,7 +1033,7 @@ class GcpPlatform:
                         _zone=zone,
                         _project_id=self._project_id,
                         _labels=vm_labels,
-                        _created_at=Timestamp.now(),
+                        _created_at=_parse_vm_created_at(vm_data),
                         _label_prefix=self._label_prefix,
                         _ssh_config=self._ssh_config,
                     )
@@ -1111,13 +1133,8 @@ class GcpPlatform:
         return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
 
     def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        label_prefix = config.platform.label_prefix or "iris"
-        labels = Labels(label_prefix)
-        all_slices = self.list_all_slices(labels={labels.iris_managed: "true"})
-        for s in all_slices:
-            logger.info("Terminating slice %s for reload", s.slice_id)
-            s.terminate()
-        self.stop_controller(config)
+        logger.info("Reload on GCP uses full teardown + restart")
+        self.stop_all(config)
         return self.start_controller(config)
 
     # ========================================================================
