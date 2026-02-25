@@ -78,6 +78,25 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no-augment", dest="augment", action="store_false")
     parser.set_defaults(augment=False)
+    parser.add_argument(
+        "--max-corruption-steps",
+        type=int,
+        default=5,
+        help="Maximum AST mutations per corruption (default: 5)",
+    )
+    parser.add_argument(
+        "--corruption-curriculum",
+        type=str,
+        default="constant",
+        choices=["constant", "linear", "cosine"],
+        help="Schedule for ramping corruption difficulty: constant (default), linear, or cosine",
+    )
+    parser.add_argument(
+        "--curriculum-warmup-fraction",
+        type=float,
+        default=0.3,
+        help="Fraction of training over which to ramp corruption difficulty (default: 0.3)",
+    )
     return parser.parse_args()
 
 
@@ -154,6 +173,9 @@ def main():
         seed=args.seed,
         wandb_project=args.wandb_project,
         wandb_run_name=args.wandb_run_name,
+        max_corruption_steps=args.max_corruption_steps,
+        corruption_curriculum=args.corruption_curriculum,
+        curriculum_warmup_fraction=args.curriculum_warmup_fraction,
     )
 
     data_iter = create_edit_data_iter(
