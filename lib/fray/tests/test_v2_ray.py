@@ -270,6 +270,28 @@ def test_build_runtime_env_gpu_clears_jax_platforms():
     assert env["env_vars"]["JAX_PLATFORMS"] == ""
 
 
+@pytest.mark.parametrize(
+    ("device", "user_value"),
+    [
+        (CpuConfig(), "cpu,tpu"),
+        (GpuConfig(variant="H100"), "gpu"),
+        (TpuConfig(variant="v5p-8"), "tpu"),
+    ],
+)
+def test_build_runtime_env_preserves_user_jax_platforms(device, user_value):
+    from fray.v2.ray_backend.backend import build_runtime_env
+    from fray.v2.types import create_environment
+
+    request = JobRequest(
+        name="jax-platforms-user-override",
+        entrypoint=Entrypoint.from_callable(lambda: None),
+        resources=ResourceConfig(device=device),
+        environment=create_environment(env_vars={"JAX_PLATFORMS": user_value}),
+    )
+    env = build_runtime_env(request)
+    assert env["env_vars"]["JAX_PLATFORMS"] == user_value
+
+
 # ---------------------------------------------------------------------------
 # Actor resource mapping (_actor_ray_options)
 # ---------------------------------------------------------------------------

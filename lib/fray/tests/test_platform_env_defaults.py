@@ -13,12 +13,26 @@ def test_default_rules_set_libtpu_init_args_for_v5p_and_v6e():
     assert v6e_env["LIBTPU_INIT_ARGS"] == "--xla_tpu_scoped_vmem_limit_kib=50000"
 
 
+def test_default_rules_set_jax_platforms_by_device_kind():
+    cpu_env = apply_platform_default_env_vars(CpuConfig(), {})
+    gpu_env = apply_platform_default_env_vars(GpuConfig(variant="H100"), {})
+    tpu_env = apply_platform_default_env_vars(TpuConfig(variant="v5p-8"), {})
+
+    assert cpu_env["JAX_PLATFORMS"] == "cpu"
+    assert gpu_env["JAX_PLATFORMS"] == ""
+    assert tpu_env["JAX_PLATFORMS"] == ""
+
+
 def test_default_rules_do_not_override_user_values():
     env = apply_platform_default_env_vars(
         TpuConfig(variant="v5p-8"),
-        {"LIBTPU_INIT_ARGS": "--user-specified"},
+        {
+            "LIBTPU_INIT_ARGS": "--user-specified",
+            "JAX_PLATFORMS": "tpu",
+        },
     )
     assert env["LIBTPU_INIT_ARGS"] == "--user-specified"
+    assert env["JAX_PLATFORMS"] == "tpu"
 
 
 def test_default_rules_skip_non_matching_device():

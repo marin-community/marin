@@ -22,7 +22,6 @@ from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_pa
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
     ActorConfig,
-    CpuConfig,
     GpuConfig,
     JobRequest,
     JobStatus,
@@ -166,21 +165,12 @@ def build_runtime_env(request: JobRequest) -> dict:
     env_vars = dict(environment.env_vars)
     extras = list(environment.extras)
 
-    if isinstance(request.resources.device, CpuConfig):
-        if "JAX_PLATFORMS" in env_vars and env_vars["JAX_PLATFORMS"] != "cpu":
-            logger.warning(
-                "Found existing JAX_PLATFORMS=%s, overriding for CPU only job.",
-                env_vars["JAX_PLATFORMS"],
-            )
-        env_vars["JAX_PLATFORMS"] = "cpu"
-    elif isinstance(request.resources.device, TpuConfig):
+    if isinstance(request.resources.device, TpuConfig):
         if "tpu" not in extras:
             extras.append("tpu")
-        env_vars["JAX_PLATFORMS"] = ""
     elif isinstance(request.resources.device, GpuConfig):
         if "gpu" not in extras:
             extras.append("gpu")
-        env_vars["JAX_PLATFORMS"] = ""
 
     env_vars = apply_platform_default_env_vars(request.resources.device, env_vars)
 

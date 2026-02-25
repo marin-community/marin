@@ -15,6 +15,8 @@ from fray.v2.iris_backend import (
     convert_constraints,
 )
 from fray.v2.types import (
+    CpuConfig,
+    GpuConfig,
     ResourceConfig,
     TpuConfig,
     create_environment,
@@ -77,18 +79,36 @@ class TestIrisActorHandlePickle:
 
 
 class TestConvertEnvironment:
+    def test_cpu_sets_default_jax_platforms(self):
+        env_spec = convert_environment(None, CpuConfig())
+        assert env_spec is not None
+        assert env_spec.env_vars["JAX_PLATFORMS"] == "cpu"
+
+    def test_gpu_sets_default_jax_platforms(self):
+        env_spec = convert_environment(None, GpuConfig(variant="H100"))
+        assert env_spec is not None
+        assert env_spec.env_vars["JAX_PLATFORMS"] == ""
+
     def test_tpu_v5p_sets_default_libtpu_init_args(self):
         env_spec = convert_environment(None, TpuConfig(variant="v5p-8"))
         assert env_spec is not None
+        assert env_spec.env_vars["JAX_PLATFORMS"] == ""
         assert env_spec.env_vars["LIBTPU_INIT_ARGS"] == "--xla_tpu_scoped_vmem_limit_kib=50000"
 
     def test_tpu_v6e_sets_default_libtpu_init_args(self):
         env_spec = convert_environment(None, TpuConfig(variant="v6e-8"))
         assert env_spec is not None
+        assert env_spec.env_vars["JAX_PLATFORMS"] == ""
         assert env_spec.env_vars["LIBTPU_INIT_ARGS"] == "--xla_tpu_scoped_vmem_limit_kib=50000"
 
     def test_user_libtpu_init_args_is_preserved(self):
-        env = create_environment(env_vars={"LIBTPU_INIT_ARGS": "--user-specified"})
+        env = create_environment(
+            env_vars={
+                "LIBTPU_INIT_ARGS": "--user-specified",
+                "JAX_PLATFORMS": "tpu",
+            }
+        )
         env_spec = convert_environment(env, TpuConfig(variant="v5p-8"))
         assert env_spec is not None
         assert env_spec.env_vars["LIBTPU_INIT_ARGS"] == "--user-specified"
+        assert env_spec.env_vars["JAX_PLATFORMS"] == "tpu"

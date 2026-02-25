@@ -33,6 +33,21 @@ class PlatformEnvDefaultRule:
 
 DEFAULT_PLATFORM_ENV_RULES: tuple[PlatformEnvDefaultRule, ...] = (
     PlatformEnvDefaultRule(
+        env_var="JAX_PLATFORMS",
+        value="cpu",
+        device_kind="cpu",
+    ),
+    PlatformEnvDefaultRule(
+        env_var="JAX_PLATFORMS",
+        value="",
+        device_kind="tpu",
+    ),
+    PlatformEnvDefaultRule(
+        env_var="JAX_PLATFORMS",
+        value="",
+        device_kind="gpu",
+    ),
+    PlatformEnvDefaultRule(
         env_var="LIBTPU_INIT_ARGS",
         value="--xla_tpu_scoped_vmem_limit_kib=50000",
         device_kind="tpu",

@@ -20,7 +20,6 @@ from ray.job_submission import JobSubmissionClient
 from fray.platform_env_defaults import apply_platform_default_env_vars
 from fray.v1.cluster.base import (
     Cluster,
-    CpuConfig,
     EnvironmentConfig,
     GpuConfig,
     JobId,
@@ -250,21 +249,12 @@ class RayCluster(Cluster):
         env_vars = dict(environment.env_vars)
         # disable access to the TPU if we're not a TPU job, otherwise
         # any import of JAX will claim the TPU and block other users.
-        if isinstance(request.resources.device, CpuConfig):
-            if "JAX_PLATFORMS" in env_vars and env_vars["JAX_PLATFORMS"] != "cpu":
-                logger.warning(
-                    "Found existing JAX_PLATFORMS=%s, overriding for CPU only job.",
-                    env_vars["JAX_PLATFORMS"],
-                )
-            env_vars["JAX_PLATFORMS"] = "cpu"
-        elif isinstance(request.resources.device, TpuConfig):
+        if isinstance(request.resources.device, TpuConfig):
             if "tpu" not in environment.extras:
                 environment.extras.append("tpu")
-            env_vars["JAX_PLATFORMS"] = ""
         elif isinstance(request.resources.device, GpuConfig):
             if "gpu" not in environment.extras:
                 environment.extras.append("gpu")
-            env_vars["JAX_PLATFORMS"] = ""
 
         env_vars = apply_platform_default_env_vars(request.resources.device, env_vars)
 
