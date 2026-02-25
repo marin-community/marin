@@ -449,10 +449,15 @@ def build_controller_bootstrap_script(
 
 def build_controller_bootstrap_script_from_config(
     config: config_pb2.IrisClusterConfig,
+    platform: object,
 ) -> str:
     """Build controller bootstrap script from the full cluster config.
 
     Serializes the config to YAML and embeds it in the bootstrap script.
+
+    Args:
+        config: Full cluster configuration.
+        platform: Platform instance used to resolve the controller image.
     """
     # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
@@ -460,12 +465,12 @@ def build_controller_bootstrap_script_from_config(
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
     port = config.controller.gcp.port or config.controller.manual.port or 10000
     image = config.controller.image
+
     ctrl = config.controller
-    if ctrl.HasField("gcp") and ctrl.gcp.zone and image.startswith("ghcr.io/"):
-        multi_region = zone_to_multi_region(ctrl.gcp.zone)
-        if multi_region:
-            project = config.platform.gcp.project_id
-            assert project, "platform.gcp.project_id required for GHCR→AR controller image rewrite"
-            image = rewrite_ghcr_to_ar_remote(image, multi_region, project)
+    zone: str | None = None
+    if ctrl.HasField("gcp") and ctrl.gcp.zone:
+        zone = ctrl.gcp.zone
+
+    image = platform.resolve_image(image, zone=zone)
 
     return build_controller_bootstrap_script(image, port, config_yaml)

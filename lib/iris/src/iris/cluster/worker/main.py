@@ -13,7 +13,6 @@ from pathlib import Path
 import click
 
 from iris.cluster.config import load_config
-from iris.cluster.platform.bootstrap import zone_to_multi_region
 from iris.cluster.platform.factory import create_platform
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
@@ -33,24 +32,8 @@ def _load_task_default_env() -> dict[str, str]:
     return {str(k): str(v) for k, v in parsed.items()}
 
 
-def _configure_docker_ar_auth() -> None:
-    """Configure Docker to authenticate with Artifact Registry for the worker's continent.
-
-    On GCP, task containers are pulled by the Docker CLI inside the worker
-    container (via the host docker socket). The host's bootstrap configured
-    gcloud auth for its own docker config, but the worker container has its own
-    config. This runs ``gcloud auth configure-docker`` inside the worker
-    container so that ``docker create`` can pull AR images for tasks.
-    """
-    zone = detect_gcp_zone()
-    if not zone:
-        return
-
-    multi_region = zone_to_multi_region(zone)
-    if not multi_region:
-        return
-
-    ar_host = f"{multi_region}-docker.pkg.dev"
+def _configure_docker_ar_auth(ar_host: str) -> None:
+    """Configure Docker to authenticate with the given Artifact Registry host."""
     logger = logging.getLogger(__name__)
     logger.info("Configuring Docker auth for %s", ar_host)
     result = subprocess.run(
@@ -118,32 +101,46 @@ def serve(
 
     log_prefix = None
     default_task_image = None
-    gcp_project = ""
+    platform = None
     cluster_config = None
     if config_file:
         cluster_config = load_config(Path(config_file))
         log_prefix = cluster_config.storage.log_prefix or None
         default_task_image = cluster_config.defaults.default_task_image or None
-        if cluster_config.platform.HasField("gcp"):
-            gcp_project = cluster_config.platform.gcp.project_id
-
-    if controller_address:
-        resolved_controller_address = f"http://{controller_address}"
-    elif cluster_config:
         platform = create_platform(
             platform_config=cluster_config.platform,
             ssh_config=cluster_config.defaults.ssh,
         )
+
+    if controller_address:
+        resolved_controller_address = f"http://{controller_address}"
+    elif platform and cluster_config:
         resolved_controller_address = f"http://{platform.discover_controller(cluster_config.controller)}"
     else:
         raise click.ClickException("Either --controller-address or --config must be provided")
+
+    zone = detect_gcp_zone()
+    if platform:
+
+        def resolve_image(image: str) -> str:
+            return platform.resolve_image(image, zone=zone)
+
+    else:
+
+        def resolve_image(image: str) -> str:
+            return image
 
     port_start, port_end = map(int, port_range.split("-"))
 
     if runtime == "kubernetes":
         container_runtime = KubernetesRuntime()
     else:
-        _configure_docker_ar_auth()
+        # Configure Docker AR auth for task images by resolving the default
+        # task image and extracting the AR host, if any.
+        if default_task_image:
+            resolved = resolve_image(default_task_image)
+            if resolved != default_task_image and "-docker.pkg.dev/" in resolved:
+                _configure_docker_ar_auth(resolved.split("/")[0])
         container_runtime = DockerRuntime()
 
     config = WorkerConfig(
@@ -156,7 +153,7 @@ def serve(
         worker_attributes=_load_worker_attributes(),
         default_task_env=_load_task_default_env(),
         default_task_image=default_task_image,
-        gcp_project=gcp_project,
+        resolve_image=resolve_image,
         log_prefix=log_prefix,
     )
 

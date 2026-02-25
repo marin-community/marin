@@ -404,6 +404,9 @@ class LocalPlatform:
         self._gpu_count_by_group = gpu_count_by_group or {}
         self._local_controller: object | None = None
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
+
     def create_vm(self, config: config_pb2.VmConfig) -> _LocalStandaloneWorkerHandle:
         """Create an in-process "VM". Used by start_controller() for local mode."""
         handle = _LocalStandaloneWorkerHandle(

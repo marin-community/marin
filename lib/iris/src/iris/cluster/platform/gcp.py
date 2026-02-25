@@ -53,7 +53,11 @@ from iris.cluster.platform.base import (
     default_stop_all,
     find_free_port,
 )
-from iris.cluster.platform.bootstrap import build_worker_bootstrap_script
+from iris.cluster.platform.bootstrap import (
+    build_worker_bootstrap_script,
+    rewrite_ghcr_to_ar_remote,
+    zone_to_multi_region,
+)
 from iris.cluster.platform.debug import wait_for_port
 from iris.cluster.platform.remote_exec import (
     GceRemoteExec,
@@ -469,6 +473,20 @@ class GcpPlatform:
         self._ssh_config = ssh_config
         self._zones = list(gcp_config.zones)
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        """Rewrite ``ghcr.io/`` images to the AR remote repo for *zone*'s continent.
+
+        Non-GHCR images pass through unchanged.
+        """
+        if not image.startswith("ghcr.io/"):
+            return image
+        if not zone:
+            raise ValueError("zone is required for GHCR→AR image rewriting on GCP")
+        multi_region = zone_to_multi_region(zone)
+        if not multi_region:
+            return image
+        return rewrite_ghcr_to_ar_remote(image, multi_region, self._project_id)
+
     def create_vm(self, config: config_pb2.VmConfig) -> GcpStandaloneWorkerHandle:
         """Create a GCE instance. Returns a handle with SSH and label/metadata support."""
         _validate_vm_config(config)
@@ -583,6 +601,7 @@ class GcpPlatform:
         )
 
         if bootstrap_config:
+            bootstrap_config.docker_image = self.resolve_image(bootstrap_config.docker_image, zone=gcp.zone)
 
             def _bootstrap_worker():
                 try:

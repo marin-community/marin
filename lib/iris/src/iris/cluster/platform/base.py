@@ -392,6 +392,23 @@ class Platform(Protocol):
         """
         ...
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        """Resolve a container image reference for this platform's registry.
+
+        On GCP, rewrites ``ghcr.io/`` images to the Artifact Registry remote
+        repo for the given zone's continent.  Other platforms return the image
+        unchanged.
+
+        Args:
+            image: Container image tag (e.g. ``ghcr.io/org/img:v1``).
+            zone: Cloud zone used to select the regional mirror.  Required on
+                GCP when the image starts with ``ghcr.io/``.
+
+        Returns:
+            Resolved image tag ready for ``docker pull``.
+        """
+        ...
+
     def discover_controller(self, controller_config: config_pb2.ControllerVmConfig) -> str:
         """Discover controller address from platform-specific mechanism.
 

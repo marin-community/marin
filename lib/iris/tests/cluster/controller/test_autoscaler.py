@@ -176,8 +176,17 @@ def make_mock_slice_handle(
     return handle
 
 
-def make_mock_platform(slices_to_discover: list[MagicMock] | None = None) -> MagicMock:
-    """Create a mock Platform for testing."""
+def make_mock_platform(
+    slices_to_discover: list[MagicMock] | None = None,
+) -> MagicMock:
+    """Create a mock Platform for testing.
+
+    Infrastructure methods (create_slice, list_slices, etc.) are mocked
+    because they would hit cloud APIs.
+
+    Args:
+        slices_to_discover: Pre-existing slices returned by list_slices.
+    """
     platform = MagicMock()
     platform.list_slices.return_value = slices_to_discover or []
 
@@ -267,7 +276,6 @@ def make_autoscaler(
     config: config_pb2.AutoscalerConfig | None = None,
     platform: MagicMock | None = None,
     bootstrap_config: config_pb2.BootstrapConfig | None = None,
-    gcp_project: str = "",
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
     mock_platform = platform or make_mock_platform()
@@ -278,7 +286,6 @@ def make_autoscaler(
             config=config,
             platform=mock_platform,
             bootstrap_config=bootstrap_config,
-            gcp_project=gcp_project,
         )
     else:
         return Autoscaler(
@@ -286,7 +293,6 @@ def make_autoscaler(
             evaluation_interval=Duration.from_seconds(0.1),
             platform=mock_platform,
             bootstrap_config=bootstrap_config,
-            gcp_project=gcp_project,
         )
 
 
@@ -2078,61 +2084,8 @@ class TestPerGroupBootstrapConfig:
 
         assert "IRIS_WORKER_ATTRIBUTES" not in base_bc.env_vars
 
-    def test_rewrites_ghcr_image_to_ar_remote_for_gcp_group(self):
-        """GHCR image is rewritten to AR remote repo for the group's continent."""
-        base_bc = config_pb2.BootstrapConfig(
-            docker_image="ghcr.io/marin-community/iris-worker:latest",
-            worker_port=10001,
-            controller_address="controller:10000",
-        )
-        sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
-
-        group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
-
-        bc = autoscaler._per_group_bootstrap_config(group)
-
-        assert bc is not None
-        assert bc.docker_image == "europe-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-worker:latest"
-        # Base config must not be mutated
-        assert base_bc.docker_image == "ghcr.io/marin-community/iris-worker:latest"
-
-    def test_no_rewrite_for_non_ghcr_image(self):
-        """Non-GHCR images (e.g. docker.io) pass through unchanged."""
-        base_bc = config_pb2.BootstrapConfig(
-            docker_image="docker.io/library/ubuntu:latest",
-            worker_port=10001,
-            controller_address="controller:10000",
-        )
-        sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
-
-        group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
-
-        bc = autoscaler._per_group_bootstrap_config(group)
-
-        assert bc is not None
-        assert bc.docker_image == "docker.io/library/ubuntu:latest"
-
-    def test_ghcr_rewrite_for_us_group(self):
-        """GHCR image is rewritten to us multi-region for US zones."""
-        base_bc = config_pb2.BootstrapConfig(
-            docker_image="ghcr.io/marin-community/iris-worker:latest",
-            worker_port=10001,
-            controller_address="controller:10000",
-        )
-        sg_config = make_scale_group_config(name="west-group", max_slices=5, zones=["us-west4-a"])
-
-        group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc, gcp_project="proj")
-
-        bc = autoscaler._per_group_bootstrap_config(group)
-
-        assert bc is not None
-        assert bc.docker_image == "us-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-worker:latest"
-
-    def test_rewrite_combined_with_worker_attributes(self):
-        """Image rewrite and worker attribute injection both apply when both are needed."""
+    def test_worker_attributes_injected(self):
+        """Worker attributes are injected into env vars."""
         import json
 
         base_bc = config_pb2.BootstrapConfig(
@@ -2144,12 +2097,11 @@ class TestPerGroupBootstrapConfig:
         sg_config.worker.attributes["region"] = "europe-west4"
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
         assert bc is not None
-        assert bc.docker_image == "europe-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-worker:latest"
         attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
         assert attrs["region"] == "europe-west4"
 

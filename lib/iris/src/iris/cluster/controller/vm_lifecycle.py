@@ -367,7 +367,7 @@ def start_controller(
         raise RuntimeError(f"Controller VM {vm_config.name} did not become reachable within 300s")
 
     # Bootstrap
-    bootstrap_script = build_controller_bootstrap_script_from_config(config)
+    bootstrap_script = build_controller_bootstrap_script_from_config(config, platform=platform)
     vm.bootstrap(bootstrap_script)
 
     # Health check

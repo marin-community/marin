@@ -127,6 +127,9 @@ class FakePlatform:
         self._vm_to_create = vm_to_create or FakeWorkerHandle()
         self.created_vms: list[FakeWorkerHandle] = []
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
+
     def create_vm(self, config: config_pb2.VmConfig) -> FakeWorkerHandle:
         self.created_vms.append(self._vm_to_create)
         return self._vm_to_create
