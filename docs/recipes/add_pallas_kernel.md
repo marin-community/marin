@@ -290,10 +290,10 @@ Levanter trackers (e.g. Weights & Biases):
 - See `lib/levanter/docs/Performance-Guide.md` for details.
 - Levanter uses JAX profiling and uploads a `jax_profile` artifact to W&B when profiling is enabled.
 - If your benchmark is implemented as (or inside) a Levanter training loop, prefer flags like:
-  - `--trainer.profiler true`
-  - `--trainer.profiler_start_step 5`
-  - `--trainer.profiler_num_steps 50`
-  - `--trainer.profiler_perfetto_link false` (enable if you want a Perfetto URL; see the guide)
+  - `--trainer.profiler.enabled true`
+  - `--trainer.profiler.start_step 5`
+  - `--trainer.profiler.num_steps 50`
+  - `--trainer.profiler.perfetto_link false` (enable if you want a Perfetto URL; see the guide)
 
 If you’re writing a standalone microbench script, prefer invoking the profiler directly with
 `levanter.callbacks.profile_ctx` (rather than trying to plumb trainer flags through a non-trainer script). See

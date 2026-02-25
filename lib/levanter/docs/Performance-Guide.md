@@ -11,7 +11,7 @@ See also the [JAX Profiling Guide](https://jax.readthedocs.io/en/latest/profilin
 
 ### Enabling the Profiler
 
-Levanter uses JAX's built-in profiler. You can enable it by adding the `--trainer.profiler true` flag
+Levanter uses JAX's built-in profiler. You can enable it by adding the `--trainer.profiler.enabled true` flag
 to the command line. This will generate a trace file in the `./logs` directory, under `./logs/<run_id>/profiler/plugins/profile/<datetime>`.
 (Yeah, it's a mess, but it's what JAX wants to do.)
 It will also upload the information to the relevant tracker (such as Weights & Biases or TensorBoard).
@@ -23,12 +23,12 @@ Install profiling dependencies (TensorBoard) with one of:
 
 Here are the full list of profiling related options:
 
-| Argument                           | Description | Default |
-|------------------------------------|-------------|---------|
-| `--trainer.profiler`               | Enable the profiler | `false` |
-| `--trainer.profiler_start_step`    | The step to start profiling | `5`     |
-| `--trainer.profiler_num_steps`     | The number of steps to profile | `100`   |
-| `--trainer.profiler_perfetto_link` | Whether to generate a Perfetto URL | `false` |
+| Argument                                  | Description | Default |
+|-------------------------------------------|-------------|---------|
+| `--trainer.profiler.enabled`              | Enable the profiler | `false` |
+| `--trainer.profiler.start_step`           | The step to start profiling | `5`     |
+| `--trainer.profiler.num_steps`            | The number of steps to profile | `100`   |
+| `--trainer.profiler.perfetto_link`        | Whether to generate a Perfetto URL | `false` |
 
 As usual, these can be specified in the yaml configuration file as well.
 
@@ -51,7 +51,7 @@ To find the trace, go to the run's page on WandB and click on the "Artifacts" ta
 Click `plugins` then `profile` then a date, then download `perfetto_trace.json.gz`.
 You can then go to https://ui.perfetto.dev/ and upload the file.
 
-Alternatively, you can enable the `--trainer.profiler_perfetto_link` flag.
+Alternatively, you can enable the `--trainer.profiler.perfetto_link` flag.
 This will generate a link that will automatically upload the `perfetto_trace.json.gz` file in the same directory as the TensorBoard profile.
 This link is a little tricky to use on TPU. The JAX guide has [some instructions](https://docs.jax.dev/en/latest/profiling.html#remote-profiling)
 on how to use it. (Basically, set up SSH port forwarding and then use the link in your local browser.)

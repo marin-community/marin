@@ -29,6 +29,7 @@ from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from experiments.speedrun.hackable_transformer_starter.hackable_transformer_attn_sink import HackableTransformerConfig
 
 AUTHOR = Author(
@@ -153,7 +154,7 @@ def _train_config(
         weight_decay=0.1,
         steps_per_hf_export=-1,
         explicit_mesh_axes=explicit_mesh_axes,
-        profiler=True,
+        profiler=ProfilerConfig(enabled=True),
     )
 
 
