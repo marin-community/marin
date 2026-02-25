@@ -43,6 +43,7 @@ Levanter is incorporated into `lib/levanter`. Start with the shared instructions
 * Do not rely on dynamic shapes or dynamic lengths when indexing.
 * Use `debug.print` if you need to inspect values.
 * Choose jit-safe variants like `jnp.where` or `hax.where` when branching on data.
+* Do not call `jax.default_backend()` or `jax.devices()` at module import time; resolve backend/device lazily inside runtime functions.
 
 Any method inside an `equinox.Module`, any function decorated with `jax.jit` or one of its variants (for example `eqx.filter_jit` or `jax.named_jit`), and any helpers they call must follow these jit-safety rules.
 
