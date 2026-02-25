@@ -12,6 +12,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ from iris.cluster.types import (
     EnvironmentSpec,
     JobName,
     ResourceSpec,
+    gpu_device,
     region_constraint,
     zone_constraint,
     tpu_device,
@@ -171,11 +173,39 @@ def add_standard_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
     return result
 
 
+def parse_gpu_spec(spec: str) -> tuple[str, int]:
+    """Parse a GPU spec string into (variant, count).
+
+    Accepts: 'H100x8' → ("H100", 8), '8' → ("", 8), 'H100' → ("H100", 1).
+    Only a trailing 'x<digits>' is treated as a count separator, so variants
+    like 'rtx4090' are not misinterpreted.
+    """
+    if not spec:
+        raise ValueError("GPU spec must not be empty")
+
+    # Only treat 'x' as a count separator for trailing x<1-3 digits>,
+    # so model names like 'rtx4090' (4+ digit suffix) aren't misinterpreted.
+    m = re.fullmatch(r"(\w+)x(\d{1,3})", spec)
+    if m:
+        variant, count = m.group(1), int(m.group(2))
+        if count <= 0:
+            raise ValueError(f"GPU count must be positive, got {count}")
+        return variant, count
+    if spec.isdigit():
+        count = int(spec)
+        if count <= 0:
+            raise ValueError(f"GPU count must be positive, got {count}")
+        return "", count
+    if not spec.isalnum():
+        raise ValueError(f"Invalid GPU spec: {spec!r}")
+    return spec, 1
+
+
 def build_resources(
     tpu: str | None,
-    gpu: int | None,
-    cpu: int | None,
-    memory: str | None,
+    gpu: str | None,
+    cpu: int | None = None,
+    memory: str | None = None,
     disk: str | None = None,
 ) -> ResourceSpec:
     """Build ResourceSpec from CLI arguments."""
@@ -184,7 +214,8 @@ def build_resources(
     if tpu:
         spec.device = tpu_device(tpu)
     elif gpu:
-        raise ValueError("GPU support not yet implemented in Iris")
+        variant, count = parse_gpu_spec(gpu)
+        spec.device = gpu_device(variant, count)
 
     return spec
 
@@ -208,7 +239,7 @@ def run_iris_job(
     env_vars: dict[str, str],
     controller_url: str,
     tpu: str | None = None,
-    gpu: int | None = None,
+    gpu: str | None = None,
     cpu: int | None = None,
     memory: str | None = None,
     disk: str | None = None,
@@ -236,7 +267,7 @@ def run_iris_job(
         Exit code: 0 for success, 1 for failure
     """
     env_vars = add_standard_env_vars(env_vars)
-    resources = build_resources(tpu, gpu, cpu, memory, disk)
+    resources = build_resources(tpu, gpu, cpu=cpu, memory=memory, disk=disk)
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
@@ -251,6 +282,9 @@ def run_iris_job(
     logger.info(f"Resources: cpu={resources.cpu}, memory={resources.memory}, disk={resources.disk}")
     if resources.device and resources.device.HasField("tpu"):
         logger.info(f"TPU: {resources.device.tpu.variant}")
+    if resources.device and resources.device.HasField("gpu"):
+        gpu_dev = resources.device.gpu
+        logger.info(f"GPU: {gpu_dev.count}x {gpu_dev.variant or 'any'}")
     if regions:
         logger.info(f"Region constraint: {', '.join(regions)}")
     if zone:
@@ -370,7 +404,7 @@ Examples:
     help="Set environment variables for the job (KEY VALUE). Can be repeated.",
 )
 @click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16)")
-@click.option("--gpu", type=int, help="Number of GPUs to request")
+@click.option("--gpu", type=str, help="GPU spec: VARIANTxCOUNT (e.g., H100x8), COUNT (e.g., 8), or VARIANT (e.g., H100)")
 @click.option("--cpu", type=int, help="Number of CPUs to request (default: 1)")
 @click.option("--memory", type=str, help="Memory size to request (e.g., 8GB, 512MB; default: 8GB)")
 @click.option("--disk", type=str, help="Ephemeral disk size to request (e.g., 64GB, 1TB; default: 10GB)")
@@ -398,7 +432,7 @@ def run(
     ctx,
     env_vars: tuple[tuple[str, str], ...],
     tpu: str | None,
-    gpu: int | None,
+    gpu: str | None,
     cpu: int | None,
     memory: str | None,
     disk: str | None,
