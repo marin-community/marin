@@ -839,6 +839,24 @@ class Controller(_message.Message):
         RECORDS_FIELD_NUMBER: _ClassVar[int]
         records: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
         def __init__(self, records: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
+    class GetMachineStatusRequest(_message.Message):
+        __slots__ = ("id",)
+        ID_FIELD_NUMBER: _ClassVar[int]
+        id: str
+        def __init__(self, id: _Optional[str] = ...) -> None: ...
+    class GetMachineStatusResponse(_message.Message):
+        __slots__ = ("vm", "scale_group", "worker", "bootstrap_logs", "worker_logs")
+        VM_FIELD_NUMBER: _ClassVar[int]
+        SCALE_GROUP_FIELD_NUMBER: _ClassVar[int]
+        WORKER_FIELD_NUMBER: _ClassVar[int]
+        BOOTSTRAP_LOGS_FIELD_NUMBER: _ClassVar[int]
+        WORKER_LOGS_FIELD_NUMBER: _ClassVar[int]
+        vm: _vm_pb2.VmInfo
+        scale_group: str
+        worker: Controller.WorkerHealthStatus
+        bootstrap_logs: str
+        worker_logs: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
+        def __init__(self, vm: _Optional[_Union[_vm_pb2.VmInfo, _Mapping]] = ..., scale_group: _Optional[str] = ..., worker: _Optional[_Union[Controller.WorkerHealthStatus, _Mapping]] = ..., bootstrap_logs: _Optional[str] = ..., worker_logs: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class Worker(_message.Message):

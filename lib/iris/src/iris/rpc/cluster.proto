@@ -683,6 +683,26 @@ message Controller {
     repeated ProcessLogRecord records = 1;
   }
 
+  // --- Machine Detail (unified VM + worker view) ---
+  message GetMachineStatusRequest {
+    string id = 1;  // VM ID or worker ID — resolved against both
+  }
+
+  message GetMachineStatusResponse {
+    // VM info (null if identifier matched a worker with no VM)
+    iris.vm.VmInfo vm = 1;
+    string scale_group = 2;
+
+    // Worker health (null if no worker registered for this machine)
+    WorkerHealthStatus worker = 3;
+
+    // Bootstrap logs (from VM init)
+    string bootstrap_logs = 4;
+
+    // Worker daemon logs (proxied from worker, empty if unhealthy/absent)
+    repeated ProcessLogRecord worker_logs = 5;
+  }
+
 }
 
 // ============================================================================
@@ -822,6 +842,9 @@ service ControllerService {
 
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
+
+  // Unified machine detail (VM + worker + logs in one call)
+  rpc GetMachineStatus(Controller.GetMachineStatusRequest) returns (Controller.GetMachineStatusResponse);
 }
 
 service WorkerService {

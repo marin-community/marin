@@ -18,10 +18,7 @@ from collections import Counter, defaultdict
 from iris.cluster.types import JobName
 from iris.rpc import vm_pb2
 
-ACTIVE_HINT_PREFIXES = (
-    "Waiting for worker scale-up in scale group",
-    "Waiting for workers in scale group",
-)
+ACTIVE_HINT_PREFIXES = ("Waiting for worker scale-up in scale group",)
 
 
 def _task_id_to_job_id(task_id: str) -> str | None:
