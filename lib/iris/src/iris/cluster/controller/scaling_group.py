@@ -125,6 +125,9 @@ def prepare_slice_config(
     config.labels[labels.iris_managed] = "true"
     config.labels[labels.iris_scale_group] = parent_config.name
 
+    if not config.num_vms and parent_config.HasField("num_vms"):
+        config.num_vms = parent_config.num_vms
+
     if parent_config.HasField("resources"):
         config.gpu_count = parent_config.resources.gpu_count
         disk_bytes = parent_config.resources.disk_bytes
