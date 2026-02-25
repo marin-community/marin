@@ -5,7 +5,6 @@
 
 from typing import Any, Protocol, cast
 
-import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -46,14 +45,6 @@ class GrugTransformer(Protocol):
     ) -> jax.Array: ...
 
 
-class GrugInitFn(Protocol):
-    def __call__(self, cfg: GrugConfigLike, *, key: PRNGKeyArray) -> GrugTransformer: ...
-
-
-def _default_init_fn(cfg: GrugConfigLike, *, key: PRNGKeyArray) -> GrugTransformer:
-    return Transformer.init(cfg, key=key)
-
-
 def _mask_from_levanter(attn_mask: LevanterAttentionMask | NamedArray | None) -> AttentionMask | jax.Array | None:
     mask: AttentionMask | jax.Array | None = None
     if isinstance(attn_mask, LevanterAttentionMask):
@@ -82,7 +73,6 @@ class GrugWrapper(LmHeadModel[Any]):
 
     params: GrugTransformer
     grug_config: GrugConfigLike
-    init_fn: GrugInitFn = eqx.field(static=True)
 
     @property
     def config(self) -> GrugConfigLike:
@@ -111,16 +101,13 @@ class GrugWrapper(LmHeadModel[Any]):
         config: GrugConfigLike,
         *,
         key: PRNGKeyArray,
-        init_fn: GrugInitFn | None = None,
     ) -> "GrugWrapper":
         del Vocab
         cfg = config
-        chosen_init = init_fn or _default_init_fn
-        params = chosen_init(cfg, key=key)
+        params = Transformer.init(cfg, key=key)
         return cls(
             params=params,
             grug_config=cfg,
-            init_fn=chosen_init,
         )
 
     def activations(
