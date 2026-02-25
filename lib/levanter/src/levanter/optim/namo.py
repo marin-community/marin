@@ -83,6 +83,14 @@ def _adamw_transform(
     weight_decay: float,
     build_weight_decay_mask: Callable[[], PyTree],
 ) -> optax.GradientTransformation:
+    """Build the AdamW-style Optax transform used as NAMO/NAMO-D fallback.
+
+    This helper composes, in order:
+    1) optional global-norm gradient clipping,
+    2) Adam moment normalization,
+    3) optional decoupled weight decay (with the provided mask), and
+    4) scaling by ``-adam_lr``.
+    """
     components = []
     if max_grad_norm:
         components.append(optax.clip_by_global_norm(max_grad_norm))
