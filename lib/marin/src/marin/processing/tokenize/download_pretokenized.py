@@ -28,7 +28,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfigBase
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
     """Configuration for downloading a pre-existing Levanter cache from Hugging Face."""
 
