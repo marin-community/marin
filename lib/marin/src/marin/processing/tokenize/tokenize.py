@@ -62,6 +62,11 @@ class HfDatasetSpec:
 class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
+    num_shards: int | None = None
+    """Override the number tokenize shards. When set, files are grouped to produce approximately
+    this many shards instead of deriving the count from max_workers. This can be useful if you want
+    more shards than max_workers, for example to mitigate the cost of retrying a single shard."""
+
     @abc.abstractmethod
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -340,7 +345,10 @@ def tokenize(config: TokenizeConfigBase):
             )
         )
         total_input_bytes = sum(f["size"] for f in file_stats)
-        target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.max_workers)
+        if config.num_shards is not None:
+            target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.num_shards)
+        else:
+            target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.max_workers)
         file_groups = list(_bundle_files_by_size(file_stats, target_group_bytes))
         logger.info(
             f"Grouped {len(paths):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
