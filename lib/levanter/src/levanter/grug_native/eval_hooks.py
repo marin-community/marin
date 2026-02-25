@@ -12,11 +12,32 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from levanter.data.text import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator
-from levanter.grug.model import GrugModelConfig, GrugModelParameters, loss_fn as default_grug_loss_fn
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.grug.model import GrugModelConfig, Transformer
 from levanter.models.lm_model import LmExample
 from levanter.trainer import TrainerConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _default_grug_loss_fn(
+    model: Transformer,
+    token_ids: jax.Array,
+    loss_weight: jax.Array,
+    model_config: GrugModelConfig,
+    *,
+    mask: GrugAttentionMask | jax.Array | None = None,
+    reduction: str = "mean",
+    logsumexp_weight: float | None = None,
+) -> jax.Array:
+    del model_config
+    return model.next_token_loss(
+        token_ids,
+        loss_weight,
+        mask=mask,
+        reduction=reduction,
+        logsumexp_weight=logsumexp_weight,
+    )
 
 
 def build_tagged_evaluator(
@@ -28,8 +49,8 @@ def build_tagged_evaluator(
     mesh: Mesh,
     max_eval_batches: int | None,
     compute_bpb: bool,
-    loss_fn: Callable[..., jax.Array] = default_grug_loss_fn,
-) -> TaggedEvaluator[LmExample | GrugLmExample, GrugModelParameters] | None:
+    loss_fn: Callable[..., jax.Array] = _default_grug_loss_fn,
+) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     Pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(Pos)
     if len(tagged_eval_sets) == 0:
@@ -50,9 +71,7 @@ def build_tagged_evaluator(
     )
     eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
 
-    def eval_loss_fn(
-        model: GrugModelParameters, batch: LmExample | GrugLmExample
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+    def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = loss_fn(

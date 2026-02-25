@@ -25,8 +25,7 @@ from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.data.mixture import MixtureDataset
 from levanter.eval import construct_log_dict
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.model import GrugModelConfig, GrugModelParameters, init_parameters
-from levanter.grug.model import loss_fn as grug_loss_fn
+from levanter.grug.model import GrugModelConfig, Transformer
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import estimate_jit_flops, parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -43,14 +42,34 @@ from .eval_hooks import build_tagged_evaluator
 logger = logging.getLogger(__name__)
 
 
+def grug_loss_fn(
+    model: Transformer,
+    token_ids: jax.Array,
+    loss_weight: jax.Array,
+    cfg: GrugModelConfig,
+    *,
+    mask: GrugAttentionMask | jax.Array | None = None,
+    reduction: str = "mean",
+    logsumexp_weight: float | None = None,
+) -> jax.Array:
+    del cfg
+    return model.next_token_loss(
+        token_ids,
+        loss_weight,
+        mask=mask,
+        reduction=reduction,
+        logsumexp_weight=logsumexp_weight,
+    )
+
+
 @register_dataclass
 @dataclass(frozen=True)
 class GrugTrainState:
     step: jax.Array
-    params: GrugModelParameters
+    params: Transformer
     opt_state: optax.OptState
     training_key: jax.Array
-    ema_params: GrugModelParameters
+    ema_params: Transformer
 
 
 def _make_train_step(
@@ -171,7 +190,7 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
 
         @jax.jit
         def _init_state(model_rng, train_rng):
-            params = trainer_runtime.mp.cast_to_param(init_parameters(config.model, key=model_rng))
+            params = trainer_runtime.mp.cast_to_param(Transformer.init(config.model, key=model_rng))
             opt_state = optimizer.init(params)
             return GrugTrainState(
                 step=jnp.array(0, dtype=jnp.int32),
@@ -223,7 +242,7 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
         token_ids_spec = jax.ShapeDtypeStruct((1, config.model.max_seq_len), jnp.int32)
         loss_weight_spec = jax.ShapeDtypeStruct((1, config.model.max_seq_len), jnp.float32)
 
-        def _loss_only(params: GrugModelParameters, token_ids: jax.Array, loss_weight: jax.Array) -> jax.Array:
+        def _loss_only(params: Transformer, token_ids: jax.Array, loss_weight: jax.Array) -> jax.Array:
             return grug_loss_fn(
                 trainer_runtime.mp.cast_to_compute(params),
                 token_ids,
