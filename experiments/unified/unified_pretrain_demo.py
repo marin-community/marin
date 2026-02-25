@@ -84,6 +84,7 @@ TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
 TEXT_WEIGHT = float(os.environ.get("TEXT_WEIGHT", "1.0"))
 MULTIMODAL_WEIGHT = float(os.environ.get("MULTIMODAL_WEIGHT", "2.0"))
+LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "3e-4"))
 
 
 def _merge_xla_flags(existing: str, required_flags: list[str]) -> str:
@@ -280,6 +281,7 @@ DEFAULT_EVAL_BENCHMARKS = [
 def make_unified_0_6b(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
+    learning_rate: float = 3e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
     step = default_train(
@@ -290,7 +292,7 @@ def make_unified_0_6b(
             eval_benchmarks=eval_benchmarks,
         ),
         model_config=qwen3_0_6b,
-        train_config=_demo_train_config(learning_rate=3e-4),
+        train_config=_demo_train_config(learning_rate=learning_rate),
         tags=["unified", "scaling", "qwen3", "0.6b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -303,6 +305,7 @@ def make_unified_0_6b(
 def make_unified_1_7b(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
+    learning_rate: float = 3e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
     step = default_train(
@@ -313,7 +316,7 @@ def make_unified_1_7b(
             eval_benchmarks=eval_benchmarks,
         ),
         model_config=qwen3_1_7b,
-        train_config=_demo_train_config(learning_rate=3e-4),
+        train_config=_demo_train_config(learning_rate=learning_rate),
         tags=["unified", "scaling", "qwen3", "1.7b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -325,6 +328,7 @@ def make_unified_1_7b(
 def make_unified_4b(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
+    learning_rate: float = 1.5e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
 ):
     step = default_train(
@@ -335,7 +339,7 @@ def make_unified_4b(
             eval_benchmarks=eval_benchmarks,
         ),
         model_config=qwen3_4b,
-        train_config=_demo_train_config(learning_rate=1.5e-4),
+        train_config=_demo_train_config(learning_rate=learning_rate),
         tags=["unified", "scaling", "qwen3", "4b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -345,9 +349,9 @@ def make_unified_4b(
 
 
 if __name__ == "__main__":
-    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT)]
-    steps = [make_unified_1_7b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT)]
-    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT)]
+    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE)]
+    steps = [make_unified_1_7b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE)]
+    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE)]
     executor_main(
         steps,
         description="Unified image-text model pre-training with Qwen3 architecture",
