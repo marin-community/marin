@@ -32,6 +32,7 @@ from iris.cluster.types import (
     JobName,
     ResourceSpec,
     region_constraint,
+    zone_constraint,
     tpu_device,
 )
 from iris.rpc import cluster_pb2
@@ -220,6 +221,7 @@ def run_iris_job(
     include_children_logs: bool = True,
     terminate_on_exit: bool = True,
     regions: tuple[str, ...] | None = None,
+    zone: str | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -228,6 +230,7 @@ def run_iris_job(
         terminate_on_exit: If True, terminate the job on any non-normal exit
             (KeyboardInterrupt, unexpected exceptions). Normal completion is unaffected.
         regions: If provided, restrict the job to workers in these regions.
+        zone: If provided, restrict the job to workers in this zone.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -240,6 +243,8 @@ def run_iris_job(
     constraints: list[Constraint] = []
     if regions:
         constraints.append(region_constraint(list(regions)))
+    if zone:
+        constraints.append(zone_constraint(zone))
 
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
@@ -248,6 +253,8 @@ def run_iris_job(
         logger.info(f"TPU: {resources.device.tpu.variant}")
     if regions:
         logger.info(f"Region constraint: {', '.join(regions)}")
+    if zone:
+        logger.info(f"Zone constraint: {zone}")
 
     logger.info(f"Using controller: {controller_url}")
     return _submit_and_wait_job(
@@ -373,6 +380,7 @@ Examples:
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, help="Job timeout in seconds (default: 0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
+@click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
 @click.option(
     "--include-children-logs/--no-include-children-logs",
@@ -400,6 +408,7 @@ def run(
     max_retries: int,
     timeout: int,
     region: tuple[str, ...],
+    zone: str | None,
     extra: tuple[str, ...],
     include_children_logs: bool,
     terminate_on_exit: bool,
@@ -432,6 +441,7 @@ def run(
         include_children_logs=include_children_logs,
         terminate_on_exit=terminate_on_exit,
         regions=region or None,
+        zone=zone,
     )
     sys.exit(exit_code)
 

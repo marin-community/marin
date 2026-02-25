@@ -9,7 +9,6 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 
 import signal
 import threading
-from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -20,10 +19,8 @@ from iris.cli.build import (
     find_iris_root,
     find_marin_root,
     get_git_sha,
-    push_to_gcp_registries,
     push_to_ghcr,
 )
-from iris.cluster.platform.bootstrap import parse_artifact_registry_tag
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
@@ -91,122 +88,34 @@ def _parse_ghcr_tag(image_tag: str) -> tuple[str, str, str] | None:
     return org, image_name, version
 
 
-@dataclass
-class _ImageBuildParams:
-    image_type: str
-    region: str
-    project: str
-    image_name: str
-    version: str
-    context: str | None = None
-    dockerfile: str | None = None
+def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = False) -> None:
+    """Build and push a single image to GHCR, parsing org/name/version from the tag."""
+    ghcr_parsed = _parse_ghcr_tag(image_tag)
+    if not ghcr_parsed:
+        raise click.ClickException(f"Unrecognized image tag format (expected ghcr.io/...): {image_tag}")
 
-    @property
-    def local_tag(self) -> str:
-        return f"{self.image_name}:{self.version}"
-
-
-def _extract_image_params(image_tag: str, image_type: str) -> _ImageBuildParams | None:
-    parsed = parse_artifact_registry_tag(image_tag)
-    if not parsed:
-        return None
-    region, project, image_name, version = parsed
-    return _ImageBuildParams(
-        image_type=image_type, region=region, project=project, image_name=image_name, version=version
-    )
-
-
-def _build_and_push_image(params: _ImageBuildParams) -> None:
-    click.echo(f"Building {params.image_type} image: {params.local_tag}")
-    click.echo(f"  Region: {params.region}")
-    click.echo(f"  Project: {params.project}")
+    org, image_name, version = ghcr_parsed
+    local_tag = f"{image_name}:{version}"
+    click.echo(f"Building {image_type} image: {local_tag}")
+    click.echo(f"  Registry: ghcr.io/{org}")
     click.echo()
     build_image(
-        image_type=params.image_type,
-        tag=params.local_tag,
+        image_type=image_type,
+        tag=local_tag,
         push=False,
-        dockerfile=params.dockerfile,
-        context=params.context,
+        dockerfile=None,
+        context=None,
         platform="linux/amd64",
-        registry="gcp",
-        ghcr_org="",
-        gcp_regions=(),
-        gcp_project=params.project,
+        ghcr_org=org,
+        verbose=verbose,
     )
     click.echo()
-    push_to_gcp_registries(
-        source_tag=params.local_tag,
-        regions=(params.region,),
-        project=params.project,
-        image_name=params.image_name,
-        version=params.version,
-    )
+    push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
+    click.echo()
 
 
-def _collect_scale_group_regions(config) -> set[str]:
-    """Collect unique cloud regions from all scale groups' GCP zones."""
-    regions: set[str] = set()
-    for sg in config.scale_groups.values():
-        template = sg.slice_template
-        if template.HasField("gcp") and template.gcp.zone:
-            regions.add(template.gcp.zone.rsplit("-", 1)[0])
-    return regions
-
-
-def _push_image_to_extra_regions(params: _ImageBuildParams, extra_regions: set[str]) -> None:
-    """Push an already-built image to additional AR regions beyond the primary."""
-    for region in sorted(extra_regions):
-        click.echo(f"Pushing {params.image_name} to additional region: {region}")
-        push_to_gcp_registries(
-            source_tag=params.local_tag,
-            regions=(region,),
-            project=params.project,
-            image_name=params.image_name,
-            version=params.version,
-        )
-
-
-def _build_and_push_for_tag(image_tag: str, image_type: str) -> None:
-    """Build and push a single image, auto-detecting registry from the tag."""
-    gcp_parsed = parse_artifact_registry_tag(image_tag)
-    if gcp_parsed:
-        region, project, image_name, version = gcp_parsed
-        params = _ImageBuildParams(
-            image_type=image_type, region=region, project=project, image_name=image_name, version=version
-        )
-        _build_and_push_image(params)
-        click.echo()
-        return
-
-    ghcr_parsed = _parse_ghcr_tag(image_tag)
-    if ghcr_parsed:
-        org, image_name, version = ghcr_parsed
-        local_tag = f"{image_name}:{version}"
-        click.echo(f"Building {image_type} image: {local_tag}")
-        click.echo(f"  Registry: ghcr.io/{org}")
-        click.echo()
-        build_image(
-            image_type=image_type,
-            tag=local_tag,
-            push=False,
-            dockerfile=None,
-            context=None,
-            platform="linux/amd64",
-            registry="ghcr",
-            ghcr_org=org,
-            gcp_regions=(),
-            gcp_project="",
-        )
-        click.echo()
-        push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version)
-        click.echo()
-        return
-
-    raise click.ClickException(f"Unrecognized image tag format: {image_tag}")
-
-
-def _build_and_push_task_image(task_tag: str) -> None:
-    """Build and push the task image, deriving registry from the task image tag.
+def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
+    """Build and push the task image to GHCR.
 
     The task image uses a different Dockerfile (Dockerfile.task) and build context
     (marin repo root) than worker/controller, so it can't use _build_and_push_for_tag
@@ -215,69 +124,41 @@ def _build_and_push_task_image(task_tag: str) -> None:
     marin_root = str(find_marin_root())
     task_dockerfile = str(find_iris_root() / "Dockerfile.task")
 
-    gcp_parsed = parse_artifact_registry_tag(task_tag)
-    if gcp_parsed:
-        region, project, image_name, version = gcp_parsed
-        task_params = _ImageBuildParams(
-            image_type="task",
-            region=region,
-            project=project,
-            image_name=image_name,
-            version=version,
-            context=marin_root,
-            dockerfile=task_dockerfile,
-        )
-        _build_and_push_image(task_params)
-        click.echo()
-        return
-
     ghcr_parsed = _parse_ghcr_tag(task_tag)
-    if ghcr_parsed:
-        org, image_name, version = ghcr_parsed
-        local_tag = f"{image_name}:{version}"
-        click.echo(f"Building task image: {local_tag}")
-        click.echo(f"  Registry: ghcr.io/{org}")
-        click.echo()
-        build_image(
-            image_type="task",
-            tag=local_tag,
-            push=False,
-            dockerfile=task_dockerfile,
-            context=marin_root,
-            platform="linux/amd64",
-            registry="ghcr",
-            ghcr_org=org,
-            gcp_regions=(),
-            gcp_project="",
-        )
-        click.echo()
-        push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version)
-        click.echo()
-        return
+    if not ghcr_parsed:
+        raise click.ClickException(f"Unrecognized image tag format (expected ghcr.io/...): {task_tag}")
 
-    raise click.ClickException(f"Unrecognized image tag format: {task_tag}")
+    org, image_name, version = ghcr_parsed
+    local_tag = f"{image_name}:{version}"
+    click.echo(f"Building task image: {local_tag}")
+    click.echo(f"  Registry: ghcr.io/{org}")
+    click.echo()
+    build_image(
+        image_type="task",
+        tag=local_tag,
+        push=False,
+        dockerfile=task_dockerfile,
+        context=marin_root,
+        platform="linux/amd64",
+        ghcr_org=org,
+        verbose=verbose,
+    )
+    click.echo()
+    push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
+    click.echo()
 
 
-def _build_cluster_images(config) -> dict[str, str]:
+def _build_cluster_images(config, verbose: bool = False) -> dict[str, str]:
     built: dict[str, str] = {}
-    extra_regions = _collect_scale_group_regions(config)
 
     for tag, typ in [(config.defaults.bootstrap.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
-            _build_and_push_for_tag(tag, typ)
+            _build_and_push_for_tag(tag, typ, verbose=verbose)
             built[typ] = tag
-            # Push AR images to all scale group regions
-            gcp_parsed = parse_artifact_registry_tag(tag)
-            if gcp_parsed and typ == "worker":
-                region, project, image_name, version = gcp_parsed
-                params = _ImageBuildParams(
-                    image_type=typ, region=region, project=project, image_name=image_name, version=version
-                )
-                _push_image_to_extra_regions(params, extra_regions - {region})
 
     task_tag = config.defaults.default_task_image
     if task_tag:
-        _build_and_push_task_image(task_tag)
+        _build_and_push_task_image(task_tag, verbose=verbose)
         built["task"] = task_tag
 
     return built
@@ -360,7 +241,8 @@ def cluster_start(ctx, local: bool):
     is_local = config.controller.WhichOneof("controller") == "local"
     if not is_local:
         _pin_latest_images(config)
-        built = _build_cluster_images(config)
+        verbose = ctx.obj.get("verbose", False)
+        built = _build_cluster_images(config, verbose=verbose)
         if built:
             click.echo("Built image tags:")
             for name, tag in built.items():

@@ -29,7 +29,7 @@ from iris.cluster.platform.base import (
     SliceStatus,
     WorkerStatus,
 )
-from iris.cluster.types import REGION_ATTRIBUTE_KEY, DeviceType, VmWorkerStatus
+from iris.cluster.types import REGION_ATTRIBUTE_KEY, ZONE_ATTRIBUTE_KEY, DeviceType, VmWorkerStatus
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
@@ -267,6 +267,7 @@ def make_autoscaler(
     config: config_pb2.AutoscalerConfig | None = None,
     platform: MagicMock | None = None,
     bootstrap_config: config_pb2.BootstrapConfig | None = None,
+    gcp_project: str = "",
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
     mock_platform = platform or make_mock_platform()
@@ -277,6 +278,7 @@ def make_autoscaler(
             config=config,
             platform=mock_platform,
             bootstrap_config=bootstrap_config,
+            gcp_project=gcp_project,
         )
     else:
         return Autoscaler(
@@ -284,6 +286,7 @@ def make_autoscaler(
             evaluation_interval=Duration.from_seconds(0.1),
             platform=mock_platform,
             bootstrap_config=bootstrap_config,
+            gcp_project=gcp_project,
         )
 
 
@@ -1036,7 +1039,8 @@ class TestRegionRouting:
 
         assert result.routed_entries.get("eu") is None
         assert len(result.unmet_entries) == 1
-        assert "required_regions=['us-west4']" in result.unmet_entries[0].reason
+        assert "no groups in region" in result.unmet_entries[0].reason
+        assert "us-west4" in result.unmet_entries[0].reason
 
     def test_route_demand_combined_region_and_preemptible(self):
         """Demand requiring both region=us-west4 and preemptible=True only routes to the matching group."""
@@ -1069,6 +1073,107 @@ class TestRegionRouting:
         assert result.routed_entries.get("west-ondemand") is None
         assert result.routed_entries.get("eu-preemptible") is None
         assert result.unmet_entries == []
+
+
+class TestZoneRouting:
+    def test_route_demand_filters_by_required_zone(self):
+        config_a = make_scale_group_config(name="zone-a", max_slices=5, priority=10, zones=["us-central2-a"])
+        config_a.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-central2"
+        config_a.worker.attributes[ZONE_ATTRIBUTE_KEY] = "us-central2-a"
+
+        config_b = make_scale_group_config(name="zone-b", max_slices=5, priority=10, zones=["us-central2-b"])
+        config_b.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-central2"
+        config_b.worker.attributes[ZONE_ATTRIBUTE_KEY] = "us-central2-b"
+
+        zone_a = ScalingGroup(config_a, make_mock_platform())
+        zone_b = ScalingGroup(config_b, make_mock_platform())
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        for entry in demand:
+            entry.required_zones = frozenset({"us-central2-b"})
+
+        result = route_demand([zone_a, zone_b], demand)
+
+        assert len(result.routed_entries["zone-b"]) == 2
+        assert result.routed_entries.get("zone-a") is None
+        assert result.unmet_entries == []
+
+    def test_route_demand_unmet_when_no_group_matches_zone(self):
+        config_a = make_scale_group_config(name="zone-a", max_slices=5, priority=10, zones=["us-central2-a"])
+        config_a.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-central2"
+        config_a.worker.attributes[ZONE_ATTRIBUTE_KEY] = "us-central2-a"
+        zone_a = ScalingGroup(config_a, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_zones = frozenset({"us-central2-b"})
+
+        result = route_demand([zone_a], demand)
+
+        assert result.routed_entries.get("zone-a") is None
+        assert len(result.unmet_entries) == 1
+        assert "no groups in zone" in result.unmet_entries[0].reason
+        assert "us-central2-b" in result.unmet_entries[0].reason
+
+    def test_zone_typo_suggests_close_match(self):
+        """A zone typo like 'europe-west4b' triggers a 'did you mean' suggestion."""
+        config = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
+        config.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+        config.worker.attributes[ZONE_ATTRIBUTE_KEY] = "europe-west4-b"
+        eu = ScalingGroup(config, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_zones = frozenset({"europe-west4b"})
+
+        result = route_demand([eu], demand)
+
+        assert len(result.unmet_entries) == 1
+        reason = result.unmet_entries[0].reason
+        assert "did you mean" in reason
+        assert "europe-west4-b" in reason
+
+    def test_device_mismatch_shows_available(self):
+        """When device doesn't match, the reason mentions the requested device."""
+        config = make_scale_group_config(
+            name="gpu-group",
+            max_slices=5,
+            priority=10,
+            zones=["us-central1-a"],
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="a100",
+        )
+        gpu_group = ScalingGroup(config, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+
+        result = route_demand([gpu_group], demand)
+
+        assert len(result.unmet_entries) == 1
+        reason = result.unmet_entries[0].reason
+        assert "no groups with device" in reason
+        assert "tpu" in reason
+
+    def test_reason_string_is_concise(self):
+        """The no_matching_group reason stays under 200 chars even with many groups."""
+        groups = []
+        for i in range(60):
+            zone = f"us-east{i % 5 + 1}-{'abc'[i % 3]}"
+            config = make_scale_group_config(
+                name=f"tpu_v6e_4-{zone}",
+                max_slices=2,
+                priority=10,
+                zones=[zone],
+            )
+            config.worker.attributes[ZONE_ATTRIBUTE_KEY] = zone
+            groups.append(ScalingGroup(config, make_mock_platform()))
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_zones = frozenset({"nonexistent-zone-z"})
+
+        result = route_demand(groups, demand)
+
+        assert len(result.unmet_entries) == 1
+        reason = result.unmet_entries[0].reason
+        assert len(reason) < 200, f"Reason too long ({len(reason)} chars): {reason}"
 
 
 class TestAutoscalerWaterfallEndToEnd:
@@ -1963,66 +2068,65 @@ class TestPerGroupBootstrapConfig:
 
         assert "IRIS_WORKER_ATTRIBUTES" not in base_bc.env_vars
 
-    def test_rewrites_docker_image_region_for_gcp_group(self):
-        """AR image is rewritten to match the group's GCP zone region."""
+    def test_rewrites_ghcr_image_to_ar_remote_for_gcp_group(self):
+        """GHCR image is rewritten to AR remote repo for the group's continent."""
         base_bc = config_pb2.BootstrapConfig(
-            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
             worker_port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
         assert bc is not None
-        assert bc.docker_image == "europe-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        assert bc.docker_image == "europe-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-worker:latest"
         # Base config must not be mutated
-        assert base_bc.docker_image == "us-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        assert base_bc.docker_image == "ghcr.io/marin-community/iris-worker:latest"
 
-    def test_no_rewrite_for_non_ar_image(self):
-        """Non-AR images (e.g. ghcr.io) pass through unchanged."""
+    def test_no_rewrite_for_non_ghcr_image(self):
+        """Non-GHCR images (e.g. docker.io) pass through unchanged."""
         base_bc = config_pb2.BootstrapConfig(
-            docker_image="ghcr.io/org/iris-worker:latest",
+            docker_image="docker.io/library/ubuntu:latest",
             worker_port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
         assert bc is not None
-        # GHCR images are not rewritten but still get a copy with accel env vars
-        assert bc.docker_image == "ghcr.io/org/iris-worker:latest"
+        assert bc.docker_image == "docker.io/library/ubuntu:latest"
 
-    def test_no_rewrite_for_same_region(self):
-        """When the group zone matches the image region, no rewrite needed."""
+    def test_ghcr_rewrite_for_us_group(self):
+        """GHCR image is rewritten to us multi-region for US zones."""
         base_bc = config_pb2.BootstrapConfig(
-            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
             worker_port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="west-group", max_slices=5, zones=["us-west4-a"])
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc, gcp_project="proj")
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
         assert bc is not None
-        assert bc.docker_image == "us-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        assert bc.docker_image == "us-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-worker:latest"
 
     def test_rewrite_combined_with_worker_attributes(self):
         """Image rewrite and worker attribute injection both apply when both are needed."""
         import json
 
         base_bc = config_pb2.BootstrapConfig(
-            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
             worker_port=10001,
             controller_address="controller:10000",
         )
@@ -2030,12 +2134,12 @@ class TestPerGroupBootstrapConfig:
         sg_config.worker.attributes["region"] = "europe-west4"
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
         assert bc is not None
-        assert bc.docker_image == "europe-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        assert bc.docker_image == "europe-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-worker:latest"
         attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
         assert attrs["region"] == "europe-west4"
 

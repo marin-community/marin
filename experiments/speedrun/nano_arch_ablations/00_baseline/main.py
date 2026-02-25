@@ -76,7 +76,7 @@ class CausalSelfAttention(eqx.Module):
     w_k: jax.Array
     w_v: jax.Array
     w_o: jax.Array
-    cfg: ModelConfig
+    cfg: ModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: ModelConfig, *, key):
@@ -123,7 +123,7 @@ class MLP(eqx.Module):
 
 class RMSNorm(eqx.Module):
     weight: jax.Array
-    eps: float
+    eps: float = eqx.field(static=True)
 
     @staticmethod
     def init(dim: int, eps: float):
@@ -168,7 +168,7 @@ class Transformer(eqx.Module):
     output_proj: jax.Array
     blocks: tuple[Block, ...]
     final_norm: RMSNorm
-    config: ModelConfig
+    config: ModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: ModelConfig, *, key):

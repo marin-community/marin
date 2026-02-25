@@ -16,7 +16,7 @@ from jax.sharding import AxisType
 from levanter.store.cache import TreeCache
 
 from levanter.grug.data import DEFAULT_AXIS_MAPPING, build_token_loader
-from levanter.grug.model import GrugModelConfig, GrugModelParameters, forward, init_parameters
+from levanter.grug.model import GrugModelConfig, Transformer
 
 
 def synthetic_batch_iterator(
@@ -93,8 +93,10 @@ def make_train_step(
     model_cfg: GrugModelConfig,
     optimizer: optax.GradientTransformation,
 ):
-    def loss_and_metrics(params: GrugModelParameters, batch: dict[str, jax.Array]):
-        logits = forward(params, batch["tokens"], model_cfg, mask=None)
+    del model_cfg
+
+    def loss_and_metrics(params: Transformer, batch: dict[str, jax.Array]):
+        logits = params.logits(batch["tokens"], mask=None)
         loss = cross_entropy_loss(logits, batch["labels"])
         metrics = {"loss": loss, "ppl": jnp.exp(loss)}
         return loss, metrics
@@ -126,7 +128,7 @@ def run_training(train_cfg: GrugTrainingConfig, *, cache_dir: str | None = None)
     with jax.set_mesh(mesh):
         rng = jax.random.key(train_cfg.seed)
         rng, init_rng = jax.random.split(rng)
-        params = init_parameters(train_cfg.model, key=init_rng)
+        params = Transformer.init(train_cfg.model, key=init_rng)
         optimizer = optax.adamw(learning_rate=train_cfg.learning_rate, weight_decay=train_cfg.weight_decay)
         opt_state = optimizer.init(params)
         state = TrainingState(step=0, params=params, opt_state=opt_state)
@@ -161,7 +163,7 @@ def run_training(train_cfg: GrugTrainingConfig, *, cache_dir: str | None = None)
 @dataclass(frozen=True)
 class TrainingState:
     step: int
-    params: GrugModelParameters
+    params: Transformer
     opt_state: optax.OptState
 
 

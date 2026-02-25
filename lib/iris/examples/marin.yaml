@@ -34,7 +34,7 @@ storage:
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:
-    zone: us-west1-b
+    zone: us-central1-a
     machine_type: e2-standard-4
     port: 10000
 
