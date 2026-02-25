@@ -150,7 +150,7 @@ def _gather(
                     lines.append(entry.data)
             task_logs[task.task_id] = lines[-tail:]
         except Exception:
-            logger.debug("Failed to fetch logs for task %s", task.task_id, exc_info=True)
+            logger.warning("Failed to fetch logs for task %s", task.task_id, exc_info=True)
             task_logs[task.task_id] = ["(failed to fetch logs)"]
 
     # 5. Derive log prefix

@@ -163,6 +163,9 @@ class LocalClusterClient:
     def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]:
         return self._remote_client.list_endpoints(prefix)
 
+    def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]:
+        return self._remote_client.list_workers()
+
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
         return self._remote_client.list_jobs()
 
