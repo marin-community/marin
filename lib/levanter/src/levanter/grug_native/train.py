@@ -36,8 +36,9 @@ from .checkpoint import (
     wait_for_checkpoints,
 )
 from .config import GrugNativeRunConfig
-from .data import build_train_dataset, build_train_loader_for_runtime
+from .data import build_train_dataset, build_train_loader
 from .eval_hooks import build_tagged_evaluator
+from .runtime import as_grug_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +149,7 @@ def _make_train_step(
 
 
 def run_grug_native(config: GrugNativeRunConfig) -> None:
-    trainer_runtime = config.trainer.trainer
+    trainer_runtime = as_grug_runtime(config.trainer.trainer)
     trainer_runtime.initialize()
     levanter.tracker.log_configuration(config)
 
@@ -182,10 +183,12 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
             batch_schedule=batch_schedule,
             key=data_key,
         )
-        train_loader = build_train_loader_for_runtime(
+        train_loader = build_train_loader(
             train_dataset,
-            trainer_runtime=trainer_runtime,
+            batch_schedule=batch_schedule,
             mesh=mesh,
+            batch_pspec=config.trainer.train_batch_pspec,
+            allow_nondivisible_batch_size=trainer_runtime.allow_nondivisible_batch_size,
         )
 
         @jax.jit
@@ -202,9 +205,7 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
 
         state = _init_state(model_key, training_key)
 
-        checkpointer = (
-            trainer_runtime.checkpointer.create(run_id) if trainer_runtime.checkpointer is not None else None
-        )
+        checkpointer = trainer_runtime.checkpointer.create(run_id)
         checkpoint_path = trainer_runtime.load_checkpoint_path
         if checkpoint_path is None and checkpointer is not None:
             checkpoint_path = trainer_runtime.checkpointer.expanded_path(run_id)
@@ -288,20 +289,14 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
             mesh=mesh,
             max_eval_batches=config.eval.max_eval_batches,
             compute_bpb=config.eval.compute_bpb,
+            eval_batch_pspec=config.eval.eval_batch_pspec,
         )
 
         profiler_path = trainer_runtime.log_dir / run_id / "profiler"
-        profiler_start_step = trainer_runtime.profiler_start_step
-        profiler_num_steps = trainer_runtime.profiler_num_steps
-        profiler_enabled = trainer_runtime.profiler
-        if profiler_enabled and profiler_num_steps + profiler_start_step > trainer_runtime.num_train_steps:
-            logger.warning(
-                f"Adjusting profiler_total_steps from {profiler_num_steps} to"
-                f" {trainer_runtime.num_train_steps - profiler_start_step}"
-            )
-            profiler_num_steps = trainer_runtime.num_train_steps - profiler_start_step
-        if profiler_num_steps <= 0:
-            profiler_enabled = False
+        profiler_config = trainer_runtime.profiler
+        profiler_start_step = profiler_config.start_step
+        profiler_num_steps = profiler_config.resolve_num_profile_steps(num_train_steps=trainer_runtime.num_train_steps)
+        profiler_enabled = profiler_config.is_enabled and profiler_num_steps > 0
         profiler_ctx: contextlib.AbstractContextManager[None] | None = None
 
         eval_interval = config.eval.steps_per_eval
@@ -354,7 +349,7 @@ def run_grug_native(config: GrugNativeRunConfig) -> None:
 
                 if profiler_enabled and profiler_ctx is None and step == profiler_start_step - 1:
                     profiler_ctx = callbacks.profile_ctx(
-                        str(profiler_path), create_perfetto_link=trainer_runtime.profiler_perfetto_link
+                        str(profiler_path), create_perfetto_link=profiler_config.perfetto_link
                     )
                     profiler_ctx.__enter__()
 

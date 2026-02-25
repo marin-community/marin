@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-from typing import Callable
 
 import jax
 import jax.numpy as jnp
@@ -15,7 +14,8 @@ from levanter.eval import TaggedEvaluator
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.model import GrugModelConfig, Transformer
 from levanter.models.lm_model import LmExample
-from levanter.trainer import TrainerConfig
+
+from .runtime import GrugRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +24,11 @@ def _default_grug_loss_fn(
     model: Transformer,
     token_ids: jax.Array,
     loss_weight: jax.Array,
-    model_config: GrugModelConfig,
     *,
     mask: GrugAttentionMask | jax.Array | None = None,
     reduction: str = "mean",
     logsumexp_weight: float | None = None,
 ) -> jax.Array:
-    del model_config
     return model.next_token_loss(
         token_ids,
         loss_weight,
@@ -45,11 +43,11 @@ def build_tagged_evaluator(
     data_config: LmDataConfig,
     model_config: GrugModelConfig,
     max_seq_len: int,
-    trainer_runtime: TrainerConfig,
+    trainer_runtime: GrugRuntime,
     mesh: Mesh,
     max_eval_batches: int | None,
     compute_bpb: bool,
-    loss_fn: Callable[..., jax.Array] = _default_grug_loss_fn,
+    eval_batch_pspec: P,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     Pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(Pos)
@@ -62,23 +60,20 @@ def build_tagged_evaluator(
         max_examples_per_dataset = max_eval_batches * trainer_runtime.EvalBatch.size
 
     tokenizer = data_config.the_tokenizer if compute_bpb else None
-    compute_axis_mapping = trainer_runtime.compute_axis_mapping
-    batch_axis_resource = compute_axis_mapping.get(
-        trainer_runtime.EvalBatch.name,
-        compute_axis_mapping.get(
-            trainer_runtime.batch_axis_name or "batch", compute_axis_mapping.get("batch", "data")
-        ),
-    )
+    if len(eval_batch_pspec) != 1:
+        raise ValueError(f"eval_batch_pspec must describe a single logical batch axis, got {eval_batch_pspec}")
+    batch_axis_resource = eval_batch_pspec[0]
+    if batch_axis_resource is not None and not isinstance(batch_axis_resource, (str, tuple)):
+        raise ValueError(f"eval_batch_pspec must map to mesh axis names, got {eval_batch_pspec}")
+    eval_axis_mapping = {trainer_runtime.EvalBatch.name: batch_axis_resource}
     eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
-        per_pos_loss = loss_fn(
-            model,
+        per_pos_loss = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
-            model_config,
             mask=batch.attn_mask,
             reduction="none",
             logsumexp_weight=None,
@@ -94,6 +89,6 @@ def build_tagged_evaluator(
         loss_fn=eval_loss_fn,
         tokenizer=tokenizer,
         device_mesh=mesh,
-        axis_mapping=trainer_runtime.compute_axis_mapping,
+        axis_mapping=eval_axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
     )

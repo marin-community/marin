@@ -61,23 +61,3 @@ def build_train_loader(
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=bool(allow_nondivisible_batch_size),
     )
-
-
-def build_train_loader_for_runtime(
-    dataset: AsyncDataset[GrugLmExample],
-    *,
-    trainer_runtime,
-    mesh: Mesh,
-) -> DataLoader[GrugLmExample]:
-    compute_axis_mapping = trainer_runtime.compute_axis_mapping
-    batch_axis_resource = compute_axis_mapping.get(
-        trainer_runtime.batch_axis_name or "batch",
-        compute_axis_mapping.get("batch", ("data",)),
-    )
-    return build_train_loader(
-        dataset,
-        batch_schedule=trainer_runtime.batch_schedule,
-        mesh=mesh,
-        batch_pspec=P(batch_axis_resource),
-        allow_nondivisible_batch_size=trainer_runtime.allow_nondivisible_batch_size,
-    )

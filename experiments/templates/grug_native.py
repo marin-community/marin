@@ -16,9 +16,11 @@ from experiments.defaults import default_validation_sets
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from levanter.data.text import LmDataConfig
 from levanter.grug.model import GrugModelConfig
 from levanter.grug_native.config import GrugEvalConfig, GrugNativeRunConfig, GrugTrainerConfig
+from levanter.grug_native.runtime import as_grug_runtime
 from levanter.grug_native.train import run_grug_native
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
@@ -80,10 +82,7 @@ def run_grug_native_trial(config: GrugNativeTrialConfig) -> None:
         train_batch_size=config.batch_size,
         num_train_steps=config.steps,
         steps_per_eval=max(1, config.steps_per_eval),
-        profiler=False,
-        profiler_start_step=5,
-        profiler_num_steps=100,
-        profiler_perfetto_link=False,
+        profiler=ProfilerConfig(enabled=False, start_step=5, num_steps=100, perfetto_link=False),
         mp=jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="marin",
@@ -115,7 +114,7 @@ def run_grug_native_trial(config: GrugNativeTrialConfig) -> None:
             warmup=1000,
         ),
         trainer=GrugTrainerConfig(
-            trainer=trainer,
+            trainer=as_grug_runtime(trainer),
             log_every=1,
             z_loss_weight=config.z_loss_weight,
             ema_beta=config.ema_beta,

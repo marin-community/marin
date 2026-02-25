@@ -6,14 +6,17 @@ from dataclasses import dataclass, field
 from levanter.data.text import LmDataConfig
 from levanter.grug.model import GrugModelConfig
 from levanter.optim import AdamConfig, OptimizerConfig
-from levanter.trainer import TrainerConfig
+from jax.sharding import PartitionSpec as P
+
+from .runtime import GrugRuntime, default_grug_runtime
 
 
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug-native training."""
 
-    trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
+    trainer: GrugRuntime = field(default_factory=default_grug_runtime)
+    train_batch_pspec: P = P(("data",))
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None
@@ -24,6 +27,7 @@ class GrugTrainerConfig:
 class GrugEvalConfig:
     """Perplexity eval settings for grug-native training."""
 
+    eval_batch_pspec: P = P(("data",))
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
