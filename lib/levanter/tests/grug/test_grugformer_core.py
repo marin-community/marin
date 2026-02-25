@@ -9,9 +9,8 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import AttentionMask, attention, reference_attention
-from levanter.grug.model import GrugModelConfig
+from levanter.grug.model import GrugModelConfig, Transformer
 from levanter.grug.sharding import Pbatch
-from levanter.grug.model import forward, init_parameters
 
 
 def _make_grug_mesh() -> Mesh:
@@ -42,14 +41,14 @@ def test_forward_shapes_and_jit_compile():
 
     mesh = _make_grug_mesh()
     with jax.set_mesh(mesh):
-        params = init_parameters(cfg, key=jax.random.key(0))
+        params = Transformer.init(cfg, key=jax.random.key(0))
         tokens = jax.random.randint(jax.random.key(1), (batch, seq), 0, cfg.vocab_size)
 
-        logits = forward(params, tokens, cfg, mask=AttentionMask.causal())
+        logits = params.logits(tokens, mask=AttentionMask.causal())
         assert logits.shape == (batch, seq, cfg.vocab_size)
 
-        jit_forward = jax.jit(forward, static_argnames=("cfg",))
-        logits_jit = jit_forward(params, tokens, cfg, mask=AttentionMask.causal())
+        jit_forward = jax.jit(lambda p, token_ids: p.logits(token_ids, mask=AttentionMask.causal()))
+        logits_jit = jit_forward(params, tokens)
         assert logits_jit.shape == (batch, seq, cfg.vocab_size)
 
 
@@ -66,7 +65,7 @@ def test_parameter_sharding_specs_are_named():
 
     mesh = _make_grug_mesh()
     with jax.set_mesh(mesh):
-        params = init_parameters(cfg, key=jax.random.key(0))
+        params = Transformer.init(cfg, key=jax.random.key(0))
 
         expected_vocab = P(None, None)
         assert params.token_embed.sharding.spec == expected_vocab

@@ -10,9 +10,8 @@ from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as
 from jax._src import config as jax_config
 
 from levanter.grug.attention import AttentionMask
-from levanter.grug.model import GrugModelConfig
+from levanter.grug.model import GrugModelConfig, Transformer
 from levanter.grug.sharding import Pbatch
-from levanter.grug.model import init_parameters, loss_fn
 
 
 def _make_abstract_mesh(*, data: int, model: int) -> AbstractMesh:
@@ -57,7 +56,7 @@ def test_grug_loss_can_lower_on_abstract_4_device_mesh(data: int, model: int):
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
         # Build shaped params via eval_shape so we exercise init sharding rules under AbstractMesh.
         key = jax.ShapeDtypeStruct(shape=(2,), dtype=jnp.uint32, sharding=NamedSharding(mesh, P()))
-        params = jax.eval_shape(lambda k: init_parameters(cfg, key=k), key)
+        params = jax.eval_shape(lambda k: Transformer.init(cfg, key=k), key)
 
         batch = 8
         seq = 256
@@ -67,7 +66,7 @@ def test_grug_loss_can_lower_on_abstract_4_device_mesh(data: int, model: int):
             token_ids = jax.sharding.reshard(token_ids, Pbatch)
             loss_weight = jnp.ones((batch, seq), dtype=jnp.float32)
             loss_weight = jax.sharding.reshard(loss_weight, Pbatch)
-            return loss_fn(p, token_ids, loss_weight, cfg, mask=AttentionMask.causal(), reduction="mean")
+            return p.next_token_loss(token_ids, loss_weight, mask=AttentionMask.causal(), reduction="mean")
 
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
         lowered = jax.jit(f).trace(params).lower(lowering_platforms=(platform,))

@@ -5,11 +5,11 @@ import inspect
 import math
 from dataclasses import dataclass
 
+import equinox as eqx
 import jax
 from jax import numpy as jnp
 from jax import shard_map
 from jax.sharding import NamedSharding, PartitionSpec as P
-from jax.tree_util import register_dataclass
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import named_call
@@ -28,9 +28,7 @@ class RotaryConfig:
     scaling_factor: float | None = None
 
 
-@functools.partial(register_dataclass, data_fields=["segment_ids"], meta_fields=["is_causal", "sliding_window"])
-@dataclass(frozen=True)
-class AttentionMask:
+class AttentionMask(eqx.Module):
     """Grug attention mask spec.
 
     This is deliberately simpler than `levanter.layers.attention.AttentionMask`:
@@ -38,9 +36,9 @@ class AttentionMask:
     - Supports causal masking, sliding windows, and segment IDs.
     """
 
-    is_causal: bool = False
+    is_causal: bool = eqx.field(default=False, static=True)
     segment_ids: tuple[jax.Array, jax.Array] | None = None
-    sliding_window: int | None = None
+    sliding_window: int | None = eqx.field(default=None, static=True)
 
     @classmethod
     def causal(cls, *, sliding_window: int | None = None) -> "AttentionMask":

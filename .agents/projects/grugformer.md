@@ -2,15 +2,15 @@
 
 ## Background
 
-Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [NanoGPT](https://github.com/karpathy/nanoGPT), we want a “grug-simple” causal LM trainer that showcases JAX’s explicit sharding mode while relying only on primitive building blocks: `jax`, `einops`, and JAX dataclasses (via `jax.tree_util.register_dataclass`). Training utilities stay minimal—optax for optimization, Levanter’s data loading/trackers for ingestion + logging, HuggingFace tokenizers (or Levanter’s serializer) for text, and TensorStore serialization for checkpoints. We explicitly do **not** want Haliax abstractions or class-heavy APIs—every computation lives in straightforward top-level functions so the trainer reads like a notebook.
+Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [NanoGPT](https://github.com/karpathy/nanoGPT), we want a “grug-simple” causal LM trainer that showcases JAX’s explicit sharding mode while relying only on primitive building blocks: `jax`, `einops`, and Equinox modules. Training utilities stay minimal—optax for optimization, Levanter’s data loading/trackers for ingestion + logging, HuggingFace tokenizers (or Levanter’s serializer) for text, and TensorStore serialization for checkpoints. We explicitly do **not** want Haliax abstractions or class-heavy APIs beyond lightweight Equinox modules—the trainer should still read like a notebook.
 
 
 ## Grug Principles
 
 ### Software Principles
 
-- **Few methods**: prefer top level functions to lots of methods (i.e. torch-style class hierarchies). Use `@dataclass`es for parameter/state containers, but keep logic in functions. Accessors are okay for small helpers (e.g. `def get_attention_params(model_params): ...`).
-- **No array-involved methods in jit**: avoid class methods that operate on `jax.Array` fields inside `@jax.jit`-compiled functions. There are a few corner cases where they behave surprisingly. (Mostly we need to avoid `jit(module.compute_loss)`).
+- **Equinox-first model surface.** Use `equinox.Module` for model structure (`Transformer`, `Block`, `MLP`, `RMSNorm`, attention). Keep methods small and direct (`init`, `__call__`, `logits`, `next_token_loss`).
+- **Do not use `eqx.nn` library modules.** Build Grug layers from raw JAX ops and explicit parameter arrays so we can explicitly manage initialization, sharding, and dtypes.
 - **Keep dependencies small.** Prefer `einshard`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs. Grug doesn't want to reinvent wheels, but we also don't want heavy frameworks obscuring the core logic.
 - **Fast kernels are allowed, but keep the surface simple.** On TPU, Grug uses JAX Splash attention (via `jax.experimental.pallas.ops.tpu.splash_attention`). We keep a separate reference implementation for debugging/regressions.
 - **Serializable state.** Trainer state must round-trip through `levanter.tensorstore_serialization.tree_{de,}serialize_leaves_tensorstore` with no custom logic.
@@ -21,8 +21,8 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 ## Working Agreement: How Grug Evolves
 
 - Canonical “best guess” lives in `lib/levanter/src/levanter/grug/`.
-- The evolving speedrun entrypoint is `experiments/speedrun/grugformer_starter/grugformer_speedrun.py`.
-- One-off speedruns under `experiments/speedrun/…` are snapshots/edit surfaces; they should not silently become the source of truth.
+- The evolving speedrun reference is `experiments/speedrun/nano_arch_ablations/00_baseline/main.py`.
+- One-off speedruns under `experiments/speedrun/…` are snapshots/edit surfaces; they are never the source of truth unless their shape is explicitly upstreamed into `lib/levanter/src/levanter/grug/`.
 - When we upstream a successful experiment, we update tests and record/clean up old experiments per `docs/recipes/change_grug.md`. This involves deletion of incompatible experiments but leaving a trail.
 
 ### JAX/ML Principles
@@ -35,7 +35,7 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 ### Code Organization Principles
 
-- **Keep `levanter.grug` core-only.** The `levanter.grug` package should stay “notebook-like”: raw `jax.Array` inputs/outputs, top-level functions, small dataclasses, and minimal plumbing.
+- **Keep `levanter.grug` core-only.** The `levanter.grug` package should stay “notebook-like”: raw `jax.Array` inputs/outputs, Equinox modules for model state, and minimal plumbing.
 - **Adapters live outside grug.** Integration with Levanter model interfaces (`LmHeadModel`, `NamedArray`, etc.) lives in `levanter.models`, currently `levanter.models.grug_wrapper`.
 - **Mask spec is simple.** Grug’s attention mask is a small spec (`levanter.grug.attention.AttentionMask`) storing only raw JAX arrays/ints (no NamedArray fields). Dense masks are currently accepted only by the reference attention path (TPU Splash does not support dense masks).
 - **Prefer jaxtyping for the grug core.** Grug uses jaxtyping-style shape hints in `levanter.grug` (e.g. `Int[Array, "B S"]`, `Float[Array, "B Q H D"]`) to keep the core readable and to document expected conventions without introducing runtime checks.
@@ -45,17 +45,17 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 - Prefer `jnp.einsum` for tensor contractions, including both matmuls and weighted reductions.
 - Avoid broadcast-plus-sum expressions that rely on inserted singleton dimensions (for example `x[..., None] * y[:, None, :]`) when an equivalent `einsum` is clear.
 - Keep explicit `PartitionSpec` annotations so contractions stay consistent with the mesh layout.
+- Use this module pattern directly in Grug core: each module defines `@staticmethod init(...)` and `__call__(...)` (`CausalSelfAttention`, `MLP`, `RMSNorm`, `Block`, `Transformer`), matching `00_baseline`.
 - Grug core attention is a single `attention(q, k, v, mask)` that calls ejkernel block-sparse attention; `reference_attention(...)` exists for debugging/regressions but is not selected at runtime.
-- Attention masks are a small spec dataclass (`levanter.grug.attention.AttentionMask`) rather than a dense mask/bias array. Grug defaults to causal masking.
-- Layer norm: implement epsilon-stabilized RMSNorm using `jnp.mean/var` and explicit shardings.
+- Attention masks are an `equinox.Module` (`levanter.grug.attention.AttentionMask`) rather than a dense mask/bias array. Grug defaults to causal masking.
 - Residual dropouts remain optional and implemented via `jax.random.bernoulli` (with `out_sharding=P(None)` to keep them replicated).
 
 ### Loss & Training Step
 
-- `loss_fn(params, batch, *, cfg, mesh)` runs forward pass and computes token-level cross-entropy (optionally ignoring padding tokens). Output sharding uses `(Batch @ data, None)` so reductions stay deterministic.
+- `params.next_token_loss(tokens, loss_weight, mask=...)` runs the forward pass and computes token-level cross-entropy (optionally ignoring padding tokens). Output sharding uses `(Batch @ data, None)` so reductions stay deterministic.
 - Optimizer: `optax.adamw` built from `TrainingConfig`. `TrainingState` carries `opt_state`. We wrap the optimizer in `optax.apply_updates`.
-- `@jax.jit` (or `jax.jit(static_argnames=("cfg",))`) compiled `train_step(state, batch, tracker)`:
-  1. `loss, grads = jax.value_and_grad(loss_fn)(state.params, batch)`
+- `@jax.jit` compiled `train_step(state, batch, tracker)`:
+  1. `loss, grads = jax.value_and_grad(model_loss)(state.params, batch)` where `model_loss` calls `params.next_token_loss(...)`
   2. `grads = reshard(grads, param_spec)` so updates stay model-sharded.
   3. `updates, new_opt_state = optimizer.update(grads, state.opt_state, state.params)`
   4. `new_params = optax.apply_updates(state.params, updates)`
@@ -130,7 +130,7 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
    - Checkpoint `(state, cfg, tokenizer metadata)` with Levanter’s TensorStore serialization.
 
 5) **Lock the grug core surface with tests**
-   - Shapes + `jax.jit` compile sanity for `init_parameters`/`forward`.
+   - Shapes + `jax.jit` compile sanity for `Transformer.init`/`Transformer.logits`.
    - Sharding sanity: `PartitionSpec` expectations don’t explode when a mesh is active.
    - Mask semantics for causal + sliding window + segment ids.
    - (Optional) blocksparse vs reference numerical check on tiny shapes.
@@ -146,7 +146,7 @@ Goal: use Grug as a “copy-pasteable” reference implementation inside a singl
 
 ### Constraints
 
-- Single-file friendly: minimal imports, no class-heavy APIs, top-level functions.
+- Single-file friendly: minimal imports and no class-heavy framework APIs.
 - Keep an accelerated path (ejkernel blocksparse) + a reference fallback path.
 - Make the “hack points” obvious: attention sinks, masks, sharding, and config.
 
@@ -155,9 +155,8 @@ Goal: use Grug as a “copy-pasteable” reference implementation inside a singl
 1) **Define a “Grug-In-File” template section in the speedrun script**
    - Put it near the top of the file under a clear header like `# === GRUG CORE (COPY-PASTE) ===`.
    - Include only:
-     - param dataclasses (`GrugAttentionParams`, `GrugBlockParams`, `GrugModelParameters`)
-     - `init_parameters(cfg, *, key)`
-     - `forward(params, tokens, cfg, *, mask=None)`
+     - small Equinox modules (`CausalSelfAttention`, `MLP`, `RMSNorm`, `Block`, `Transformer`)
+     - module pattern: `@staticmethod init(cfg, *, key)` + `__call__(tokens, *, mask=None)` on each Equinox module.
      - `attention(q, k, v, mask)`
      - `AttentionMask` (Grug-local, raw arrays only)
 
@@ -168,7 +167,7 @@ Goal: use Grug as a “copy-pasteable” reference implementation inside a singl
 3) **Keep the mask surface minimal and explicit**
    - Use the Grug-local `AttentionMask` spec (causal + sliding window + segment ids).
    - Avoid accepting dense boolean masks in accelerated mode (raise loudly).
-   - Default to causal masking in `forward()` when `mask is None`.
+   - Default to causal masking in `Transformer.__call__()` when `mask is None`.
 
 4) **Define the gauntlet API in the speedrun script**
    - Standardize a small set of functions the harness calls:
@@ -177,7 +176,7 @@ Goal: use Grug as a “copy-pasteable” reference implementation inside a singl
      - `fwd_fn(params, batch) -> logits`
      - `loss_fn(logits, labels) -> loss`
      - `train_step(state, batch) -> (new_state, metrics)`
-   - Keep all state as plain pytrees so it’s easy to serialize/inspect.
+   - Keep all state as Equinox modules / pytrees so it’s easy to serialize/inspect.
 
 5) **Gauntlet checks to run every time**
    - **Correctness sanity** (small shapes):
@@ -197,7 +196,7 @@ Goal: use Grug as a “copy-pasteable” reference implementation inside a singl
 7) **Document the expected “edit surface” inside the file**
    - Put a short list at the top:
      - “To add sinks: edit the ejkernel block-sparse attention call in `attention()`.”
-     - “To change masking: edit `AttentionMask` / `mask` construction in `forward()`.”
+     - “To change masking: edit `AttentionMask` / `mask` construction in `Transformer.__call__()`.”
      - “To change sharding: edit `PartitionSpec`s in init + `out_sharding=` callsites.”
 
 ## Integration Direction
@@ -211,7 +210,7 @@ Longer term, we want one of:
    - Owns data loading, checkpointing, and evaluation in a way that’s easy to copy/paste into speedrun scripts.
 
 2) **Evolve Levanter/Marin to support grug natively**
-   - Make Levanter’s trainer accept a “grug-style” model (pure functions + pytrees) without requiring a wrapper that reifies NamedArray/Haliax concepts.
+   - Make Levanter’s trainer accept a “grug-style” model (Equinox modules + thin function wrappers) without requiring a wrapper that reifies NamedArray/Haliax concepts.
    - Goal: the core stays `jax.Array`-first, and the training stack becomes more flexible rather than forcing everything into `LmHeadModel`-style interfaces.
 
 The wrapper remains a pragmatic bridge, but the intended direction is to shrink/remove it over time.

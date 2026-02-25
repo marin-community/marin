@@ -11,7 +11,7 @@ This recipe describes the workflow for:
 
 - **Source of truth:** `lib/levanter/src/levanter/grug/`
   - This is the “best guess” model. It should stay small, readable, and testable.
-- **Evolving experiment:** `experiments/speedrun/grugformer_starter/grugformer_speedrun.py`
+- **Evolving experiment:** `experiments/speedrun/nano_arch_ablations/00_baseline/main.py`
   - This is the *living* entrypoint that is expected to evolve as we learn.
 - **One-off experiments:** under `experiments/speedrun/…`
   - These are snapshots / specialized edit surfaces (e.g. attention sinks).
@@ -36,12 +36,12 @@ Try to change **one bucket at a time**. Optimizer isn't really (currently) addre
 
 Start from:
 
-- `experiments/speedrun/grugformer_starter/grugformer_speedrun.py`
+- `experiments/speedrun/nano_arch_ablations/00_baseline/main.py`
 
 Recommended workflow:
 
-1. Copy the file to a new experiment (or branch the starter if the change is small):
-   - Example: `experiments/speedrun/grugformer_<idea>/grugformer_<idea>.py`
+1. Copy the file to a new experiment (or branch the baseline if the change is small):
+   - Example: `experiments/speedrun/<idea>/main.py`
 2. Keep the edit surface explicit:
    - If you’re changing attention, keep the change in one local `attention()` or `attn_fn` block.
    - If you’re changing the MLP, keep it local to an `mlp()` helper.
@@ -70,17 +70,18 @@ Move the change into one of the core files:
 - `lib/levanter/src/levanter/grug/loss.py`
 
 Keep the “grug” style:
-- top-level functions,
-- small dataclasses only for parameter/state containers,
+- Equinox modules for model components (`Transformer`, `Block`, `MLP`, `RMSNorm`, attention),
+- explicit module pattern per component: `@staticmethod init(...)` + `__call__(...)`,
+- model API on module methods (`Transformer.init`, `Transformer.__call__`, `Transformer.logits`, `Transformer.next_token_loss`),
 - explicit sharding when needed (and loud failures otherwise).
 
 ### 2) Update/extend tests
 
 Add or adjust tests to lock the intended surface:
 
-- `lib/levanter/tests/test_grugformer_core.py`
-- `lib/levanter/tests/test_grugformer_model_loss.py`
-- `lib/levanter/tests/test_grugformer_fused_loss.py`
+- `lib/levanter/tests/grug/test_grugformer_core.py`
+- `lib/levanter/tests/grug/test_grugformer_model_loss.py`
+- `lib/levanter/tests/grug/test_grugformer_compilation.py`
 
 The goal is:
 - shapes don’t regress,
@@ -109,4 +110,3 @@ uv run python infra/pre-commit.py --all-files
 ## Notes / Inspiration
 
 This workflow is inspired by projects like `modded-nanogpt`: keep a small, readable core, iterate quickly via “hackable” entrypoints, and regularly upstream what works.
-
