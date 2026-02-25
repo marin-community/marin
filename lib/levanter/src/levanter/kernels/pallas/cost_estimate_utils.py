@@ -34,4 +34,3 @@ def with_io_bytes_accessed(
         bytes_accessed=input_bytes + output_bytes,
         remote_bytes_transferred=body_cost.remote_bytes_transferred,
     )
-
