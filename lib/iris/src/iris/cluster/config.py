@@ -687,7 +687,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     validate_config(config)
 
     platform_kind = config.platform.WhichOneof("platform") if config.HasField("platform") else "unspecified"
-    logger.info(
+    logger.debug(
         "Config loaded: platform=%s, scale_groups=%s",
         platform_kind,
         list(config.scale_groups.keys()) if config.scale_groups else "(none)",

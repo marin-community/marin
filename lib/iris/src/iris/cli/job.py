@@ -414,7 +414,7 @@ Examples:
 @click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
 @click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
-@click.option("--timeout", type=int, default=300, show_default=True, help="Job timeout in seconds (0 = no timeout)")
+@click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
