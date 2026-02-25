@@ -90,6 +90,21 @@ def _log_stream_response(response: cluster_pb2.Controller.GetTaskLogsResponse) -
             )
 
 
+def _log_child_terminated(job_id_wire: str, status: cluster_pb2.JobStatus) -> None:
+    """Log when a child job terminates with a failure state.
+
+    This surfaces termination reasons (e.g. OOMKilled, non-zero exit codes) that would
+    otherwise only be visible via `iris job list --json`.
+    """
+    state_name = cluster_pb2.JobState.Name(status.state)
+    parts = [f"job={job_id_wire} terminated with state={state_name}"]
+    if status.exit_code:
+        parts.append(f"exit_code={status.exit_code}")
+    if status.error:
+        parts.append(f"error={status.error!r}")
+    logger.warning(" | ".join(parts))
+
+
 class JobFailedError(Exception):
     """Raised when a job ends in a non-SUCCESS terminal state."""
 
@@ -297,6 +312,7 @@ class Job:
             include_children=include_children,
             since_ms=0,
             on_logs=_log_stream_response,
+            on_child_terminated=_log_child_terminated if include_children else None,
         )
 
     def terminate(self) -> None:

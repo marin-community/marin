@@ -200,6 +200,7 @@ class LocalClusterClient:
         include_children: bool,
         since_ms: int = 0,
         on_logs: Callable[[cluster_pb2.Controller.GetTaskLogsResponse], None] | None = None,
+        on_child_terminated: Callable[[str, cluster_pb2.JobStatus], None] | None = None,
     ) -> cluster_pb2.JobStatus:
         return self._remote_client.wait_for_job_with_streaming(
             job_id,
@@ -208,6 +209,7 @@ class LocalClusterClient:
             include_children=include_children,
             since_ms=since_ms,
             on_logs=on_logs,
+            on_child_terminated=on_child_terminated,
         )
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:

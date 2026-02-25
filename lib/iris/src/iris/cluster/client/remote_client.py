@@ -159,11 +159,18 @@ class RemoteClusterClient:
         include_children: bool,
         since_ms: int = 0,
         on_logs: Callable[[cluster_pb2.Controller.GetTaskLogsResponse], None] | None = None,
+        on_child_terminated: Callable[[str, cluster_pb2.JobStatus], None] | None = None,
     ) -> cluster_pb2.JobStatus:
         """Wait for job completion while streaming task logs via the controller RPC.
 
         Delegates log reading to the controller (which has the correct storage
         credentials and endpoint configuration), avoiding client-side S3 access.
+
+        Args:
+            on_child_terminated: Called when a child job reaches a terminal failure state
+                (FAILED, KILLED, WORKER_FAILED, UNSCHEDULABLE). Receives the child job_id
+                wire string and its JobStatus, allowing callers to surface the termination
+                reason (e.g. OOMKilled) in streamed output.
         """
         deadline = Deadline.from_seconds(timeout)
         last_timestamp_ms = since_ms
@@ -171,6 +178,8 @@ class RemoteClusterClient:
         log_fetch_backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
         consecutive_log_failures = 0
         max_log_failures = 5
+        # Track child job states so we only fire on_child_terminated once per transition.
+        child_job_states: dict[str, int] = {}
 
         while True:
             status = self.get_job_status(job_id)
@@ -204,6 +213,10 @@ class RemoteClusterClient:
                 if on_logs is not None:
                     on_logs(log_response)
 
+            # Detect child job failures and surface their termination reasons.
+            if include_children and on_child_terminated is not None:
+                self._check_child_job_failures(job_id, child_job_states, on_child_terminated)
+
             if is_job_finished(status.state):
                 total_lines = sum(len(b.logs) for b in log_response.task_logs) if log_response else 0
                 logger.info(
@@ -222,6 +235,30 @@ class RemoteClusterClient:
             deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")
             sleep_time = log_fetch_backoff.next_interval() if consecutive_log_failures > 0 else poll_interval
             time.sleep(sleep_time)
+
+    def _check_child_job_failures(
+        self,
+        parent_job_id: JobName,
+        child_job_states: dict[str, int],
+        on_child_terminated: Callable[[str, cluster_pb2.JobStatus], None],
+    ) -> None:
+        """Check for child job state transitions and invoke callback on failures."""
+        try:
+            all_jobs = self.list_jobs()
+            prefix = parent_job_id.to_wire()
+            for child in all_jobs:
+                child_wire = child.job_id
+                # Only process actual children, not the parent itself.
+                if child_wire == prefix or not child_wire.startswith(prefix + "/"):
+                    continue
+                prev_state = child_job_states.get(child_wire)
+                child_job_states[child_wire] = child.state
+                if prev_state == child.state:
+                    continue
+                if is_job_finished(child.state) and child.state != cluster_pb2.JOB_STATE_SUCCEEDED:
+                    on_child_terminated(child_wire, child)
+        except Exception:
+            logger.debug("Failed to check child job states for %s", parent_job_id, exc_info=True)
 
     def terminate_job(self, job_id: JobName) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
