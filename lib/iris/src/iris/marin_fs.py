@@ -13,6 +13,7 @@ Resolution chain for the storage prefix:
   3. ``/tmp/marin`` (local fallback)
 """
 
+import dataclasses
 import logging
 import os
 import pathlib
@@ -22,8 +23,6 @@ import urllib.request
 from collections.abc import Callable, Sequence
 from pathlib import PurePath
 from typing import Any
-
-import dataclasses
 
 logger = logging.getLogger(__name__)
 
