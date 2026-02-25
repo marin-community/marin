@@ -88,13 +88,16 @@ Definition of done:
 Macro-move forcing function:
 - If your shortlist contains only “small” changes (tweaks to unroll/chunk/segment, removing a reshape, changing a constant), discard it and restart step (2).
 - Pick exactly one headline direction and execute it end-to-end.
+- Diversity requirement:
+  - Do not repeat the same macro move as the previous iteration unless there is a clearly new algorithmic variant and you state why prior evidence does not apply.
+  - If a macro move has produced two consecutive `<3%`-gain outcomes (including regressions/infra-blocked retries), place it on cooldown and pick a different macro move.
 
 Priority order for current phase:
-1. **G**: Eliminate Ct^2 exponentials in `exp_diff` using centered outer-product exp.
-2. **H**: Batch matmuls by stacking left operands that share the same right operand.
-3. **I**: Fuse segmented forward prepare+recurrent only after G/H is in place.
-4. **J**: Sweep `Ct`/`Seg` for new kernels (`Ct in {64,96,128}`, `Seg in {8,16,32}`).
-5. **E**: V-tiling with shared-K precompute.
+1. **I**: Fuse segmented forward prepare+recurrent, reusing heavy intermediates once.
+2. **J**: Sweep `Ct`/`Seg` for new kernels (`Ct in {64,96,128}`, `Seg in {8,16,32}`) with a compact benchmark table.
+3. **E**: V-tiling with shared-K precompute.
+4. **H**: Batch matmuls by stacking left operands that share the same right operand.
+5. **G**: Eliminate Ct^2 exponentials in `exp_diff` using centered outer-product exp (cooldown unless a materially new formulation is proposed).
 
 Deprioritized unless new evidence appears:
 - A/B-only micro-edits already explored heavily.
