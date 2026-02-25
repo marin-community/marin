@@ -47,7 +47,7 @@ def make_demand_entries(
 ) -> list[DemandEntry]:
     if count <= 0:
         return []
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
     return [
         DemandEntry(
             task_ids=[f"{task_prefix}-{i}"],
@@ -63,7 +63,7 @@ def make_demand_entries(
 
 
 DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
-    cpu=128,
+    cpu_millicores=128000,
     memory_bytes=128 * 1024**3,
     disk_bytes=100 * 1024**3,
     gpu_count=8,

@@ -299,14 +299,14 @@ def test_job_detail_page(cluster, page, screenshot):
     assert page.locator("text=SUCCEEDED").is_visible(timeout=5000)
     screenshot("job-detail-succeeded")
 
-def test_workers_tab(cluster, page, screenshot):
-    """Workers tab shows healthy workers."""
+def test_fleet_tab(cluster, page, screenshot):
+    """Fleet tab shows machines with health status."""
     page.goto(f"{cluster.url}/")
     _wait_for_dashboard_ready(page)
-    page.click('button.tab-btn:has-text("Workers")')
+    page.click('button.tab-btn:has-text("Fleet")')
 
-    assert page.locator("text=healthy").first.is_visible(timeout=5000)
-    screenshot("workers-tab")
+    assert page.locator("text=ready").first.is_visible(timeout=5000)
+    screenshot("fleet-tab")
 
 def test_autoscaler_tab(cluster, page, screenshot):
     """Autoscaler tab shows scale groups."""
@@ -337,12 +337,12 @@ def test_quota_exceeded_retry():
     # Uses FakePlatform directly — no cluster needed
     ...
 
-def test_vm_tab_shows_states(cluster, page, screenshot):
-    """VMs tab renders VM states from autoscaler."""
+def test_fleet_tab_shows_states(cluster, page, screenshot):
+    """Fleet tab renders machine states from autoscaler."""
     page.goto(f"{cluster.url}/")
     _wait_for_dashboard_ready(page)
-    page.click('button.tab-btn:has-text("Vms")')
-    screenshot("vms-tab")
+    page.click('button.tab-btn:has-text("Fleet")')
+    screenshot("fleet-tab")
 ```
 
 ### What Gets Deleted

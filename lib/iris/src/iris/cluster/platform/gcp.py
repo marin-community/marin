@@ -809,7 +809,7 @@ class GcpPlatform:
         slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
         vm_name = slice_id
         machine_type = gcp.machine_type or DEFAULT_MACHINE_TYPE
-        boot_disk_size = gcp.boot_disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
+        boot_disk_size = config.disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
 
         labels = dict(config.labels)
         labels[self._iris_labels.iris_slice_id] = slice_id

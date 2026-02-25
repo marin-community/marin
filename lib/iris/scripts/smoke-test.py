@@ -106,9 +106,9 @@ def _format_resource(res: dict) -> str:
         parts.append(f"{res['gpu_count']} gpu")
     elif int(res.get("tpu_count", 0)) > 0:
         parts.append(f"{res['tpu_count']} tpu")
-    cpu = res.get("cpu", 0)
-    if cpu:
-        parts.append(f"{cpu} cpu")
+    cpu_millicores = res.get("cpuMillicores", res.get("cpu_millicores", 0))
+    if cpu_millicores:
+        parts.append(f"{int(cpu_millicores) / 1000:g} cpu")
     mem = int(res.get("memory_bytes", 0))
     if mem:
         parts.append(f"{mem / (1 << 30):.0f}GB mem")

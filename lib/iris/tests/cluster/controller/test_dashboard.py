@@ -176,7 +176,7 @@ def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-job").to_wire(),
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
     )
@@ -184,7 +184,7 @@ def job_request():
 
 @pytest.fixture
 def resource_spec():
-    return cluster_pb2.ResourceSpecProto(cpu=4, memory_bytes=8 * 1024**3, disk_bytes=100 * 1024**3)
+    return cluster_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=8 * 1024**3, disk_bytes=100 * 1024**3)
 
 
 def test_list_jobs_returns_job_state_counts(client, state, job_request):
@@ -301,7 +301,7 @@ def test_list_jobs_includes_task_counts(client, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -364,7 +364,7 @@ def test_get_job_status_returns_original_request(client, state):
         name="request-detail-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=4,
+            cpu_millicores=4000,
             memory_bytes=8 * 1024**3,
             disk_bytes=100 * 1024**3,
         ),
@@ -393,7 +393,7 @@ def test_get_job_status_returns_original_request(client, state):
     assert ep.get("runCommand", {}).get("argv") == ["python", "-c", "pass"]
     # Verify resources
     res = returned_request.get("resources", {})
-    assert res["cpu"] == 4
+    assert res["cpuMillicores"] == 4000
     assert int(res["memoryBytes"]) == 8 * 1024**3
     assert int(res["diskBytes"]) == 100 * 1024**3
     # Verify environment
@@ -583,7 +583,7 @@ def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="diag-constraint",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
         constraints=[
@@ -723,7 +723,7 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
@@ -759,7 +759,7 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="big-cosched",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
@@ -812,7 +812,7 @@ def test_list_jobs_returns_all_jobs_for_pagination(client, state):
         request = cluster_pb2.Controller.LaunchJobRequest(
             name=f"job-{i:03d}",
             entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
         )
         submit_job(state, f"job-{i:03d}", request)

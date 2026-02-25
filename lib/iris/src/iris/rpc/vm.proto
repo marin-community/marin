@@ -42,7 +42,7 @@ enum ScalingAction {
 }
 
 message ResourceSpec {
-  int32 cpu = 1;
+  int32 cpu_millicores = 1;
   int64 memory_bytes = 2;
   int64 disk_bytes = 3;
   int32 gpu_count = 4;

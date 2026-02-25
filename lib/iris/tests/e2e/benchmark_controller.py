@@ -117,7 +117,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         sg.num_vms = num_vms
         sg.min_slices = count
         sg.max_slices = count
-        sg.resources.cpu = int(cpu)
+        sg.resources.cpu_millicores = int(float(cpu) * 1000)
         sg.resources.memory_bytes = _parse_size(memory)
         sg.resources.disk_bytes = _parse_size(disk)
         sg.resources.tpu_count = tpu_count

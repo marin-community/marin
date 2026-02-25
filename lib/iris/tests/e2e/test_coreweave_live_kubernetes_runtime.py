@@ -202,7 +202,7 @@ def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: Kubernetes
             mounts=_cache_mounts(),
             network_mode="bridge",
             task_id=f"runtime-live-cpu-{run_id}",
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1 * 1024**3),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1 * 1024**3),
         )
         cpu_handle = coreweave_runtime.create_container(cpu_config)
         cpu_handle.run()
@@ -251,7 +251,7 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
             mounts=_cache_mounts(),
             network_mode="bridge",
             task_id=f"log-dedup-{run_id}",
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
         )
     )
     handle.run()
@@ -294,7 +294,7 @@ def test_coreweave_kubernetes_runtime_gpu_job_live(coreweave_runtime: Kubernetes
     image = config.defaults.default_task_image
     run_id = uuid.uuid4().hex[:8]
 
-    gpu_resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=4 * 1024**3)
+    gpu_resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=4 * 1024**3)
     gpu_resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="H100", count=1))
     gpu_config = ContainerConfig(
         image=image,

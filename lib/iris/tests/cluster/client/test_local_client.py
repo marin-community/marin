@@ -38,7 +38,7 @@ def test_command_entrypoint_preserves_env_vars(client):
     # Create a command that echoes an environment variable
     entrypoint = Entrypoint.from_command("sh", "-c", "echo IRIS_JOB_ID=$IRIS_JOB_ID")
 
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
 
@@ -60,7 +60,7 @@ def test_log_streaming_captures_output_without_trailing_newline(client):
     # Use printf which doesn't add a newline
     entrypoint = Entrypoint.from_command("sh", "-c", "printf 'output without newline'")
 
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
 
@@ -84,7 +84,7 @@ def test_callable_entrypoint_succeeds(client):
 
     entrypoint = Entrypoint.from_callable(task_func)
 
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
 
@@ -100,7 +100,7 @@ def test_command_entrypoint_with_custom_env_var(client):
     # Create a command that uses a custom env var
     entrypoint = Entrypoint.from_command("sh", "-c", "echo CUSTOM_VAR=$CUSTOM_VAR")
 
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
     environment = EnvironmentSpec(env_vars={"CUSTOM_VAR": "custom_value"}).to_proto()
 
     client.submit_job(
@@ -127,7 +127,7 @@ def test_job_wait_with_stream_logs(client, caplog):
     job_id = JobName.root("test-stream-logs")
 
     entrypoint = Entrypoint.from_command("sh", "-c", "echo 'hello from streaming'")
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, job_id)
@@ -200,7 +200,7 @@ def test_child_job_logs_sorted_by_timestamp(client):
     """Logs from multiple child jobs are sorted globally by timestamp and include worker_id."""
     parent_id = JobName.root("test-child-logs")
     entrypoint = Entrypoint.from_callable(_parent_with_two_children)
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
 
@@ -230,7 +230,7 @@ def test_wait_stream_logs_discovers_child_tasks(client, caplog):
     iris = IrisClient(client)
     parent_id = JobName.root("test-stream-child-discovery")
     entrypoint = Entrypoint.from_callable(_parent_with_delayed_child)
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, parent_id)
@@ -268,7 +268,7 @@ def test_stream_logs_surfaces_child_failure(client, caplog):
     iris = IrisClient(client)
     parent_id = JobName.root("test-child-failure-surfaced")
     entrypoint = Entrypoint.from_callable(_parent_with_failing_child)
-    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
     client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, parent_id)

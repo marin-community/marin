@@ -136,6 +136,8 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "") -> str:
                     path = f"{path}/{prefix.strip('/')}"
                 return path
 
+    if "://" not in mp:
+        mp = f"file://{mp}"
     path = f"{mp}/tmp"
     if prefix:
         path = f"{path}/{prefix.strip('/')}"

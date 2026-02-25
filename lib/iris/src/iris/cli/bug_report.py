@@ -322,8 +322,8 @@ def _format_resources(resources: cluster_pb2.ResourceSpecProto | None) -> str:
     if not resources:
         return "-"
     parts: list[str] = []
-    if resources.cpu:
-        parts.append(f"{resources.cpu} cpu")
+    if resources.cpu_millicores:
+        parts.append(f"{resources.cpu_millicores / 1000:g} cpu")
     if resources.memory_bytes:
         gib = resources.memory_bytes / (1024**3)
         parts.append(f"{gib:.0f} GiB")

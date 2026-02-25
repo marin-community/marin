@@ -29,7 +29,7 @@ from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
-    cpu=64,
+    cpu_millicores=64000,
     memory_bytes=64 * 1024**3,
     disk_bytes=100 * 1024**3,
     gpu_count=0,
