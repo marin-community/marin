@@ -39,7 +39,7 @@ Usage:
     uv run experiments/unified/vlm_tokenize_captions.py \
         --input_path gs://marin-vlm/hf_85m_tokenized \
         --output_path gs://marin-vlm/hf_85m_levanter_cache \
-        --shuffle true --max_batch_gb 100 --rows_per_shard 8000 \
+        --shuffle true --max_batch_gb 30 --rows_per_shard 8000 \
         --start_shard 0 --end_shard 10000 --num_workers 128
 
     # Ratio-controlled: 30% generation (text-first), 70% understanding (image-first)
