@@ -1,0 +1,473 @@
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Extends 09_attn_gate with a bigram hash embedding.
+Example pytorch code:
+def _compute_bigram_hash(x: Tensor) -> Tensor:
+
+        Computes bigram hash for each position using [prev_token, curr_token].
+        Multiply by arbitary large ints to get even spread over int32 range.
+        Position 0 is mapped to the reserved index (vocab_size - 1).
+        BOS_tokens within the batch will hash based on last token of prior doc.
+
+        rand_int_1 = 36313
+        rand_int_2 = 27191
+        mod = args.bigram_vocab_size-1
+        result = torch.empty_like(x)
+        result[0] = mod
+        result[1:] = torch.bitwise_xor(rand_int_1 * x[1:], rand_int_2 * x[:-1]) % mod
+        return result
+
+Then include before each layer via:
+for i in range(num_layers):
+    x = resid_lambda_i * x + x0_lambda_i * x0 + bigram_lambda_i * x0_bigram
+    x = block(x)
+
+Set bigram_vocab_size to 1x the vocab size (reduced from 4x to fit in TPU v4-8 HBM).
+"""
+
+# nodryrun
+from __future__ import annotations
+
+from dataclasses import dataclass
+import sys
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import jax.random as random
+from einops import rearrange
+from fray.cluster import ResourceConfig
+from jax.sharding import PartitionSpec as P, reshard
+from jaxtyping import Array, Float, Int, PRNGKeyArray
+
+from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.simple_train_config import SimpleTrainConfig
+from levanter.callbacks.profiler import ProfilerConfig
+from haliax.jax_utils import named_call
+from levanter.grug.attention import AttentionMask, attention
+from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
+from levanter.grug.sharding import Pbatch, Pvocab, unshard
+from levanter.optim import GrugMuonConfig
+from marin.execution.executor import executor_main
+from marin.speedrun.speedrun import Author
+
+from ..minimal_grug_wrapper import build_speedrun
+
+# -----------------------------------------------------------------------------
+# Model
+
+
+def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, ...]:
+    return std * random.truncated_normal(key, -3, 3, shape)
+
+
+def _rotary_cache(seq_len: int, rotary_dim: int, rope_theta: float) -> tuple[Float[Array, "S D"], Float[Array, "S D"]]:
+    half_dim = rotary_dim // 2
+    inv_freq = 1.0 / (rope_theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
+    positions = jnp.arange(seq_len, dtype=jnp.float32)
+    angles = positions[:, None] * inv_freq[None, :]
+    cos = jnp.cos(angles)
+    sin = jnp.sin(angles)
+    return cos, sin
+
+
+@named_call
+def apply_rotary_embedding(
+    q: Float[Array, "B S H D"],
+    k: Float[Array, "B S H D"],
+    *,
+    seq_len: int,
+    head_dim: int,
+    rope_theta: float,
+    partial_rotary_factor: float = 0.5,
+) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
+    rotary_dim = int(head_dim * partial_rotary_factor)
+    cos, sin = _rotary_cache(seq_len, rotary_dim, rope_theta)
+    cos = cos[None, :, None, :]
+    sin = sin[None, :, None, :]
+
+    def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
+        x_rot, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
+        x1, x2 = jnp.split(x_rot, 2, axis=-1)
+        x_rot = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
+        return jnp.concatenate([x_rot, x_pass], axis=-1)
+
+    return _apply(q), _apply(k)
+
+
+@named_call
+def qk_norm(x: Float[Array, "B S H D"], eps: float = 1e-6) -> Float[Array, "B S H D"]:
+    """Non-parametric RMS norm over the head dimension."""
+    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+    return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
+
+
+@named_call
+def compute_bigram_hash(token_ids: Int[Array, "B S"], bigram_vocab_size: int) -> Int[Array, "B S"]:
+    """Compute bigram hash indices from token pairs."""
+    rand_int_1 = 36313
+    rand_int_2 = 27191
+    mod = bigram_vocab_size - 1
+    # For positions 1..S-1: xor(rand_int_1 * curr, rand_int_2 * prev) % mod
+    curr = token_ids[:, 1:]
+    prev = token_ids[:, :-1]
+    hashed = jnp.bitwise_xor(rand_int_1 * curr, rand_int_2 * prev) % mod
+    # Position 0 maps to the reserved index
+    reserved = jnp.full((token_ids.shape[0], 1), mod, dtype=jnp.int32)
+    return jnp.concatenate([reserved, hashed], axis=1).astype(jnp.int32)
+
+
+GATE_INPUT_DIM = 12
+
+
+class CausalSelfAttention(eqx.Module):
+    w_q: jax.Array
+    w_k: jax.Array
+    w_v: jax.Array
+    w_o: jax.Array
+    value_lambda: jax.Array
+    ve_lambda: jax.Array
+    ve_gate: jax.Array
+    attn_gate: jax.Array
+    cfg: ModelConfig
+
+    @staticmethod
+    def init(cfg: ModelConfig, *, key):
+        q_key, k_key, v_key, o_key = random.split(key, 4)
+        D, N, M, H = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim
+        w_q = reshard(_init_weight(q_key, (D, N * H), cfg.initializer_std), P("data", "model"))
+        w_k = reshard(_init_weight(k_key, (D, M * H), cfg.initializer_std), P("data", "model"))
+        w_v = reshard(_init_weight(v_key, (D, M * H), cfg.initializer_std), P("data", "model"))
+        w_o = reshard(_init_weight(o_key, (N * H, D), cfg.initializer_std), P("model", "data"))
+        value_lambda = jnp.full((), 0.5, dtype=jnp.float32)
+        ve_lambda = jnp.full((), 0.5, dtype=jnp.float32)
+        ve_gate = jnp.zeros((GATE_INPUT_DIM, M), dtype=jnp.float32)
+        attn_gate = jnp.zeros((GATE_INPUT_DIM, N), dtype=jnp.float32)
+        return CausalSelfAttention(w_q, w_k, w_v, w_o, value_lambda, ve_lambda, ve_gate, attn_gate, cfg)
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        ve: Float[Array, "B S D"] | None = None,
+    ) -> Float[Array, "B S D"]:
+        head_dim = self.cfg.head_dim
+        seq_len = x.shape[1]
+        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        # QK Norm: non-parametric RMS norm on Q and K before RoPE
+        q = qk_norm(q)
+        k = qk_norm(k)
+        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope_theta=self.cfg.rope_theta)
+        if ve is not None:
+            ve_heads = rearrange(ve, "... (m d) -> ... m d", d=head_dim)
+            gate_out = 2 * jax.nn.sigmoid(x[..., :GATE_INPUT_DIM] @ self.ve_gate)
+            v = self.value_lambda * v + self.ve_lambda * gate_out[..., None] * ve_heads
+        attn_out = attention(q, k, v, mask)
+        # Per-head attention gate: [B, S, N] -> [B, S, N, 1]
+        attn_gate_out = 2 * jax.nn.sigmoid(x[..., :GATE_INPUT_DIM] @ self.attn_gate)
+        attn_out = attn_gate_out[..., None] * attn_out
+        attn_out = rearrange(attn_out, "... n d -> ... (n d)")
+        attn_out = jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=Pbatch)
+        return attn_out
+
+
+class MLP(eqx.Module):
+    mlp_up: jax.Array
+    mlp_down: jax.Array
+
+    @staticmethod
+    def init(cfg: ModelConfig, *, key):
+        up_key, down_key = random.split(key, 2)
+        D, I = cfg.hidden_dim, cfg.intermediate_dim
+        mlp_up = reshard(_init_weight(up_key, (D, I), cfg.initializer_std), P("data", "model"))
+        mlp_down = reshard(_init_weight(down_key, (I, D), cfg.initializer_std), P("model", "data"))
+        return MLP(mlp_up, mlp_down)
+
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        up = jnp.einsum("bsh,hm->bsm", x, self.mlp_up)
+        activated = jax.nn.relu(up) ** 2
+        return jnp.einsum("bsm,mh->bsh", activated, self.mlp_down, out_sharding=Pbatch)
+
+
+class RMSNorm(eqx.Module):
+    weight: jax.Array
+    eps: float
+
+    @staticmethod
+    def init(dim: int, eps: float):
+        weight = jnp.ones((dim,), dtype=jnp.float32)
+        return RMSNorm(weight, eps)
+
+    @named_call
+    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        weight = unshard(self.weight)
+        dtype = x.dtype
+        x = x.astype(jnp.float32)
+        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        normed = x * jax.lax.rsqrt(variance + self.eps)
+        out = normed * weight
+        return out.astype(dtype)
+
+
+class Block(eqx.Module):
+    rms_attn: RMSNorm
+    attn: CausalSelfAttention
+    rms_mlp: RMSNorm
+    mlp: MLP
+
+    @staticmethod
+    def init(cfg: ModelConfig, *, key):
+        attn_key, mlp_key = random.split(key, 2)
+        rms_attn = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+        attn = CausalSelfAttention.init(cfg, key=attn_key)
+        rms_mlp = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+        mlp = MLP.init(cfg, key=mlp_key)
+        return Block(rms_attn, attn, rms_mlp, mlp)
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        ve: Float[Array, "B S D"] | None = None,
+    ) -> Float[Array, "B S D"]:
+        x = x + self.attn(self.rms_attn(x), mask, ve=ve)
+        x = x + self.mlp(self.rms_mlp(x))
+        return x
+
+
+class Transformer(eqx.Module):
+    token_embed: jax.Array
+    bigram_embed: jax.Array
+    ve_start_embed: jax.Array
+    ve_end_embed: jax.Array
+    output_proj: jax.Array
+    blocks: tuple[Block, ...]
+    resid_lambdas: tuple[jax.Array, ...]
+    x0_lambdas: tuple[jax.Array, ...]
+    bigram_lambdas: tuple[jax.Array, ...]
+    final_norm: RMSNorm
+    config: ModelConfig
+
+    @staticmethod
+    def init(cfg: ModelConfig, *, key):
+        embed_key, bigram_key, ve_start_key, ve_end_key, out_key, block_key = random.split(key, 6)
+        D = cfg.hidden_dim
+        ve_dim = cfg.num_kv_heads * cfg.head_dim
+        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, D), cfg.initializer_std), Pvocab)
+        bigram_embed = reshard(_init_weight(bigram_key, (cfg.bigram_vocab_size, D), cfg.initializer_std), Pvocab)
+        ve_start_embed = reshard(_init_weight(ve_start_key, (cfg.vocab_size, ve_dim), cfg.initializer_std), Pvocab)
+        ve_end_embed = reshard(_init_weight(ve_end_key, (cfg.vocab_size, ve_dim), cfg.initializer_std), Pvocab)
+        output_proj = reshard(_init_weight(out_key, (D, cfg.vocab_size), cfg.initializer_std), Pvocab)
+        blocks = tuple(Block.init(cfg, key=block_key) for _ in range(cfg.num_layers))
+        resid_lambdas = tuple(jnp.ones((), dtype=jnp.float32) for _ in range(cfg.num_layers))
+        x0_lambdas = tuple(jnp.zeros((), dtype=jnp.float32) for _ in range(cfg.num_layers))
+        bigram_lambdas = tuple(jnp.zeros((), dtype=jnp.float32) for _ in range(cfg.num_layers))
+        final_norm = RMSNorm.init(D, cfg.layer_norm_eps)
+        return Transformer(
+            token_embed,
+            bigram_embed,
+            ve_start_embed,
+            ve_end_embed,
+            output_proj,
+            blocks,
+            resid_lambdas,
+            x0_lambdas,
+            bigram_lambdas,
+            final_norm,
+            cfg,
+        )
+
+    @named_call
+    def __call__(self, token_ids: Int[Array, "B S"], mask: AttentionMask | jax.Array | None) -> Float[Array, "B S D"]:
+        if mask is None:
+            mask = AttentionMask.causal()
+        x = self.token_embed.at[token_ids].get(out_sharding=Pbatch)
+        bigram_ids = compute_bigram_hash(token_ids, self.config.bigram_vocab_size)
+        x0_bigram = self.bigram_embed.at[bigram_ids].get(out_sharding=Pbatch)
+        x0 = x
+        num_layers = len(self.blocks)
+        for i, (resid_lambda, x0_lambda, bigram_lambda, block) in enumerate(
+            zip(self.resid_lambdas, self.x0_lambdas, self.bigram_lambdas, self.blocks, strict=True)
+        ):
+            x = resid_lambda * x + x0_lambda * x0 + bigram_lambda * x0_bigram
+            if i == 0:
+                ve = self.ve_start_embed.at[token_ids].get(out_sharding=Pbatch)
+            elif i == num_layers - 1:
+                ve = self.ve_end_embed.at[token_ids].get(out_sharding=Pbatch)
+            else:
+                ve = None
+            x = eqx.filter_checkpoint(block)(x, mask, ve=ve)
+        x = self.final_norm(x)
+        return x
+
+
+def loss_fn(
+    transformer: Transformer,
+    token_ids: Int[Array, "B S"],
+    loss_weight: Float[Array, "B S"],
+    cfg: ModelConfig,
+    *,
+    mask: AttentionMask | jax.Array | None = None,
+    reduction: str = "mean",
+    logsumexp_weight: float | None = None,
+    loss_dtype: jnp.dtype = jnp.float32,
+):
+    hidden = transformer(token_ids, mask=mask)
+    labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+    loss_weight = loss_weight.astype(loss_dtype)
+
+    return fused_linear_softmax_cross_entropy_loss(
+        hidden,
+        transformer.output_proj,
+        labels,
+        weight=loss_weight,
+        reduction=reduction,
+        logsumexp_weight=logsumexp_weight,
+        dtype=loss_dtype,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Configs
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    """Hyperparameters available to the model"""
+
+    vocab_size: int = llama3_tokenizer_vocab_size
+    hidden_dim: int = 512
+    num_layers: int = 6
+    num_heads: int = 4
+    num_kv_heads: int = 4
+    max_seq_len: int = 2048
+    layer_norm_eps: float = 1e-5
+    initializer_std: float = 0.02
+    rope_theta: float = 1024
+
+    @property
+    def bigram_vocab_size(self) -> int:
+        return self.vocab_size
+
+    @property
+    def head_dim(self) -> int:
+        return self.hidden_dim // self.num_heads
+
+    @property
+    def intermediate_dim(self) -> int:
+        return int(self.hidden_dim * 4)
+
+    @property
+    def total_trainable_params(self) -> int:
+        token_embedding = self.vocab_size * self.hidden_dim
+        bigram_embedding = self.bigram_vocab_size * self.hidden_dim
+        ve_dim = self.num_kv_heads * self.head_dim
+        value_embeddings = 2 * self.vocab_size * ve_dim
+        attn = (
+            self.hidden_dim * self.head_dim * self.num_heads
+            + 2 * self.hidden_dim * self.head_dim * self.num_kv_heads
+            + self.head_dim * self.num_heads * self.hidden_dim
+        )
+        # ve_gate: GATE_INPUT_DIM * num_kv_heads; attn_gate: GATE_INPUT_DIM * num_heads
+        gate_params = GATE_INPUT_DIM * self.num_kv_heads + GATE_INPUT_DIM * self.num_heads
+        mlp = 2 * self.hidden_dim * self.intermediate_dim
+        # +3 per layer: resid_lambda + x0_lambda + bigram_lambda; +2 per layer: value_lambda + ve_lambda
+        transformer = self.num_layers * (attn + mlp + 2 * self.hidden_dim + 5 + gate_params) + self.hidden_dim
+        return int(transformer + 2 * token_embedding + bigram_embedding + value_embeddings)
+
+    @property
+    def flops_per_token(self) -> float:
+        mlp = 2 * 2 * self.hidden_dim * self.intermediate_dim
+        qkv_proj = 2 * self.hidden_dim * (self.num_heads * self.head_dim + 2 * self.num_kv_heads * self.head_dim)
+        dense_proj = 2 * self.hidden_dim * self.hidden_dim
+        # The following are across the whole sequence
+        # assume full attention map like megatron-lm
+        key_query_logits = 2 * self.max_seq_len**2 * self.num_heads * self.head_dim
+        mask = 3 * self.max_seq_len**2 * self.num_heads
+        mask_value = 2 * self.max_seq_len**2 * self.head_dim * self.num_heads
+        seq_flops = key_query_logits + mask + mask_value
+        # so we divide by the sequence length to get the per-token flops
+        attn = seq_flops / self.max_seq_len
+        lm_head = 2 * self.hidden_dim * self.vocab_size
+        return self.num_layers * (mlp + qkv_proj + dense_proj + attn) + lm_head
+
+
+def build_train_config(model_cfg: ModelConfig) -> SimpleTrainConfig:
+    batch_size = 128
+    num_train_steps = 1000
+
+    muon = GrugMuonConfig(
+        learning_rate=0.02,
+        adam_lr=0.0064,
+        weight_decay=0,
+        min_lr_ratio=0.1,
+        warmup=0,
+        momentum=0.95,
+        beta1=0.8,
+        beta2=0.95,
+        epsilon=1e-15,
+        muon_epsilon=1e-5,
+        max_grad_norm=1,
+        lr_schedule="linear",
+        decay=0.5,
+    )
+
+    train_cfg = SimpleTrainConfig(
+        resources=ResourceConfig.with_tpu("v4-8"),
+        train_batch_size=batch_size,
+        learning_rate=muon.learning_rate,
+        explicit_mesh_axes=True,
+        profiler=ProfilerConfig(enabled=True),
+        train_seq_len=model_cfg.max_seq_len,
+        num_train_steps=num_train_steps,
+        steps_per_hf_export=-1,
+        optimizer_config=muon,
+    )
+    return train_cfg
+
+
+# -----------------------------------------------------------------------------
+# Main
+
+
+def repoint_modules_for_ray(classes_in_main):
+    # ensure naming compatibility if job is called from Ray workers
+    import_path = getattr(__spec__, "name", __name__)
+    sys.modules[import_path] = sys.modules[__name__]
+    for _cls in classes_in_main:
+        _cls.__module__ = import_path
+
+
+def main() -> None:
+    module_classes = [Transformer, ModelConfig, Block, RMSNorm, MLP, CausalSelfAttention]
+    repoint_modules_for_ray(module_classes)
+
+    model_cfg = ModelConfig()
+    train_cfg = build_train_config(model_cfg)
+    speedrun = build_speedrun(
+        model_cls=Transformer,
+        model_cfg=model_cfg,
+        train_cfg=train_cfg,
+        loss_fn=loss_fn,
+        speedrun_name="nano_ablations_10_bigram_hash_embedding",
+        speedrun_desc="09_attn_gate + bigram hash embedding mixed into residual stream",
+        author=Author(
+            name="Larry Dial",
+            affiliation="OpenAthena",
+            url="https://github.com/ClassicLarry",
+        ),
+    )
+    steps = []
+    steps.extend(speedrun)
+    executor_main(steps=steps, description="Single Nano Run")
+
+
+if __name__ == "__main__":
+    main()

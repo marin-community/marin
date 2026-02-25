@@ -21,8 +21,15 @@ from iris.cluster.controller.autoscaler import (
     route_demand,
 )
 from iris.cluster.controller.scaling_group import ScalingGroup
-from iris.cluster.platform.base import CloudSliceState, CloudWorkerState, QuotaExhaustedError, SliceStatus, WorkerStatus
-from iris.cluster.types import REGION_ATTRIBUTE_KEY, DeviceType, VmWorkerStatus
+from iris.cluster.platform.base import (
+    CloudSliceState,
+    CloudWorkerState,
+    Labels,
+    QuotaExhaustedError,
+    SliceStatus,
+    WorkerStatus,
+)
+from iris.cluster.types import REGION_ATTRIBUTE_KEY, ZONE_ATTRIBUTE_KEY, DeviceType, VmWorkerStatus
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
@@ -130,7 +137,8 @@ def make_mock_slice_handle(
     handle.slice_id = slice_id
     handle.scale_group = scale_group
     handle.zone = "us-central1-a"
-    handle.labels = {"iris-scale-group": scale_group, "iris-managed": "true"}
+    iris_labels = Labels("iris")
+    handle.labels = {iris_labels.iris_scale_group: scale_group, iris_labels.iris_managed: "true"}
     handle.created_at = Timestamp.from_ms(created_at_ms)
 
     if vm_states is None:
@@ -184,11 +192,11 @@ def make_mock_platform(slices_to_discover: list[MagicMock] | None = None) -> Mag
     return platform
 
 
-def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock]) -> None:
+def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock], timestamp: Timestamp | None = None) -> None:
     """Mark discovered slices as READY with their VM addresses."""
     for handle in handles:
         vm_addresses = [w.internal_address for w in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, vm_addresses)
+        group.mark_slice_ready(handle.slice_id, vm_addresses, timestamp=timestamp)
 
 
 def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> None:
@@ -259,6 +267,7 @@ def make_autoscaler(
     config: config_pb2.AutoscalerConfig | None = None,
     platform: MagicMock | None = None,
     bootstrap_config: config_pb2.BootstrapConfig | None = None,
+    gcp_project: str = "",
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
     mock_platform = platform or make_mock_platform()
@@ -269,6 +278,7 @@ def make_autoscaler(
             config=config,
             platform=mock_platform,
             bootstrap_config=bootstrap_config,
+            gcp_project=gcp_project,
         )
     else:
         return Autoscaler(
@@ -276,6 +286,7 @@ def make_autoscaler(
             evaluation_interval=Duration.from_seconds(0.1),
             platform=mock_platform,
             bootstrap_config=bootstrap_config,
+            gcp_project=gcp_project,
         )
 
 
@@ -416,6 +427,7 @@ class TestAutoscalerScaleDown:
 
     def test_scales_down_idle_slice_via_run_once(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """run_once() scales down idle slices via ScalingGroup.scale_down_if_idle()."""
+        ready_ts = Timestamp.from_ms(1_000)
         discovered = [
             make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000),
             make_mock_slice_handle("slice-002", all_ready=True, created_at_ms=200000),
@@ -428,7 +440,7 @@ class TestAutoscalerScaleDown:
             idle_threshold=Duration.from_ms(1000),
         )
         group.reconcile()
-        _mark_discovered_ready(group, discovered)
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -443,6 +455,7 @@ class TestAutoscalerScaleDown:
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
+        # Timestamp must be past idle_threshold (1000ms) from when slices became ready
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
         assert group.slice_count() == 1
@@ -876,6 +889,74 @@ class TestWaterfallRouting:
         assert "v5p-group" in groups_in_decisions
         assert "v5lite-group" in groups_in_decisions
 
+    def test_backoff_group_falls_through_to_fallback(self):
+        """When primary group is in BACKOFF, demand falls through to fallback."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
+        config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20)
+
+        group_primary = ScalingGroup(
+            config_primary,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+            backoff_initial=Duration.from_seconds(60),
+        )
+        group_fallback = ScalingGroup(
+            config_fallback,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+
+        ts = Timestamp.from_ms(1000)
+        group_primary.record_failure(timestamp=ts)
+        assert group_primary.availability(ts).status == GroupAvailability.BACKOFF
+
+        autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback})
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        decisions = autoscaler.evaluate(demand, timestamp=ts)
+
+        assert len(decisions) == 1
+        assert decisions[0].scale_group == "fallback"
+        status_by_group = {s.group: s for s in autoscaler._last_routing_decision.group_statuses}
+        assert status_by_group["primary"].decision == "blocked"
+        assert "backoff" in status_by_group["primary"].reason
+        assert status_by_group["fallback"].decision == "selected"
+
+    def test_backoff_group_with_ready_slices_still_falls_through(self):
+        """Even with ready slices, a BACKOFF group rejects demand so it falls through."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
+        config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
+        config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20)
+
+        group_primary = ScalingGroup(
+            config_primary,
+            make_mock_platform(slices_to_discover=discovered),
+            scale_up_cooldown=Duration.from_ms(0),
+            backoff_initial=Duration.from_seconds(60),
+        )
+        group_primary.reconcile()
+        group_fallback = ScalingGroup(
+            config_fallback,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+
+        ts = Timestamp.from_ms(1000)
+        group_primary.record_failure(timestamp=ts)
+        assert group_primary.availability(ts).status == GroupAvailability.BACKOFF
+        assert group_primary.slice_count() == 1
+
+        autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback})
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        decisions = autoscaler.evaluate(demand, timestamp=ts)
+
+        assert len(decisions) == 1
+        assert decisions[0].scale_group == "fallback"
+        assert group_primary.current_demand == 0
+
 
 class TestPreemptibleRouting:
     """Tests for preemptible demand routing."""
@@ -962,7 +1043,8 @@ class TestRegionRouting:
 
         assert result.routed_entries.get("eu") is None
         assert len(result.unmet_entries) == 1
-        assert "required_regions=['us-west4']" in result.unmet_entries[0].reason
+        assert "no groups in region" in result.unmet_entries[0].reason
+        assert "us-west4" in result.unmet_entries[0].reason
 
     def test_route_demand_combined_region_and_preemptible(self):
         """Demand requiring both region=us-west4 and preemptible=True only routes to the matching group."""
@@ -995,6 +1077,107 @@ class TestRegionRouting:
         assert result.routed_entries.get("west-ondemand") is None
         assert result.routed_entries.get("eu-preemptible") is None
         assert result.unmet_entries == []
+
+
+class TestZoneRouting:
+    def test_route_demand_filters_by_required_zone(self):
+        config_a = make_scale_group_config(name="zone-a", max_slices=5, priority=10, zones=["us-central2-a"])
+        config_a.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-central2"
+        config_a.worker.attributes[ZONE_ATTRIBUTE_KEY] = "us-central2-a"
+
+        config_b = make_scale_group_config(name="zone-b", max_slices=5, priority=10, zones=["us-central2-b"])
+        config_b.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-central2"
+        config_b.worker.attributes[ZONE_ATTRIBUTE_KEY] = "us-central2-b"
+
+        zone_a = ScalingGroup(config_a, make_mock_platform())
+        zone_b = ScalingGroup(config_b, make_mock_platform())
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        for entry in demand:
+            entry.required_zones = frozenset({"us-central2-b"})
+
+        result = route_demand([zone_a, zone_b], demand)
+
+        assert len(result.routed_entries["zone-b"]) == 2
+        assert result.routed_entries.get("zone-a") is None
+        assert result.unmet_entries == []
+
+    def test_route_demand_unmet_when_no_group_matches_zone(self):
+        config_a = make_scale_group_config(name="zone-a", max_slices=5, priority=10, zones=["us-central2-a"])
+        config_a.worker.attributes[REGION_ATTRIBUTE_KEY] = "us-central2"
+        config_a.worker.attributes[ZONE_ATTRIBUTE_KEY] = "us-central2-a"
+        zone_a = ScalingGroup(config_a, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_zones = frozenset({"us-central2-b"})
+
+        result = route_demand([zone_a], demand)
+
+        assert result.routed_entries.get("zone-a") is None
+        assert len(result.unmet_entries) == 1
+        assert "no groups in zone" in result.unmet_entries[0].reason
+        assert "us-central2-b" in result.unmet_entries[0].reason
+
+    def test_zone_typo_suggests_close_match(self):
+        """A zone typo like 'europe-west4b' triggers a 'did you mean' suggestion."""
+        config = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
+        config.worker.attributes[REGION_ATTRIBUTE_KEY] = "europe-west4"
+        config.worker.attributes[ZONE_ATTRIBUTE_KEY] = "europe-west4-b"
+        eu = ScalingGroup(config, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_zones = frozenset({"europe-west4b"})
+
+        result = route_demand([eu], demand)
+
+        assert len(result.unmet_entries) == 1
+        reason = result.unmet_entries[0].reason
+        assert "did you mean" in reason
+        assert "europe-west4-b" in reason
+
+    def test_device_mismatch_shows_available(self):
+        """When device doesn't match, the reason mentions the requested device."""
+        config = make_scale_group_config(
+            name="gpu-group",
+            max_slices=5,
+            priority=10,
+            zones=["us-central1-a"],
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="a100",
+        )
+        gpu_group = ScalingGroup(config, make_mock_platform())
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+
+        result = route_demand([gpu_group], demand)
+
+        assert len(result.unmet_entries) == 1
+        reason = result.unmet_entries[0].reason
+        assert "no groups with device" in reason
+        assert "tpu" in reason
+
+    def test_reason_string_is_concise(self):
+        """The no_matching_group reason stays under 200 chars even with many groups."""
+        groups = []
+        for i in range(60):
+            zone = f"us-east{i % 5 + 1}-{'abc'[i % 3]}"
+            config = make_scale_group_config(
+                name=f"tpu_v6e_4-{zone}",
+                max_slices=2,
+                priority=10,
+                zones=[zone],
+            )
+            config.worker.attributes[ZONE_ATTRIBUTE_KEY] = zone
+            groups.append(ScalingGroup(config, make_mock_platform()))
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].required_zones = frozenset({"nonexistent-zone-z"})
+
+        result = route_demand(groups, demand)
+
+        assert len(result.unmet_entries) == 1
+        reason = result.unmet_entries[0].reason
+        assert len(reason) < 200, f"Reason too long ({len(reason)} chars): {reason}"
 
 
 class TestAutoscalerWaterfallEndToEnd:
@@ -1208,6 +1391,48 @@ class TestAutoscalerWaterfallEndToEnd:
         total = group_primary.slice_count() + group_fallback.slice_count()
         assert total >= 4
 
+    def test_demand_cascades_through_priority_groups_on_backoff(self):
+        """E2E: primary create fails → BACKOFF, second run cascades to fallback."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10, zones=["us-central1-a"])
+        config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20, zones=["us-central1-a"])
+
+        platform_primary = FakePlatform(FakePlatformConfig(config=config_primary, failure_mode=FailureMode.CREATE_FAILS))
+        platform_fallback = FakePlatform(FakePlatformConfig(config=config_fallback))
+
+        group_primary = ScalingGroup(
+            config_primary,
+            platform_primary,
+            scale_up_cooldown=Duration.from_ms(0),
+            backoff_initial=Duration.from_seconds(60),
+        )
+        group_fallback = ScalingGroup(
+            config_fallback,
+            platform_fallback,
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+
+        config = config_pb2.AutoscalerConfig()
+        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        autoscaler = make_autoscaler(
+            scale_groups={"primary": group_primary, "fallback": group_fallback},
+            config=config,
+        )
+
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+
+        # First run: primary attempts scale-up, fails → enters BACKOFF
+        autoscaler.run_once(demand, {})
+        autoscaler._wait_for_inflight()
+        assert group_primary.availability().status == GroupAvailability.BACKOFF
+        assert group_primary.slice_count() == 0
+
+        # Second run: primary in BACKOFF → demand cascades to fallback
+        autoscaler.run_once(demand, {})
+        autoscaler._wait_for_inflight()
+        assert group_fallback.slice_count() >= 1
+
 
 class TestAutoscalerQuotaHandling:
     """Tests for quota exceeded error handling."""
@@ -1386,6 +1611,8 @@ class TestAutoscalerActionLogging:
         assert status.current_demand["test-group"] == 1
         assert len(status.recent_actions) >= 1
         assert status.recent_actions[0].action_type == "scale_up"
+        assert status.last_evaluation.epoch_ms > 0
+        assert status.groups[0].availability_status != ""
 
     def test_action_log_includes_timestamp(self, empty_autoscaler: Autoscaler):
         """Verify actions include valid timestamps."""
@@ -1483,6 +1710,10 @@ class TestScalingGroupRequestingState:
         assert len(result.routed_entries["group-1"]) == 2
         assert result.routed_entries.get("group-2") is None
         assert result.unmet_entries == []
+        status_by_group = {s.group: s for s in result.group_statuses}
+        assert status_by_group["group-1"].decision == "selected"
+        assert status_by_group["group-1"].launch == 1
+        assert status_by_group["group-2"].decision == "idle"
 
 
 class TestAutoscalerAsyncScaleUp:
@@ -1789,21 +2020,35 @@ class TestPerGroupBootstrapConfig:
         env = json.loads(bc.env_vars["IRIS_TASK_DEFAULT_ENV_JSON"])
         assert env["IRIS_REGION"] == "us-west4"
         assert bc.env_vars["IRIS_SCALE_GROUP"] == "west-group"
+        assert bc.env_vars["IRIS_ACCELERATOR_TYPE"] == "tpu"
+        assert bc.env_vars["IRIS_ACCELERATOR_VARIANT"] == "v5p-8"
+        assert "IRIS_GPU_COUNT" not in bc.env_vars
 
-    def test_returns_base_when_no_worker(self):
-        """Groups without worker config get the base bootstrap config unchanged."""
+    def test_injects_accelerator_env_without_worker_settings(self):
+        """Groups without worker settings still inject accelerator env vars."""
         base_bc = config_pb2.BootstrapConfig(
             docker_image="test:latest",
             worker_port=10001,
             controller_address="controller:10000",
         )
-        sg_config = make_scale_group_config(name="plain-group", max_slices=5)
+        sg_config = make_scale_group_config(
+            name="plain-group",
+            max_slices=5,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="H100",
+        )
+        sg_config.resources.gpu_count = 8
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"plain-group": group}, bootstrap_config=base_bc)
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
-        assert bc is base_bc
+        assert bc is not None
+        assert bc is not base_bc
+        assert bc.env_vars["IRIS_ACCELERATOR_TYPE"] == "gpu"
+        assert bc.env_vars["IRIS_ACCELERATOR_VARIANT"] == "H100"
+        assert bc.env_vars["IRIS_GPU_COUNT"] == "8"
+        assert bc.env_vars["IRIS_SCALE_GROUP"] == "plain-group"
 
     def test_returns_none_without_base(self):
         """Without a base bootstrap config, returns None."""
@@ -1833,63 +2078,65 @@ class TestPerGroupBootstrapConfig:
 
         assert "IRIS_WORKER_ATTRIBUTES" not in base_bc.env_vars
 
-    def test_rewrites_docker_image_region_for_gcp_group(self):
-        """AR image is rewritten to match the group's GCP zone region."""
+    def test_rewrites_ghcr_image_to_ar_remote_for_gcp_group(self):
+        """GHCR image is rewritten to AR remote repo for the group's continent."""
         base_bc = config_pb2.BootstrapConfig(
-            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
             worker_port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
         assert bc is not None
-        assert bc.docker_image == "europe-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        assert bc.docker_image == "europe-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-worker:latest"
         # Base config must not be mutated
-        assert base_bc.docker_image == "us-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        assert base_bc.docker_image == "ghcr.io/marin-community/iris-worker:latest"
 
-    def test_no_rewrite_for_non_ar_image(self):
-        """Non-AR images (e.g. ghcr.io) pass through unchanged."""
+    def test_no_rewrite_for_non_ghcr_image(self):
+        """Non-GHCR images (e.g. docker.io) pass through unchanged."""
         base_bc = config_pb2.BootstrapConfig(
-            docker_image="ghcr.io/org/iris-worker:latest",
+            docker_image="docker.io/library/ubuntu:latest",
             worker_port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
-        assert bc is base_bc
+        assert bc is not None
+        assert bc.docker_image == "docker.io/library/ubuntu:latest"
 
-    def test_no_rewrite_for_same_region(self):
-        """When the group zone matches the image region, returns base config."""
+    def test_ghcr_rewrite_for_us_group(self):
+        """GHCR image is rewritten to us multi-region for US zones."""
         base_bc = config_pb2.BootstrapConfig(
-            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
             worker_port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="west-group", max_slices=5, zones=["us-west4-a"])
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc, gcp_project="proj")
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
-        assert bc is base_bc
+        assert bc is not None
+        assert bc.docker_image == "us-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-worker:latest"
 
     def test_rewrite_combined_with_worker_attributes(self):
         """Image rewrite and worker attribute injection both apply when both are needed."""
         import json
 
         base_bc = config_pb2.BootstrapConfig(
-            docker_image="us-west4-docker.pkg.dev/proj/marin/iris-worker:latest",
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
             worker_port=10001,
             controller_address="controller:10000",
         )
@@ -1897,11 +2144,129 @@ class TestPerGroupBootstrapConfig:
         sg_config.worker.attributes["region"] = "europe-west4"
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc, gcp_project="proj")
 
         bc = autoscaler._per_group_bootstrap_config(group)
 
         assert bc is not None
-        assert bc.docker_image == "europe-west4-docker.pkg.dev/proj/marin/iris-worker:latest"
+        assert bc.docker_image == "europe-docker.pkg.dev/proj/ghcr-mirror/marin-community/iris-worker:latest"
         attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
         assert attrs["region"] == "europe-west4"
+
+
+class TestGpuScaleGroupBugs:
+    """Reproduction tests for GPU scale group bugs observed on CoreWeave.
+
+    Production behavior: GPU job submitted -> h100-8x scales up -> slice becomes
+    READY 20s later -> immediately scaled down. Worker shows CPU=128, Memory=2TB
+    but no GPU info. All GPU jobs stuck in no_capacity.
+
+    Root cause: mark_slice_ready() doesn't initialize last_active, so freshly-ready
+    slices have last_active=epoch(0) and are immediately eligible for scaledown
+    regardless of idle_threshold.
+    """
+
+    def test_freshly_ready_slice_has_nonzero_last_active(self):
+        """When a slice transitions to READY, last_active should be initialized
+        to at least the current time, not epoch(0).
+
+        Reproduces: mark_slice_ready() doesn't touch last_active, so it stays
+        at epoch(0). is_slice_eligible_for_scaledown() returns True for
+        last_active=epoch(0), making fresh slices immediately eligible for scaledown.
+        """
+        config = make_scale_group_config(
+            name="h100-8x",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="H100",
+            min_slices=0,
+            max_slices=1,
+        )
+        platform = make_mock_platform()
+        group = ScalingGroup(
+            config,
+            platform,
+            scale_up_cooldown=Duration.from_ms(0),
+            idle_threshold=Duration.from_ms(60_000),
+        )
+
+        ts = Timestamp.from_ms(1_000_000)
+
+        # Scale up and complete
+        group.begin_scale_up()
+        handle = group.scale_up(timestamp=ts)
+        group.complete_scale_up(handle, ts)
+
+        # Mark the slice as READY (simulates bootstrap completion)
+        vm_addresses = [w.internal_address for w in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, vm_addresses)
+
+        # last_active should be initialized to at least the ready time
+        with group._slices_lock:
+            state = group._slices[handle.slice_id]
+
+        assert state.last_active.epoch_ms() > 0, (
+            "Freshly READY slice should have last_active set to at least the ready time, "
+            f"not epoch(0). Got last_active={state.last_active.epoch_ms()}"
+        )
+
+        # Consequently, the slice should NOT be eligible for scaledown immediately
+        assert not group.is_slice_eligible_for_scaledown(
+            handle.slice_id, ts
+        ), "Freshly READY slice should not be eligible for scaledown immediately"
+
+    def test_idle_threshold_protects_freshly_ready_slice(self):
+        """A freshly-ready slice should be protected by idle_threshold even when
+        demand temporarily drops to 0 (e.g., between job resubmission).
+
+        With idle_threshold=300s, a slice that became ready 1 second ago should
+        NOT be eligible for scaledown. But with last_active=epoch(0), the idle
+        duration is computed as (current_time - 0) = millions of ms, which always
+        exceeds idle_threshold.
+        """
+        config = make_scale_group_config(
+            name="h100-8x",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_variant="H100",
+            min_slices=0,
+            max_slices=2,
+        )
+        discovered = [
+            make_mock_slice_handle("slice-001", all_ready=True),
+            make_mock_slice_handle("slice-002", all_ready=True),
+        ]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(
+            config,
+            platform,
+            scale_up_cooldown=Duration.from_ms(0),
+            scale_down_cooldown=Duration.from_ms(0),
+            idle_threshold=Duration.from_ms(300_000),  # 5 minutes
+        )
+        group.reconcile()
+
+        # Mark both slices as READY (simulating bootstrap completion)
+        _mark_discovered_ready(group, discovered)
+
+        autoscaler = make_autoscaler({"h100-8x": group})
+
+        # Slices just became ready; demand drops to 0 (transient gap)
+        # target_capacity = max(0, 0) = 0, ready=2 > 0 -> scaledown check runs
+        slice_001 = group.get_slice("slice-001")
+        slice_002 = group.get_slice("slice-002")
+        addr1 = slice_001.describe().workers[0].internal_address
+        addr2 = slice_002.describe().workers[0].internal_address
+        vm_status_map = {
+            addr1: VmWorkerStatus(vm_address=addr1, running_task_ids=frozenset()),
+            addr2: VmWorkerStatus(vm_address=addr2, running_task_ids=frozenset()),
+        }
+
+        # Run 1 second after ready — well within the 5-minute idle_threshold.
+        # Slices should NOT be scaled down.
+        ts = Timestamp.from_ms(10_000)
+        autoscaler.run_once([], vm_status_map, ts)
+
+        assert group.slice_count() == 2, (
+            "Freshly-ready slices should be protected by idle_threshold (300s). "
+            "With last_active=epoch(0), idle_duration is computed from epoch, "
+            f"making all slices appear idle for >300s. Got slice_count={group.slice_count()}"
+        )

@@ -1,7 +1,5 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,10 +15,13 @@
 
 """Controller lifecycle as free functions using Platform.
 
-Provides start_controller(), stop_controller(), reload_controller() — all
-taking a Platform instance. These work uniformly across GCP and Manual
-platforms. For local mode, use LocalController directly (fundamentally
-different mechanism: in-process, no SSH/Docker).
+Provides start_controller() and stop_controller() — both taking a Platform
+instance. These work uniformly across GCP and Manual platforms. For local
+mode, use LocalController directly (fundamentally different mechanism:
+in-process, no SSH/Docker).
+
+For reload, use platform.reload() directly — each platform implements its
+own reload strategy.
 """
 
 from __future__ import annotations
@@ -30,8 +31,15 @@ import time
 from dataclasses import dataclass
 from typing import cast
 
-from iris.cluster.platform.base import Platform, RemoteWorkerHandle, StandaloneWorkerHandle
-from iris.cluster.platform.bootstrap import build_controller_bootstrap_script_from_config
+from iris.cluster.platform.base import (
+    Labels,
+    Platform,
+    RemoteWorkerHandle,
+    StandaloneWorkerHandle,
+)
+from iris.cluster.platform.bootstrap import (
+    build_controller_bootstrap_script_from_config,
+)
 from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timer
 
@@ -96,7 +104,10 @@ def check_health(
 
     try:
         logger.info("Running health check: curl -sf http://localhost:%d/health", port)
-        curl_result = vm.run_command(f"curl -sf http://localhost:{port}/health", timeout=Duration.from_seconds(10))
+        curl_result = vm.run_command(
+            f"curl -sf http://localhost:{port}/health",
+            timeout=Duration.from_seconds(10),
+        )
         if curl_result.returncode == 0:
             result.healthy = True
             result.curl_output = curl_result.stdout.strip()
@@ -167,7 +178,12 @@ def wait_healthy(
             logger.info("Health check succeeded after %d attempts (%.1fs)", attempt, elapsed)
             return True
 
-        logger.info("Health check attempt %d failed (%.1fs): %s", attempt, elapsed, last_result.summary())
+        logger.info(
+            "Health check attempt %d failed (%.1fs): %s",
+            attempt,
+            elapsed,
+            last_result.summary(),
+        )
 
         # Detect restart loop: if container keeps restarting, fail early
         if last_result.container_status == "restarting":
@@ -249,14 +265,6 @@ def _controller_zones(config: config_pb2.IrisClusterConfig) -> list[str]:
     return ["local"]
 
 
-def _controller_label_key(label_prefix: str) -> str:
-    return f"{label_prefix}-controller"
-
-
-def _controller_address_metadata_key(label_prefix: str) -> str:
-    return f"{label_prefix}-controller-address"
-
-
 def _discover_controller_vm(
     platform: Platform,
     zones: list[str],
@@ -269,26 +277,30 @@ def _discover_controller_vm(
     StandaloneWorkerHandle since we know the controller VM supports these
     operations.
     """
+    labels = Labels(label_prefix)
     vms = platform.list_vms(
         zones=zones,
-        labels={_controller_label_key(label_prefix): "true"},
+        labels={labels.iris_controller: "true"},
     )
     if len(vms) > 1:
         vm_ids = [vm.vm_id for vm in vms]
         raise RuntimeError(
             f"Multiple controller VMs found matching label "
-            f"'{_controller_label_key(label_prefix)}=true': {vm_ids}. "
+            f"'{labels.iris_controller}=true': {vm_ids}. "
             f"Expected at most one controller VM. Remove duplicates before proceeding."
         )
     return cast(StandaloneWorkerHandle, vms[0]) if vms else None
 
 
-def _build_controller_vm_config(config: config_pb2.IrisClusterConfig) -> config_pb2.VmConfig:
+def _build_controller_vm_config(
+    config: config_pb2.IrisClusterConfig,
+) -> config_pb2.VmConfig:
     """Build a VmConfig for the controller VM from cluster config."""
     label_prefix = config.platform.label_prefix or "iris"
+    labels = Labels(label_prefix)
     vm_config = config_pb2.VmConfig()
     vm_config.name = f"iris-controller-{label_prefix}"
-    vm_config.labels[_controller_label_key(label_prefix)] = "true"
+    vm_config.labels[labels.iris_controller] = "true"
 
     which = config.controller.WhichOneof("controller")
     if which == "gcp":
@@ -364,8 +376,9 @@ def start_controller(
         raise RuntimeError(f"Controller at {address} failed health check after bootstrap")
 
     # Tag for discovery: label for list_vms(), metadata for address
-    vm.set_labels({_controller_label_key(label_prefix): "true"})
-    vm.set_metadata({_controller_address_metadata_key(label_prefix): address})
+    labels = Labels(label_prefix)
+    vm.set_labels({labels.iris_controller: "true"})
+    vm.set_metadata({labels.iris_controller_address: address})
 
     logger.info("Controller started at %s", address)
     return address, vm
@@ -381,28 +394,3 @@ def stop_controller(platform: Platform, config: config_pb2.IrisClusterConfig) ->
         vm.terminate()
     else:
         logger.info("No controller VM found to stop")
-
-
-def reload_controller(
-    platform: Platform,
-    config: config_pb2.IrisClusterConfig,
-) -> str:
-    """Re-bootstrap the controller on existing VM. Returns address."""
-    label_prefix = config.platform.label_prefix or "iris"
-    zones = _controller_zones(config)
-    port = _controller_port(config)
-
-    vm = _discover_controller_vm(platform, zones, label_prefix)
-    if not vm:
-        raise RuntimeError("Controller VM not found. Use start_controller() to create a new one.")
-
-    logger.info("Reloading controller on VM %s", vm.vm_id)
-    bootstrap_script = build_controller_bootstrap_script_from_config(config)
-    vm.bootstrap(bootstrap_script)
-
-    address = f"http://{vm.internal_address}:{port}"
-    if not wait_healthy(vm, port):
-        raise RuntimeError(f"Controller at {address} failed health check after reload")
-
-    logger.info("Controller reloaded at %s", address)
-    return address

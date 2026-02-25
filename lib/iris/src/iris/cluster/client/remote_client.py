@@ -8,7 +8,6 @@ import time
 from collections.abc import Callable
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.task_logging import LogReader
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -161,91 +160,68 @@ class RemoteClusterClient:
         since_ms: int = 0,
         on_logs: Callable[[cluster_pb2.Controller.GetTaskLogsResponse], None] | None = None,
     ) -> cluster_pb2.JobStatus:
-        """Wait for job completion while streaming task logs."""
+        """Wait for job completion while streaming task logs via the controller RPC.
+
+        Delegates log reading to the controller (which has the correct storage
+        credentials and endpoint configuration), avoiding client-side S3 access.
+        """
         deadline = Deadline.from_seconds(timeout)
-        readers: dict[str, LogReader] = {}
+        last_timestamp_ms = since_ms
         terminal_status: cluster_pb2.JobStatus | None = None
-        try:
-            while True:
-                status = self.get_job_status(job_id)
-                tasks = self._collect_task_statuses(job_id, include_children=include_children)
-                task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
-                max_lines = 10000
-                total_lines = 0
-                last_timestamp_ms = since_ms
+        log_fetch_backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
+        consecutive_log_failures = 0
+        max_log_failures = 5
 
-                for task_status in tasks:
-                    if not task_status.log_directory or not task_status.worker_id:
-                        continue
+        while True:
+            status = self.get_job_status(job_id)
+            state_name = cluster_pb2.JobState.Name(status.state)
 
-                    attempts_by_id = {a.attempt_id: a for a in task_status.attempts}
-                    assert attempts_by_id, f"Task {task_status.task_id} missing attempts in status response"
-                    for att_id in sorted(attempts_by_id):
-                        if total_lines >= max_lines:
-                            break
-                        attempt = attempts_by_id[att_id]
-                        worker_id = attempt.worker_id or task_status.worker_id
-                        task_id = JobName.from_wire(task_status.task_id)
-                        if not worker_id:
-                            continue
-
-                        reader_key = f"{task_status.log_directory}|{worker_id}|{att_id}"
-                        reader = readers.get(reader_key)
-                        if reader is None:
-                            try:
-                                reader = LogReader.from_log_directory_for_attempt(
-                                    log_directory=task_status.log_directory,
-                                    task_id=task_id,
-                                    worker_id=worker_id,
-                                    attempt_id=att_id,
-                                )
-                            except ValueError:
-                                logger.warning(
-                                    "Invalid log_directory format for %s: %s",
-                                    task_status.task_id,
-                                    task_status.log_directory,
-                                )
-                                continue
-                            reader.seek_to(since_ms)
-                            readers[reader_key] = reader
-
-                        entries = reader.read_logs(
-                            source=None,
-                            regex_filter=None,
-                            since_ms=0,
-                            max_lines=max_lines - total_lines,
-                        )
-                        if not entries:
-                            continue
-                        last_timestamp_ms = max(last_timestamp_ms, max(e.timestamp.epoch_ms for e in entries))
-                        total_lines += len(entries)
-                        task_logs.append(
-                            cluster_pb2.Controller.TaskLogBatch(
-                                task_id=task_status.task_id,
-                                worker_id=worker_id,
-                                logs=entries,
-                            )
-                        )
-
-                response = cluster_pb2.Controller.GetTaskLogsResponse(
-                    task_logs=task_logs,
-                    last_timestamp_ms=last_timestamp_ms,
-                    truncated=total_lines >= max_lines,
+            try:
+                log_response = self._fetch_task_logs_rpc(
+                    job_id,
+                    include_children=include_children,
+                    since_ms=last_timestamp_ms,
                 )
+                consecutive_log_failures = 0
+                log_fetch_backoff.reset()
+            except Exception:
+                consecutive_log_failures += 1
+                logger.warning(
+                    "Failed to fetch logs for %s (%d/%d), will retry",
+                    job_id,
+                    consecutive_log_failures,
+                    max_log_failures,
+                    exc_info=True,
+                )
+                if consecutive_log_failures >= max_log_failures:
+                    raise
+                log_response = None
+
+            if log_response is not None:
+                if log_response.last_timestamp_ms > last_timestamp_ms:
+                    last_timestamp_ms = log_response.last_timestamp_ms
+
                 if on_logs is not None:
-                    on_logs(response)
+                    on_logs(log_response)
 
-                if is_job_finished(status.state):
-                    if terminal_status is not None:
-                        return terminal_status
-                    # Do one final immediate drain in the next loop iteration.
-                    terminal_status = status
-                    continue
+            if is_job_finished(status.state):
+                total_lines = sum(len(b.logs) for b in log_response.task_logs) if log_response else 0
+                logger.info(
+                    "job=%s finished with state=%s, draining logs (total_lines=%d)",
+                    job_id,
+                    state_name,
+                    total_lines,
+                )
+                if terminal_status is not None:
+                    return terminal_status
+                # Give log writers a moment to flush, then drain once more.
+                terminal_status = status
+                time.sleep(1)
+                continue
 
-                deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")
-                time.sleep(poll_interval)
-        finally:
-            readers.clear()
+            deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")
+            sleep_time = log_fetch_backoff.next_interval() if consecutive_log_failures > 0 else poll_interval
+            time.sleep(sleep_time)
 
     def terminate_job(self, job_id: JobName) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
@@ -342,7 +318,10 @@ class RemoteClusterClient:
         regex: str | None = None,
         attempt_id: int = -1,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Fetch logs for a task or job from storage.
+        """Fetch logs for a task or job via the controller RPC.
+
+        The controller reads from storage with the correct credentials and
+        endpoint configuration.
 
         Args:
             target: Task ID or Job ID
@@ -352,98 +331,39 @@ class RemoteClusterClient:
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
         """
-        tasks = self._collect_task_statuses(target, include_children=include_children)
-
-        task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
-        total_lines = 0
-        last_timestamp_ms = since_ms
-        max_lines = max_total_lines if max_total_lines > 0 else 10000
-
-        for task_status in tasks:
-            if not task_status.log_directory:
-                continue
-            if not task_status.worker_id:
-                continue
-
-            attempts_by_id = {a.attempt_id: a for a in task_status.attempts}
-            if attempt_id >= 0:
-                attempt_ids = [attempt_id]
-            else:
-                assert attempts_by_id, f"Task {task_status.task_id} missing attempts in status response"
-                attempt_ids = sorted(attempts_by_id)
-
-            for att_id in attempt_ids:
-                if total_lines >= max_lines:
-                    break
-                worker_id = task_status.worker_id
-                attempt = attempts_by_id.get(att_id)
-                task_id = JobName.from_wire(task_status.task_id)
-                if attempt and attempt.worker_id:
-                    worker_id = attempt.worker_id
-                if not worker_id:
-                    continue
-
-                try:
-                    reader = LogReader.from_log_directory_for_attempt(
-                        log_directory=task_status.log_directory,
-                        task_id=task_id,
-                        worker_id=worker_id,
-                        attempt_id=att_id,
-                    )
-                except ValueError:
-                    logger.warning(
-                        "Invalid log_directory format for %s: %s",
-                        task_status.task_id,
-                        task_status.log_directory,
-                    )
-                    continue
-                log_entries = reader.read_logs(
-                    source=None,
-                    regex_filter=regex,
-                    since_ms=since_ms,
-                    max_lines=max_lines - total_lines,
-                    flush_partial_line=True,
-                )
-
-                if log_entries:
-                    for entry in log_entries:
-                        if entry.timestamp.epoch_ms > last_timestamp_ms:
-                            last_timestamp_ms = entry.timestamp.epoch_ms
-                    task_logs.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_status.task_id,
-                            worker_id=worker_id,
-                            logs=log_entries,
-                        )
-                    )
-                    total_lines += len(log_entries)
-
-        return cluster_pb2.Controller.GetTaskLogsResponse(
-            task_logs=task_logs,
-            last_timestamp_ms=last_timestamp_ms,
-            truncated=total_lines >= max_lines,
+        return self._fetch_task_logs_rpc(
+            target,
+            include_children=include_children,
+            since_ms=since_ms,
+            max_total_lines=max_total_lines,
+            regex=regex,
+            attempt_id=attempt_id,
         )
 
-    def _collect_task_statuses(self, target: JobName, *, include_children: bool) -> list[cluster_pb2.TaskStatus]:
-        """Collect TaskStatus entries for target job/task."""
-        if target.is_task:
-            parent_job = target.parent
-            assert parent_job is not None, f"Task id must have parent job: {target}"
-            parent_status = self.get_job_status(parent_job)
-            return [ts for ts in parent_status.tasks if ts.task_id == target.to_wire()]
+    def _fetch_task_logs_rpc(
+        self,
+        target: JobName,
+        *,
+        include_children: bool = False,
+        since_ms: int = 0,
+        max_total_lines: int = 0,
+        regex: str | None = None,
+        attempt_id: int = -1,
+    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
+        """Call the GetTaskLogs RPC on the controller."""
+        request = cluster_pb2.Controller.GetTaskLogsRequest(
+            id=target.to_wire(),
+            include_children=include_children,
+            since_ms=since_ms,
+            max_total_lines=max_total_lines,
+            regex=regex or "",
+            attempt_id=attempt_id,
+        )
 
-        root_status = self.get_job_status(target)
-        tasks = list(root_status.tasks)
-        if include_children:
-            all_jobs = self.list_jobs()
-            prefix_wire = target.to_wire()
-            for job in all_jobs:
-                if job.job_id == prefix_wire:
-                    continue
-                if job.job_id.startswith(prefix_wire + "/"):
-                    child_status = self.get_job_status(JobName.from_wire(job.job_id))
-                    tasks.extend(child_status.tasks)
-        return tasks
+        def _call():
+            return self._client.get_task_logs(request)
+
+        return call_with_retry(f"get_task_logs({target})", _call)
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.

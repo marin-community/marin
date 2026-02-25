@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for controller lifecycle functions (start, stop, reload).
+"""Tests for controller lifecycle functions (start, stop).
 
 Uses fake Platform and StandaloneWorkerHandle implementations to exercise the
 lifecycle orchestration without SSH, Docker, or cloud API calls. The
@@ -30,8 +30,7 @@ from unittest.mock import patch
 
 import pytest
 
-from iris.cluster.controller.lifecycle import (
-    reload_controller,
+from iris.cluster.controller.vm_lifecycle import (
     start_controller,
     stop_controller,
 )
@@ -186,7 +185,7 @@ def config() -> config_pb2.IrisClusterConfig:
     return _make_config()
 
 
-LIFECYCLE_MODULE = "iris.cluster.controller.lifecycle"
+LIFECYCLE_MODULE = "iris.cluster.controller.vm_lifecycle"
 
 
 # ============================================================================
@@ -206,8 +205,8 @@ def test_start_controller_fresh(mock_wait_healthy, mock_bootstrap_script, config
     assert address == "http://10.0.0.5:10000"
     assert vm is new_vm
     assert len(new_vm.bootstrap_calls) == 1
-    assert new_vm.labels == {"test-controller": "true"}
-    assert "test-controller-address" in new_vm.metadata
+    assert new_vm.labels == {"iris-test-controller": "true"}
+    assert "iris-test-controller-address" in new_vm.metadata
     assert not new_vm.terminated
 
 
@@ -289,26 +288,6 @@ def test_stop_controller_not_found(mock_wait_healthy, config):
     stop_controller(platform, config)
 
 
-# ============================================================================
-# reload_controller
-# ============================================================================
-
-
-@patch(f"{LIFECYCLE_MODULE}.build_controller_bootstrap_script_from_config", return_value="#!/bin/bash\necho reload")
-@patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
-def test_reload_controller_success(mock_wait_healthy, mock_bootstrap_script, config):
-    """Discovers existing VM, re-bootstraps, health check passes, returns address."""
-    existing = FakeWorkerHandle(vm_id="ctrl-reload", internal_address="10.0.0.3")
-    platform = FakePlatform(existing_vms=[existing])
-
-    address = reload_controller(platform, config)
-
-    assert address == "http://10.0.0.3:10000"
-    assert len(existing.bootstrap_calls) == 1
-    assert existing.bootstrap_calls[0] == "#!/bin/bash\necho reload"
-    assert not existing.terminated
-
-
 @patch(f"{LIFECYCLE_MODULE}.build_controller_bootstrap_script_from_config", return_value="#!/bin/bash\necho ok")
 @patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
 def test_start_controller_duplicate_vms_raises(mock_wait_healthy, mock_bootstrap_script, config):
@@ -319,30 +298,6 @@ def test_start_controller_duplicate_vms_raises(mock_wait_healthy, mock_bootstrap
 
     with pytest.raises(RuntimeError, match="Multiple controller VMs found"):
         start_controller(platform, config)
-
-
-@patch(f"{LIFECYCLE_MODULE}.build_controller_bootstrap_script_from_config", return_value="#!/bin/bash\necho reload")
-@patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
-def test_reload_controller_no_vm_found(mock_wait_healthy, mock_bootstrap_script, config):
-    """No controller VM found -- raises RuntimeError."""
-    platform = FakePlatform(existing_vms=[])
-
-    with pytest.raises(RuntimeError, match="Controller VM not found"):
-        reload_controller(platform, config)
-
-
-@patch(f"{LIFECYCLE_MODULE}.build_controller_bootstrap_script_from_config", return_value="#!/bin/bash\necho reload")
-@patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=False)
-def test_reload_controller_health_check_fails(mock_wait_healthy, mock_bootstrap_script, config):
-    """Reload bootstraps successfully but health check fails -- raises RuntimeError."""
-    existing = FakeWorkerHandle(vm_id="ctrl-reload-fail", internal_address="10.0.0.4")
-    platform = FakePlatform(existing_vms=[existing])
-
-    with pytest.raises(RuntimeError, match="failed health check after reload"):
-        reload_controller(platform, config)
-
-    # Should have attempted bootstrap before the health check failed
-    assert len(existing.bootstrap_calls) == 1
 
 
 def test_stop_controller_duplicate_vms_raises(config):

@@ -14,6 +14,7 @@ from typing import Any, cast
 
 from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
 from fray.v2.types import (
+    ActorConfig,
     BinaryEntrypoint,
     CallableEntrypoint,
     JobRequest,
@@ -135,6 +136,7 @@ class LocalClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> LocalActorHandle:
         """Create an in-process actor, returning a handle immediately."""
@@ -148,6 +150,7 @@ class LocalClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorGroup:
         """Create N in-process actor instances, returning a group handle."""

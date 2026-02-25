@@ -31,7 +31,7 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, DeviceType, JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from iris.time_utils import Duration, Timestamp
 
 # =============================================================================
 # Test Helpers
@@ -272,6 +272,27 @@ def test_task_failure_with_retry_requeues(job_request, worker_metadata):
     pending = state.peek_pending_tasks()
     assert len(pending) == 1
     assert pending[0].task_id == task.task_id
+
+
+def test_unschedulable_task_finalizes_job_with_timeout_error(job_request, worker_metadata):
+    """E2E: Task UNSCHEDULABLE propagates timeout-style error to final job state."""
+    state = ControllerState()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.scheduling_timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+    job = state.get_job(JobName.root("j1"))
+
+    dispatch_task(state, task, worker_id)
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_UNSCHEDULABLE)
+
+    assert task.state == cluster_pb2.TASK_STATE_UNSCHEDULABLE
+    assert task.error == "Scheduling timeout exceeded"
+    assert job.state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
+    assert job.error == "Scheduling timeout exceeded"
 
 
 def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
@@ -1016,7 +1037,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
         meta.attributes["tpu-worker-id"].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
-    # Use max_retries_preemption=1 (not 0 because 0 gets defaulted to 100)
+    # Use max_retries_preemption=1 so second worker failure is terminal.
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
@@ -1277,6 +1298,68 @@ def test_stale_attempt_error_log_for_non_terminal(caplog, job_request, worker_me
         )
 
     assert any("Stale attempt precondition violation" in r.message for r in caplog.records)
+
+
+# =============================================================================
+# log_directory Tests
+# =============================================================================
+
+
+def test_log_directory_persisted_on_first_running_heartbeat(job_request, worker_metadata):
+    """log_directory is stored from running_tasks even when task state has not changed."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    tasks = submit_job(state, "j1", job_request("job1"))
+    task = tasks[0]
+    dispatch_task(state, task, worker_id)
+
+    snapshot = state.begin_heartbeat(worker_id)
+    assert snapshot is not None
+
+    # Worker reports task as RUNNING (same state the controller already has) with a log_directory.
+    # This simulates the common steady-state heartbeat where the state hasn't changed but
+    # log_directory has not yet been recorded by the controller.
+    response = cluster_pb2.HeartbeatResponse(
+        running_tasks=[
+            cluster_pb2.Controller.RunningTaskEntry(
+                task_id=task.task_id.to_wire(),
+                attempt_id=task.current_attempt_id,
+                state=cluster_pb2.TASK_STATE_RUNNING,
+                log_directory="s3://bucket/logs/task/0",
+            )
+        ]
+    )
+    state.complete_heartbeat(snapshot, response)
+
+    assert task.attempts[task.current_attempt_id].log_directory == "s3://bucket/logs/task/0"
+
+
+def test_log_directory_persisted_on_completed_task(job_request, worker_metadata):
+    """log_directory is stored from completed_tasks report."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    tasks = submit_job(state, "j1", job_request("job1"))
+    task = tasks[0]
+    dispatch_task(state, task, worker_id)
+
+    snapshot = state.begin_heartbeat(worker_id)
+    assert snapshot is not None
+
+    response = cluster_pb2.HeartbeatResponse(
+        completed_tasks=[
+            cluster_pb2.Controller.CompletedTaskEntry(
+                task_id=task.task_id.to_wire(),
+                attempt_id=task.current_attempt_id,
+                state=cluster_pb2.TASK_STATE_SUCCEEDED,
+                log_directory="s3://bucket/logs/task/0",
+            )
+        ]
+    )
+    state.complete_heartbeat(snapshot, response)
+
+    assert task.attempts[task.current_attempt_id].log_directory == "s3://bucket/logs/task/0"
 
 
 # =============================================================================
@@ -1665,75 +1748,6 @@ def test_requeued_task_maintains_priority_position(job_request, worker_metadata)
 # =============================================================================
 # Concurrent Access Race Condition Tests
 # =============================================================================
-
-
-def test_running_tasks_unsafe_iteration_causes_race(worker_metadata):
-    """Demonstrate that unsafe iteration over worker.running_tasks causes race conditions.
-
-    This reproduces the bug where _heartbeat_worker() iterates over worker.running_tasks
-    without holding state._lock, while the scheduling thread modifies the set via
-    assign_task(). When 128+ tasks are scheduled rapidly, this causes
-    "Set changed size during iteration".
-
-    The production scenario:
-    - Scheduling thread: modifies worker.running_tasks via assign_task()
-    - Heartbeat thread: iterates over worker.running_tasks without any lock
-
-    This test EXPECTS the race to trigger, demonstrating the bug.
-    """
-    import concurrent.futures
-
-    state = ControllerState()
-    worker_id = register_worker(state, "w1", "addr1:8080", worker_metadata())
-    worker = state.get_worker(worker_id)
-
-    errors = []
-    stop_flag = threading.Event()
-    barrier = threading.Barrier(3)
-
-    def iterate_unsafely():
-        """Iterate directly over the set (UNSAFE - causes race)."""
-        try:
-            barrier.wait()
-            while not stop_flag.is_set():
-                try:
-                    # UNSAFE: direct iteration without snapshot
-                    _ = [tid for tid in worker.running_tasks]
-                except RuntimeError as e:
-                    if "Set changed size during iteration" in str(e):
-                        errors.append(e)
-                        return
-                    raise
-        except Exception as e:
-            errors.append(e)
-
-    def modify_running_tasks():
-        """Modify the set rapidly to trigger the race."""
-        try:
-            barrier.wait()
-            for i in range(10000):
-                fake_tid = JobName.from_string(f"/test-job/{i % 500}")
-                worker.running_tasks.add(fake_tid)
-                if i % 3 == 0 and worker.running_tasks:
-                    try:
-                        worker.running_tasks.pop()
-                    except KeyError:
-                        pass
-            stop_flag.set()
-        except Exception as e:
-            errors.append(e)
-            stop_flag.set()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(iterate_unsafely)
-        f2 = executor.submit(modify_running_tasks)
-        barrier.wait()
-        f2.result()
-        f1.result()
-
-    # This test EXPECTS the race to trigger
-    assert errors, "Expected race condition but it didn't trigger (try running again)"
-    assert "Set changed size during iteration" in str(errors[0])
 
 
 def test_running_tasks_safe_iteration_prevents_race(worker_metadata):
