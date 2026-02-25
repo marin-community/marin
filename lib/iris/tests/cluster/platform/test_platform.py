@@ -488,6 +488,8 @@ def test_gcp_reload_uses_full_stop_then_start():
     stop_all.assert_called_once_with(cfg)
     start_controller.assert_called_once_with(cfg)
     assert address == "10.0.0.1:10000"
+
+
 # =============================================================================
 # Section 3: Manual-Specific Tests
 #
