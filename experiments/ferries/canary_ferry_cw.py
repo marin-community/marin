@@ -23,12 +23,12 @@ from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_data_config
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.llama import llama_150m, llama3_tokenizer
+from experiments.llama import llama3_tokenizer, llama_150m
 from experiments.simple_train_config import SimpleTrainConfig
 
 CANARY_DATE = os.environ.get("CANARY_DATE", datetime.date.today().isoformat())
 
-BATCH_SIZE = 64
+BATCH_SIZE = 512
 SEQ_LEN = 1024
 TARGET_TOKENS = 1_000_000_000
 NUM_STEPS = TARGET_TOKENS // (BATCH_SIZE * SEQ_LEN)

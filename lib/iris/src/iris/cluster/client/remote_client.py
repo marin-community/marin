@@ -168,6 +168,9 @@ class RemoteClusterClient:
         deadline = Deadline.from_seconds(timeout)
         last_timestamp_ms = since_ms
         terminal_status: cluster_pb2.JobStatus | None = None
+        log_fetch_backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
+        consecutive_log_failures = 0
+        max_log_failures = 5
 
         while True:
             status = self.get_job_status(job_id)
@@ -179,8 +182,19 @@ class RemoteClusterClient:
                     include_children=include_children,
                     since_ms=last_timestamp_ms,
                 )
+                consecutive_log_failures = 0
+                log_fetch_backoff.reset()
             except Exception:
-                logger.warning("Failed to fetch logs for %s, will retry next poll", job_id, exc_info=True)
+                consecutive_log_failures += 1
+                logger.warning(
+                    "Failed to fetch logs for %s (%d/%d), will retry",
+                    job_id,
+                    consecutive_log_failures,
+                    max_log_failures,
+                    exc_info=True,
+                )
+                if consecutive_log_failures >= max_log_failures:
+                    raise
                 log_response = None
 
             if log_response is not None:
@@ -206,7 +220,8 @@ class RemoteClusterClient:
                 continue
 
             deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")
-            time.sleep(poll_interval)
+            sleep_time = log_fetch_backoff.next_interval() if consecutive_log_failures > 0 else poll_interval
+            time.sleep(sleep_time)
 
     def terminate_job(self, job_id: JobName) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())

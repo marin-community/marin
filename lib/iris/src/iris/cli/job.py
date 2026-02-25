@@ -12,6 +12,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -176,12 +177,27 @@ def parse_gpu_spec(spec: str) -> tuple[str, int]:
     """Parse a GPU spec string into (variant, count).
 
     Accepts: 'H100x8' → ("H100", 8), '8' → ("", 8), 'H100' → ("H100", 1).
+    Only a trailing 'x<digits>' is treated as a count separator, so variants
+    like 'rtx4090' are not misinterpreted.
     """
-    if "x" in spec:
-        variant, count_str = spec.rsplit("x", 1)
-        return variant, int(count_str)
+    if not spec:
+        raise ValueError("GPU spec must not be empty")
+
+    # Only treat 'x' as a count separator for trailing x<1-3 digits>,
+    # so model names like 'rtx4090' (4+ digit suffix) aren't misinterpreted.
+    m = re.fullmatch(r"(\w+)x(\d{1,3})", spec)
+    if m:
+        variant, count = m.group(1), int(m.group(2))
+        if count <= 0:
+            raise ValueError(f"GPU count must be positive, got {count}")
+        return variant, count
     if spec.isdigit():
-        return "", int(spec)
+        count = int(spec)
+        if count <= 0:
+            raise ValueError(f"GPU count must be positive, got {count}")
+        return "", count
+    if not spec.isalnum():
+        raise ValueError(f"Invalid GPU spec: {spec!r}")
     return spec, 1
 
 

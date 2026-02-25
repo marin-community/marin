@@ -15,6 +15,7 @@ from iris.cluster.manager import connect_cluster
 from iris.cli.job import (
     build_resources,
     load_env_vars,
+    parse_gpu_spec,
     run_iris_job,
 )
 from iris.cluster.types import ConstraintOp
@@ -46,6 +47,27 @@ def test_iris_config_empty_file(tmp_path):
     bad_config.write_text("")
     with pytest.raises(ValueError, match="Config file is empty"):
         IrisConfig.load(bad_config)
+
+
+@pytest.mark.parametrize(
+    "spec, expected",
+    [
+        ("H100x8", ("H100", 8)),
+        ("4", ("", 4)),
+        ("A100", ("A100", 1)),
+        ("rtx4090", ("rtx4090", 1)),
+        ("rtx4090x2", ("rtx4090", 2)),
+        ("H100", ("H100", 1)),
+    ],
+)
+def test_parse_gpu_spec(spec, expected):
+    assert parse_gpu_spec(spec) == expected
+
+
+@pytest.mark.parametrize("spec", ["0", ""])
+def test_parse_gpu_spec_rejects_invalid(spec):
+    with pytest.raises(ValueError):
+        parse_gpu_spec(spec)
 
 
 def test_build_resources_gpu():
