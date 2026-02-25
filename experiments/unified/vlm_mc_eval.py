@@ -215,9 +215,9 @@ def _make_vlm_eval_jit(axis_resources, mp, EvalPos, EvalBatch, max_packed_segmen
         # +1 because -1 is used as padding value for segments
         max_Segments = hax.Axis("Segments", size=max_packed_segments + 1)
 
-        batched_segment_ids, batched_per_segment_losses = hax.vmap(
-            per_segment_loss, EvalBatch
-        )(packed_example, loss, max_Segments)
+        batched_segment_ids, batched_per_segment_losses = hax.vmap(per_segment_loss, EvalBatch)(
+            packed_example, loss, max_Segments
+        )
 
         segments = hax.flatten(batched_segment_ids, "segment")
         losses = hax.flatten(batched_per_segment_losses, "segment")

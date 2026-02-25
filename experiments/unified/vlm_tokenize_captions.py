@@ -39,8 +39,8 @@ Usage:
     uv run experiments/unified/vlm_tokenize_captions.py \
         --input_path gs://marin-vlm/hf_85m_tokenized \
         --output_path gs://marin-vlm/hf_85m_levanter_cache \
-        --shuffle true --max_batch_gb 30 --rows_per_shard 8000 \
-        --start_shard 0 --end_shard 10000 --num_workers 128
+        --shuffle true --max_batch_gb 10 --rows_per_shard 8000 \
+        --start_shard 0 --end_shard 10000 --num_workers 32
 
     # Ratio-controlled: 30% generation (text-first), 70% understanding (image-first)
     uv run experiments/unified/vlm_tokenize_captions.py \
@@ -53,6 +53,8 @@ Usage:
         --input_path gs://marin-vlm/stage2_sharded_full_tokenized \
         --start_shard 0 --end_shard 50 \
         --w_visual 0.3 --num_workers 16
+
+ uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache/understanding         --shuffle true --max_batch_gb 10 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 32 --dual_ordering false --generation_ratio 1.0 --w_visual 0.3 
 """
 
 import dataclasses
@@ -667,8 +669,7 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
                 # Step 1: Download this chunk's parquet shards (one gcloud storage cp; gcloud does parallelism)
                 logger.info("[%s] Downloading %d shards ...", chunk_label, len(chunk))
                 gcs_shards = [
-                    shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}"
-                    for shard_path, _ in chunk
+                    shard_path if shard_path.startswith("gs://") else f"gs://{shard_path}" for shard_path, _ in chunk
                 ]
                 gcs_download_batch(gcs_shards, local_parquet_dir)
                 chunk_jobs = []
@@ -742,13 +743,17 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
                     if os.path.isdir(val_und_local):
                         shard_name = local_cache.rsplit("/", 1)[-1]
                         val_und_gcs = f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
-                        gcs_upload(val_und_local, val_und_gcs if val_und_gcs.startswith("gs://") else f"gs://{val_und_gcs}")
+                        gcs_upload(
+                            val_und_local, val_und_gcs if val_und_gcs.startswith("gs://") else f"gs://{val_und_gcs}"
+                        )
 
                     val_gen_local = f"{local_cache}_val_gen"
                     if os.path.isdir(val_gen_local):
                         shard_name = local_cache.rsplit("/", 1)[-1]
                         val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
-                        gcs_upload(val_gen_local, val_gen_gcs if val_gen_gcs.startswith("gs://") else f"gs://{val_gen_gcs}")
+                        gcs_upload(
+                            val_gen_local, val_gen_gcs if val_gen_gcs.startswith("gs://") else f"gs://{val_gen_gcs}"
+                        )
 
                 # Step 4: Clean up local files for this chunk
                 shutil.rmtree(parquet_work_dir)
@@ -895,13 +900,9 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
                 work_dir = tempfile.mkdtemp(prefix=f"vlm_batch{batch_idx}_sub{sub_idx}_", dir=config.download_dir)
                 local_parquet_dir = os.path.join(work_dir, "parquets")
                 os.makedirs(local_parquet_dir)
-                gcs_shards = [
-                    p if p.startswith("gs://") else f"gs://{p}" for p in sub_chunk
-                ]
+                gcs_shards = [p if p.startswith("gs://") else f"gs://{p}" for p in sub_chunk]
                 gcs_download_batch(gcs_shards, local_parquet_dir)
-                local_parquets = [
-                    os.path.join(local_parquet_dir, p.rsplit("/", 1)[-1]) for p in sub_chunk
-                ]
+                local_parquets = [os.path.join(local_parquet_dir, p.rsplit("/", 1)[-1]) for p in sub_chunk]
 
                 # Tokenize in parallel
                 logger.info("[%s] Tokenizing %d files ...", sub_label, len(local_parquets))

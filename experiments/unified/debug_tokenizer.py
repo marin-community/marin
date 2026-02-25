@@ -1,3 +1,6 @@
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Diagnostic script to debug tokenizer loading on the Ray cluster."""
 
 import json
@@ -6,7 +9,6 @@ import shutil
 import tempfile
 
 import fsspec
-
 
 UNIFIED_TOKENIZER_PATH = "gs://marin-us-west4/tokenizers/llama3-unified-144k"
 
@@ -19,10 +21,12 @@ def check_disk_space():
     for path in ["/tmp", os.path.expanduser("~"), "/"]:
         try:
             usage = shutil.disk_usage(path)
-            print(f"  {path}: total={usage.total // (1024**2)}MB, "
-                  f"used={usage.used // (1024**2)}MB, "
-                  f"free={usage.free // (1024**2)}MB "
-                  f"({usage.free / usage.total * 100:.1f}% free)")
+            print(
+                f"  {path}: total={usage.total // (1024**2)}MB, "
+                f"used={usage.used // (1024**2)}MB, "
+                f"free={usage.free // (1024**2)}MB "
+                f"({usage.free / usage.total * 100:.1f}% free)"
+            )
         except Exception as e:
             print(f"  {path}: ERROR - {e}")
     print()
@@ -80,7 +84,7 @@ def test_download():
                     print(f"    -> Local file exists: {local_size} bytes (expected {remote_size})")
                     with open(local_path) as f:
                         content = f.read()
-                    print(f"    -> Last 200 chars: {repr(content[-200:])}")
+                    print(f"    -> Last 200 chars: {content[-200:]!r}")
     print()
 
 
@@ -89,6 +93,7 @@ def test_load_tokenizer():
     print("=== Load Tokenizer Test ===")
     try:
         from levanter.compat.hf_checkpoints import load_tokenizer
+
         tok = load_tokenizer(UNIFIED_TOKENIZER_PATH)
         print(f"  SUCCESS: vocab_size={len(tok)}, type={type(tok).__name__}")
     except Exception as e:

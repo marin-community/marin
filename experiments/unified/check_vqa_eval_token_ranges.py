@@ -287,8 +287,7 @@ def main():
         print("First violations:")
         for v in total_violations[: args.max_print]:
             print(
-                f"[{v.reason}] bench={v.benchmark} row={v.row} task={v.task_type} "
-                f"shard={v.shard} detail={v.detail}"
+                f"[{v.reason}] bench={v.benchmark} row={v.row} task={v.task_type} " f"shard={v.shard} detail={v.detail}"
             )
         raise SystemExit(2)
 

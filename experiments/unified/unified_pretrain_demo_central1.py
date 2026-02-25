@@ -37,7 +37,7 @@ from levanter.data.text.formats import PrebuiltLmDatasetFormat
 
 from experiments.defaults import default_train, default_validation_sets
 from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
+from experiments.pretraining_datasets import tokenize_nemotron
 from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig

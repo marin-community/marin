@@ -26,13 +26,15 @@ Usage:
 import dataclasses
 import logging
 import tempfile
+from collections.abc import Callable
 
+import numpy as np
 from levanter.data.text import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
 
 from experiments.defaults import default_train, default_validation_sets
 from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
+from experiments.pretraining_datasets import tokenize_nemotron
 from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
@@ -111,12 +113,33 @@ def create_unified_tokenizer(output_path: str = UNIFIED_TOKENIZER_PATH) -> str:
 # --- Data Config ---
 
 
+def _make_visual_weight_transform(new_w_visual: float) -> Callable[[np.ndarray], np.ndarray]:
+    """Create a loss_weight_transform that replaces fractional weights with new_w_visual.
+
+    In the preprocessing cache, weights are either w_visual (a value in (0, 1)) for the
+    "secondary" modality or 1.0 for the "primary" modality. This transform replaces all
+    fractional weights with the new value, allowing w_visual to be tuned at training time
+    without re-running preprocessing.
+    """
+
+    def transform(weights: np.ndarray) -> np.ndarray:
+        mask = (weights > 0) & (weights < 1.0)
+        if not mask.any():
+            return weights
+        result = weights.copy()
+        result[mask] = new_w_visual
+        return result
+
+    return transform
+
+
 def unified_data_config(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
     multimodal_cache_path: str = UNIFIED_CACHE_PATH,
     eval_benchmarks: list[str] | None = None,
     eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
+    w_visual: float | None = 1.0,
 ) -> LmDataConfig:
     """Build data mixture with Nemotron text + multimodal cache for unified model training.
 
@@ -127,6 +150,9 @@ def unified_data_config(
         eval_benchmarks: List of eval benchmark names to include as validation-only
             components (train_weight=0.0). Set to None to disable eval.
         eval_cache_path: GCS path to eval benchmark Levanter caches.
+        w_visual: Override for the visual token loss weight. When set, replaces
+            the preprocessing-baked w_visual at data loading time. None uses the
+            original preprocessing value unchanged.
     """
     # Text: only hq_actual from Nemotron-CC
     nemotron_steps = tokenize_nemotron()
@@ -138,12 +164,15 @@ def unified_data_config(
     # pack=True to avoid wasting compute padding short sequences (~600 tokens) to 4096.
     # NOTE: cache_dir should NOT include the split suffix — Levanter's build_caches()
     # appends /{split} automatically (e.g., cache_dir/train, cache_dir/validation).
+    loss_weight_transform = _make_visual_weight_transform(w_visual) if w_visual is not None else None
+    prebuilt_format = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=loss_weight_transform,
+    )
     multimodal_component = DatasetComponent(
         cache_dir=multimodal_cache_path,
-        format=PrebuiltLmDatasetFormat(
-            input_ids_key="input_ids",
-            loss_weights_key="loss_weights",
-        ),
+        format=prebuilt_format,
         pack=True,
     )
 
@@ -152,7 +181,6 @@ def unified_data_config(
 
     # Multimodal validation: separate understanding and generation val loss.
     # These are produced by vlm_tokenize_captions.py with val_fraction > 0.
-    prebuilt_format = PrebuiltLmDatasetFormat(input_ids_key="input_ids", loss_weights_key="loss_weights")
     components["val_understanding"] = DatasetComponent(
         cache_dir=f"{multimodal_cache_path}/val_understanding",
         format=prebuilt_format,
@@ -181,10 +209,7 @@ def unified_data_config(
 
             components[f"eval_{bench}"] = DatasetComponent(
                 cache_dir=f"{eval_cache_path}/{bench}",
-                format=PrebuiltLmDatasetFormat(
-                    input_ids_key="input_ids",
-                    loss_weights_key="loss_weights",
-                ),
+                format=prebuilt_format,
                 pack=True,
                 tags=tags,
             )
@@ -264,6 +289,7 @@ def make_unified_0_6b(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
+    w_visual: float | None = None,
 ):
     step = default_train(
         name="unified-qwen3-0.6b",
@@ -271,6 +297,7 @@ def make_unified_0_6b(
             text_weight=text_weight,
             multimodal_weight=multimodal_weight,
             eval_benchmarks=eval_benchmarks,
+            w_visual=w_visual,
         ),
         model_config=qwen3_0_6b,
         train_config=unified_0_6b_train,
@@ -286,6 +313,7 @@ def make_unified_1_7b(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
+    w_visual: float | None = None,
 ):
     step = default_train(
         name="unified-qwen3-1.7b",
@@ -293,6 +321,7 @@ def make_unified_1_7b(
             text_weight=text_weight,
             multimodal_weight=multimodal_weight,
             eval_benchmarks=eval_benchmarks,
+            w_visual=w_visual,
         ),
         model_config=qwen3_1_7b,
         train_config=unified_1_7b_train,
@@ -308,6 +337,7 @@ def make_unified_4b(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
+    w_visual: float | None = None,
 ):
     step = default_train(
         name="unified-qwen3-4b",
@@ -315,6 +345,7 @@ def make_unified_4b(
             text_weight=text_weight,
             multimodal_weight=multimodal_weight,
             eval_benchmarks=eval_benchmarks,
+            w_visual=w_visual,
         ),
         model_config=qwen3_4b,
         train_config=unified_4b_train,

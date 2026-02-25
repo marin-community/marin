@@ -37,7 +37,7 @@ from levanter.data.text.formats import PrebuiltLmDatasetFormat
 
 from experiments.defaults import default_train, default_validation_sets
 from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
+from experiments.pretraining_datasets import tokenize_nemotron
 from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
@@ -84,6 +84,7 @@ TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
 TEXT_WEIGHT = float(os.environ.get("TEXT_WEIGHT", "1.0"))
 MULTIMODAL_WEIGHT = float(os.environ.get("MULTIMODAL_WEIGHT", "2.0"))
+
 
 def _merge_xla_flags(existing: str, required_flags: list[str]) -> str:
     merged = existing.strip()
@@ -243,9 +244,6 @@ def unified_data_config(
     data_config = add_validation_sets_to_mixture(data_config, validation_sets)
 
     return data_config
-
-
-
 
 
 def _demo_train_config(learning_rate: float = 3e-4) -> SimpleTrainConfig:
