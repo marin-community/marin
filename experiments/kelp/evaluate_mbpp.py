@@ -42,6 +42,7 @@ from pathlib import Path
 import jax
 
 from experiments.kelp.checkpointing import find_best_checkpoint, load_checkpoint
+from experiments.kelp.corpus import load_corpus
 from experiments.kelp.model.config import TreeDiffusionConfig
 from experiments.kelp.tree.beam_search import best_of_n
 from experiments.kelp.tree.edit_model import EditModelParams
@@ -55,33 +56,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
-
-CORPUS_SEPARATOR = "# ---"
-
-
-def load_corpus(path: str) -> list[str]:
-    """Load a corpus file with '# ---' separators."""
-    programs = []
-    current_lines: list[str] = []
-
-    with open(path) as f:
-        for line in f:
-            if line.rstrip() == CORPUS_SEPARATOR:
-                if current_lines:
-                    programs.append("\n".join(current_lines) + "\n")
-                    current_lines = []
-            else:
-                current_lines.append(line.rstrip())
-
-    if current_lines:
-        while current_lines and not current_lines[0].strip():
-            current_lines.pop(0)
-        while current_lines and not current_lines[-1].strip():
-            current_lines.pop()
-        if current_lines:
-            programs.append("\n".join(current_lines) + "\n")
-
-    return programs
 
 
 def load_mbpp_eval_tasks(max_length: int = 512, max_tasks: int = 0) -> list[dict]:

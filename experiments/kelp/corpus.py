@@ -14,6 +14,57 @@
 
 """Shared program corpus for Kelp tree diffusion training and evaluation."""
 
+import ast
+
+
+CORPUS_SEPARATOR = "# ---"
+"""Sentinel line separating programs in corpus files.
+
+Programs may contain internal blank lines, so we use this sentinel
+instead of blank-line separation. See prepare_corpus.py for the writer
+and load_corpus() below for the reader.
+"""
+
+
+def load_corpus(path: str) -> list[str]:
+    """Load a corpus from a file.
+
+    Programs are separated by lines containing only '# ---'.
+    This allows programs to contain internal blank lines.
+    """
+    programs: list[str] = []
+    current_lines: list[str] = []
+
+    with open(path) as f:
+        for line in f:
+            if line.rstrip() == CORPUS_SEPARATOR:
+                if current_lines:
+                    programs.append("\n".join(current_lines) + "\n")
+                    current_lines = []
+            else:
+                current_lines.append(line.rstrip())
+
+    if current_lines:
+        # Strip leading/trailing empty lines from last program.
+        while current_lines and not current_lines[0].strip():
+            current_lines.pop(0)
+        while current_lines and not current_lines[-1].strip():
+            current_lines.pop()
+        if current_lines:
+            programs.append("\n".join(current_lines) + "\n")
+
+    return programs
+
+
+def is_valid_python(source: str) -> bool:
+    """Check whether a string is syntactically valid Python."""
+    try:
+        ast.parse(source)
+        return True
+    except SyntaxError:
+        return False
+
+
 # Toy corpus of 15 small Python functions used for training and evaluation.
 # Each program is a standalone function covering basic arithmetic, comparisons,
 # and control flow patterns.
