@@ -47,6 +47,10 @@ from zephyr.writers import ensure_parent_dir
 logger = logging.getLogger(__name__)
 
 
+class _ShutdownRequested(Exception):
+    """Raised by _await_future when the shutdown event is set."""
+
+
 class Chunk(Protocol):
     def __iter__(self) -> Iterator: ...
 
@@ -386,7 +390,7 @@ class ZephyrCoordinator:
             self._task_queue.append(task)
             self._retries += 1
 
-    def _check_worker_heartbeats(self, timeout: float = 30.0) -> None:
+    def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
         """Internal heartbeat check (called with lock held)."""
         now = time.monotonic()
         for worker_id, last in list(self._last_seen.items()):
@@ -704,7 +708,7 @@ class ZephyrCoordinator:
         """Load a new stage's tasks into the queue (legacy compat)."""
         self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
 
-    def check_heartbeats(self, timeout: float = 30.0) -> None:
+    def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
             self._check_worker_heartbeats(timeout)
@@ -776,6 +780,19 @@ class ZephyrWorker:
             )
         return self._shared_data_cache[name]
 
+    def _await_future(self, future: Any, poll_interval: float = 5.0) -> Any:
+        """Wait for a Future to resolve, checking _shutdown_event between polls.
+
+        No hard timeout — the heartbeat thread is the liveness detector.
+        Raises _ShutdownRequested if shutdown is signaled before the future resolves.
+        """
+        while not self._shutdown_event.is_set():
+            try:
+                return future.result(timeout=poll_interval)
+            except TimeoutError:
+                continue
+        raise _ShutdownRequested()
+
     def _run_polling(self, coordinator: ActorHandle) -> None:
         """Main polling loop. Runs in a background thread started by __init__."""
         logger.info("[%s] Starting polling loop", self._worker_id)
@@ -796,19 +813,38 @@ class ZephyrWorker:
             heartbeat_thread.join(timeout=5.0)
             logger.debug("[%s] Polling loop ended", self._worker_id)
 
-    def _heartbeat_loop(self, coordinator: ActorHandle, interval: float = 5.0) -> None:
+    def _heartbeat_loop(
+        self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
+    ) -> None:
         logger.debug("[%s] Heartbeat loop starting", self._worker_id)
         heartbeat_count = 0
+        consecutive_failures = 0
         while not self._shutdown_event.is_set():
             try:
                 # Block on result to avoid congesting the coordinator RPC pipe
                 # with fire-and-forget heartbeats.
                 coordinator.heartbeat.remote(self._worker_id).result()
                 heartbeat_count += 1
+                consecutive_failures = 0
                 if heartbeat_count % 10 == 1:
                     logger.debug("[%s] Sent heartbeat #%d", self._worker_id, heartbeat_count)
             except Exception as e:
-                logger.warning("[%s] Heartbeat failed: %s", self._worker_id, e)
+                consecutive_failures += 1
+                logger.warning(
+                    "[%s] Heartbeat failed (%d/%d): %s",
+                    self._worker_id,
+                    consecutive_failures,
+                    max_consecutive_failures,
+                    e,
+                )
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error(
+                        "[%s] %d consecutive heartbeat failures — coordinator is unreachable, shutting down",
+                        self._worker_id,
+                        consecutive_failures,
+                    )
+                    self._shutdown_event.set()
+                    break
             self._shutdown_event.wait(timeout=interval)
         logger.debug("[%s] Heartbeat loop exiting after %d beats", self._worker_id, heartbeat_count)
 
@@ -824,7 +860,9 @@ class ZephyrWorker:
                 logger.debug("[%s] Poll iteration #%d, tasks completed: %d", self._worker_id, loop_count, task_count)
 
             try:
-                response = coordinator.pull_task.remote(self._worker_id).result(timeout=30.0)
+                response = self._await_future(coordinator.pull_task.remote(self._worker_id))
+            except _ShutdownRequested:
+                break
             except Exception as e:
                 # Coordinator is dead or unreachable - exit gracefully
                 logger.info("[%s] pull_task failed (coordinator may be dead): %s", self._worker_id, e)
