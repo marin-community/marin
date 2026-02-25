@@ -15,7 +15,7 @@ from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.types import ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import ContainerErrorKind, ContainerStats, ContainerStatus
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
@@ -295,6 +295,31 @@ def test_task_failure_on_error(worker, mock_runtime):
     final_task = worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
     assert final_task.error == "Container crashed"
+
+
+def test_task_infra_not_found_error_maps_to_worker_failed(worker, mock_runtime):
+    """Infrastructure disappearance should consume preemption budget, not failure budget."""
+    mock_handle = create_mock_container_handle(
+        status_sequence=[
+            ContainerStatus(
+                running=False,
+                exit_code=1,
+                error="Task pod not found after retry window: name=iris-task-abc, namespace=iris",
+                error_kind=ContainerErrorKind.INFRA_NOT_FOUND,
+            )
+        ]
+    )
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    request = create_run_task_request()
+    task_id = worker.submit_task(request)
+
+    task = worker.get_task(task_id)
+    task.thread.join(timeout=10.0)
+
+    final_task = worker.get_task(task_id)
+    assert final_task.status == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert "Task pod not found" in (final_task.error or "")
 
 
 def test_task_exception_handling(worker, mock_runtime):

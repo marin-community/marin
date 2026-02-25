@@ -33,7 +33,13 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus, ImageInfo
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerErrorKind,
+    ContainerStats,
+    ContainerStatus,
+    ImageInfo,
+)
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
@@ -582,7 +588,11 @@ exec {quoted_cmd}
         )
 
         if result.returncode != 0:
-            return ContainerStatus(running=False, error="Container not found")
+            return ContainerStatus(
+                running=False,
+                error=f"Container not found: id={container_id}",
+                error_kind=ContainerErrorKind.INFRA_NOT_FOUND,
+            )
 
         try:
             state = json.loads(result.stdout.strip())
@@ -595,10 +605,15 @@ exec {quoted_cmd}
                 running=running,
                 exit_code=exit_code if not running else None,
                 error=error_msg,
+                error_kind=ContainerErrorKind.USER_CODE if error_msg else ContainerErrorKind.NONE,
                 oom_killed=oom_killed,
             )
         except (json.JSONDecodeError, KeyError) as e:
-            return ContainerStatus(running=False, error=f"Failed to parse inspect output: {e}")
+            return ContainerStatus(
+                running=False,
+                error=f"Failed to parse inspect output: {e}",
+                error_kind=ContainerErrorKind.RUNTIME_ERROR,
+            )
 
     def _docker_stats(self, container_id: str) -> ContainerStats:
         """Get container stats."""
