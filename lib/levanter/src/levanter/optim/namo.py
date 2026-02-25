@@ -213,10 +213,29 @@ def _clamp_to_mean(col_scale: Array, clamp_c: float) -> Array:
     if not (0.0 < float(clamp_c) <= 1.0):
         return col_scale
 
-    mean = jnp.nanmean(col_scale)
+    # Clamp per matrix (last axis = columns) so stacked/scanned linears are independent.
+    mean = jnp.nanmean(col_scale, axis=-1, keepdims=True)
     floor = jnp.where(jnp.isfinite(mean) & (mean > 0), mean * clamp_c, 0.0)
     ceil = jnp.where(jnp.isfinite(mean) & (mean > 0), mean / clamp_c, jnp.inf)
     return jnp.clip(col_scale, floor, ceil)
+
+
+def _orthogonalize_batched(
+    matrix: Array,
+    *,
+    steps: int,
+    muon_eps: float,
+    coefficient_type: CoefficientType,
+) -> Array:
+    """Apply Newton-Schulz orthogonalization to [..., m, n] tensors."""
+    if matrix.ndim == 2:
+        return zeropower_via_newtonschulz5(matrix, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
+
+    flat = matrix.reshape((-1, matrix.shape[-2], matrix.shape[-1]))
+    flat_orth = jax.vmap(
+        lambda m: zeropower_via_newtonschulz5(m, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
+    )(flat)
+    return flat_orth.reshape(matrix.shape)
 
 
 def scale_with_namo(
@@ -244,7 +263,7 @@ def scale_with_namo(
 
         def init_v(node):
             if isinstance(node, Linear):
-                return jnp.zeros([], dtype=jnp.float32)
+                return jnp.zeros(node.weight.array.shape[:-2], dtype=jnp.float32)
             return None
 
         v_squared = jax.tree_util.tree_map(init_v, flat_params, is_leaf=_is_linear_or_none)
@@ -288,14 +307,14 @@ def scale_with_namo(
                 return grad_node, v_prev
 
             if v_prev is None:
-                v_prev = jnp.zeros([], dtype=jnp.float32)
+                v_prev = jnp.zeros(m_node.weight.array.shape[:-2], dtype=jnp.float32)
 
             grad_arr = grad_node.weight.array
             m_arr = m_node.weight.array
             param_arr = param_node.weight.array
 
-            grad_norm = jnp.linalg.norm(grad_arr)
-            momentum_norm = jnp.linalg.norm(m_arr)
+            grad_norm = jnp.linalg.norm(grad_arr, axis=(-2, -1))
+            momentum_norm = jnp.linalg.norm(m_arr, axis=(-2, -1))
 
             v_new = mu2 * v_prev + (1.0 - mu2) * grad_norm * grad_norm
             adaptive_lr = (learning_rate * jnp.sqrt(bc2) / (bc1 + 1e-12)) * (
@@ -303,16 +322,16 @@ def scale_with_namo(
             )
             adaptive_lr = jnp.minimum(adaptive_lr, 1.0)
 
-            shape_scale = scale_coeff * jnp.sqrt(jnp.maximum(m_arr.shape[0], m_arr.shape[1]))
+            shape_scale = scale_coeff * jnp.sqrt(jnp.maximum(m_arr.shape[-2], m_arr.shape[-1]))
             shaped_lr = jnp.minimum(adaptive_lr * shape_scale, 1.0)
 
-            orth_dir = zeropower_via_newtonschulz5(
+            orth_dir = _orthogonalize_batched(
                 m_arr,
                 steps=steps,
-                eps=muon_eps,
+                muon_eps=muon_eps,
                 coefficient_type=coefficient_type,
             )
-            delta = -(weight_decay * adaptive_lr) * param_arr - shaped_lr * orth_dir
+            delta = -(weight_decay * adaptive_lr[..., None, None]) * param_arr - shaped_lr[..., None, None] * orth_dir
 
             return dataclasses.replace(grad_node, weight=dataclasses.replace(grad_node.weight, array=delta)), v_new
 
@@ -366,7 +385,8 @@ def scale_with_namod(
 
         def init_v(node):
             if isinstance(node, Linear):
-                return jnp.zeros((node.weight.array.shape[1],), dtype=jnp.float32)
+                shape = node.weight.array.shape
+                return jnp.zeros(shape[:-2] + (shape[-1],), dtype=jnp.float32)
             return None
 
         v = jax.tree_util.tree_map(init_v, flat_params, is_leaf=_is_linear_or_none)
@@ -414,31 +434,33 @@ def scale_with_namod(
             param_arr = param_node.weight.array
 
             if v_prev is None:
-                v_prev = jnp.zeros((m_arr.shape[1],), dtype=jnp.float32)
+                v_prev = jnp.zeros(m_arr.shape[:-2] + (m_arr.shape[-1],), dtype=jnp.float32)
 
-            col_norm_grad = jnp.linalg.norm(grad_arr, axis=0)
+            col_norm_grad = jnp.linalg.norm(grad_arr, axis=-2)
             v_new = mu2 * v_prev + (1.0 - mu2) * jnp.square(col_norm_grad)
 
             base_lr = learning_rate * jnp.sqrt(bc2) / (bc1 + 1e-12)
 
-            col_norm_m = jnp.linalg.norm(m_arr, axis=0)
+            col_norm_m = jnp.linalg.norm(m_arr, axis=-2)
             col_scale = col_norm_m * jax.lax.rsqrt(v_new + adamnorm_eps)
             col_scale = _clamp_to_mean(col_scale, clamp_c)
 
             col_lr_wd = jnp.minimum(col_scale * base_lr, 1.0)
             decay = jnp.maximum(1.0 - weight_decay * col_lr_wd, 0.0)
 
-            shape_scale = scale_coeff * jnp.sqrt(jnp.maximum(m_arr.shape[0], m_arr.shape[1]))
+            shape_scale = scale_coeff * jnp.sqrt(jnp.maximum(m_arr.shape[-2], m_arr.shape[-1]))
             col_lr_up = jnp.minimum(col_scale * (base_lr * shape_scale), 1.0)
 
-            orth_dir = zeropower_via_newtonschulz5(
+            orth_dir = _orthogonalize_batched(
                 m_arr,
                 steps=steps,
-                eps=muon_eps,
+                muon_eps=muon_eps,
                 coefficient_type=coefficient_type,
             )
 
-            delta = param_arr * (decay[None, :] - 1.0) - orth_dir * col_lr_up[None, :]
+            delta = param_arr * (jnp.expand_dims(decay, axis=-2) - 1.0) - orth_dir * jnp.expand_dims(
+                col_lr_up, axis=-2
+            )
             return dataclasses.replace(grad_node, weight=dataclasses.replace(grad_node.weight, array=delta)), v_new
 
         new_flat_updates = jax.tree_util.tree_map(
