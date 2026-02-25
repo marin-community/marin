@@ -60,6 +60,7 @@ from iris.cluster.types import (
     EnvironmentSpec,
     ResourceSpec,
     gpu_device,
+    preemptible_constraint,
     region_constraint,
     tpu_device,
 )
@@ -900,6 +901,11 @@ class SmokeTestRunner:
 
     def _log_autoscaler_status(self):
         """Log current cluster state via `iris cluster status`."""
+        if self.config.local:
+            # `iris cluster status` resolves controller discovery through the config platform
+            # (GCP/manual/coreweave). In local smoke mode we intentionally run a local
+            # controller against the same config, so this command is not meaningful.
+            return
         try:
             result = _run_iris("cluster", "status", config_path=self.config.config_path)
             for line in result.stdout.splitlines():
@@ -937,6 +943,8 @@ class SmokeTestRunner:
             (f"Simple GPU job ({a.label()})", self._run_simple_gpu_job),
             (f"Concurrent GPU jobs (3x {a.label()})", self._run_concurrent_gpu_jobs),
         ]
+        if self._has_non_preemptible_cpu_group():
+            tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
         if not self.config.local:
             tests.append((f"Multi-GPU device check ({a.label()})", self._run_gpu_check_job))
         if a.region and not self.config.local:
@@ -998,19 +1006,48 @@ class SmokeTestRunner:
 
     def _run_tpu_tests(self, client: IrisClient):
         a = self._accel
-        tests = [
-            (f"[Test 1/6] Simple TPU job ({a.variant})", self._run_simple_tpu_job),
-            (f"[Test 2/6] Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs),
-            (f"[Test 3/6] Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job),
-            (f"[Test 4/6] JAX TPU job ({a.variant})", self._run_jax_tpu_job),
-        ]
-        if a.region:
-            tests.append((f"[Test 5/6] Region-constrained job ({a.region})", self._run_region_constrained_job))
-            tests.append((f"[Test 6/6] Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
-
-        for label, method in tests:
-            if not self._run_test_step(client, label, method):
+        if self.config.local:
+            tests: list[tuple[str, object]] = []
+            if self._has_non_preemptible_cpu_group():
+                tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
+            if not tests:
+                logger.info("No local TPU smoke tests enabled; skipping TPU suite")
                 return
+
+            total = len(tests)
+            for i, (label, method) in enumerate(tests, 1):
+                if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method):
+                    return
+            return
+
+        tests = [
+            (f"Simple TPU job ({a.variant})", self._run_simple_tpu_job),
+            (f"Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs),
+            (f"Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job),
+            (f"JAX TPU job ({a.variant})", self._run_jax_tpu_job),
+        ]
+        if self._has_non_preemptible_cpu_group():
+            tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
+        if a.region:
+            tests.append((f"Region-constrained job ({a.region})", self._run_region_constrained_job))
+            tests.append((f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
+
+        total = len(tests)
+        for i, (label, method) in enumerate(tests, 1):
+            if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method):
+                return
+
+    def _has_non_preemptible_cpu_group(self) -> bool:
+        """Return True when config contains an active non-preemptible CPU group."""
+        for sg in self._cluster_config.scale_groups.values():
+            if sg.HasField("max_slices") and sg.max_slices <= 0:
+                continue
+            if sg.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+                continue
+            if sg.slice_template.preemptible:
+                continue
+            return True
+        return False
 
     def _run_job_test(
         self,
@@ -1180,6 +1217,17 @@ class SmokeTestRunner:
             job_name=f"smoke-nested-{self._run_id}",
             resources=ResourceSpec(device=a.make_device()),
             constraints=[region_constraint([a.region])],
+        )
+
+    def _run_non_preemptible_cpu_job(self, client: IrisClient) -> TestResult:
+        """Run a CPU-only job constrained to non-preemptible workers."""
+        return self._run_job_test(
+            client=client,
+            test_name="Non-preemptible CPU job",
+            entrypoint=Entrypoint.from_callable(_quick_task_job, 1),
+            job_name=f"smoke-non-preemptible-cpu-{self._run_id}",
+            resources=ResourceSpec(cpu=1, memory="1GB", disk="1GB"),
+            constraints=[preemptible_constraint(False)],
         )
 
     # ----- Diagnostics and cleanup -----
