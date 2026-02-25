@@ -261,6 +261,16 @@ class RemoteClusterClient:
         response = self._client.list_endpoints(request)
         return list(response.endpoints)
 
+    def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]:
+        """List all workers registered with the controller."""
+
+        def _call():
+            request = cluster_pb2.Controller.ListWorkersRequest()
+            response = self._client.list_workers(request)
+            return list(response.workers)
+
+        return call_with_retry("list_workers", _call)
+
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
         def _call():
             request = cluster_pb2.Controller.ListJobsRequest()
