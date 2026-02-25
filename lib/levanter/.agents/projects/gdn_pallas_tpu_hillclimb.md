@@ -2293,3 +2293,88 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / regression**. Macro-H batching reduced measured closed-call trace buckets but did not translate to end-to-end speed; runtime shifted cost into additional control-flow overhead.
 - Next bold hypothesis:
   - Escalate to **Macro Move E** (V-tiling with shared-K precompute) to reduce per-program state footprint and increase useful MXU work without relying on concat-heavy layout-sensitive batching in train fused kernels.
+
+### Iteration 42 - Macro Move G / in-kernel centered outer-product exp-diff with exact fallback (regression, reverted)
+
+- Date: 2026-02-25T21:04:10Z
+- Commit: none (failed attempt)
+- Loop session/local index: `1/10`
+- Starting commit: `2835ae5042a7cd0bdf25ba3eba899febfd532e85`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` bucket: `78.098 ms` (dominant), with top closed-call hotspots:
+    - `jit(_train_step)/jvp(...)/closed_call/shard_map/pallas_call`: `41.324 ms`
+    - `jit(_train_step)/transpose(jvp(...))/closed_call/shard_map/pallas_call`: `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move G**: centered outer-product `exp_diff` with exact fallback inside train chunk kernels (`+10-20%`, medium compiler/control-flow risk).
+  2. **Macro Move H**: shared-RHS train-path matmul batching (`+8-18%`, medium VMEM/layout risk; prior regressions).
+  3. **Macro Move E**: V-tiling (`KxV -> KxVb`) with shared-K precompute (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **G) Eliminate Ct^2 exponentials in `exp_diff` via centered outer-product exp**.
+- Selected hypothesis: add `_exp_diff_and_mask_from_g` and use it directly in train-path prepare/recurrent/fused-forward/backward kernels so fallback branching stays local to `exp_diff` construction rather than dispatch-level control flow.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Implemented `_exp_diff_and_mask_from_g(g, clip)` with:
+    - centered outer-product fast path (`er[:,None] * ec[None,:]`, clamped to `[exp(-clip), exp(clip)]`);
+    - exact `diff/clip/exp` fallback path for out-of-range chunk ranges.
+  - Rewired train-path chunk kernels to consume the helper in:
+    - prepare kernels (segmented + full-sequence pipeline),
+    - recurrent forward kernels (segmented + full-sequence pipeline),
+    - fused train forward kernel (loop + pipeline stage body),
+    - backward chunk kernel (for `exp_diff` and derivative mask).
+  - Local and TPU correctness passed, but profiled end-to-end throughput regressed materially.
+  - Reverted speculative kernel edits; tree restored to starting commit state.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter1_macroG_centered_inkernel --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter1_macroG_centered_inkernel_130m_ch128_seg1-131ac7`
+  - W&B artifact: `run-gdn_loop_iter1_macroG_centered_inkernel_130m_ch128_seg1-131ac7-profiler:v0`
+  - Trace download:
+    - `uv run wandb artifact get marin-community/marin/run-gdn_loop_iter1_macroG_centered_inkernel_130m_ch128_seg1-131ac7-profiler:v0 --root .profiles/wandb`
+  - Downloaded trace: `.profiles/wandb/plugins/profile/2026_02_25_20_58_22/perfetto_trace.json.gz`
+  - Throughput source:
+    - `gsutil cat gs://marin-us-east5/checkpoints/speedrun/gdn_loop_iter1_macroG_centered_inkernel_130m_ch128_seg1-131ac7/tracker_metrics.jsonl`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, compared to baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`):
+  - `shard_map`: `78.098 ms -> 46.475 ms` (`-40.49%`)
+  - `fusion`: `45.618 ms -> 34.883 ms` (`-23.53%`)
+  - `all-gather`: `20.158 ms -> 10.141 ms` (`-49.69%`)
+  - New large `while` bucket: `0.000 ms -> 31.509 ms`
+  - Forward closed-call `shard_map/pallas_call`: `41.324 ms -> 24.429 ms` (`-40.88%`)
+  - Backward closed-call `shard_map/pallas_call`: `26.266 ms -> 16.829 ms` (`-35.93%`)
+  - Event volume changed materially (`11761 -> 6596`), so per-trace bucket drops did not predict end-to-end throughput.
+
+- MFU/throughput delta (vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.787594 -> 5.218560` (`-9.83%`)
+  - `throughput/tokens_per_second`: `187227.57 -> 168819.42` (`-9.83%`)
+  - `throughput/duration`: `0.175017s -> 0.194101s` (`+10.90%`)
+  - Vs governance champion (`5.748507`): `-9.22%` (regression beyond `1.000%` threshold).
+
+- Macro G exp-op reduction note (trace-derived):
+  - **No reduction observed.**
+  - `exp*` event count on TPU:0 XLA Ops thread: `10 -> 21`.
+  - `exp*` total time: `0.005513 ms -> 1.694401 ms`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call`: `41.324 ms -> 24.429 ms` (`-40.88%`).
+    - Backward closed-call `shard_map/pallas_call`: `26.266 ms -> 16.829 ms` (`-35.93%`).
+    - `throughput/mfu -9.83%`, `throughput/tokens_per_second -9.83%`, `throughput/duration +10.90%`.
+    - Macro G exp-op reduction: **not observed** (`exp*` count/time increased).
+  - Governance:
+    - MFU gain `<3%` and dominant hotspot family remained train-path `shard_map/custom-call`; attempt marked **low-impact/regressive** and speculative kernel edits were reverted.
+
+- Assessment: **failed attempt / regression**. In-kernel Macro G reformulation reduced some trace buckets but introduced a large `while` hotspot and regressed end-to-end throughput.
+- Next bold hypothesis:
+  - Escalate to **Macro Move E** (V-tiling with shared-K precompute) to structurally reduce per-program state and attack train-path `shard_map/custom-call` critical path without adding new control-flow-heavy work.
