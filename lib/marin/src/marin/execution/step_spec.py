@@ -4,13 +4,13 @@
 import dataclasses
 import hashlib
 import json
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
 
 from fray.v2.types import ResourceConfig
+from iris.marin_fs import marin_prefix
 
 
 @dataclass(frozen=True)
@@ -65,7 +65,7 @@ class StepSpec:
         if self.override_output_path is not None:
             return self.override_output_path
 
-        prefix = self.output_path_prefix or os.environ["MARIN_PREFIX"]
+        prefix = self.output_path_prefix or marin_prefix()
         return f"{prefix}/{self.name_with_hash}"
 
     # Resources

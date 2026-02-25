@@ -27,7 +27,7 @@ from typing import Any, Protocol
 import cloudpickle
 import fsspec
 from fray.v2 import ActorConfig, ActorHandle, Client, ResourceConfig
-from iris.temp_buckets import get_temp_bucket_path
+from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import ExponentialBackoff
 
 from zephyr.dataset import Dataset
@@ -1022,17 +1022,7 @@ class ZephyrContext:
             self.no_workers_timeout = 6 * 60 * 60  # 6 hours
 
         if self.chunk_storage_prefix is None:
-            temp_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")
-            if temp_prefix is None:
-                marin_prefix = os.environ.get("MARIN_PREFIX")
-                if not marin_prefix:
-                    raise RuntimeError(
-                        "MARIN_PREFIX must be set when using a distributed backend.\n"
-                        "  Example: export MARIN_PREFIX=gs://marin-us-central2"
-                    )
-                temp_prefix = f"{marin_prefix}/tmp/zephyr"
-
-            self.chunk_storage_prefix = temp_prefix
+            self.chunk_storage_prefix = marin_temp_bucket(ttl_days=3, prefix="zephyr")
 
         # make sure each context is unique
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"

@@ -17,7 +17,7 @@ from typing import Protocol
 
 from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.rpc import cluster_pb2
-from iris.temp_buckets import REGION_TO_TMP_BUCKET
+from iris.marin_fs import marin_temp_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -113,19 +113,6 @@ def detect_gcp_zone() -> str | None:
     if "-" not in zone_name:
         return None
     return zone_name
-
-
-def _infer_worker_log_prefix() -> str | None:
-    """Infer worker log prefix from GCP metadata."""
-    zone_name = detect_gcp_zone()
-    if not zone_name:
-        return None
-    region = zone_name.rsplit("-", 1)[0]
-    bucket = REGION_TO_TMP_BUCKET.get(region)
-    if not bucket:
-        logger.warning("No tmp bucket mapping for region %s", region)
-        return None
-    return f"gs://{bucket}/ttl=30d/iris-logs"
 
 
 def _extract_tpu_name(instance_name: str) -> str:
@@ -493,4 +480,4 @@ class DefaultEnvironmentProvider:
         explicit = os.environ.get("IRIS_LOG_PREFIX")
         if explicit:
             return explicit
-        return _infer_worker_log_prefix()
+        return marin_temp_bucket(ttl_days=30, prefix="iris-logs")
