@@ -38,6 +38,7 @@ import time
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
@@ -66,7 +67,7 @@ from iris.cluster.platform.remote_exec import (
 )
 from iris.cluster.types import get_tpu_topology
 from iris.rpc import config_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +120,6 @@ def _parse_tpu_created_at(tpu_data: dict) -> Timestamp:
     # GCP returns ISO 8601 format like "2024-01-15T10:30:00.000Z"
     # Convert to epoch ms
     try:
-        from datetime import datetime
-
         dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
         epoch_ms = int(dt.timestamp() * 1000)
         return Timestamp.from_ms(epoch_ms)
@@ -134,8 +133,6 @@ def _parse_vm_created_at(vm_data: dict) -> Timestamp:
     if not create_time:
         return Timestamp.now()
     try:
-        from datetime import datetime
-
         dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
         epoch_ms = int(dt.timestamp() * 1000)
         return Timestamp.from_ms(epoch_ms)
@@ -151,6 +148,21 @@ def _classify_gcloud_error(stderr: str) -> PlatformError:
     return PlatformError(stderr)
 
 
+def _composite_slice_state(
+    cloud_state: CloudSliceState,
+    bootstrap_state: CloudSliceState | None,
+) -> CloudSliceState:
+    """Compose cloud lifecycle with bootstrap lifecycle into effective slice state."""
+    if cloud_state != CloudSliceState.READY:
+        # Never mask non-READY cloud states (DELETING/REPAIRING/UNKNOWN/etc).
+        return cloud_state
+    if bootstrap_state is None:
+        return CloudSliceState.BOOTSTRAPPING
+    if bootstrap_state == CloudSliceState.FAILED:
+        return CloudSliceState.FAILED
+    return CloudSliceState.READY
+
+
 def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
     """Validate required fields on a SliceConfig before creating a GCP slice.
 
@@ -158,26 +170,31 @@ def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
     in one pass rather than discovering issues one-by-one.
     """
     missing: list[str] = []
+    violations: list[str] = []
     if not config.gcp.zone:
         missing.append("gcp.zone")
     if config.gcp.mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
         if not config.gcp.machine_type:
             missing.append("gcp.machine_type")
         if config.num_vms != 1:
-            raise ValueError("GCP VM slice mode requires num_vms=1")
+            violations.append("GCP VM slice mode requires num_vms=1")
         if config.preemptible:
-            raise ValueError("GCP VM slice mode does not support preemptible instances")
+            violations.append("GCP VM slice mode does not support preemptible instances")
         if config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
-            raise ValueError("GCP VM slice mode requires accelerator_type=cpu")
+            violations.append("GCP VM slice mode requires accelerator_type=cpu")
         if config.accelerator_variant:
-            raise ValueError("GCP VM slice mode does not support accelerator_variant")
+            violations.append("GCP VM slice mode does not support accelerator_variant")
     else:
         if not config.accelerator_variant:
             missing.append("accelerator_variant")
         if not config.gcp.runtime_version:
             missing.append("gcp.runtime_version")
+    errors: list[str] = []
     if missing:
-        raise ValueError(f"SliceConfig is missing required fields: {', '.join(missing)}")
+        errors.append(f"SliceConfig is missing required fields: {', '.join(missing)}")
+    errors.extend(violations)
+    if errors:
+        raise ValueError("; ".join(errors))
 
 
 def _validate_vm_config(config: config_pb2.VmConfig) -> None:
@@ -382,18 +399,7 @@ class GcpSliceHandle:
         with self._bootstrap_lock:
             bs = self._bootstrap_state
 
-        if cloud_state != CloudSliceState.READY:
-            # Never mask non-READY cloud states (DELETING/REPAIRING/UNKNOWN/etc)
-            # with local bootstrap state.
-            effective_state = cloud_state
-        elif bs is None:
-            # Cloud is ready but bootstrap hasn't completed yet — still bootstrapping.
-            # This handles the case where bootstrap_config was provided.
-            effective_state = CloudSliceState.BOOTSTRAPPING
-        elif bs == CloudSliceState.FAILED:
-            effective_state = CloudSliceState.FAILED
-        else:
-            effective_state = CloudSliceState.READY
+        effective_state = _composite_slice_state(cloud_state, bs)
 
         return SliceStatus(
             state=effective_state,
@@ -538,14 +544,7 @@ class GcpVmSliceHandle:
         with self._bootstrap_lock:
             bs = self._bootstrap_state
 
-        if cloud_state != CloudSliceState.READY:
-            effective_state = cloud_state
-        elif bs is None:
-            effective_state = CloudSliceState.BOOTSTRAPPING
-        elif bs == CloudSliceState.FAILED:
-            effective_state = CloudSliceState.FAILED
-        else:
-            effective_state = CloudSliceState.READY
+        effective_state = _composite_slice_state(cloud_state, bs)
 
         return SliceStatus(
             state=effective_state,
@@ -954,9 +953,10 @@ class GcpPlatform:
         cloud_ready_timeout: float = 600.0,
     ) -> None:
         """Wait for VM to be RUNNING, then bootstrap the single worker."""
-        deadline = time.monotonic() + cloud_ready_timeout
+        deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
+        poll_duration = Duration.from_seconds(poll_interval)
         worker: RemoteWorkerHandle | None = None
-        while True:
+        while not deadline.expired():
             cloud_status = handle._describe_cloud()
             if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
                 raise PlatformError(
@@ -966,11 +966,9 @@ class GcpPlatform:
                 worker = cloud_status.workers[0]
                 if worker.internal_address:
                     break
-            if time.monotonic() > deadline:
-                raise PlatformError(
-                    f"VM slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s"
-                )
-            time.sleep(poll_interval)
+            time.sleep(poll_duration.to_seconds())
+        else:
+            raise PlatformError(f"VM slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
 
         assert worker is not None
         if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
