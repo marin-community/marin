@@ -471,6 +471,55 @@ def test_fused_cross_entropy_pallas_gpu_requires_gpu():
         )
 
 
+def test_fused_cross_entropy_pallas_gpu_custom_backward_grad_matches_xla():
+    if jax.default_backend() != "gpu":
+        pytest.skip("requires GPU backend")
+    device_kind = jax.devices()[0].device_kind.lower()
+    if "gb10" not in device_kind:
+        pytest.skip("requires GB10 device to exercise custom backward path")
+
+    batch, hidden, vocab = 1024, 32, 65537
+    key = jax.random.PRNGKey(23)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+    x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.bfloat16)
+    w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.bfloat16)
+    y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
+
+    # Match the v-block used by GB10 pallas_gpu forward fallback for B>=1024, V>=65536.
+    xla_block_sizes = fused_api.BlockSizes(v_block_size=2048)
+
+    def loss_pallas(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            logsumexp_weight=0.2,
+            dtype=jnp.float32,
+            implementation="pallas_gpu",
+        )
+
+    def loss_xla(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            logsumexp_weight=0.2,
+            block_sizes=xla_block_sizes,
+            dtype=jnp.float32,
+            implementation="xla",
+        )
+
+    gx_pallas, gw_pallas = jax.grad(loss_pallas, argnums=(0, 1))(x, w)
+    gx_xla, gw_xla = jax.grad(loss_xla, argnums=(0, 1))(x, w)
+
+    gx_max_abs = jnp.max(jnp.abs(gx_pallas.astype(jnp.float32) - gx_xla.astype(jnp.float32)))
+    gw_max_abs = jnp.max(jnp.abs(gw_pallas.astype(jnp.float32) - gw_xla.astype(jnp.float32)))
+    assert gx_max_abs <= 5e-3
+    assert gw_max_abs <= 5e-3
+
+
 def test_fused_cross_entropy_pallas_bwd_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")

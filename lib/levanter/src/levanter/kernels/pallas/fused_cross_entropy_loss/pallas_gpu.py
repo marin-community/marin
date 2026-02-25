@@ -17,7 +17,9 @@ from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
 
+# Empirical GB10 launch guardrail from repeated Triton shared-memory launch failures.
 _GB10_WEIGHT_TILE_BYTES_LIMIT = 101_376
+# Compile-time safety cap observed to avoid pathological GB10 H-tiling compile behavior.
 _GB10_MAX_H_TILES = 512
 _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_1K = 2048
@@ -472,18 +474,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
     is_gb10_bf16 = is_gb10 and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
     gb10_native_forward_opt_in = is_gb10_bf16 and gb10_native_forward_opt_in
 
-    if is_gb10 and not is_gb10_bf16:
-        return linear_softmax_cross_entropy_loss_xla(
-            x,
-            labels,
-            w,
-            block_sizes=block_sizes,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-            return_argmax=return_argmax,
-        )
-
     if gb10_native_forward_opt_in and block_sizes is None:
         raise PallasUnsupportedError(
             "GB10 native Pallas forward opt-in requires explicit block sizes. "
@@ -611,8 +601,6 @@ def _gb10_custom_backward_v_block_size(
         return None
     if w.shape[1] < 65536:
         return None
-    if x.shape[0] >= 8192:
-        return _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS
     if x.shape[0] >= 2048:
         return _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS
     if x.shape[0] >= 1024:
@@ -747,6 +735,8 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
         precision=precision,
         gb10_native_forward_opt_in=gb10_native_forward_opt_in,
     )
+    # We carry this shape-derived tuning choice in residuals so bwd can use
+    # exactly the same policy decision as fwd without recomputing dispatch logic.
     backward_v_block = _gb10_custom_backward_v_block_size(x, w)
     return (loss, lse), (x, labels, w, lse, backward_v_block)
 
