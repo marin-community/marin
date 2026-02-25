@@ -167,6 +167,48 @@ Some Mosaic TPU matmul paths require 32-bit accumulation. If you see
 `lax.dot_general` or set `jax.config.update("jax_default_matmul_precision", "highest")`
 in your benchmark script. Prefer the explicit `preferred_element_type` in kernels.
 
+**Pallas cost estimates (required for new kernels):**
+- Add a `cost_estimate=` argument on each `pl.pallas_call` so profiler and scheduler metadata have usable FLOP/byte
+  estimates.
+- Use `pl.estimate_cost` on a **reference/body-equivalent JAX function**. Do not call it on a kernel body that uses
+  `pl.program_id`, because that tracing path is outside a Pallas grid context.
+- Compute `bytes_accessed` from kernel inputs + outputs passed to the call.
+
+```python
+from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
+
+
+def _cost_estimate(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    *,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate | None:
+    body_cost = pl.estimate_cost(reference_impl, q, k, v)
+    return with_io_bytes_accessed(
+        body_cost,
+        kernel_inputs_specs=kernel_inputs_specs,
+        kernel_outputs_specs=kernel_outputs_specs,
+    )
+
+
+out_shape = jax.ShapeDtypeStruct(...)
+out = pl.pallas_call(
+    kernel,
+    ...,
+    out_shape=out_shape,
+    cost_estimate=_cost_estimate(
+        q,
+        k,
+        v,
+        kernel_inputs_specs=(q, k, v),
+        kernel_outputs_specs=out_shape,
+    ),
+)(q, k, v)
+```
+
 ### 5) Add a speed microbench + profiling hook
 
 Minimum:
