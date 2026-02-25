@@ -211,6 +211,118 @@ def mha_forward_kernel(
     plgpu.store(o_ref.at[:, : o.shape[-1]], o.astype(o_ref.dtype), mask=head_mask)
 
 
+def _bytes_for_spec(spec: jax.Array | jax.ShapeDtypeStruct | None) -> int:
+    if spec is None:
+        return 0
+    shape = getattr(spec, "shape", None)
+    dtype = getattr(spec, "dtype", None)
+    if shape is None or dtype is None:
+        return 0
+    return math.prod(shape) * jnp.dtype(dtype).itemsize
+
+
+def _cost_with_io_bytes_accessed(
+    *,
+    body_flops: int,
+    body_transcendentals: int,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate:
+    input_bytes = sum(_bytes_for_spec(spec) for spec in jax.tree.leaves(kernel_inputs_specs))
+    output_bytes = sum(_bytes_for_spec(spec) for spec in jax.tree.leaves(kernel_outputs_specs))
+    return pl.CostEstimate(
+        flops=body_flops,
+        transcendentals=body_transcendentals,
+        bytes_accessed=input_bytes + output_bytes,
+        remote_bytes_transferred=0,
+    )
+
+
+def _mha_forward_cost_estimate(
+    *,
+    batch_size: int,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    head_dim: int,
+    block_q: int,
+    block_k: int,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate:
+    q_tiles = (q_seq_len + block_q - 1) // block_q
+    kv_tiles = (kv_seq_len + block_k - 1) // block_k
+    tile_pairs = batch_size * num_heads * q_tiles * kv_tiles
+    # Per (q_tile, kv_tile): QK^T matmul + P@V matmul.
+    body_flops = tile_pairs * (4 * block_q * block_k * head_dim)
+    body_transcendentals = tile_pairs * (block_q * block_k)
+    return _cost_with_io_bytes_accessed(
+        body_flops=body_flops,
+        body_transcendentals=body_transcendentals,
+        kernel_inputs_specs=kernel_inputs_specs,
+        kernel_outputs_specs=kernel_outputs_specs,
+    )
+
+
+def _mha_backward_cost_estimate(
+    *,
+    batch_size: int,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    head_dim: int,
+    block_q_dkv: int,
+    block_kv_dkv: int,
+    block_q_dq: int,
+    block_kv_dq: int,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate:
+    q_tiles_dkv = (q_seq_len + block_q_dkv - 1) // block_q_dkv
+    kv_tiles_dkv = (kv_seq_len + block_kv_dkv - 1) // block_kv_dkv
+    dkv_tile_pairs = batch_size * num_heads * q_tiles_dkv * kv_tiles_dkv
+
+    q_tiles_dq = (q_seq_len + block_q_dq - 1) // block_q_dq
+    kv_tiles_dq = (kv_seq_len + block_kv_dq - 1) // block_kv_dq
+    dq_tile_pairs = batch_size * num_heads * q_tiles_dq * kv_tiles_dq
+
+    # dKV phase does four tile matmuls (QK^T, P^T@dO, dP via dO@V^T, dS^T@Q).
+    dkv_flops = dkv_tile_pairs * (8 * block_q_dkv * block_kv_dkv * head_dim)
+    # dQ phase does three tile matmuls (QK^T, dP via dO@V^T, dS@K).
+    dq_flops = dq_tile_pairs * (6 * block_q_dq * block_kv_dq * head_dim)
+    body_flops = dkv_flops + dq_flops
+
+    dkv_transcendentals = dkv_tile_pairs * (block_q_dkv * block_kv_dkv)
+    dq_transcendentals = dq_tile_pairs * (block_q_dq * block_kv_dq)
+    body_transcendentals = dkv_transcendentals + dq_transcendentals
+
+    return _cost_with_io_bytes_accessed(
+        body_flops=body_flops,
+        body_transcendentals=body_transcendentals,
+        kernel_inputs_specs=kernel_inputs_specs,
+        kernel_outputs_specs=kernel_outputs_specs,
+    )
+
+
+def _mha_preprocess_backward_cost_estimate(
+    *,
+    batch_size: int,
+    seq_len: int,
+    num_heads: int,
+    head_dim: int,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate:
+    elements = batch_size * seq_len * num_heads * head_dim
+    body_flops = 2 * elements
+    return _cost_with_io_bytes_accessed(
+        body_flops=body_flops,
+        body_transcendentals=0,
+        kernel_inputs_specs=kernel_inputs_specs,
+        kernel_outputs_specs=kernel_outputs_specs,
+    )
+
+
 def _mha_call(
     q,
     k,
@@ -334,6 +446,17 @@ def _mha_call(
         interpret=interpret,
         compiler_params=plgpu.CompilerParams(num_warps=num_warps_, num_stages=num_stages),
         name="mha_forward_sliding",
+        cost_estimate=_mha_forward_cost_estimate(
+            batch_size=batch_size,
+            q_seq_len=q_seq_len,
+            kv_seq_len=kv_seq_len,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            block_q=block_q,
+            block_k=block_k,
+            kernel_inputs_specs=(q, k, v, q_segment_ids, kv_segment_ids),
+            kernel_outputs_specs=out_shape,
+        ),
     )(q, k, v, q_segment_ids, kv_segment_ids)
     if return_residuals:
         return out
@@ -559,6 +682,19 @@ def _mha_backward(
             debug=debug,
             interpret=interpret,
             compiler_params=plgpu.CompilerParams(num_warps=num_warps_, num_stages=num_stages),
+            cost_estimate=_mha_backward_cost_estimate(
+                batch_size=batch_size,
+                q_seq_len=q_seq_len,
+                kv_seq_len=kv_seq_len,
+                num_heads=num_heads,
+                head_dim=head_dim,
+                block_q_dkv=block_q_dkv,
+                block_kv_dkv=block_kv_dkv,
+                block_q_dq=block_q_dq,
+                block_kv_dq=block_kv_dq,
+                kernel_inputs_specs=(q, k, v, q_segment_ids, kv_segment_ids, out, do, lse, delta),
+                kernel_outputs_specs=out_shapes,
+            ),
         )(q, k, v, q_segment_ids, kv_segment_ids, out, do, lse, delta)
         return dq.astype(q.dtype), dk, dv, None
 
@@ -594,6 +730,14 @@ def _preprocess_backward(out, do, lse, block_q: int, debug: bool, interpret: boo
         debug=debug,
         interpret=interpret,
         name="mha_preprocess_backward",
+        cost_estimate=_mha_preprocess_backward_cost_estimate(
+            batch_size=batch_size,
+            seq_len=seq_len,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            kernel_inputs_specs=(out, do),
+            kernel_outputs_specs=out_shape,
+        ),
     )(out, do)
     return delta
 
