@@ -54,10 +54,10 @@ Usage:
         --start_shard 0 --end_shard 50 \
         --w_visual 0.3 --num_workers 16
 
- uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache/understanding         --shuffle true --max_batch_gb 10 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 32 --dual_ordering false --generation_ratio 0 --w_visual 0.3 
+ uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache_v2/understanding         --shuffle true --max_batch_gb 30 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 256 --dual_ordering false --generation_ratio 0 --w_visual 0.3 
 
 
-  uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache/generation         --shuffle true --max_batch_gb 10 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 32 --dual_ordering false --generation_ratio 1.0 --w_visual 0.3 
+  uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache_v2/generation         --shuffle true --max_batch_gb 30 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 256 --dual_ordering false --generation_ratio 1.0 --w_visual 0.3 
 """
 
 import dataclasses
