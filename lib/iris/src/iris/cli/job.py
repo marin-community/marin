@@ -23,6 +23,7 @@ import yaml
 from google.protobuf import json_format
 from tabulate import tabulate
 
+from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug_report
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
@@ -629,3 +630,28 @@ def logs(
     for entry in entries:
         ts = entry.timestamp.as_short_time()
         click.echo(f"[{ts}] worker={entry.worker_id} task={entry.task_id} | {entry.data}")
+
+
+@job.command("bug-report")
+@click.argument("job_id")
+@click.option("--file-issue", is_flag=True, help="File a GitHub issue with the report")
+@click.option("--repo", type=str, default=None, help="GitHub repo (default: auto-detect from git remote)")
+@click.option("--tail", type=int, default=50, help="Recent log lines per task to include")
+@click.option("--labels", type=str, default="bug", help="Comma-separated labels for the GitHub issue")
+@click.pass_context
+def bug_report(ctx, job_id: str, file_issue: bool, repo: str | None, tail: int, labels: str):
+    """Generate a diagnostic bug report for a job."""
+    controller_url = require_controller_url(ctx)
+    report = gather_bug_report(controller_url, JobName.from_wire(job_id), tail=tail)
+    markdown = format_bug_report(report)
+
+    if file_issue:
+        title = f"[Iris] Job {report.job_id} {report.state_name}: {report.error_summary}"
+        url = file_github_issue(title, markdown, repo=repo, labels=labels.split(","))
+        if url:
+            click.echo(f"Filed issue: {url}")
+        else:
+            click.echo("Failed to file issue. Report printed below:\n")
+            click.echo(markdown)
+    else:
+        click.echo(markdown)
