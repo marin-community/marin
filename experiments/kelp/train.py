@@ -35,7 +35,7 @@ import random
 import sys
 from dataclasses import replace
 
-from experiments.kelp.corpus import TOY_CORPUS
+from experiments.kelp.corpus import TOY_CORPUS, load_corpus
 from experiments.kelp.model.presets import PRESETS, get_preset
 from experiments.kelp.tree.augmentation import augment_bank
 from experiments.kelp.tree.subtree_bank import SubtreeBank
@@ -98,39 +98,6 @@ def parse_args() -> argparse.Namespace:
         help="Fraction of training over which to ramp corruption difficulty (default: 0.3)",
     )
     return parser.parse_args()
-
-
-CORPUS_SEPARATOR = "# ---"
-
-
-def load_corpus(path: str) -> list[str]:
-    """Load a corpus from a file.
-
-    Programs are separated by lines containing only '# ---'.
-    This allows programs to contain internal blank lines.
-    """
-    programs = []
-    current_lines: list[str] = []
-
-    with open(path) as f:
-        for line in f:
-            if line.rstrip() == CORPUS_SEPARATOR:
-                if current_lines:
-                    programs.append("\n".join(current_lines) + "\n")
-                    current_lines = []
-            else:
-                current_lines.append(line.rstrip())
-
-    if current_lines:
-        # Strip leading/trailing empty lines from last program.
-        while current_lines and not current_lines[0].strip():
-            current_lines.pop(0)
-        while current_lines and not current_lines[-1].strip():
-            current_lines.pop()
-        if current_lines:
-            programs.append("\n".join(current_lines) + "\n")
-
-    return programs
 
 
 def main():
