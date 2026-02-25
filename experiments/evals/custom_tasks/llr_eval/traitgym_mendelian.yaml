@@ -1,0 +1,9 @@
+task: traitgym_mendelian
+class: !function dna_vep_llr_eval.DnaVepLlrEvalTask
+dataset_path: songlab/TraitGym
+dataset_name: mendelian_traits
+test_split: test
+llr_transform: negate
+metrics:
+  - auprc
+  - auroc
