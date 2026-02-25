@@ -29,6 +29,7 @@ from fray.v2.types import (
     TpuConfig,
     create_environment,
     get_tpu_topology,
+    with_default_tpu_env_vars,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,8 @@ def build_runtime_env(request: JobRequest) -> dict:
         if "gpu" not in extras:
             extras.append("gpu")
         env_vars["JAX_PLATFORMS"] = ""
+
+    env_vars = with_default_tpu_env_vars(request.resources.device, env_vars)
 
     if os.environ.get("MARIN_CI_DISABLE_RUNTIME_ENVS", "").lower() in ("1", "true") or os.environ.get(
         "PYTEST_CURRENT_TEST"

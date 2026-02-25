@@ -298,6 +298,19 @@ class TpuConfig:
 
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
 
+_LIBTPU_SCOPED_VMEM_LIMIT_INIT_ARG = "--xla_tpu_scoped_vmem_limit_kib=50000"
+
+
+def with_default_tpu_env_vars(device: DeviceConfig, env_vars: dict[str, str]) -> dict[str, str]:
+    """Return env vars with TPU launch defaults applied without overriding user values."""
+    if not isinstance(device, TpuConfig):
+        return dict(env_vars)
+
+    merged_env_vars = dict(env_vars)
+    if device.variant.startswith(("v5p-", "v6e-")) and "LIBTPU_INIT_ARGS" not in merged_env_vars:
+        merged_env_vars["LIBTPU_INIT_ARGS"] = _LIBTPU_SCOPED_VMEM_LIMIT_INIT_ARG
+    return merged_env_vars
+
 
 @dataclass
 class ResourceConfig:

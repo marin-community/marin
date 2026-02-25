@@ -27,6 +27,7 @@ from fray.v1.cluster.base import (
     JobRequest,
     JobStatus,
     TpuConfig,
+    with_default_tpu_env_vars,
 )
 from fray.v1.cluster.ray.config import find_config_by_region
 from fray.v1.cluster.ray.deps import build_python_path, build_runtime_env_for_packages
@@ -264,6 +265,8 @@ class RayCluster(Cluster):
             if "gpu" not in environment.extras:
                 environment.extras.append("gpu")
             env_vars["JAX_PLATFORMS"] = ""
+
+        env_vars = with_default_tpu_env_vars(request.resources.device, env_vars)
 
         logger.info(
             "Building environment for device: %s/%s", request.resources.device.kind, request.resources.device.variant
