@@ -666,6 +666,11 @@ message Controller {
     repeated TaskLogBatch task_logs = 1;
     int64 last_timestamp_ms = 2;     // Max timestamp seen (for next since_ms)
     bool truncated = 3;              // True if max_total_lines hit
+
+    // Child job statuses (populated when include_children=true).
+    // Included on every response so the client can detect state transitions
+    // (e.g. child moved to FAILED) without a separate ListJobs RPC.
+    repeated JobStatus child_job_statuses = 4;
   }
 
   // --- Process Logs ---

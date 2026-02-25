@@ -863,7 +863,10 @@ class ControllerServiceImpl:
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
         requested_attempt_id = request.attempt_id
 
-        # Detect if this is a task ID (ends in /N) or job ID and collect tasks
+        # Detect if this is a task ID (ends in /N) or job ID and collect tasks.
+        # When include_children is set, also collect child job statuses so the
+        # client can detect state transitions without a separate ListJobs RPC.
+        child_job_statuses: list[cluster_pb2.JobStatus] = []
         if job_name.is_task:
             task = self._state.get_task(job_name)
             tasks = [task] if task else []
@@ -875,6 +878,16 @@ class ControllerServiceImpl:
                     job_wire = job.job_id.to_wire()
                     if job_wire == prefix or job_wire.startswith(prefix + "/"):
                         tasks.extend(self._state.get_job_tasks(job.job_id))
+                        if job_wire != prefix:
+                            child_status = cluster_pb2.JobStatus(
+                                job_id=job_wire,
+                                state=job.state,
+                                exit_code=job.exit_code or 0,
+                                error=job.error or "",
+                            )
+                            if job.finished_at:
+                                child_status.finished_at.CopyFrom(job.finished_at.to_proto())
+                            child_job_statuses.append(child_status)
             else:
                 tasks.extend(self._state.get_job_tasks(job_name))
 
@@ -975,6 +988,7 @@ class ControllerServiceImpl:
             task_logs=task_logs,
             last_timestamp_ms=last_timestamp_ms,
             truncated=truncated,
+            child_job_statuses=child_job_statuses,
         )
 
     # --- Profiling ---

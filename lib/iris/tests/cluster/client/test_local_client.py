@@ -241,3 +241,50 @@ def test_wait_stream_logs_discovers_child_tasks(client, caplog):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
     messages = [r.message for r in caplog.records]
     assert any("CHILD_DYNAMIC_LINE" in msg for msg in messages), messages
+
+
+def _parent_with_failing_child():
+    """Parent callable that submits a child that exits with an error."""
+    from iris.client.client import iris_ctx
+    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+
+    ctx = iris_ctx()
+    res = ResourceSpec(cpu=1, memory="1g")
+    env = EnvironmentSpec()
+
+    child = ctx.client.submit(
+        Entrypoint.from_command("sh", "-c", "echo 'about to fail'; exit 42"),
+        "failing-child",
+        res,
+        environment=env,
+    )
+    child.wait(timeout=30, raise_on_failure=False)
+    # Keep parent alive after child failure so the streaming loop has time to detect it.
+    time.sleep(2.0)
+
+
+def test_stream_logs_surfaces_child_failure(client, caplog):
+    """Streaming logs surfaces a warning when a child job terminates with failure."""
+    iris = IrisClient(client)
+    parent_id = JobName.root("test-child-failure-surfaced")
+    entrypoint = Entrypoint.from_callable(_parent_with_failing_child)
+    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+
+    client.submit_job(job_id=parent_id, entrypoint=entrypoint, resources=resources)
+    job = Job(iris, parent_id)
+
+    with caplog.at_level(logging.WARNING, logger="iris.client.client"):
+        status = job.wait(
+            stream_logs=True,
+            include_children=True,
+            timeout=30.0,
+            poll_interval=0.2,
+            raise_on_failure=False,
+        )
+
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(
+        "failing-child" in msg and "terminated" in msg for msg in warning_messages
+    ), f"Expected child failure warning in streamed logs, got: {warning_messages}"
