@@ -54,7 +54,10 @@ Usage:
         --start_shard 0 --end_shard 50 \
         --w_visual 0.3 --num_workers 16
 
- uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache/understanding         --shuffle true --max_batch_gb 10 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 32 --dual_ordering false --generation_ratio 1.0 --w_visual 0.3 
+ uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache/understanding         --shuffle true --max_batch_gb 10 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 32 --dual_ordering false --generation_ratio 0 --w_visual 0.3 
+
+
+  uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache/generation         --shuffle true --max_batch_gb 10 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 32 --dual_ordering false --generation_ratio 1.0 --w_visual 0.3 
 """
 
 import dataclasses
@@ -397,37 +400,46 @@ def process_shard(
 
     result = {**train_result, "val_und_path": None, "val_gen_path": None, "val_und_count": 0, "val_gen_count": 0}
 
-    # Val caches (if val_fraction > 0)
+    # Val caches (if val_fraction > 0), respecting which orderings are active
     if val_fraction > 0:
-        val_und_path = f"{local_output_path}_val_und"
-        val_und_records = process_parquet_rows(
-            table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_understanding"
-        )
-        val_und_result = write_levanter_cache(val_und_records, val_und_path, {**metadata, "split": "val_understanding"})
-        result["val_und_count"] = val_und_result["count"]
-        if val_und_result["count"] > 0:
-            result["val_und_path"] = val_und_path
-            logger.info(
-                "Shard %s val_understanding: %d records, %d tokens",
-                source_shard,
-                val_und_result["count"],
-                val_und_result["token_count"],
-            )
+        need_und = dual_ordering or generation_ratio < 1.0
+        need_gen = dual_ordering or generation_ratio > 0.0
 
-        val_gen_path = f"{local_output_path}_val_gen"
-        val_gen_records = process_parquet_rows(
-            table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_generation"
-        )
-        val_gen_result = write_levanter_cache(val_gen_records, val_gen_path, {**metadata, "split": "val_generation"})
-        result["val_gen_count"] = val_gen_result["count"]
-        if val_gen_result["count"] > 0:
-            result["val_gen_path"] = val_gen_path
-            logger.info(
-                "Shard %s val_generation: %d records, %d tokens",
-                source_shard,
-                val_gen_result["count"],
-                val_gen_result["token_count"],
+        if need_und:
+            val_und_path = f"{local_output_path}_val_und"
+            val_und_records = process_parquet_rows(
+                table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_understanding"
             )
+            val_und_result = write_levanter_cache(
+                val_und_records, val_und_path, {**metadata, "split": "val_understanding"}
+            )
+            result["val_und_count"] = val_und_result["count"]
+            if val_und_result["count"] > 0:
+                result["val_und_path"] = val_und_path
+                logger.info(
+                    "Shard %s val_understanding: %d records, %d tokens",
+                    source_shard,
+                    val_und_result["count"],
+                    val_und_result["token_count"],
+                )
+
+        if need_gen:
+            val_gen_path = f"{local_output_path}_val_gen"
+            val_gen_records = process_parquet_rows(
+                table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_generation"
+            )
+            val_gen_result = write_levanter_cache(
+                val_gen_records, val_gen_path, {**metadata, "split": "val_generation"}
+            )
+            result["val_gen_count"] = val_gen_result["count"]
+            if val_gen_result["count"] > 0:
+                result["val_gen_path"] = val_gen_path
+                logger.info(
+                    "Shard %s val_generation: %d records, %d tokens",
+                    source_shard,
+                    val_gen_result["count"],
+                    val_gen_result["token_count"],
+                )
 
     return result
 
@@ -460,16 +472,21 @@ def tokenize_shard(
     val_gen_records: list[dict[str, np.ndarray]] = []
 
     if val_fraction > 0:
-        val_und_records = list(
-            process_parquet_rows(
-                table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_understanding"
+        need_und = dual_ordering or generation_ratio < 1.0
+        need_gen = dual_ordering or generation_ratio > 0.0
+
+        if need_und:
+            val_und_records = list(
+                process_parquet_rows(
+                    table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_understanding"
+                )
             )
-        )
-        val_gen_records = list(
-            process_parquet_rows(
-                table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_generation"
+        if need_gen:
+            val_gen_records = list(
+                process_parquet_rows(
+                    table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_generation"
+                )
             )
-        )
 
     return train_records, val_und_records, val_gen_records
 
@@ -765,16 +782,21 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
     _consolidate(all_train_paths, f"{config.output_path}/train", "train")
 
     if config.val_fraction > 0:
-        _consolidate(
-            val_und_gcs_paths,
-            f"{config.output_path}/val_understanding/validation",
-            "val_understanding",
-        )
-        _consolidate(
-            val_gen_gcs_paths,
-            f"{config.output_path}/val_generation/validation",
-            "val_generation",
-        )
+        need_und = config.dual_ordering or config.generation_ratio < 1.0
+        need_gen = config.dual_ordering or config.generation_ratio > 0.0
+
+        if need_und:
+            _consolidate(
+                val_und_gcs_paths,
+                f"{config.output_path}/val_understanding/validation",
+                "val_understanding",
+            )
+        if need_gen:
+            _consolidate(
+                val_gen_gcs_paths,
+                f"{config.output_path}/val_generation/validation",
+                "val_generation",
+            )
 
     _write_metadata(
         config,
@@ -1030,8 +1052,13 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     _consolidate(all_output_paths, f"{config.output_path}/train", "train")
 
     if config.val_fraction > 0:
-        _consolidate(val_und_gcs_paths, f"{config.output_path}/val_understanding/validation", "val_understanding")
-        _consolidate(val_gen_gcs_paths, f"{config.output_path}/val_generation/validation", "val_generation")
+        need_und = config.dual_ordering or config.generation_ratio < 1.0
+        need_gen = config.dual_ordering or config.generation_ratio > 0.0
+
+        if need_und:
+            _consolidate(val_und_gcs_paths, f"{config.output_path}/val_understanding/validation", "val_understanding")
+        if need_gen:
+            _consolidate(val_gen_gcs_paths, f"{config.output_path}/val_generation/validation", "val_generation")
 
     _write_metadata(
         config,
