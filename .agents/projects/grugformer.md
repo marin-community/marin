@@ -11,6 +11,7 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 - **Equinox-first model surface.** Use `equinox.Module` for model structure (`Transformer`, `Block`, `MLP`, `RMSNorm`, attention). Keep methods small and direct (`init`, `__call__`, `logits`, `next_token_loss`).
 - **Do not use `eqx.nn` library modules.** Build Grug layers from raw JAX ops and explicit parameter arrays so we can explicitly manage initialization, sharding, and dtypes.
+- **Templates over libraries.** The primary edit surface is experiment templates, not shared trainer/model libraries. Put grug implementation code in `experiments/grug/*` and copy/modify variants directly (for example `base -> moe`) instead of growing reusable framework abstractions.
 - **Keep dependencies small.** Prefer `einshard`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs. Grug doesn't want to reinvent wheels, but we also don't want heavy frameworks obscuring the core logic.
 - **Fast kernels are allowed, but keep the surface simple.** On TPU, Grug uses JAX Splash attention (via `jax.experimental.pallas.ops.tpu.splash_attention`). We keep a separate reference implementation for debugging/regressions.
 - **Serializable state.** Trainer state must round-trip through `levanter.tensorstore_serialization.tree_{de,}serialize_leaves_tensorstore` with no custom logic.
@@ -20,10 +21,13 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 ## Working Agreement: How Grug Evolves
 
-- Canonical “best guess” lives in `lib/levanter/src/levanter/grug/`.
-- The evolving speedrun reference is `experiments/speedrun/nano_arch_ablations/00_baseline/main.py`.
-- One-off speedruns under `experiments/speedrun/…` are snapshots/edit surfaces; they are never the source of truth unless their shape is explicitly upstreamed into `lib/levanter/src/levanter/grug/`.
-- When we upstream a successful experiment, we update tests and record/clean up old experiments per `docs/recipes/change_grug.md`. This involves deletion of incompatible experiments but leaving a trail.
+- Canonical Grug-in-practice lives in `experiments/grug/base/` as three files:
+  - `model.py` (model + config)
+  - `train.py` (training loop + eval/checkpoint/logging wiring)
+  - `launch.py` (run config, run naming, resources, last-mile knobs)
+- New variants (for example MoE) should start by copying `experiments/grug/base/` and editing in place.
+- Shared library code should be limited to non-grug-specific helpers (launch/runtime helpers, generic path checks, etc.).
+- Keep a trail via docs/tests and delete stale or superseded experiment variants when they are no longer useful.
 
 ### JAX/ML Principles
 
@@ -35,10 +39,11 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 ### Code Organization Principles
 
-- **Keep `levanter.grug` core-only.** The `levanter.grug` package should stay “notebook-like”: raw `jax.Array` inputs/outputs, Equinox modules for model state, and minimal plumbing.
+- **Keep grug template code self-contained.** Core model/trainer code should live inside `experiments/grug/<variant>/` so the full implementation is easy to read/copy/modify without chasing library indirection.
 - **Adapters live outside grug.** Integration with Levanter model interfaces (`LmHeadModel`, `NamedArray`, etc.) lives in `levanter.models`, currently `levanter.models.grug_wrapper`.
 - **Mask spec is simple.** Grug’s attention mask is a small spec (`levanter.grug.attention.AttentionMask`) storing only raw JAX arrays/ints (no NamedArray fields). Dense masks are currently accepted only by the reference attention path (TPU Splash does not support dense masks).
 - **Prefer jaxtyping for the grug core.** Grug uses jaxtyping-style shape hints in `levanter.grug` (e.g. `Int[Array, "B S"]`, `Float[Array, "B Q H D"]`) to keep the core readable and to document expected conventions without introducing runtime checks.
+- **Preserve metric parity with classic Levanter runs.** Grug templates should log the same core observability keys where applicable (`train/loss`, `throughput/*`, `eval/*`, `mixture/*`, and watch metrics) so variants remain comparable.
 
 ## Misc Style
 - Use `einops.rearrange` for `[batch, seq, heads, head_dim]` manipulations where it improves clarity.
