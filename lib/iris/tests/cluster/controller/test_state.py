@@ -118,7 +118,7 @@ def job_request():
         return cluster_pb2.Controller.LaunchJobRequest(
             name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
             replicas=1,
         )
@@ -497,7 +497,7 @@ def test_failure_domain_kills_remaining_tasks(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-task-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
         replicas=3,
@@ -528,7 +528,7 @@ def test_max_task_failures_tolerance(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="tolerant-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=1,
@@ -561,7 +561,7 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="preemption-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
@@ -805,7 +805,7 @@ def make_job_request():
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=cpu * 1000, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(),
             replicas=1,
         )
@@ -939,7 +939,7 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -974,7 +974,7 @@ def test_coscheduled_cascade_releases_worker_resources(worker_metadata):
     """Coscheduled sibling cascade must free committed resources on surviving workers.
 
     Regression test: previously, _cascade_coscheduled_failure marked siblings
-    terminal but never called _cleanup_task_resources, leaking committed_cpu/mem
+    terminal but never called _cleanup_task_resources, leaking committed_cpu_millicores/mem
     on workers and permanently blocking future scheduling.
     """
     state = ControllerState()
@@ -988,7 +988,7 @@ def test_coscheduled_cascade_releases_worker_resources(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="leak-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -1001,7 +1001,7 @@ def test_coscheduled_cascade_releases_worker_resources(worker_metadata):
     # Verify resources are committed before failure
     for i in range(4):
         w = state.get_worker(WorkerId(f"w{i}"))
-        assert w.committed_cpu == 2
+        assert w.committed_cpu_millicores == 2000
         assert len(w.running_tasks) == 1
 
     # Fail task-0 terminally → cascade kills siblings on w1, w2, w3
@@ -1017,13 +1017,13 @@ def test_coscheduled_cascade_releases_worker_resources(worker_metadata):
     # All surviving workers (w1..w3) must have resources fully released
     for i in range(1, 4):
         w = state.get_worker(WorkerId(f"w{i}"))
-        assert w.committed_cpu == 0, f"w{i} has leaked committed_cpu={w.committed_cpu}"
+        assert w.committed_cpu_millicores == 0, f"w{i} has leaked committed_cpu_millicores={w.committed_cpu_millicores}"
         assert w.committed_mem == 0, f"w{i} has leaked committed_mem={w.committed_mem}"
         assert len(w.running_tasks) == 0, f"w{i} has phantom running_tasks={w.running_tasks}"
 
     # w0 should also be clean (task-0 was the trigger, cleaned up by _on_task_state_changed)
     w0 = state.get_worker(WorkerId("w0"))
-    assert w0.committed_cpu == 0
+    assert w0.committed_cpu_millicores == 0
     assert len(w0.running_tasks) == 0
 
 
@@ -1041,7 +1041,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         max_retries_preemption=1,  # Allow one retry, so second failure is terminal
@@ -1102,7 +1102,7 @@ def test_coscheduled_task_success_does_not_affect_siblings(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -1139,7 +1139,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="regular-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=3,  # Allow failures without killing the job
@@ -1184,7 +1184,7 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         max_retries_failure=1,  # Allow one retry
@@ -1374,7 +1374,7 @@ def test_compute_demand_entries_counts_coscheduled_job_once():
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
@@ -1399,7 +1399,7 @@ def test_compute_demand_entries_counts_non_coscheduled_tasks_individually():
         name="regular-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
@@ -1427,7 +1427,7 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular():
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
@@ -1442,7 +1442,7 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular():
         name="regular-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
@@ -1472,7 +1472,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         name="preemptible-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
@@ -1493,7 +1493,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         name="on-demand-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
@@ -1527,7 +1527,7 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none():
         name="unconstrained-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
@@ -1547,7 +1547,7 @@ def test_compute_demand_entries_extracts_required_region():
         name="regional-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
@@ -1575,7 +1575,7 @@ def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints(
         name="invalid-regional-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),

@@ -242,7 +242,7 @@ message TpuDevice {
 // Clients should create a ResourceSpec dataclass and call .to_proto().
 message ResourceSpecProto {
   // Compute resources
-  int32 cpu = 1;              // Number of CPU cores
+  int32 cpu_millicores = 1;   // CPU in millicores (1000 = 1 core)
   int64 memory_bytes = 4;     // RAM in bytes
   int64 disk_bytes = 9;       // Disk space in bytes
 

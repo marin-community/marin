@@ -940,7 +940,7 @@ class Autoscaler:
                 if resources.device.HasField("tpu"):
                     tpu_count = resources.device.tpu.count or 0
             return vm_pb2.ResourceSpec(
-                cpu=resources.cpu,
+                cpu_millicores=resources.cpu_millicores,
                 memory_bytes=resources.memory_bytes,
                 disk_bytes=resources.disk_bytes,
                 gpu_count=gpu_count,

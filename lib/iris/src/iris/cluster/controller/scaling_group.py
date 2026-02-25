@@ -127,6 +127,9 @@ def prepare_slice_config(
 
     if parent_config.HasField("resources"):
         config.gpu_count = parent_config.resources.gpu_count
+        disk_bytes = parent_config.resources.disk_bytes
+        if disk_bytes:
+            config.disk_size_gb = disk_bytes // (1024**3)
 
     return config
 
@@ -448,8 +451,11 @@ class ScalingGroup:
         if sg_resources is None:
             return f"group '{self.name}' has no resources configured"
 
-        if sg_resources.cpu and resources.cpu > sg_resources.cpu:
-            return f"cpu: need {resources.cpu}, group '{self.name}' has {sg_resources.cpu}"
+        if sg_resources.cpu_millicores and resources.cpu_millicores > sg_resources.cpu_millicores:
+            return (
+                f"cpu: need {resources.cpu_millicores / 1000:g},"
+                f" group '{self.name}' has {sg_resources.cpu_millicores / 1000:g}"
+            )
         if sg_resources.memory_bytes and resources.memory_bytes > sg_resources.memory_bytes:
             need_gb = resources.memory_bytes / (1024**3)
             have_gb = sg_resources.memory_bytes / (1024**3)
