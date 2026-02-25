@@ -45,7 +45,6 @@ slimpajama_tokenized = dataclasses.replace(
     config=dataclasses.replace(
         _slimpajama_step.config,
         worker_resources=ResourceConfig(ram="64g", disk="64g"),
-        window_size_bytes=1_000_000_000,
     ),
 )
 
