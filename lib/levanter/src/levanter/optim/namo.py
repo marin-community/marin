@@ -17,8 +17,9 @@ for experimentation.
 """
 
 import dataclasses
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Optional
+from typing import Any, NamedTuple, Optional, Protocol, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -39,14 +40,29 @@ from levanter.optim.util import (
 from levanter.utils.jax_utils import leaf_key_paths
 
 
+PyTree: TypeAlias = Any
+Scalar: TypeAlias = float | jax.Array
+
+
+class _AdamWFallbackConfig(Protocol):
+    adam_weight_decay: Optional[float]
+    weight_decay: float
+    max_grad_norm: float
+    beta1: float
+    beta2: float
+    epsilon: float
+
+    def build_weight_decay_mask(self) -> PyTree: ...
+
+
 def _is_linear_or_none(x: Any) -> bool:
     return isinstance(x, Linear) or x is None
 
 
-def _create_namo_mask(params: Any) -> Any:
+def _create_namo_mask(params: PyTree) -> PyTree:
     paths = leaf_key_paths(params)
 
-    def mask_fn(param, path):
+    def mask_fn(param: Any, path: Any) -> Any:
         path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
         if "Embedding" in path_str or "lm_head" in path_str:
             return "adamw"
@@ -63,9 +79,9 @@ def _adamw_transform(
     beta1: float,
     beta2: float,
     epsilon: float,
-    adam_lr: float,
+    adam_lr: Scalar,
     weight_decay: float,
-    build_weight_decay_mask,
+    build_weight_decay_mask: Callable[[], PyTree],
 ) -> optax.GradientTransformation:
     components = []
     if max_grad_norm:
@@ -77,10 +93,27 @@ def _adamw_transform(
     return optax.chain(*components)
 
 
+def _build_namo_adamw_fallback(config: _AdamWFallbackConfig, *, adam_lr: Scalar) -> optax.GradientTransformation:
+    """Build AdamW fallback for non-matrix parameters in NAMO/NAMO-D."""
+    adam_weight_decay = config.adam_weight_decay if config.adam_weight_decay is not None else config.weight_decay
+    return _adamw_transform(
+        max_grad_norm=config.max_grad_norm,
+        beta1=config.beta1,
+        beta2=config.beta2,
+        epsilon=config.epsilon,
+        adam_lr=adam_lr,
+        weight_decay=adam_weight_decay,
+        build_weight_decay_mask=config.build_weight_decay_mask,
+    )
+
+
 @OptimizerConfig.register_subclass("namo")
 @dataclass(frozen=True)
 class NamoConfig(OptimizerConfig):
-    """NAMO optimizer with AdamW fallback for non-linear parameters."""
+    """NAMO optimizer with AdamW fallback for non-linear parameters.
+
+    Paper: https://arxiv.org/abs/2602.17080
+    """
 
     learning_rate: float = 1e-2
     adam_lr: float = 6e-4
@@ -102,9 +135,9 @@ class NamoConfig(OptimizerConfig):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 
-        def optimizer(learning_rate, adam_lr):
-            def namo_transform():
-                return scale_with_namo(
+        def optimizer(learning_rate: Scalar, adam_lr: Scalar) -> optax.GradientTransformation:
+            transformations = {
+                "namo": scale_with_namo(
                     momentum=self.momentum,
                     mu2=self.mu2,
                     nesterov=self.nesterov,
@@ -115,21 +148,10 @@ class NamoConfig(OptimizerConfig):
                     adamnorm_eps=self.adamnorm_eps,
                     scale_coeff=self.scale_coeff,
                     coefficient_type=self.coefficient_type,
-                )
-
-            def adamw_transform():
-                adam_weight_decay = self.adam_weight_decay if self.adam_weight_decay is not None else self.weight_decay
-                return _adamw_transform(
-                    max_grad_norm=self.max_grad_norm,
-                    beta1=self.beta1,
-                    beta2=self.beta2,
-                    epsilon=self.epsilon,
-                    adam_lr=adam_lr,
-                    weight_decay=adam_weight_decay,
-                    build_weight_decay_mask=self.build_weight_decay_mask,
-                )
-
-            return optax.multi_transform({"namo": namo_transform(), "adamw": adamw_transform()}, _create_namo_mask)
+                ),
+                "adamw": _build_namo_adamw_fallback(self, adam_lr=adam_lr),
+            }
+            return optax.multi_transform(transformations, _create_namo_mask)
 
         return optax.inject_hyperparams(optimizer)(learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule)
 
@@ -137,7 +159,10 @@ class NamoConfig(OptimizerConfig):
 @OptimizerConfig.register_subclass("namoD")
 @dataclass(frozen=True)
 class NamoDConfig(OptimizerConfig):
-    """NAMO-D optimizer with column-wise adaptivity and AdamW fallback."""
+    """NAMO-D optimizer with column-wise adaptivity and AdamW fallback.
+
+    Paper: https://arxiv.org/abs/2602.17080
+    """
 
     learning_rate: float = 1e-2
     adam_lr: float = 6e-4
@@ -160,9 +185,9 @@ class NamoDConfig(OptimizerConfig):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 
-        def optimizer(learning_rate, adam_lr):
-            def namod_transform():
-                return scale_with_namod(
+        def optimizer(learning_rate: Scalar, adam_lr: Scalar) -> optax.GradientTransformation:
+            transformations = {
+                "namo": scale_with_namod(
                     momentum=self.momentum,
                     mu2=self.mu2,
                     nesterov=self.nesterov,
@@ -174,21 +199,10 @@ class NamoDConfig(OptimizerConfig):
                     scale_coeff=self.scale_coeff,
                     clamp_c=self.col_state_clamp_c,
                     coefficient_type=self.coefficient_type,
-                )
-
-            def adamw_transform():
-                adam_weight_decay = self.adam_weight_decay if self.adam_weight_decay is not None else self.weight_decay
-                return _adamw_transform(
-                    max_grad_norm=self.max_grad_norm,
-                    beta1=self.beta1,
-                    beta2=self.beta2,
-                    epsilon=self.epsilon,
-                    adam_lr=adam_lr,
-                    weight_decay=adam_weight_decay,
-                    build_weight_decay_mask=self.build_weight_decay_mask,
-                )
-
-            return optax.multi_transform({"namo": namod_transform(), "adamw": adamw_transform()}, _create_namo_mask)
+                ),
+                "adamw": _build_namo_adamw_fallback(self, adam_lr=adam_lr),
+            }
+            return optax.multi_transform(transformations, _create_namo_mask)
 
         return optax.inject_hyperparams(optimizer)(learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule)
 
@@ -200,7 +214,7 @@ class ScaleByNamoState(NamedTuple):
     conventions across ``levanter.optim`` and Optax examples.
     """
 
-    step_count: jnp.ndarray
+    step_count: jax.Array
     momentum_buffer: optax.Updates
     v_squared: optax.Updates
 
@@ -208,7 +222,7 @@ class ScaleByNamoState(NamedTuple):
 class ScaleByNamoDState(NamedTuple):
     """Optax-compatible NAMO-D state."""
 
-    step_count: jnp.ndarray
+    step_count: jax.Array
     momentum_buffer: optax.Updates
     v: optax.Updates
 
@@ -261,11 +275,11 @@ def scale_with_namo(
     adaptive scaling and applies adaptive decoupled weight decay.
     """
 
-    def init_fn(params):
+    def init_fn(params: optax.Params) -> ScaleByNamoState:
         flat_params = flatten_linear_layers(params)
         momentum_buffer = otu.tree_zeros_like(flat_params)
 
-        def init_v(node):
+        def init_v(node: Any) -> Optional[jax.Array]:
             if isinstance(node, Linear):
                 return jnp.zeros(node.weight.array.shape[:-2], dtype=jnp.float32)
             return None
@@ -277,7 +291,11 @@ def scale_with_namo(
             v_squared=v_squared,
         )
 
-    def update_fn(updates, state, params=None):
+    def update_fn(
+        updates: optax.Updates,
+        state: ScaleByNamoState,
+        params: Optional[optax.Params] = None,
+    ) -> tuple[optax.Updates, ScaleByNamoState]:
         if params is None:
             raise ValueError("NAMO requires params to apply adaptive weight decay")
 
@@ -304,7 +322,12 @@ def scale_with_namo(
         bc1 = 1.0 - (momentum**count_inc)
         bc2 = 1.0 - (mu2**count_inc)
 
-        def transform(param_node, grad_node, m_node, v_prev):
+        def transform(
+            param_node: Any,
+            grad_node: Any,
+            m_node: Any,
+            v_prev: Optional[jax.Array],
+        ) -> tuple[Any, Optional[jax.Array]]:
             if m_node is None:
                 return grad_node, v_prev
             if not isinstance(m_node, Linear):
@@ -383,11 +406,11 @@ def scale_with_namod(
     balance conditioning and fine-grained noise adaptation.
     """
 
-    def init_fn(params):
+    def init_fn(params: optax.Params) -> ScaleByNamoDState:
         flat_params = flatten_linear_layers(params)
         momentum_buffer = otu.tree_zeros_like(flat_params)
 
-        def init_v(node):
+        def init_v(node: Any) -> Optional[jax.Array]:
             if isinstance(node, Linear):
                 shape = node.weight.array.shape
                 return jnp.zeros(shape[:-2] + (shape[-1],), dtype=jnp.float32)
@@ -400,7 +423,11 @@ def scale_with_namod(
             v=v,
         )
 
-    def update_fn(updates, state, params=None):
+    def update_fn(
+        updates: optax.Updates,
+        state: ScaleByNamoDState,
+        params: Optional[optax.Params] = None,
+    ) -> tuple[optax.Updates, ScaleByNamoDState]:
         if params is None:
             raise ValueError("NAMO-D requires params to apply adaptive weight decay")
 
@@ -427,7 +454,12 @@ def scale_with_namod(
         bc1 = 1.0 - (momentum**count_inc)
         bc2 = 1.0 - (mu2**count_inc)
 
-        def transform(param_node, grad_node, m_node, v_prev):
+        def transform(
+            param_node: Any,
+            grad_node: Any,
+            m_node: Any,
+            v_prev: Optional[jax.Array],
+        ) -> tuple[Any, Optional[jax.Array]]:
             if m_node is None:
                 return grad_node, v_prev
             if not isinstance(m_node, Linear):
