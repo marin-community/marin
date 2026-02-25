@@ -27,7 +27,7 @@ Here are the full list of profiling related options:
 |-------------------------------------------|-------------|---------|
 | `--trainer.profiler.enabled`              | Enable the profiler | `false` |
 | `--trainer.profiler.start_step`           | The step to start profiling | `5`     |
-| `--trainer.profiler.num_steps`            | The number of steps to profile | `100`   |
+| `--trainer.profiler.num_steps`            | The number of steps to profile | `25`    |
 | `--trainer.profiler.perfetto_link`        | Whether to generate a Perfetto URL | `false` |
 
 As usual, these can be specified in the yaml configuration file as well.

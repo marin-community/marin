@@ -23,7 +23,7 @@ class ProfilerConfig:
 
     enabled: bool = False
     start_step: int = 5
-    num_steps: int = 100
+    num_steps: int = 25
     perfetto_link: bool = False
 
     @property
