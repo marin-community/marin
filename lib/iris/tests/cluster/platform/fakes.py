@@ -421,6 +421,8 @@ class FakeGcloud:
     _tpus: dict[tuple[str, str], dict] = field(default_factory=dict)
     _vms: dict[tuple[str, str], dict] = field(default_factory=dict)
     _failures: dict[str, tuple[str, int]] = field(default_factory=dict)
+    # Serial port output per VM, appended to by tests to simulate startup-script progress.
+    _serial_output: dict[tuple[str, str], str] = field(default_factory=dict)
 
     def set_failure(self, operation: str, error: str, code: int = 1) -> None:
         """Make a specific operation type fail on the next call.
@@ -483,6 +485,8 @@ class FakeGcloud:
             return self._vm_update(cmd, tokens[3])
         if _matches_gcloud(tokens, ["compute", "instances", "add-metadata", None]):
             return self._vm_add_metadata(cmd, tokens[3])
+        if _matches_gcloud(tokens, ["compute", "instances", "get-serial-port-output", None]):
+            return self._vm_get_serial_port_output(cmd, tokens[3])
 
         raise ValueError(f"FakeGcloud: unrecognized command: {cmd}")
 
@@ -597,6 +601,16 @@ class FakeGcloud:
         metadata_str = _parse_flag(cmd, "metadata")
         metadata = _parse_labels_string(metadata_str) if metadata_str else {}
 
+        # Parse --metadata-from-file=key=path and read file contents into metadata.
+        metadata_from_file_str = _parse_flag(cmd, "metadata-from-file")
+        if metadata_from_file_str and "=" in metadata_from_file_str:
+            key, path = metadata_from_file_str.split("=", 1)
+            try:
+                with open(path) as f:
+                    metadata[key] = f.read()
+            except OSError:
+                pass
+
         idx = len(self._vms) + 1
         vm_data = {
             "name": name,
@@ -681,6 +695,22 @@ class FakeGcloud:
             self._vms[key].setdefault("metadata", {}).update(new_metadata)
 
         return FakeResult(returncode=0)
+
+    def _vm_get_serial_port_output(self, cmd: list[str], name: str) -> FakeResult:
+        zone = _parse_flag(cmd, "zone")
+        key = (name, zone)
+        if key not in self._vms:
+            return FakeResult(returncode=1, stderr="NOT_FOUND")
+
+        full_output = self._serial_output.get(key, "")
+        start_str = _parse_flag(cmd, "start")
+        start = int(start_str) if start_str else 0
+        return FakeResult(returncode=0, stdout=full_output[start:])
+
+    def append_serial_output(self, name: str, zone: str, text: str) -> None:
+        """Append text to a VM's serial port output buffer for testing."""
+        key = (name, zone)
+        self._serial_output[key] = self._serial_output.get(key, "") + text
 
 
 def _matches_gcloud(tokens: list[str], pattern: list[str | None]) -> bool:

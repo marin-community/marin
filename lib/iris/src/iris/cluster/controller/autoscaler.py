@@ -679,7 +679,7 @@ class Autoscaler:
         thread for the actual scale-up work. The counter is included in
         slice_count(), preventing double scale-up.
         """
-        group.begin_scale_up()
+        group.begin_scale_up(timestamp=ts)
 
         def _scale_up_wrapper(stop_event):
             self._do_scale_up(group, ts, reason)

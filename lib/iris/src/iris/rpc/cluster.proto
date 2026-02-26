@@ -370,9 +370,8 @@ message WorkerMetadata {
   // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
 
-  // VM address from IRIS_VM_ADDRESS env var, used for autoscaler VM tracking.
-  // For cloud VMs, this is the VM's IP address injected by the Platform bootstrap.
-  // For local workers, this may be empty or a local identifier.
+  // VM IP address used for autoscaler slice/worker matching.
+  // Self-discovered by the worker at startup via socket probe.
   string vm_address = 41;
 }
 

@@ -687,7 +687,6 @@ class CoreweavePlatform:
         labels = dict(handle.labels)
 
         env_vars = [
-            {"name": "IRIS_VM_ADDRESS", "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}}},
             {"name": "IRIS_WORKER_NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
             {"name": "IRIS_POD_NAMESPACE", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}},
             {"name": "IRIS_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},

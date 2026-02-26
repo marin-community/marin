@@ -117,6 +117,9 @@ message ScaleGroupStatus {
   string availability_status = 61;   // "available", "requesting", "backoff", "quota_exceeded", "at_capacity"
   string availability_reason = 62;   // Human-readable reason (for blocked states)
   iris.time.Timestamp blocked_until = 63;  // Set for temporary blocked states (backoff/quota)
+
+  // Scale-up cooldown — set when cooldown is active (last_scale_up + cooldown > now)
+  iris.time.Timestamp scale_up_cooldown_until = 70;
 }
 
 // Autoscaler action/event log entry

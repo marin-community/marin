@@ -290,14 +290,18 @@ class ScalingGroup:
         """Number of consecutive scale-up failures."""
         return self._consecutive_failures
 
-    def begin_scale_up(self) -> None:
+    def begin_scale_up(self, timestamp: Timestamp | None = None) -> None:
         """Mark that a scale-up is in progress.
 
         Increments the pending counter, which is included in slice_count()
         and slice_state_counts(REQUESTING) to prevent over-provisioning.
+        Also updates _last_scale_up so the cooldown gates subsequent requests
+        even while this one is still in-flight.
         """
+        timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
             self._pending_scale_ups += 1
+        self._last_scale_up = timestamp
 
     def complete_scale_up(self, handle: SliceHandle, timestamp: Timestamp | None = None) -> None:
         """Record a successful scale-up: add the slice and decrement the pending counter."""
@@ -305,7 +309,6 @@ class ScalingGroup:
         with self._slices_lock:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
             self._slices[handle.slice_id] = SliceState(handle=handle)
-        self._last_scale_up = timestamp
         self._consecutive_failures = 0
         self._backoff_until = None
         self._quota_exceeded_until = None
@@ -743,7 +746,7 @@ class ScalingGroup:
         if self._backoff_until is not None and not self._backoff_until.expired(now=timestamp):
             return AvailabilityState(
                 GroupAvailability.BACKOFF,
-                f"backoff until {self._backoff_until.as_timestamp().epoch_ms()}",
+                f"{self._consecutive_failures} consecutive failure{'s' if self._consecutive_failures != 1 else ''}",
                 self._backoff_until.as_timestamp(),
             )
 
@@ -803,10 +806,18 @@ class ScalingGroup:
         """Build a ScaleGroupStatus proto for the status API."""
         with self._slices_lock:
             snapshot = list(self._slices.values())
-        availability = self.availability()
+        now = Timestamp.now()
+        availability = self.availability(now)
         backoff_ts = self._backoff_until.as_timestamp() if self._backoff_until else Timestamp.from_ms(0)
         blocked_until = availability.until if availability.until is not None else Timestamp.from_ms(0)
         counts = self.slice_state_counts()
+
+        cooldown_until = Timestamp.from_ms(0)
+        if self._last_scale_up.epoch_ms() > 0:
+            cooldown_end = self._last_scale_up.add(self._scale_up_cooldown)
+            if now.before(cooldown_end):
+                cooldown_until = cooldown_end
+
         status = vm_pb2.ScaleGroupStatus(
             name=self.name,
             config=self._config,
@@ -819,6 +830,7 @@ class ScalingGroup:
             availability_status=availability.status.value,
             availability_reason=availability.reason,
             blocked_until=blocked_until.to_proto(),
+            scale_up_cooldown_until=cooldown_until.to_proto(),
             slices=[slice_state_to_proto(state) for state in snapshot],
         )
         for state_name, count in counts.items():
