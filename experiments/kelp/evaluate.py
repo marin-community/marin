@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -150,7 +153,6 @@ EVAL_TASKS = [
 ]
 
 
-
 def run_test(program: str, call_expr: str, expected: str) -> bool:
     """Execute a program and test case, return whether it passes."""
     try:
@@ -240,9 +242,7 @@ def evaluate_task(
             for c in candidates:
                 c_passed = sum(1 for call, exp in tests if run_test(c.source, call, exp))
                 c_rate = c_passed / len(tests) if tests else 0.0
-                if c_rate > best_trial_pass_rate or (
-                    c_rate == best_trial_pass_rate and c.score > candidates[0].score
-                ):
+                if c_rate > best_trial_pass_rate or (c_rate == best_trial_pass_rate and c.score > candidates[0].score):
                     best_trial_pass_rate = c_rate
                     best_trial_candidate = c.source
             total_test_pass_rate += best_trial_pass_rate

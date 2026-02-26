@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -147,6 +150,7 @@ def generate_edit(
     key: PRNGKeyArray,
     temperature: float = 1.0,
     max_replacement_len: int = 64,
+    prompt: str | None = None,
 ) -> tuple[Mutation | None, float]:
     """Generate a single edit from the model via autoregressive decoding.
 
@@ -165,17 +169,26 @@ def generate_edit(
         key: PRNG key.
         temperature: Sampling temperature (0 = greedy).
         max_replacement_len: Maximum replacement length in tokens.
+        prompt: Optional natural language prompt (e.g. docstring or task
+            description) to prepend to the context. Requires prompt_tokens=True.
 
     Returns:
         Tuple of (mutation, log_probability). Returns (None, -inf) if the
         generated edit is invalid or decoding fails.
     """
+    # Encode optional prompt prefix.
+    prompt_prefix: list[int] = []
+    if prompt is not None and tokenizer.prompt_tokens:
+        prompt_prefix = tokenizer.encode_prompt_prefix(prompt)
+
     context_tokens = tokenizer.encode_source(source)
 
     # Cap context to avoid exceeding max_seq_len.
-    max_context = cfg.max_seq_len - max_replacement_len - 3  # SOS + POS + EOS
+    max_context = cfg.max_seq_len - max_replacement_len - 3 - len(prompt_prefix)  # SOS + POS + EOS
     if len(context_tokens) > max_context:
         context_tokens = context_tokens[:max_context]
+
+    context_tokens = prompt_prefix + context_tokens
 
     generated, log_prob = _ar_generate_tokens(
         params=params,
@@ -274,6 +287,7 @@ def beam_search(
     expansions_per_beam: int = 3,
     max_depth: int = 30,
     temperature: float = 1.0,
+    prompt: str | None = None,
 ) -> list[BeamCandidate]:
     """Run beam search to refine programs through iterative edits.
 
@@ -318,6 +332,7 @@ def beam_search(
                     tokenizer=tokenizer,
                     key=expansion_keys[key_idx],
                     temperature=temperature,
+                    prompt=prompt,
                 )
                 key_idx += 1
 
@@ -369,6 +384,7 @@ def best_of_n(
     n: int = 16,
     max_depth: int = 30,
     temperature: float = 1.0,
+    prompt: str | None = None,
 ) -> list[BeamCandidate]:
     """Best-of-N sampling: run N independent rollouts, return all results.
 
@@ -406,6 +422,7 @@ def best_of_n(
                 tokenizer=tokenizer,
                 key=step_key,
                 temperature=temperature,
+                prompt=prompt,
             )
 
             if mutation is None:

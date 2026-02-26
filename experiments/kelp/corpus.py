@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +18,6 @@
 """Shared program corpus for Kelp tree diffusion training and evaluation."""
 
 import ast
-
 
 CORPUS_SEPARATOR = "# ---"
 """Sentinel line separating programs in corpus files.
@@ -54,6 +56,24 @@ def load_corpus(path: str) -> list[str]:
             programs.append("\n".join(current_lines) + "\n")
 
     return programs
+
+
+def extract_docstring(source: str) -> str | None:
+    """Extract the docstring from a Python function source.
+
+    Parses the source and returns the docstring of the first function
+    definition found, or None if there is no docstring or parsing fails.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            docstring = ast.get_docstring(node)
+            return docstring
+    return None
 
 
 def is_valid_python(source: str) -> bool:

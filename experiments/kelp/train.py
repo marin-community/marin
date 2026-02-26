@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -97,6 +100,17 @@ def parse_args() -> argparse.Namespace:
         default=0.3,
         help="Fraction of training over which to ramp corruption difficulty (default: 0.3)",
     )
+    parser.add_argument(
+        "--prompt-conditioning",
+        action="store_true",
+        help="Enable prompt conditioning (adds PROMPT_START/PROMPT_END tokens, uses docstrings as prompts)",
+    )
+    parser.add_argument(
+        "--p-prompt",
+        type=float,
+        default=0.5,
+        help="Probability of including a docstring prompt when available (default: 0.5)",
+    )
     return parser.parse_args()
 
 
@@ -106,6 +120,8 @@ def main():
 
     preset = get_preset(args.preset)
     model_config = preset.config
+    if args.prompt_conditioning:
+        model_config = replace(model_config, prompt_tokens=True)
     lr = args.lr or preset.learning_rate
     batch_size = args.batch_size or preset.batch_size
 
@@ -122,7 +138,7 @@ def main():
     if args.augment:
         rng = random.Random(args.seed)
         bank = augment_bank(bank, rng, n_renamed=2, n_perturbed=2, synthetic_count=50)
-    tokenizer = TreeDiffusionTokenizer(max_seq_len=model_config.max_seq_len)
+    tokenizer = TreeDiffusionTokenizer(max_seq_len=model_config.max_seq_len, prompt_tokens=model_config.prompt_tokens)
     logger.info(f"Subtree bank: {bank.total_entries} entries across {len(bank.entries)} node types")
 
     # Override model config vocab_size to match tokenizer.
@@ -143,6 +159,7 @@ def main():
         max_corruption_steps=args.max_corruption_steps,
         corruption_curriculum=args.corruption_curriculum,
         curriculum_warmup_fraction=args.curriculum_warmup_fraction,
+        p_prompt=args.p_prompt,
     )
 
     data_iter = create_edit_data_iter(

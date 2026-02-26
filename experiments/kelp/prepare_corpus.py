@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +22,7 @@ Combines multiple sources to maximize diversity:
 2. MBPP: curated coding problems from Google Research (~374 programs)
 3. HumanEval: OpenAI's coding benchmark (~164 programs)
 4. codeparrot/github-code: streaming Python from GitHub (~5,000+ functions)
+5. HuggingFaceTB/stack-edu: educational Python code filtered from The Stack v2
 
 Eval task decontamination: programs matching EVAL_TASKS in evaluate.py
 are automatically excluded from the training corpus to prevent train/test leakage.
@@ -30,6 +34,7 @@ Usage:
     uv run python experiments/kelp/prepare_corpus.py --output experiments/kelp/corpus.txt
     uv run python experiments/kelp/prepare_corpus.py --output corpus.txt --source-dirs /path/to/repos
     uv run python experiments/kelp/prepare_corpus.py --output corpus.txt --no-github  # offline mode
+    uv run python experiments/kelp/prepare_corpus.py --output corpus_v7.txt --stack-edu-max 50000
 """
 
 import argparse
@@ -40,7 +45,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from experiments.kelp.corpus import CORPUS_SEPARATOR
+from experiments.kelp.corpus import CORPUS_SEPARATOR, extract_docstring
 
 logging.basicConfig(
     level=logging.INFO,
@@ -210,6 +215,50 @@ def stream_github_code(max_functions: int, max_length: int) -> list[str]:
         return []
 
 
+def stream_stack_edu(max_functions: int, max_length: int) -> list[str]:
+    """Stream educational Python functions from HuggingFaceTB/stack-edu.
+
+    Stack Edu contains Python code filtered from The Stack v2 by an
+    educational quality classifier. This is a high-quality source with
+    strong docstring coverage, ideal for prompt-conditioned training.
+    """
+    try:
+        from datasets import load_dataset
+
+        logger.info(f"  Streaming stack-edu Python (target: {max_functions} functions)...")
+        ds = load_dataset(
+            "HuggingFaceTB/stack-edu",
+            "Python",
+            streaming=True,
+            split="train",
+            trust_remote_code=True,
+        )
+
+        functions: list[str] = []
+        files_scanned = 0
+        for item in ds:
+            files_scanned += 1
+            code = item.get("content", "")
+            if not code:
+                continue
+            funcs = extract_functions_from_file(code, max_length)
+            functions.extend(funcs)
+            if files_scanned % 5000 == 0:
+                logger.info(f"    Scanned {files_scanned} files, {len(functions)} functions so far...")
+            if len(functions) >= max_functions:
+                functions = functions[:max_functions]
+                break
+
+        logger.info(f"  stack-edu: extracted {len(functions)} functions from {files_scanned} files")
+        return functions
+    except ImportError:
+        logger.warning("  stack-edu: 'datasets' library not installed, skipping")
+        return []
+    except Exception as e:
+        logger.warning(f"  stack-edu: failed to stream: {e}")
+        return []
+
+
 def deduplicate_and_filter(programs: list[str], max_length: int) -> list[str]:
     """Remove duplicates, blocklisted eval programs, and filter.
 
@@ -298,6 +347,12 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Include MBPP programs in training (WARNING: contaminates evaluate_mbpp.py eval)",
     )
+    parser.add_argument(
+        "--stack-edu-max",
+        type=int,
+        default=0,
+        help="Max functions to stream from HuggingFaceTB/stack-edu Python (0=skip, e.g. 50000)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for shuffling")
     return parser.parse_args()
 
@@ -337,6 +392,11 @@ def main():
             github = stream_github_code(args.max_github, args.max_length)
             all_programs.extend(github)
 
+        # Source 5: HuggingFaceTB/stack-edu (educational Python code).
+        if args.stack_edu_max > 0:
+            stack_edu = stream_stack_edu(args.stack_edu_max, args.max_length)
+            all_programs.extend(stack_edu)
+
     # Deduplicate and filter.
     logger.info(f"Total raw programs: {len(all_programs)}")
     filtered = deduplicate_and_filter(all_programs, args.max_length)
@@ -353,9 +413,11 @@ def main():
     # Report stats.
     total_chars = sum(len(p) for p in filtered)
     avg_len = total_chars / max(len(filtered), 1)
+    num_with_docstrings = sum(1 for p in filtered if extract_docstring(p) is not None)
     logger.info(f"Wrote {len(filtered)} programs to {output_path}")
     logger.info(f"Total characters: {total_chars:,}")
     logger.info(f"Average length: {avg_len:.0f} chars")
+    logger.info(f"With docstrings: {num_with_docstrings} ({100 * num_with_docstrings / max(len(filtered), 1):.1f}%)")
     logger.info(f"File size: {output_path.stat().st_size:,} bytes")
 
 

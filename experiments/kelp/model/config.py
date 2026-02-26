@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -68,6 +71,11 @@ class TreeDiffusionConfig:
     gradient_checkpointing: bool = False
     """If True, recompute activations during backward pass to save memory.
     Essential for large models (>1B params) but increases compute by ~33%."""
+
+    prompt_tokens: bool = False
+    """If True, the tokenizer uses PROMPT_START/PROMPT_END special tokens
+    (IDs 3 and 4), shifting position and byte token offsets by +2.
+    Old checkpoints deserialize with False, keeping the legacy layout."""
 
     pad_token_id: int = 0
     """Token ID for padding."""
