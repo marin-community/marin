@@ -3,10 +3,8 @@
 
 """Tests for WorkerDashboard HTTP/RPC endpoints and WorkerService implementation."""
 
-import socket
 from unittest.mock import Mock
 
-import httpx
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -86,26 +84,6 @@ def worker(mock_bundle_cache, mock_runtime, tmp_path):
         bundle_provider=mock_bundle_cache,
         container_runtime=mock_runtime,
     )
-
-
-def create_test_entrypoint():
-    """Create a simple test entrypoint."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class Entrypoint:
-        callable: object
-        args: tuple = ()
-        kwargs: dict | None = None
-
-        def __post_init__(self):
-            if self.kwargs is None:
-                self.kwargs = {}
-
-    def test_fn():
-        print("Hello from test")
-
-    return Entrypoint(callable=test_fn)
 
 
 def create_run_task_request(
@@ -435,67 +413,3 @@ def test_get_task_status_completed_task(service, worker, request_context):
     assert status.exit_code == 0
     assert status.started_at.epoch_ms > 0
     assert status.finished_at.epoch_ms > 0
-
-
-# ============================================================================
-# Connect RPC integration tests
-# ============================================================================
-
-
-@pytest.mark.skip(reason="Flaky test - timing issues with server startup")
-def test_rpc_heartbeat_via_connect_client(service):
-    """Test calling heartbeat via Connect RPC client."""
-    import threading
-    import time
-
-    import uvicorn
-    from iris.rpc.cluster_connect import WorkerServiceClientSync
-
-    # Find a free port
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        s.listen(1)
-        port = s.getsockname()[1]
-
-    # Create server
-    server = WorkerDashboard(service=service, host="127.0.0.1", port=port)
-
-    # Run server in background thread (sync version)
-    config = uvicorn.Config(server._app, host="127.0.0.1", port=port, log_level="error")
-    uvicorn_server = uvicorn.Server(config)
-
-    def run_server():
-        uvicorn_server.run()
-
-    server_thread = threading.Thread(target=run_server, daemon=True)
-    server_thread.start()
-
-    try:
-        # Wait for server to start with retry logic
-        max_retries = 10
-        for i in range(max_retries):
-            time.sleep(0.2)
-
-            try:
-                with httpx.Client(timeout=2.0) as test_client:
-                    test_client.get(f"http://127.0.0.1:{port}/")
-                break
-            except (httpx.ConnectError, httpx.TimeoutException) as e:
-                if i == max_retries - 1:
-                    raise TimeoutError(f"Could not connect to server on port {port} after {max_retries} retries") from e
-                continue
-
-        # Call heartbeat via sync Connect client
-        client = WorkerServiceClientSync(address=f"http://127.0.0.1:{port}", timeout_ms=5000)
-
-        run_req = create_run_task_request(task_id=JobName.root("rpc-test-job").task(0).to_wire())
-        heartbeat_req = cluster_pb2.HeartbeatRequest(tasks_to_run=[run_req])
-        response = client.heartbeat(heartbeat_req)
-
-        # Heartbeat response should have the task in running or completed
-        all_task_ids = {t.task_id for t in response.running_tasks} | {t.task_id for t in response.completed_tasks}
-        assert "rpc-test-task" in all_task_ids
-
-    finally:
-        uvicorn_server.should_exit = True
-        server_thread.join(timeout=2.0)

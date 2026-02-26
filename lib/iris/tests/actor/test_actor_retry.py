@@ -9,7 +9,7 @@ import pytest
 from connectrpc.errors import ConnectError
 
 from iris.actor import ActorClient, ActorPool
-from iris.actor.resolver import FixedResolver, ResolveResult, Resolver
+from iris.actor.resolver import FixedResolver, ResolveResult
 from iris.actor.server import ActorServer
 
 
@@ -25,28 +25,6 @@ class Counter:
     def increment(self) -> int:
         self._count += 1
         return self._count
-
-
-class FailingResolver:
-    """Resolver that simulates transient resolution failures.
-
-    Returns empty results for the first N calls, then returns real endpoints.
-    This simulates the case where a worker hasn't registered yet or has
-    temporarily disappeared.
-    """
-
-    def __init__(self, real_resolver: Resolver, fail_count: int = 2):
-        self._real = real_resolver
-        self._fail_count = fail_count
-        self._call_count = 0
-        self._lock = threading.Lock()
-
-    def resolve(self, name: str) -> ResolveResult:
-        with self._lock:
-            self._call_count += 1
-            if self._call_count <= self._fail_count:
-                return ResolveResult(name=name, endpoints=[])
-        return self._real.resolve(name)
 
 
 class SwitchingResolver:
