@@ -5,11 +5,11 @@
 
 import threading
 
-from connectrpc.code import Code
+import pytest
 from connectrpc.errors import ConnectError
 
 from iris.actor import ActorClient, ActorPool
-from iris.actor.resolver import FixedResolver, ResolvedEndpoint, ResolveResult, Resolver
+from iris.actor.resolver import FixedResolver, ResolveResult, Resolver
 from iris.actor.server import ActorServer
 
 
@@ -80,10 +80,12 @@ def test_actor_client_retries_on_transient_rpc_error():
         # First endpoint is a dead address that will cause UNAVAILABLE,
         # second endpoint is the real server.
         # The SwitchingResolver returns the dead endpoint first, then the real one.
-        switching = SwitchingResolver([
-            {"counter": "http://127.0.0.1:1"},  # Dead endpoint
-            {"counter": f"http://127.0.0.1:{port}"},  # Real endpoint
-        ])
+        switching = SwitchingResolver(
+            [
+                {"counter": "http://127.0.0.1:1"},  # Dead endpoint
+                {"counter": f"http://127.0.0.1:{port}"},  # Real endpoint
+            ]
+        )
 
         client = ActorClient(
             switching,
@@ -119,11 +121,8 @@ def test_actor_client_does_not_retry_on_application_error():
 
         # ZeroDivisionError is an application error, not a transient RPC error.
         # It should propagate immediately without retry.
-        try:
+        with pytest.raises(ZeroDivisionError):
             client.divide(1, 0)
-            assert False, "Should have raised ZeroDivisionError"
-        except ZeroDivisionError:
-            pass
     finally:
         server.stop()
 
@@ -138,10 +137,12 @@ def test_actor_pool_retries_on_transient_rpc_error():
     try:
         # First resolve returns dead + real endpoints; after the dead one fails,
         # re-resolution should route to the real one.
-        switching = SwitchingResolver([
-            {"counter": "http://127.0.0.1:1"},  # Dead endpoint
-            {"counter": f"http://127.0.0.1:{port}"},  # Real endpoint
-        ])
+        switching = SwitchingResolver(
+            [
+                {"counter": "http://127.0.0.1:1"},  # Dead endpoint
+                {"counter": f"http://127.0.0.1:{port}"},  # Real endpoint
+            ]
+        )
 
         pool = ActorPool(
             switching,
@@ -171,8 +172,5 @@ def test_actor_client_exhausts_retries():
         max_backoff=0.1,
     )
 
-    try:
+    with pytest.raises(ConnectError):
         client.increment()
-        assert False, "Should have raised"
-    except Exception:
-        pass  # Expected - should fail after exhausting retries
