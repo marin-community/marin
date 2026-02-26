@@ -251,8 +251,14 @@ Iris follows a clean layering architecture:
 - Owns autoscaling logic and scaling group state
 
 **Platform layer** (`cluster/platform/`): Platform abstractions for managing VMs
-- Provides VM lifecycle management (GCP, manual, local, CoreWeave)
 - Does NOT depend on controller layer
+- Four platform implementations with independent launch/teardown paths:
+  - `gcp.py` — GCP TPU/VM slices, SSH bootstrap
+  - `coreweave.py` — CoreWeave CKS, Kubernetes Pods on shared NodePools
+  - `manual.py` — Pre-existing hosts, SSH bootstrap
+  - `local.py` — Local development, in-process workers
+- Changes to shared interfaces (worker CLI, bootstrap flow, proto schemas)
+  must be applied to all four platforms
 
 **Cluster layer** (`cluster/`): High-level orchestration
 - `connect_cluster()` and `stop_all()` free functions for cluster lifecycle
