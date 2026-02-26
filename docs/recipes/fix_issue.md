@@ -61,9 +61,11 @@ There are 2 cases:
   > `env.run()` returns a tuple; `foo()` assumes an object and calls `.abc()`.
   > Fix: unwrap the tuple in `RolloutWorker._step()` before passing to `foo()`.
 
-* **Design change**: Write the design doc per @docs/recipes/design_doc.md
-  directly in the issue comment (agents cannot commit files to the repo before
-  the PR). Keep it to one comment; do not split across multiple comments.
+* **Design change**: The design doc replaces the `# Proposed Fix` section.
+  Write it per @docs/recipes/design_doc.md directly in the issue comment
+  (agents cannot commit files before the PR). The 3-4 sentence prose cap
+  applies to `# Research`; the design doc follows its own length guidelines.
+  Keep everything in one comment.
 
 In both cases: find the minimally disruptive fix. Do not over-engineer.
 
