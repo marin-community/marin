@@ -66,9 +66,13 @@ EXCLUDED_SPEEDRUNS = {
 
 
 def find_speedrun_results(base_path: str) -> list[str]:
-    fs = fsspec.filesystem(base_path.split("://", 1)[0] if "://" in base_path else "file")
-    pattern = f"{base_path}/**/speedrun_results.json"
-    all_results = fs.glob(pattern)
+    if "://" in base_path:
+        fs = fsspec.filesystem(base_path.split("://", 1)[0])
+        pattern = f"{base_path}/**/speedrun_results.json"
+        all_results = fs.glob(pattern)
+    else:
+        # fsspec's local glob doesn't recurse with **, so use pathlib instead.
+        all_results = [str(p) for p in Path(base_path).glob("**/speedrun_results.json")]
 
     # Filter out excluded speedruns by checking the run name (directory name)
     return [path for path in all_results if Path(path).parent.name not in EXCLUDED_SPEEDRUNS]
