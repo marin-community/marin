@@ -319,8 +319,10 @@ class TpuConfig:
 
     def default_env_vars(self) -> dict[str, str]:
         defaults: dict[str, str] = {"JAX_PLATFORMS": ""}
-        if self.variant.startswith(("v5p-", "v6e-")):
+        if self.variant.startswith(("v5litepod-", "v5e-", "v5p-")):
             defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=50000"
+        elif self.variant.startswith("v6e-"):
+            defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=98304"
         return defaults
 
 
