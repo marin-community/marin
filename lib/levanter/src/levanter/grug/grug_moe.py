@@ -113,10 +113,10 @@ class GrugMoeModelConfig:
 
 
 class CausalSelfAttention(eqx.Module):
-    w_q: jax.Array
-    w_k: jax.Array
-    w_v: jax.Array
-    w_o: jax.Array
+    w_q: Float[Array, "D NH"]
+    w_k: Float[Array, "D MH"]
+    w_v: Float[Array, "D MH"]
+    w_o: Float[Array, "NH D"]
     cfg: GrugMoeModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -243,6 +243,14 @@ def _shared_dense_mlp(
     return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
 
 
+def _batch_spec_from_x(x: jax.Array, mesh: jax.sharding.AbstractMesh | None) -> P:
+    sharding = getattr(x, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None and len(spec) > 0:
+        return P(spec[0])
+    return _batch_spec(mesh)
+
+
 def _moe_mlp_ep_ring_local(
     x_local: Float[Array, "B S D"],
     moe_router: Float[Array, "D E"],
@@ -258,6 +266,7 @@ def _moe_mlp_ep_ring_local(
     b, s, _ = x_local.shape
     x_flat_local = rearrange(x_local, "b s d -> (b s) d")
     # #2710 ring EP strategy: each shard routes against global tokens.
+    # NB: this means we receive all tokens on the DP axis, best for low EP.
     x_flat_global = jax.lax.all_gather(x_flat_local, "expert", tiled=True)
 
     router_logits = jnp.einsum("td,de->te", x_flat_global, moe_router)
@@ -293,7 +302,7 @@ def _moe_mlp_ep_ring_local(
     local_idx = jnp.nonzero(local_mask, size=local_capacity, fill_value=0)[0]
     local_count = jnp.sum(local_mask, dtype=jnp.int32)
     valid = jnp.arange(local_capacity, dtype=jnp.int32) < local_count
-    valid_i32 = valid.astype(jnp.int32)
+    valid_weight = valid.astype(jnp.float32)
 
     token_local = jnp.take(token_sorted, local_idx, axis=0)
     expert_local = jnp.take(expert_sorted, local_idx, axis=0) - expert_start
@@ -304,7 +313,7 @@ def _moe_mlp_ep_ring_local(
     weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
     expert_local = jnp.where(valid, expert_local, 0)
 
-    group_sizes = jnp.bincount(expert_local, weights=valid_i32, length=local_experts).astype(jnp.int32)
+    group_sizes = jnp.bincount(expert_local, weights=valid_weight, length=local_experts).astype(jnp.int32)
     # `local_idx` pads by appending invalid rows at the end; keep GMM segment
     # boundaries aligned by attributing padding to the final expert segment.
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
@@ -343,10 +352,10 @@ def moe_mlp(
     if mesh is None:
         mesh = get_abstract_mesh()
 
-    if callable(activation):
-        activation_fn = activation
-    else:
+    if isinstance(activation, ActivationFunctionEnum):
         activation_fn = activation.to_jax_fn()
+    else:
+        activation_fn = activation
 
     num_experts = int(moe_w13.shape[0])
     if moe_w2.shape[0] != num_experts:
@@ -372,7 +381,7 @@ def moe_mlp(
             num_experts_per_token=num_experts_per_token,
         )
 
-    batch_spec = _batch_spec(mesh)
+    batch_spec = _batch_spec_from_x(x, mesh)
     local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
 
     if has_expert_axis and expert_axis_size > 1:
