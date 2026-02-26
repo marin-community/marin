@@ -17,6 +17,7 @@ Usage::
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import uuid
 from collections.abc import Callable
@@ -53,6 +54,12 @@ class RemoteCallable(Generic[P, R]):
     env_vars: dict[str, str] = field(default_factory=dict)
     pip_dependency_groups: list[str] = field(default_factory=list)
     name: str | None = None
+
+    def named(self, name: str) -> RemoteCallable:
+        """Noop if already has a name. Otherwise use provided name."""
+        if self.name:
+            return self
+        return dataclasses.replace(self, name=name)
 
     # TODO: JobHandle doesn't have this option now, but we could make this return the R
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None:

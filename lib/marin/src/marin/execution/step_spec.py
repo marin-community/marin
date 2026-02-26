@@ -93,10 +93,8 @@ class StepSpec:
         )
 
         if isinstance(self.fn, RemoteCallable):
-            if not self.fn.name:
-                job_name = f"{self.name_with_hash}-{uuid.uuid4().hex[:8]}"
-                wrapped = dataclasses.replace(self.fn, fn=wrapped, name=job_name)
-            else:
-                wrapped = dataclasses.replace(self.fn, fn=wrapped)
+            job_name = f"{self.name_with_hash}-{uuid.uuid4().hex[:8]}"
+            remote_callable = self.fn.named(job_name)
+            wrapped = dataclasses.replace(remote_callable, fn=wrapped)
 
         return wrapped
