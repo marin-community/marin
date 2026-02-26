@@ -81,6 +81,8 @@ _DEPLOYMENT_READY_TIMEOUT = 2400.0
 _KUBECTL_TIMEOUT = 1800.0
 
 _S3_SECRET_NAME = "iris-s3-credentials"
+_CONTROLLER_CPU_REQUEST = "2"
+_CONTROLLER_MEMORY_REQUEST = "4Gi"
 
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
 # bucket name is a subdomain (https://<bucket>.cwobject.com). Path-style
@@ -1353,6 +1355,12 @@ def _build_controller_deployment(
     s3_env_vars: list[dict],
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
+    # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod
+    # as BestEffort. Matching limits keep the controller in Guaranteed QoS.
+    controller_resources = {
+        "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
+        "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
+    }
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -1386,6 +1394,7 @@ def _build_controller_deployment(
                             ],
                             "ports": [{"containerPort": port}],
                             "env": s3_env_vars,
+                            "resources": controller_resources,
                             "volumeMounts": [
                                 {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
                             ],
