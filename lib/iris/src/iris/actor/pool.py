@@ -5,7 +5,6 @@
 
 import logging
 import threading
-import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -16,8 +15,7 @@ import cloudpickle
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult, Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
-from iris.rpc.errors import is_retryable_error
-from iris.time_utils import ExponentialBackoff
+from iris.rpc.errors import call_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -197,32 +195,17 @@ class _PoolCallProxy(Generic[T]):
 
     def __getattr__(self, method_name: str) -> Callable[..., Any]:
         def call(*args, **kwargs):
-            backoff = ExponentialBackoff(
-                initial=self._pool._initial_backoff,
-                maximum=self._pool._max_backoff,
-            )
-            max_attempts = self._pool._max_call_attempts
-            for attempt in range(max_attempts):
+            def do_call():
                 endpoint = self._pool._get_next_endpoint()
-                try:
-                    return self._pool._call_endpoint(endpoint, method_name, args, kwargs)
-                except Exception as e:
-                    if not is_retryable_error(e) or attempt + 1 >= max_attempts:
-                        raise
-                    delay = backoff.next_interval()
-                    logger.warning(
-                        "Pool call %s.%s to %s failed (attempt %d/%d), " "re-resolving in %.2fs: %s",
-                        self._pool._name,
-                        method_name,
-                        endpoint.url,
-                        attempt + 1,
-                        max_attempts,
-                        delay,
-                        e,
-                    )
-                    time.sleep(delay)
+                return self._pool._call_endpoint(endpoint, method_name, args, kwargs)
 
-            raise RuntimeError(f"Pool call {self._pool._name}.{method_name} " f"failed after {max_attempts} attempts")
+            return call_with_retry(
+                f"{self._pool._name}.{method_name}",
+                do_call,
+                max_attempts=self._pool._max_call_attempts,
+                initial_backoff=self._pool._initial_backoff,
+                max_backoff=self._pool._max_backoff,
+            )
 
         return call
 

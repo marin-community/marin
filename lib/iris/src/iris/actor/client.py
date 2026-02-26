@@ -29,7 +29,7 @@ import cloudpickle
 from iris.actor.resolver import Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
-from iris.rpc.errors import is_retryable_error
+from iris.rpc.errors import call_with_retry
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -150,42 +150,24 @@ class _RpcMethod:
             serialized_kwargs=cloudpickle.dumps(kwargs),
         )
 
-        backoff = ExponentialBackoff(
-            initial=self._client._initial_backoff,
-            maximum=self._client._max_backoff,
-            factor=self._client._backoff_factor,
-            jitter=self._client._backoff_jitter,
-        )
-
-        max_attempts = self._client._max_call_attempts
-        for attempt in range(max_attempts):
-            try:
-                client = self._client.rpc_client()
-                resp = client.call(call)
-            except Exception as e:
-                self._client._rpc_client = None
-                if not is_retryable_error(e) or attempt + 1 >= max_attempts:
-                    raise
-                delay = backoff.next_interval()
-                logger.warning(
-                    "Actor call %s.%s failed (attempt %d/%d), re-resolving in %.2fs: %s",
-                    self._client._name,
-                    self._method_name,
-                    attempt + 1,
-                    max_attempts,
-                    delay,
-                    e,
-                )
-                time.sleep(delay)
-                continue
-
+        def do_call():
+            client = self._client.rpc_client()
+            resp = client.call(call)
             if resp.HasField("error"):
                 if resp.error.serialized_exception:
                     raise cloudpickle.loads(resp.error.serialized_exception)
                 raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
-
             return cloudpickle.loads(resp.serialized_value)
 
-        raise RuntimeError(
-            f"Actor call {self._client._name}.{self._method_name} " f"failed after {max_attempts} attempts"
+        def clear_connection(_exc):
+            self._client._rpc_client = None
+
+        return call_with_retry(
+            f"{self._client._name}.{self._method_name}",
+            do_call,
+            on_retry=clear_connection,
+            max_attempts=self._client._max_call_attempts,
+            initial_backoff=self._client._initial_backoff,
+            max_backoff=self._client._max_backoff,
+            backoff_factor=self._client._backoff_factor,
         )
