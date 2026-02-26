@@ -483,6 +483,30 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
     assert task.task_id not in worker.running_tasks
 
 
+def test_task_assigned_to_missing_worker_is_ignored(job_request, worker_metadata):
+    """Stale assignments to pruned workers are skipped without crashing."""
+    state = ControllerState()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+    tasks = submit_job(state, "j1", job_request("job1"))
+    task = tasks[0]
+
+    # Worker disappears between scheduling and assignment commit.
+    state.remove_worker(worker_id)
+    state.handle_event(
+        TaskAssignedEvent(
+            task_id=task.task_id,
+            worker_id=worker_id,
+        )
+    )
+
+    # Task remains schedulable and no attempt/resources are committed.
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.current_attempt_id == -1
+    assert task.can_be_scheduled()
+    assert task.task_id in {t.task_id for t in state.peek_pending_tasks()}
+
+
 # =============================================================================
 # Failure Domain Tests (max_task_failures)
 # =============================================================================
