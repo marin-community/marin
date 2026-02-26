@@ -58,16 +58,16 @@ tokenized_datasets = {DATASET_SHORT_NAME: tokenized_selfinstill_math}
 mixture_weights = {DATASET_SHORT_NAME: DATASET_SIZE}
 
 # Training configuration
-# Using v5p-16 (8 chips)
 TARGET_EPOCHS = 8
-TRAIN_BATCH_SIZE = 64  # 8 per device on v5p-16 (8 chips)
+TRAIN_BATCH_SIZE = 64
 MICROBATCH_SIZE = 64  # No gradient accumulation
 
 # Fix at 4000 instead of using the number of epochs
 # NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
 NUM_TRAIN_STEPS = 4000
 
-RESOURCES = ResourceConfig.with_tpu("v5p-16")
+# RESOURCES = ResourceConfig.with_tpu("v5p-16")
+RESOURCES = ResourceConfig.with_tpu("v4-64")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
