@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import threading
 import time
@@ -88,6 +89,10 @@ _VM_STATE_MAP: dict[str, CloudSliceState] = {
 }
 
 _ACTIVE_VM_SLICE_STATES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
+_GCE_NAME_MAX_LEN = 63
+_GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
+_GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
+_GCE_VM_SLICE_SSH_USER = "iris"
 
 
 def _format_labels(labels: dict[str, str]) -> str:
@@ -99,6 +104,29 @@ def _build_label_filter(labels: dict[str, str]) -> str:
     """Build a gcloud --filter expression for label matching."""
     parts = [f"labels.{k}={v}" for k, v in labels.items()]
     return " AND ".join(parts)
+
+
+def _build_vm_slice_id(name_prefix: str, epoch_ms: int) -> str:
+    """Build a bounded VM slice id valid for both GCE instance names and labels."""
+    suffix = str(epoch_ms)
+    max_prefix_len = _GCE_NAME_MAX_LEN - len(suffix) - 1
+    if max_prefix_len <= 0:
+        raise ValueError("Timestamp suffix leaves no room for VM slice id prefix")
+
+    normalized = _GCE_NAME_RE.sub("-", name_prefix.lower())
+    normalized = re.sub(r"-+", "-", normalized)
+    normalized = _GCE_NAME_EDGE_RE.sub("", normalized)
+    if not normalized:
+        normalized = "slice"
+    if not normalized[0].isalpha():
+        normalized = f"slice-{normalized}"
+
+    trimmed = normalized[:max_prefix_len]
+    trimmed = _GCE_NAME_EDGE_RE.sub("", trimmed)
+    if not trimmed:
+        trimmed = "slice"
+
+    return f"{trimmed}-{suffix}"
 
 
 def _extract_node_name(resource_name: str) -> str:
@@ -590,6 +618,7 @@ class GcpVmSliceHandle:
             project_id=self._project_id,
             zone=self._zone,
             vm_name=self._vm_name,
+            ssh_user=_GCE_VM_SLICE_SSH_USER,
         )
         worker = GcpStandaloneWorkerHandle(
             _vm_id=f"{self._slice_id}-worker-0",
@@ -806,7 +835,7 @@ class GcpPlatform:
     ) -> GcpVmSliceHandle:
         """Create a single GCE VM that behaves as a one-worker slice."""
         gcp = config.gcp
-        slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+        slice_id = _build_vm_slice_id(config.name_prefix, Timestamp.now().epoch_ms())
         vm_name = slice_id
         machine_type = gcp.machine_type or DEFAULT_MACHINE_TYPE
         boot_disk_size = config.disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB

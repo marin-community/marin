@@ -13,7 +13,7 @@ Key design principles:
 - Bootstrap is handled internally by each Platform implementation, not by the autoscaler
 
 The run_once() flow splits into two phases:
-- refresh(): I/O phase — poll slice states, scale down idle slices
+- refresh(): state-read phase — scale down idle slices from tracked state
 - update(): CPU phase — evaluate demand and execute scale-up decisions
 """
 
@@ -33,7 +33,6 @@ from iris.cluster.platform.base import (
     Platform,
     QuotaExhaustedError,
     RemoteWorkerHandle,
-    SliceHandle,
 )
 from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap, ZONE_ATTRIBUTE_KEY
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
@@ -481,7 +480,6 @@ class Autoscaler:
 
         Test-only: Waits for all scale-up threads to complete.
         """
-        # Wait for all threads in the container to finish
         self._threads.wait()
 
     def shutdown(self) -> None:
@@ -711,7 +709,6 @@ class Autoscaler:
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             action.slice_id = slice_obj.slice_id
             action.status = "completed"
-            self._register_slice_workers(slice_obj, group.name)
             return True
         except QuotaExhaustedError as e:
             group.cancel_scale_up()
@@ -770,16 +767,12 @@ class Autoscaler:
             bc.env_vars["IRIS_GPU_COUNT"] = str(group.config.resources.gpu_count)
         return bc
 
-    def _register_slice_workers(
-        self,
-        handle: SliceHandle,
-        scale_group: str,
-    ) -> None:
-        """Register all workers from a slice handle into the worker registry."""
-        for worker in handle.describe().workers:
+    def _register_slice_workers(self, workers: list[RemoteWorkerHandle], slice_id: str, scale_group: str) -> None:
+        """Register all workers from a slice into the worker registry."""
+        for worker in workers:
             self._workers[worker.worker_id] = TrackedWorker(
                 worker_id=worker.worker_id,
-                slice_id=handle.slice_id,
+                slice_id=slice_id,
                 scale_group=scale_group,
                 handle=worker,
                 bootstrap_log=worker.bootstrap_log,
@@ -792,10 +785,40 @@ class Autoscaler:
             del self._workers[wid]
 
     def refresh(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp | None = None) -> None:
-        """I/O phase: poll non-READY slices for state transitions, then scale down idle slices."""
+        """State-read phase: scale down idle slices from currently tracked state."""
         timestamp = timestamp or Timestamp.now()
 
-        self._poll_slice_states()
+        for group in self._groups.values():
+            for slice_id, handle in group.non_ready_slice_handles():
+                try:
+                    status = handle.describe()
+                except Exception as e:
+                    logger.warning("Failed to poll slice %s: %s", slice_id, e)
+                    continue
+
+                if status.state == CloudSliceState.READY:
+                    addrs = [w.internal_address for w in status.workers]
+                    group.mark_slice_ready(slice_id, addrs)
+                    self._register_slice_workers(status.workers, slice_id, group.name)
+                    self._log_action(
+                        "slice_ready",
+                        group.name,
+                        slice_id,
+                        reason=f"bootstrap completed ({len(addrs)} workers)",
+                    )
+                elif status.state == CloudSliceState.FAILED:
+                    group.mark_slice_failed(slice_id, error_message=status.error_message)
+                    group.scale_down(slice_id)
+                    self._unregister_slice_workers(slice_id)
+                    group.record_failure()
+                    reason = status.error_message if status.error_message else "bootstrap failed"
+                    self._log_action(
+                        "slice_failed",
+                        group.name,
+                        slice_id,
+                        reason=reason,
+                        status="failed",
+                    )
 
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
@@ -808,46 +831,6 @@ class Autoscaler:
                     slice_id=scaled_down.slice_id,
                     reason=f"idle slice (target={target_capacity}, ready={group.ready_slice_count() + 1})",
                 )
-
-    def _poll_slice_states(self) -> None:
-        """Poll describe() on non-READY slices to detect state transitions.
-
-        When a platform's internal bootstrap completes, describe() will return
-        READY. This method detects that transition and updates the ScalingGroup.
-        """
-        for group in self._groups.values():
-            with group._slices_lock:
-                snapshot = list(group._slices.items())
-            for slice_id, slice_state in snapshot:
-                if slice_state.lifecycle in (SliceLifecycleState.BOOTING, SliceLifecycleState.INITIALIZING):
-                    try:
-                        status = slice_state.handle.describe()
-                    except Exception as e:
-                        logger.warning("Failed to poll slice %s: %s", slice_id, e)
-                        continue
-                    if status.state == CloudSliceState.READY:
-                        addrs = [w.internal_address for w in status.workers]
-                        group.mark_slice_ready(slice_id, addrs)
-                        self._register_slice_workers(slice_state.handle, group.name)
-                        self._log_action(
-                            "slice_ready",
-                            group.name,
-                            slice_id,
-                            reason=f"bootstrap completed ({len(addrs)} workers)",
-                        )
-                    elif status.state == CloudSliceState.FAILED:
-                        group.mark_slice_failed(slice_id, error_message=status.error_message)
-                        group.scale_down(slice_id)
-                        self._unregister_slice_workers(slice_id)
-                        group.record_failure()
-                        reason = status.error_message if status.error_message else "bootstrap failed"
-                        self._log_action(
-                            "slice_failed",
-                            group.name,
-                            slice_id,
-                            reason=reason,
-                            status="failed",
-                        )
 
     def update(
         self,

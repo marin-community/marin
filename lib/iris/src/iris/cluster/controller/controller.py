@@ -4,9 +4,9 @@
 """Iris Controller logic for connecting state, scheduler and managing workers."""
 
 import logging
+import queue
 import threading
 from collections import defaultdict
-from concurrent.futures import Future, as_completed
 from dataclasses import dataclass, field
 from time import sleep
 from typing import Protocol
@@ -140,7 +140,7 @@ class RpcWorkerStubFactory:
     """Caches WorkerServiceClientSync stubs by address so each worker gets
     one persistent httpx.Client instead of a new one per RPC."""
 
-    def __init__(self, timeout: Duration = Duration.from_seconds(10.0)) -> None:
+    def __init__(self, timeout: Duration = Duration.from_seconds(5.0)) -> None:
         self._timeout = timeout
         self._stubs: dict[str, WorkerServiceClientSync] = {}
         self._lock = threading.Lock()
@@ -550,36 +550,45 @@ class Controller:
             if snapshot:
                 snapshots.append(snapshot)
 
-        # Phase 2: send RPCs in parallel (no lock held)
-        futures: dict[Future, HeartbeatSnapshot] = {}
-        for snapshot in snapshots:
-            future = self._dispatch_executor.submit(self._do_heartbeat_rpc, snapshot)
-            futures[future] = snapshot
+        if not snapshots:
+            return
 
-        # Phase 3: process results via state transitions
-        try:
-            for future in as_completed(futures, timeout=10):
-                snapshot = futures.pop(future)
+        # Phase 2: stream heartbeats through a bounded worker queue.
+        work_queue: queue.Queue[HeartbeatSnapshot] = queue.Queue()
+        result_queue: queue.Queue[tuple[HeartbeatSnapshot, cluster_pb2.HeartbeatResponse | None, str | None]] = (
+            queue.Queue()
+        )
+        for snapshot in snapshots:
+            work_queue.put(snapshot)
+
+        worker_count = min(self._config.max_dispatch_parallelism, len(snapshots))
+
+        def _dispatch_worker() -> None:
+            while True:
                 try:
-                    response = future.result()
-                    self._state.complete_heartbeat(snapshot, response)
+                    snapshot = work_queue.get_nowait()
+                except queue.Empty:
+                    return
+                try:
+                    response = self._do_heartbeat_rpc(snapshot)
+                    result_queue.put((snapshot, response, None))
                 except Exception as e:
-                    logger.warning(f"Heartbeat error for {snapshot.worker_id}: {e}")
-                    self._handle_heartbeat_failure(snapshot, str(e))
-        except TimeoutError:
-            # Process any futures that completed before timeout
-            for future, snapshot in futures.items():
-                if future.done():
-                    try:
-                        response = future.result()
-                        self._state.complete_heartbeat(snapshot, response)
-                    except Exception as e:
-                        logger.warning(f"Heartbeat error for {snapshot.worker_id}: {e}")
-                        self._handle_heartbeat_failure(snapshot, str(e))
-                else:
-                    logger.warning(f"Heartbeat timed out for {snapshot.worker_id}")
-                    self._handle_heartbeat_failure(snapshot, "Heartbeat timed out")
-                    future.cancel()
+                    result_queue.put((snapshot, None, str(e)))
+
+        worker_futures = [self._dispatch_executor.submit(_dispatch_worker) for _ in range(worker_count)]
+
+        # Phase 3: consume all responses; per-worker RPC timeout determines failures.
+        for _ in snapshots:
+            snapshot, response, error = result_queue.get()
+            if error is not None:
+                logger.warning("Heartbeat error for %s: %s", snapshot.worker_id, error)
+                self._handle_heartbeat_failure(snapshot, error)
+                continue
+            if response is not None:
+                self._state.complete_heartbeat(snapshot, response)
+
+        for future in worker_futures:
+            future.cancel()
 
     def _handle_heartbeat_failure(self, snapshot: HeartbeatSnapshot, error: str) -> None:
         """Process a heartbeat failure: update state, evict stub + notify autoscaler if worker died.
