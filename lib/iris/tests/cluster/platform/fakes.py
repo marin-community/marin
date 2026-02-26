@@ -162,7 +162,7 @@ class FakeSliceHandle:
         vms: list[FakeWorkerHandle],
         labels: dict[str, str] | None = None,
         created_at_ms: int | None = None,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ):
         self._slice_id = slice_id
         self._scale_group = scale_group
@@ -171,7 +171,7 @@ class FakeSliceHandle:
         self._labels = labels or {}
         self._created_at = Timestamp.from_ms(created_at_ms) if created_at_ms is not None else Timestamp.now()
         self._terminated = False
-        self._bootstrap_config = bootstrap_config
+        self._worker_config = worker_config
         self._bootstrapped = False
 
     @property
@@ -198,9 +198,9 @@ class FakeSliceHandle:
         if self._terminated:
             return SliceStatus(state=CloudSliceState.DELETING, worker_count=len(self._vms), workers=list(self._vms))
         all_running = all(vm._state == CloudWorkerState.RUNNING for vm in self._vms)
-        if all_running and self._bootstrap_config and not self._bootstrapped:
+        if all_running and self._worker_config and not self._bootstrapped:
             state = CloudSliceState.BOOTSTRAPPING
-        elif all_running and (not self._bootstrap_config or self._bootstrapped):
+        elif all_running and (not self._worker_config or self._bootstrapped):
             state = CloudSliceState.READY
         else:
             state = CloudSliceState.CREATING
@@ -215,7 +215,7 @@ class FakeSliceHandle:
         """Advance VM state transitions and simulate bootstrap when configured."""
         for vm in self._vms:
             vm.tick(ts)
-        if self._bootstrap_config and not self._bootstrapped:
+        if self._worker_config and not self._bootstrapped:
             all_running = all(vm._state == CloudWorkerState.RUNNING for vm in self._vms)
             if all_running:
                 for vm in self._vms:
@@ -266,11 +266,11 @@ class FakePlatform:
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> FakeSliceHandle:
         """Create a new fake slice.
 
-        When bootstrap_config is provided, the slice starts in CREATING state and
+        When worker_config is provided, the slice starts in CREATING state and
         transitions through BOOTSTRAPPING to READY during tick(). Without it,
         slices go straight from CREATING to READY (no bootstrap simulation).
         """
@@ -307,7 +307,7 @@ class FakePlatform:
                 vms=workers,
                 labels=labels,
                 created_at_ms=ts,
-                bootstrap_config=bootstrap_config,
+                worker_config=worker_config,
             )
             self._slices[slice_id] = fake_slice
 

@@ -18,7 +18,12 @@ from iris.cluster.runtime.types import ContainerRuntime
 from iris.cluster.types import JobName
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
-from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
+from iris.cluster.worker.env_probe import (
+    DefaultEnvironmentProvider,
+    EnvironmentProvider,
+    build_worker_metadata,
+    probe_hardware,
+)
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.task_logging import FsspecLogSink, LogSink, LogSinkConfig, ProcessLogSink
 from iris.cluster.worker.service import WorkerServiceImpl
@@ -26,7 +31,7 @@ from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import cluster_pb2, config_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -50,6 +55,54 @@ class WorkerConfig:
     log_prefix: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
+    accelerator_type: int = 0
+    accelerator_variant: str = ""
+    gpu_count: int = 0
+
+
+def worker_config_from_proto(
+    proto: config_pb2.WorkerConfig,
+    resolve_image: Callable[[str], str] | None = None,
+) -> WorkerConfig:
+    """Create internal WorkerConfig from WorkerConfig proto.
+
+    Translates the proto representation into the internal dataclass,
+    applying defaults where proto fields are unset.
+    """
+    port_start, port_end = 30000, 40000
+    if proto.port_range:
+        port_start, port_end = map(int, proto.port_range.split("-"))
+
+    controller_address = proto.controller_address
+    if controller_address and not controller_address.startswith("http"):
+        controller_address = f"http://{controller_address}"
+
+    return WorkerConfig(
+        host=proto.host or "0.0.0.0",
+        port=proto.port or 8080,
+        cache_dir=Path(proto.cache_dir) if proto.cache_dir else None,
+        port_range=(port_start, port_end),
+        controller_address=controller_address or None,
+        worker_id=proto.worker_id or None,
+        worker_attributes=dict(proto.worker_attributes),
+        default_task_env=dict(proto.default_task_env),
+        default_task_image=proto.default_task_image or None,
+        resolve_image=resolve_image or (lambda image: image),
+        log_prefix=proto.log_prefix or None,
+        poll_interval=(
+            Duration.from_ms(proto.poll_interval.milliseconds)
+            if proto.HasField("poll_interval")
+            else Duration.from_seconds(5.0)
+        ),
+        heartbeat_timeout=(
+            Duration.from_ms(proto.heartbeat_timeout.milliseconds)
+            if proto.HasField("heartbeat_timeout")
+            else Duration.from_seconds(60.0)
+        ),
+        accelerator_type=proto.accelerator_type,
+        accelerator_variant=proto.accelerator_variant,
+        gpu_count=proto.gpu_count,
+    )
 
 
 class Worker:
@@ -63,6 +116,7 @@ class Worker:
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
         threads: ThreadContainer | None = None,
+        worker_metadata: cluster_pb2.WorkerMetadata | None = None,
     ):
         self._config = config
 
@@ -74,12 +128,26 @@ class Worker:
         # Use overrides if provided, otherwise create defaults
         self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
         self._runtime = container_runtime or DockerRuntime()
-        self._environment_provider = environment_provider or DefaultEnvironmentProvider()
-        self._inferred_log_prefix = self._environment_provider.log_prefix()
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
-        # Probe worker metadata eagerly so it's available before any task arrives.
-        self._worker_metadata = self._environment_provider.probe()
+        # Resolve worker metadata: explicit > environment_provider > hardware probe
+        self._inferred_log_prefix: str | None = None
+        if worker_metadata is not None:
+            self._worker_metadata = worker_metadata
+        elif environment_provider is not None:
+            self._worker_metadata = environment_provider.probe()
+            self._inferred_log_prefix = environment_provider.log_prefix()
+        else:
+            env = DefaultEnvironmentProvider()
+            hardware = probe_hardware()
+            self._worker_metadata = build_worker_metadata(
+                hardware=hardware,
+                accelerator_type=config.accelerator_type,
+                accelerator_variant=config.accelerator_variant,
+                gpu_count_override=config.gpu_count,
+                worker_attributes=config.worker_attributes,
+            )
+            self._inferred_log_prefix = env.log_prefix()
 
         # Task state: maps (task_id, attempt_id) -> TaskAttempt.
         # Preserves all attempts so logs for historical attempts remain accessible.

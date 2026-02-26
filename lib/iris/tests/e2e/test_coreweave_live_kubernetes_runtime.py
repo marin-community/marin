@@ -167,7 +167,7 @@ def _coreweave_upload_env(config) -> object:
 def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: KubernetesRuntime):
     """CPU pod should extract bundle and complete successfully via KubernetesRuntime."""
     config = load_config(Path(__file__).resolve().parents[2] / "examples" / "coreweave.yaml")
-    image = config.defaults.default_task_image
+    image = config.defaults.worker.default_task_image
     run_id = uuid.uuid4().hex[:8]
     bundle_url = ""
     bundle_fs = None
@@ -235,7 +235,7 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
     must equal the full log with zero duplicates.
     """
     config = load_config(Path(__file__).resolve().parents[2] / "examples" / "coreweave.yaml")
-    image = config.defaults.default_task_image
+    image = config.defaults.worker.default_task_image
     run_id = uuid.uuid4().hex[:8]
 
     # Emit 20 numbered lines with 0.1s spacing so multiple land in the same second
@@ -291,7 +291,7 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
 def test_coreweave_kubernetes_runtime_gpu_job_live(coreweave_runtime: KubernetesRuntime):
     """GPU pod should request GPU and prove device access via nvidia-smi."""
     config = load_config(Path(__file__).resolve().parents[2] / "examples" / "coreweave.yaml")
-    image = config.defaults.default_task_image
+    image = config.defaults.worker.default_task_image
     run_id = uuid.uuid4().hex[:8]
 
     gpu_resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=4 * 1024**3)
