@@ -24,12 +24,17 @@ https://github.com/Open-Athena/bolinas-dna/issues/42
 import dataclasses
 
 from experiments.dna.defaults import (
+    DNA_TOKENIZER_V1,
     FAST_RUN_CONFIG_V1,
-    dna_qwen3_0_6b_256_v1,
+    dna_effective_seq_len,
     dna_tokenize_rw_v1,
     dna_train,
 )
+from experiments.qwen3 import qwen3_0_6b_hd128
 from marin.execution.executor import executor_main
+
+SEQ_LEN = 256
+model_config = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1))
 
 DATASETS = {
     # "promoter_256": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v9_256_128",
@@ -58,7 +63,7 @@ for region, dataset in DATASETS.items():
     train_step = dna_train(
         name=f"exp42-{region}-r01",
         tokenized=tokenized,
-        model_config=dna_qwen3_0_6b_256_v1,
+        model_config=model_config,
         train_config=train_config_256,
         tags=["dna", "exp42", "promoter_radius", "fast"],
     )

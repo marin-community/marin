@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from itertools import chain
-from typing import Sequence, Any
+from typing import Any, Sequence
 
+import numpy as np
 import regex
 
 from levanter.data import BatchProcessor
 from levanter.tokenizers import MarinTokenizer
+from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.py_utils import logical_cpu_core_count
 
 LONG_STRING_WORKAROUND = 10_000
@@ -195,3 +197,115 @@ def _apply_padding_and_truncation(
         encoding[k] = [seq + [pad_value] * (target_len - len(seq)) for seq in encoding[k]]
 
     return encoding
+
+
+class DNABatchTokenizer(BatchProcessor[dict, dict]):
+    """
+    A batch processor that tokenizes DNA sequences with soft-masking support.
+
+    Assigns loss weights based on character case:
+    - Uppercase (ACGT): weight = 1.0
+    - Lowercase (acgt): weight = soft_mask_weight
+
+    If the tokenizer defines BOS/EOS token IDs, they are automatically prepended/appended
+    to the token sequences. Their loss weight is set to 1.0. Use ``num_special_tokens``
+    to query how many extra tokens are added (useful for computing model context size).
+
+    Assumptions:
+    - Character-level tokenizer (1:1 character-to-token mapping)
+    - All sequences have the same length (no padding/truncation)
+    - Model context size matches sequence length + special tokens (see experiment configs).
+    """
+
+    def __init__(
+        self,
+        tokenizer: HfTokenizer,
+        text_field: str = "seq",
+        soft_mask_weight: float = 1.0,
+        *,
+        override_resources=None,
+    ):
+        self.tokenizer = tokenizer
+        self.text_field = text_field
+        self.override_resources = override_resources
+        self.soft_mask_weight = soft_mask_weight
+        self._has_bos = tokenizer.bos_token_id is not None
+        self._has_eos = tokenizer.eos_token_id is not None
+
+    @property
+    def num_special_tokens(self) -> int:
+        return int(self._has_bos) + int(self._has_eos)
+
+    def __call__(self, batch: Sequence[dict]) -> list[dict]:
+        texts = [example[self.text_field] for example in batch]
+
+        assert len(set(len(t) for t in texts)) == 1, "All sequences must have the same length"
+
+        encodings = self.tokenizer(
+            texts,
+            # important so input ids are aligned with loss weights
+            add_special_tokens=False,
+            return_attention_mask=False,
+            return_token_type_ids=False,
+            return_special_tokens_mask=False,
+            return_tensors="np",
+            verbose=False,
+        )
+
+        char_arrays = np.array([list(t) for t in texts], dtype="U1")
+        is_upper = np.char.isupper(char_arrays)
+        loss_weights = np.where(is_upper, 1.0, self.soft_mask_weight).astype(np.float32)
+
+        input_ids = encodings["input_ids"].astype(np.int32)
+
+        assert input_ids.shape == loss_weights.shape, (
+            f"Token count ({input_ids.shape[1]}) != char count ({loss_weights.shape[1]}). "
+            "Tokenizer must be character-level."
+        )
+
+        batch_size = input_ids.shape[0]
+
+        if self._has_bos:
+            bos_ids = np.full((batch_size, 1), self.tokenizer.bos_token_id, dtype=np.int32)
+            bos_weights = np.ones((batch_size, 1), dtype=np.float32)
+            input_ids = np.concatenate([bos_ids, input_ids], axis=1)
+            loss_weights = np.concatenate([bos_weights, loss_weights], axis=1)
+
+        if self._has_eos:
+            eos_ids = np.full((batch_size, 1), self.tokenizer.eos_token_id, dtype=np.int32)
+            eos_weights = np.ones((batch_size, 1), dtype=np.float32)
+            input_ids = np.concatenate([input_ids, eos_ids], axis=1)
+            loss_weights = np.concatenate([loss_weights, eos_weights], axis=1)
+
+        return [{"input_ids": ids, "loss_weight": weights} for ids, weights in zip(input_ids, loss_weights)]
+
+    @property
+    def output_exemplar(self) -> dict:
+        return {
+            "input_ids": np.zeros((0,), dtype=np.int32),
+            "loss_weight": np.zeros((0,), dtype=np.float32),
+        }
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "tokenizer": self.tokenizer.name_or_path,
+            "vocab_size": len(self.tokenizer),
+            "soft_mask_weight": self.soft_mask_weight,
+            "has_bos": self._has_bos,
+            "has_eos": self._has_eos,
+        }
+
+    @property
+    def num_cpus(self) -> int:
+        if self.override_resources is not None:
+            cpus = self.override_resources.get("num_cpus", None)
+            if cpus is not None:
+                return cpus
+        return min(max(1, logical_cpu_core_count() - 4), 12)
+
+    @property
+    def num_gpus(self) -> int:
+        if self.override_resources is not None:
+            return self.override_resources.get("num_gpus", 0)
+        return 0

@@ -29,16 +29,23 @@ different weighting schemes to study the effect of data composition:
 https://github.com/Open-Athena/bolinas-dna/issues/13
 """
 
+import dataclasses
+
 from experiments.defaults import default_train
 from experiments.dna.defaults import (
     CDS_DATASET_V1,
+    DNA_TOKENIZER_V1,
     PROMOTERS_DATASET_V1,
     YOLO_RUN_CONFIG_V1,
-    dna_qwen3_1_7b_v1,
+    dna_effective_seq_len,
     dna_tokenize_rw_v1,
 )
+from experiments.qwen3 import qwen3_1_7b
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
+
+SEQ_LEN = 512
+model_config = dataclasses.replace(qwen3_1_7b, max_seq_len=dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1))
 
 # =============================================================================
 # Dataset sizes (number of sequences)
@@ -86,7 +93,7 @@ for config_name, weights in WEIGHT_CONFIGS.items():
     training_step = default_train(
         name=f"promoter-cds-mixture-{config_name}-r01",
         tokenized=mixture_config,
-        model_config=dna_qwen3_1_7b_v1,
+        model_config=model_config,
         train_config=YOLO_RUN_CONFIG_V1,
         tags=["dna", "mixture", config_name],
         eval_harness_tasks=[],

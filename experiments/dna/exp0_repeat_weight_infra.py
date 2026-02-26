@@ -21,15 +21,22 @@ This experiment compares three loss weighting approaches on animal promoter sequ
 3. Repeat weight 0.01: DNALmDatasetFormat with 0.01 loss weight on soft-masked positions
 """
 
+import dataclasses
+
 from experiments.dna.defaults import (
+    DNA_TOKENIZER_V1,
     PROMOTERS_DATASET_V1,
     SHORT_RUN_CONFIG_V1,
-    dna_qwen3_0_6b_v1,
+    dna_effective_seq_len,
     dna_tokenize_rw_v1,
     dna_tokenize_std_v1,
     dna_train,
 )
+from experiments.qwen3 import qwen3_0_6b_hd128
 from marin.execution.executor import executor_main
+
+SEQ_LEN = 512
+model_config = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1))
 
 # =============================================================================
 # Standard (no repeat weighting) - uses TextLmDatasetFormat
@@ -40,7 +47,7 @@ data_standard = dna_tokenize_std_v1("animal-promoters-standard", PROMOTERS_DATAS
 train_standard = dna_train(
     name="animal-promoters-standard-r08",
     tokenized=data_standard,
-    model_config=dna_qwen3_0_6b_v1,
+    model_config=model_config,
     train_config=SHORT_RUN_CONFIG_V1,
     tags=["dna", "animal-promoters"],
 )
@@ -54,7 +61,7 @@ data_rw_1_0 = dna_tokenize_rw_v1("animal-promoters-repeat-weight-1.0", PROMOTERS
 train_rw_1_0 = dna_train(
     name="animal-promoters-repeat-weight-1.0-r01",
     tokenized=data_rw_1_0,
-    model_config=dna_qwen3_0_6b_v1,
+    model_config=model_config,
     train_config=SHORT_RUN_CONFIG_V1,
     tags=["dna", "animal-promoters"],
 )
@@ -68,7 +75,7 @@ data_rw_0_01 = dna_tokenize_rw_v1("animal-promoters-repeat-weight-0.01", PROMOTE
 train_rw_0_01 = dna_train(
     name="animal-promoters-repeat-weight-0.01-r01",
     tokenized=data_rw_0_01,
-    model_config=dna_qwen3_0_6b_v1,
+    model_config=model_config,
     train_config=SHORT_RUN_CONFIG_V1,
     tags=["dna", "animal-promoters"],
 )

@@ -21,15 +21,22 @@ or to also add promoters from ncRNA transcripts?
 https://github.com/Open-Athena/bolinas-dna/issues/41
 """
 
+import dataclasses
+
 from experiments.dna.defaults import (
+    DNA_TOKENIZER_V1,
     FAST_RUN_CONFIG_V1,
     PROMOTERS_MRNA_DATASET_V1,
     PROMOTERS_MRNA_NCRNA_DATASET_V1,
-    dna_qwen3_0_6b_v1,
+    dna_effective_seq_len,
     dna_tokenize_rw_v1,
     dna_train,
 )
+from experiments.qwen3 import qwen3_0_6b_hd128
 from marin.execution.executor import executor_main
+
+SEQ_LEN = 512
+model_config = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1))
 
 DATASETS = [
     PROMOTERS_MRNA_DATASET_V1,
@@ -54,7 +61,7 @@ for dataset in DATASETS:
     train_step = dna_train(
         name=f"exp41-{name}-r02",
         tokenized=tokenized,
-        model_config=dna_qwen3_0_6b_v1,
+        model_config=model_config,
         train_config=FAST_RUN_CONFIG_V1,
         tags=["dna", "exp41", "promoters", "fast"],
     )
