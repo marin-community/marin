@@ -174,3 +174,45 @@ def test_actor_client_exhausts_retries():
 
     with pytest.raises(ConnectError):
         client.increment()
+
+
+def test_actor_client_clears_cache_on_final_retryable_failure():
+    """After exhausting retries on a dead endpoint, the cached client should be
+    cleared so the next call re-resolves and can reach a now-healthy endpoint.
+
+    Regression test: with max_call_attempts=1, a single transient failure used
+    to leave _rpc_client pinned to the dead endpoint, causing subsequent calls
+    to fail even after the resolver returns a good endpoint.
+    """
+    server = ActorServer(host="127.0.0.1")
+    server.register("counter", Counter())
+    port = server.serve_background()
+
+    try:
+        # First resolve returns a dead endpoint; second returns the real one.
+        switching = SwitchingResolver(
+            [
+                {"counter": "http://127.0.0.1:1"},  # Dead endpoint
+                {"counter": f"http://127.0.0.1:{port}"},  # Real endpoint
+            ]
+        )
+
+        client = ActorClient(
+            switching,
+            "counter",
+            resolve_timeout=5.0,
+            max_call_attempts=1,
+            initial_backoff=0.05,
+            max_backoff=0.1,
+        )
+
+        # First call: resolves to dead endpoint, fails (only 1 attempt).
+        with pytest.raises(ConnectError):
+            client.increment()
+
+        # The cached client must have been cleared despite the final failure,
+        # so this second call re-resolves to the real endpoint and succeeds.
+        result = client.increment()
+        assert result == 1
+    finally:
+        server.stop()
