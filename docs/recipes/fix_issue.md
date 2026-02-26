@@ -112,10 +112,8 @@ Key checks to monitor:
 The tasks for this recipe:
 
 - [ ] Fetch issue information
-- [ ] Aggressively research codebase for relevant source files for the issue
-- [ ] Update issue with "Agent Research"
-- [ ] Formulate a design or fix
-- [ ] Update issue with proposed plan
+- [ ] Research codebase for all relevant source files
+- [ ] Formulate fix and post Research + Proposed Fix comment
 - [ ] Create branch for the changes
 - [ ] Write a test case as needed for changes
 - [ ] Implement changes until all tests pass
