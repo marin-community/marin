@@ -687,6 +687,9 @@ class ControllerWorker:
     # Worker attributes for constraint-based scheduling
     attributes: dict[str, AttributeValue] = field(default_factory=dict)
 
+    # All task IDs ever assigned to this worker (for fast per-worker history lookup)
+    task_history: set[JobName] = field(default_factory=set)
+
     def get_committed_resources(self) -> tuple[int, int, int]:
         """Return committed (cpu_millicores, memory_bytes, gpu_count) for this worker."""
         return (self.committed_cpu_millicores, self.committed_mem, self.committed_gpu)
@@ -716,6 +719,7 @@ class ControllerWorker:
     def assign_task(self, task_id: JobName, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Assign a task to this worker, updating committed resources."""
         self.running_tasks.add(task_id)
+        self.task_history.add(task_id)
         self.committed_cpu_millicores += resources.cpu_millicores
         self.committed_mem += resources.memory_bytes
         self.committed_gpu += get_gpu_count(resources.device)
@@ -1521,6 +1525,16 @@ class ControllerState:
         with self._lock:
             job_ids = {t.job_id for t in tasks}
             return {jid: self._jobs[jid] for jid in job_ids if jid in self._jobs}
+
+    def get_tasks_for_worker(self, worker_id: WorkerId, limit: int = 50) -> list[ControllerTask]:
+        """Return tasks that have been assigned to this worker, newest first."""
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if not worker:
+                return []
+            matches = [self._tasks[tid] for tid in worker.task_history if tid in self._tasks]
+            matches.sort(key=lambda t: t.started_at.epoch_ms() if t.started_at else 0, reverse=True)
+            return matches[:limit]
 
     def peek_pending_tasks(self) -> list[ControllerTask]:
         """Return all schedulable tasks in priority order without removing them.

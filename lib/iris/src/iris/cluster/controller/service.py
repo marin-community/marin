@@ -819,29 +819,6 @@ class ControllerServiceImpl:
 
     # --- VM Logs ---
 
-    def get_vm_logs(
-        self,
-        request: cluster_pb2.Controller.GetVmLogsRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Controller.GetVmLogsResponse:
-        """Get initialization logs for a VM."""
-        autoscaler = self._controller.autoscaler
-        if not autoscaler:
-            raise ConnectError(Code.UNAVAILABLE, "Autoscaler not configured")
-
-        vm_info = autoscaler.get_vm(request.vm_id)
-        if not vm_info:
-            raise ConnectError(Code.NOT_FOUND, f"VM {request.vm_id} not found")
-
-        tail = request.tail if request.tail > 0 else None
-        logs = autoscaler.get_init_log(request.vm_id, tail)
-
-        return cluster_pb2.Controller.GetVmLogsResponse(
-            logs=logs,
-            vm_id=vm_info.vm_id,
-            state=vm_info.state,
-        )
-
     # --- Task/Job Logs (batch fetching) ---
 
     def get_task_logs(
@@ -1073,20 +1050,20 @@ class ControllerServiceImpl:
             ]
         )
 
-    # --- Machine Detail (unified VM + worker view) ---
+    # --- Worker Detail (unified VM + worker view) ---
 
-    def get_machine_status(
+    def get_worker_status(
         self,
-        request: cluster_pb2.Controller.GetMachineStatusRequest,
+        request: cluster_pb2.Controller.GetWorkerStatusRequest,
         ctx: Any,
-    ) -> cluster_pb2.Controller.GetMachineStatusResponse:
-        """Return unified VM + worker detail for a single machine.
+    ) -> cluster_pb2.Controller.GetWorkerStatusResponse:
+        """Return unified VM + worker detail for a single worker.
 
         Resolves the identifier against both VM IDs and worker IDs, then
         returns VM info, worker health, bootstrap logs, and worker daemon
         logs in a single response.
         """
-        with rpc_error_handler("get_machine_status"):
+        with rpc_error_handler("get_worker_status"):
             if not request.id:
                 raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
 
@@ -1120,6 +1097,7 @@ class ControllerServiceImpl:
                 # If we found a worker, scan autoscaler status for its VM
                 if worker and autoscaler:
                     status = autoscaler.get_status()
+                    found = False
                     for group in status.groups:
                         for slice_info in group.slices:
                             for vm in slice_info.vms:
@@ -1132,6 +1110,12 @@ class ControllerServiceImpl:
                                         bootstrap_logs = autoscaler.get_init_log(vm.vm_id, tail=500)
                                         vm_info.worker_id = worker.worker_id
                                         vm_info.worker_healthy = worker.healthy
+                                        found = True
+                                        break
+                            if found:
+                                break
+                        if found:
+                            break
 
             if not vm_info and not worker:
                 raise ConnectError(Code.NOT_FOUND, f"No VM or worker found for '{identifier}'")
@@ -1173,10 +1157,32 @@ class ControllerServiceImpl:
                 except Exception:
                     logger.debug("Failed to fetch worker logs for %s", identifier, exc_info=True)
 
-            resp = cluster_pb2.Controller.GetMachineStatusResponse(
+            # Collect recent task history for this worker
+            recent_tasks: list[cluster_pb2.Controller.WorkerTaskSummary] = []
+            if worker:
+                tasks = self._state.get_tasks_for_worker(worker.worker_id, limit=50)
+                jobs = self._state.get_jobs_for_tasks(tasks)
+                for task in tasks:
+                    job = jobs.get(task.job_id)
+                    job_name = job.request.name if job and job.request else str(task.job_id)
+                    current_attempt = task.current_attempt
+                    entry = cluster_pb2.Controller.WorkerTaskSummary(
+                        task_id=task.task_id.to_wire(),
+                        job_name=job_name,
+                        state=task.state,
+                        error=task.error or "",
+                    )
+                    if current_attempt and current_attempt.started_at:
+                        entry.started_at.CopyFrom(current_attempt.started_at.to_proto())
+                    if current_attempt and current_attempt.finished_at:
+                        entry.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
+                    recent_tasks.append(entry)
+
+            resp = cluster_pb2.Controller.GetWorkerStatusResponse(
                 bootstrap_logs=bootstrap_logs,
                 scale_group=scale_group,
                 worker_logs=worker_logs,
+                recent_tasks=recent_tasks,
             )
             if vm_info:
                 resp.vm.CopyFrom(vm_info)
