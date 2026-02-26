@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "942b99d76eec",
+  "strategy": "manual-commit",
+  "branch": "rav-optional-remote",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/fray/tests/test_v2_ray.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/94/2b99d76eec/0/metadata.json",
+      "transcript": "/94/2b99d76eec/0/full.jsonl",
+      "context": "/94/2b99d76eec/0/context.md",
+      "content_hash": "/94/2b99d76eec/0/content_hash.txt",
+      "prompt": "/94/2b99d76eec/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 333,
+    "cache_creation_tokens": 36972,
+    "cache_read_tokens": 245573,
+    "output_tokens": 197,
+    "api_call_count": 7
+  }
+}
