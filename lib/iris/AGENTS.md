@@ -24,20 +24,7 @@ class Scheduler:
     ... self.job_creator.create_job()
 ```
 
-* Tests should test stable behavior, not implementation details.
-
-ABSOLUTELY DO NOT test things that are trivially caught by the type checker.
-Explicitly that means:
-
-- No tests for "constant = constant"
-- No tests for "method exists"
-- No tests for "create an object(x, y, z) and attributes are x, y, z"
-
-These tests have negative value - they make our code more brittle.
-
-Test _stable behavior_ instead. You can use mocks as needed to isolate
-environments (e.g.  mock around a remote API), but prefer "fakes" -- e.g. create
-a real database but with fake data -- when reasonable.
+See [TESTING.md](TESTING.md) for the full testing policy.
 
 ## Documentation
 
@@ -51,17 +38,6 @@ Documentation should be kept up-to-date as code changes. When implementing new f
 ## Operations
 
 When troubleshooting, monitoring, or deploying a live Iris cluster, read [OPS.md](OPS.md) first.
-
-## Protocols and Testing
-
-Non-trivial public classes should define a protocol which represents their
-_important_ interface characteristics. Use this protocol in type hints for
-when the class is used instead of the concrete class.
-
-Test to this protocol, not the concrete class: the protocol should describe the
-interesting behavior of the class, but not betray the implementation details.
-
-(You may of course _instantiate_ the concrete class for testing.)
 
 ## Imports
 
@@ -331,6 +307,9 @@ src/iris/cluster/static/
 3. Follow existing component patterns (functional components, hooks)
 
 ## Testing
+
+See [TESTING.md](TESTING.md) for the full testing policy (what to test,
+what not to test, naming, hygiene, timing).
 
 All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
 Tests use three core fixtures:

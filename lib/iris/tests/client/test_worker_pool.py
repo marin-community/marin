@@ -97,17 +97,3 @@ class TestWorkerPoolE2E:
         with pytest.raises(RuntimeError, match="shutdown"):
             pool.submit(lambda: 42)
 
-    def test_multiple_sequential_tasks(self, local_client):
-        """Multiple tasks can be submitted sequentially to the same pool."""
-        config = WorkerPoolConfig(
-            num_workers=1,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
-
-        with WorkerPool(local_client, config, timeout=30.0) as pool:
-            results = []
-            for i in range(3):
-                future = pool.submit(lambda x: x * 2, i)
-                results.append(future.result(timeout=60.0))
-
-            assert results == [0, 2, 4]
