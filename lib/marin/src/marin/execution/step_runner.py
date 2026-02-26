@@ -313,8 +313,8 @@ class StepRunner:
                 worker_fn,
                 name=step_name,
                 resources=step_fn.resources,
-                env_vars=step.env_vars,
-                pip_dependency_groups=step.pip_dependency_groups,
+                env_vars=step_fn.env_vars,
+                pip_dependency_groups=step_fn.pip_dependency_groups,
                 client=self.client,
             )
         else:

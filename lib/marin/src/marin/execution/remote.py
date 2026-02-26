@@ -30,21 +30,33 @@ R = TypeVar("R")
 class RemoteCallable(Generic[P, R]):
     """A callable wrapper that marks a function for remote execution via Fray.
 
-    Wraps the original function and carries a ``resources`` field describing
-    the Fray resources to use when executing the function.
+    Wraps the original function and carries Fray-specific execution config:
+    resources, environment variables, and pip dependency groups.
     """
 
-    def __init__(self, fn: Callable[P, R], resources: ResourceConfig):
+    def __init__(
+        self,
+        fn: Callable[P, R],
+        resources: ResourceConfig,
+        env_vars: dict[str, str] | None = None,
+        pip_dependency_groups: list[str] | None = None,
+    ):
         functools.update_wrapper(self, fn)
         self._fn = fn
         self.resources = resources
+        self.env_vars = env_vars or {}
+        self.pip_dependency_groups = pip_dependency_groups or []
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
         return self._fn(*args, **kwargs)
 
 
 def remote(
-    fn: Callable[P, R] | None = None, *, resources: ResourceConfig | None = None
+    fn: Callable[P, R] | None = None,
+    *,
+    resources: ResourceConfig | None = None,
+    env_vars: dict[str, str] | None = None,
+    pip_dependency_groups: list[str] | None = None,
 ) -> RemoteCallable[P, R] | Callable[[Callable[P, R]], RemoteCallable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
@@ -56,7 +68,7 @@ def remote(
         resources = ResourceConfig.with_cpu()
 
     def decorator(f: Callable[P, R]) -> RemoteCallable[P, R]:
-        return RemoteCallable(f, resources)
+        return RemoteCallable(f, resources, env_vars=env_vars, pip_dependency_groups=pip_dependency_groups)
 
     if fn is not None:
         return decorator(fn)

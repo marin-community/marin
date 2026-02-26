@@ -211,21 +211,26 @@ def resolve_executor_step(
 
     # Resolve resources: explicit ExecutorStep.resources > @remote decorator > None (local)
     resources = step.resources
-    if resources is None and isinstance(step.fn, RemoteCallable):
-        resources = step.fn.resources
+    env_vars = step.env_vars or {}
+    pip_dependency_groups = step.pip_dependency_groups or []
+    if isinstance(step.fn, RemoteCallable):
+        if resources is None:
+            resources = step.fn.resources
+        env_vars = {**step.fn.env_vars, **env_vars}
+        pip_dependency_groups = step.fn.pip_dependency_groups + [
+            g for g in pip_dependency_groups if g not in step.fn.pip_dependency_groups
+        ]
 
     # Wrap as RemoteCallable so StepRunner knows to submit via Fray
     final_fn: Callable = resolved_fn
     if resources is not None:
-        final_fn = RemoteCallable(resolved_fn, resources)
+        final_fn = RemoteCallable(resolved_fn, resources, env_vars=env_vars, pip_dependency_groups=pip_dependency_groups)
 
     return StepSpec(
         name=step.name,
         deps=deps or [],
         override_output_path=output_path,
         fn=final_fn,
-        env_vars=step.env_vars or {},
-        pip_dependency_groups=step.pip_dependency_groups or [],
     )
 
 

@@ -68,10 +68,3 @@ class StepSpec:
 
         prefix = self.output_path_prefix or marin_prefix()
         return f"{prefix}/{self.name_with_hash}"
-
-    # Resources
-    env_vars: dict[str, str] = dataclasses.field(default_factory=dict)
-    """Environment variables (defaults resolved)."""
-
-    pip_dependency_groups: list[str] = dataclasses.field(default_factory=list)
-    """Pip deps (defaults resolved)."""
