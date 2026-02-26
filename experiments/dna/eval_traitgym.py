@@ -114,6 +114,7 @@ def run_eval_traitgym(config: EvalTraitGymConfig):
             task_spec=tasks,
             include_path="experiments/evals/custom_tasks/dna_vep",
             log_samples=False,
+            max_packed_segments=1,
         ),
         tokenizer=config.tokenizer,
         checkpoint_path=config.checkpoint_path,
@@ -157,7 +158,7 @@ def run_eval_traitgym(config: EvalTraitGymConfig):
 _ENV_KEYS_TO_FORWARD = ["WANDB_API_KEY", "HUGGING_FACE_HUB_TOKEN"]
 
 eval_step = ExecutorStep(
-    name="eval/traitgym_mendelian_v2_train",
+    name="eval/traitgym_mendelian_v2_train_nopack",
     description="Evaluate DNA checkpoint on TraitGym Mendelian (VEP) using LLR scoring.",
     fn=run_eval_traitgym,
     config=EvalTraitGymConfig(

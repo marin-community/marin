@@ -1050,6 +1050,7 @@ class LmEvalHarnessConfig:
     apply_chat_template: bool = False
     fewshot_as_multiturn: bool = False
     confirm_run_unsafe_code: bool = True
+    max_packed_segments: int = 64
     sample_logging: SampleLoggingConfig = dataclasses.field(default_factory=SampleLoggingConfig)
     generation_kwargs: dict = dataclasses.field(
         default_factory=lambda: {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
@@ -1328,7 +1329,7 @@ def _actually_run_eval_harness(
         axis_resources,
         tokenizer,
         mp,
-        max_packed_segments=64,
+        max_packed_segments=config.max_packed_segments,
         generation_kwargs=config.generation_kwargs,
         sample_logging_config=config.sample_logging,
         profiler_config=profiler_config,
