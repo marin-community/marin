@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
@@ -92,6 +93,8 @@ class StepSpec:
         )
 
         if isinstance(self.fn, RemoteCallable):
-            wrapped = dataclasses.replace(self.fn, fn=wrapped)
+            job_name = f"{self.name_with_hash}-{uuid.uuid4().hex[:8]}"
+            remote_callable = self.fn.named(job_name)
+            wrapped = dataclasses.replace(remote_callable, fn=wrapped)
 
         return wrapped
