@@ -14,7 +14,7 @@ name: kelp-v7-eval
 resources:
   accelerators: A100:1
   disk_size: 100
-  cloud: gcp
+  cloud: lambda
 
 workdir: .
 
