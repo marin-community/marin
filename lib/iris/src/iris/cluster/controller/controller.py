@@ -44,9 +44,12 @@ from iris.logging import get_global_buffer
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from iris.time_utils import Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
+
+_SLOW_HEARTBEAT_MS = 5000
+_HEALTH_SUMMARY_INTERVAL = 6  # every ~30s at 5s heartbeat interval
 
 
 def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
@@ -274,6 +277,8 @@ class Controller:
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
 
+        self._heartbeat_iteration = 0
+
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
 
@@ -298,7 +303,7 @@ class Controller:
             self._dashboard._app,
             host=self._config.host,
             port=self._config.port,
-            log_level="error",
+            log_level="warning",
             timeout_keep_alive=120,
         )
         self._server = uvicorn.Server(server_config)
@@ -381,8 +386,10 @@ class Controller:
         No lock is needed since only one scheduling thread exists. All state
         reads and writes go through ControllerState which has its own lock.
         """
+        timer = Timer()
         pending_tasks = self._state.peek_pending_tasks()
         workers = self._state.get_available_workers()
+        state_read_ms = timer.elapsed_ms()
 
         if not pending_tasks:
             return
@@ -418,6 +425,12 @@ class Controller:
         # Buffer assignments for heartbeat delivery (commits resources via TaskAssignedEvent)
         if result.assignments:
             self._buffer_assignments(result.assignments)
+            logger.debug(
+                "Scheduling cycle: %d assignments, %dms (state read: %dms)",
+                len(result.assignments),
+                timer.elapsed_ms(),
+                state_read_ms,
+            )
 
     def _buffer_assignments(
         self,
@@ -543,12 +556,17 @@ class Controller:
         _on_worker_failed prunes it from state. We detect this (worker no longer
         in state) and evict the cached stub + notify the autoscaler.
         """
-        # Phase 1: create snapshots for all healthy workers
+        round_timer = Timer()
+
+        # Phase 1: create snapshots for all healthy workers (lock-acquiring).
+        # Timing this phase separately gives a lock-contention signal.
+        snapshot_timer = Timer()
         snapshots: list[HeartbeatSnapshot] = []
         for w in self._state.get_available_workers():
             snapshot = self._state.begin_heartbeat(w.worker_id)
             if snapshot:
                 snapshots.append(snapshot)
+        snapshot_ms = snapshot_timer.elapsed_ms()
 
         if not snapshots:
             return
@@ -578,9 +596,11 @@ class Controller:
         worker_futures = [self._dispatch_executor.submit(_dispatch_worker) for _ in range(worker_count)]
 
         # Phase 3: consume all responses; per-worker RPC timeout determines failures.
+        fail_count = 0
         for _ in snapshots:
             snapshot, response, error = result_queue.get()
             if error is not None:
+                fail_count += 1
                 logger.warning("Heartbeat error for %s: %s", snapshot.worker_id, error)
                 self._handle_heartbeat_failure(snapshot, error)
                 continue
@@ -589,6 +609,31 @@ class Controller:
 
         for future in worker_futures:
             future.cancel()
+
+        elapsed = round_timer.elapsed_ms()
+        level = logging.WARNING if elapsed > _SLOW_HEARTBEAT_MS else logging.DEBUG
+        logger.log(
+            level,
+            "Heartbeat round: %d workers, %d failed, %dms (snapshot: %dms)",
+            len(snapshots),
+            fail_count,
+            elapsed,
+            snapshot_ms,
+        )
+
+        self._heartbeat_iteration += 1
+        if self._heartbeat_iteration % _HEALTH_SUMMARY_INTERVAL == 0:
+            workers = self._state.get_available_workers()
+            jobs = self._state.list_all_jobs()
+            active = sum(1 for j in jobs if j.state == cluster_pb2.JOB_STATE_RUNNING)
+            pending = len(self._state.peek_pending_tasks())
+            logger.info(
+                "Controller status: %d workers (%d failed), %d active jobs, %d pending tasks",
+                len(workers),
+                fail_count,
+                active,
+                pending,
+            )
 
     def _handle_heartbeat_failure(self, snapshot: HeartbeatSnapshot, error: str) -> None:
         """Process a heartbeat failure: update state, evict stub + notify autoscaler if worker died.
