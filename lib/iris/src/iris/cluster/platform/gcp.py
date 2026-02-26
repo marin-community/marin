@@ -92,6 +92,7 @@ _ACTIVE_VM_SLICE_STATES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
 _GCE_NAME_MAX_LEN = 63
 _GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 _GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
+_GCE_VM_SLICE_SSH_USER = "iris"
 
 
 def _format_labels(labels: dict[str, str]) -> str:
@@ -613,12 +614,11 @@ class GcpVmSliceHandle:
             if access_configs:
                 external_ip = access_configs[0].get("natIP")
 
-        ssh_user = self._ssh_config.user if self._ssh_config else ""
         remote_exec = GceRemoteExec(
             project_id=self._project_id,
             zone=self._zone,
             vm_name=self._vm_name,
-            ssh_user=ssh_user,
+            ssh_user=_GCE_VM_SLICE_SSH_USER,
         )
         worker = GcpStandaloneWorkerHandle(
             _vm_id=f"{self._slice_id}-worker-0",

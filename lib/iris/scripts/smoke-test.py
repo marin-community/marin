@@ -75,10 +75,8 @@ logger = logging.getLogger("smoke-test")
 IRIS_ROOT = Path(__file__).parent.parent
 DEFAULT_CONFIG_PATH = IRIS_ROOT / "examples" / "smoke.yaml"
 
-DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; allows autoscaling/scheduling slack in CI
+DEFAULT_JOB_TIMEOUT = 600  # 10 minutes; all jobs launch in parallel, this is the global wait ceiling
 DEFAULT_BOOT_TIMEOUT = 300  # 5 minutes; cluster start + connection
-# TODO(#3060): Re-enable the non-preemptible CPU smoke test after VM SSH auth is fixed.
-NON_PREEMPTIBLE_SMOKE_ISSUE_URL = "https://github.com/marin-community/marin/issues/3060"
 
 
 def _log_section(title: str):
@@ -964,7 +962,7 @@ class SmokeTestRunner:
             SmokeTestCase(f"Concurrent GPU jobs (3x {a.label()})", self._run_concurrent_gpu_jobs),
         ]
         if self._has_non_preemptible_cpu_group():
-            logger.info("Skipping non-preemptible CPU job smoke test pending fix: %s", NON_PREEMPTIBLE_SMOKE_ISSUE_URL)
+            tests.append(SmokeTestCase("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
         if not self.config.local:
             tests.append(SmokeTestCase(f"Multi-GPU device check ({a.label()})", self._run_gpu_check_job))
         if a.region and not self.config.local:
@@ -1038,10 +1036,7 @@ class SmokeTestRunner:
                 ),
             ]
             if self._has_non_preemptible_cpu_group():
-                logger.info(
-                    "Skipping non-preemptible CPU job smoke test pending fix: %s",
-                    NON_PREEMPTIBLE_SMOKE_ISSUE_URL,
-                )
+                tests.append(SmokeTestCase("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
             if a.region:
                 tests.append(
                     SmokeTestCase(
@@ -1065,7 +1060,7 @@ class SmokeTestRunner:
             SmokeTestCase(f"JAX TPU job ({a.variant})", self._run_jax_tpu_job),
         ]
         if self._has_non_preemptible_cpu_group():
-            logger.info("Skipping non-preemptible CPU job smoke test pending fix: %s", NON_PREEMPTIBLE_SMOKE_ISSUE_URL)
+            tests.append(SmokeTestCase("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
         if a.region:
             tests.append(SmokeTestCase(f"Region-constrained job ({a.region})", self._run_region_constrained_job))
             tests.append(SmokeTestCase(f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
