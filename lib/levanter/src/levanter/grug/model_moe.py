@@ -136,7 +136,9 @@ class MOE(eqx.Module):
     def _ragged_linear(x: jax.Array, w: jax.Array, group_sizes: jax.Array) -> jax.Array:
         """Ragged MoE linear: (TR, In) x (E, In, Out) with groups along TR."""
         return jax.lax.ragged_dot_general(
-            lhs=x, rhs=w, group_sizes=group_sizes,
+            lhs=x,
+            rhs=w,
+            group_sizes=group_sizes,
             ragged_dot_dimension_numbers=MOE._ragged_dim_numbers,
         )
 
@@ -257,7 +259,9 @@ class Block(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> tuple[Float[Array, "B S D"], dict]:
+    def __call__(
+        self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array
+    ) -> tuple[Float[Array, "B S D"], dict]:
         x = x + self.attn(self.rms_attn(x), mask)
         moe_out, extras = self.moe(self.rms_mlp(x))
         x = x + moe_out
@@ -327,15 +331,18 @@ class Transformer(eqx.Module):
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        return fused_linear_softmax_cross_entropy_loss(
-            hidden,
-            self.output_proj,
-            labels,
-            weight=loss_weight,
-            reduction=reduction,
-            logsumexp_weight=logsumexp_weight,
-            dtype=loss_dtype,
-        ) + aux_loss
+        return (
+            fused_linear_softmax_cross_entropy_loss(
+                hidden,
+                self.output_proj,
+                labels,
+                weight=loss_weight,
+                reduction=reduction,
+                logsumexp_weight=logsumexp_weight,
+                dtype=loss_dtype,
+            )
+            + aux_loss
+        )
 
     def parse_aux_loss(self, all_extras) -> Float[Array, ""]:
         load_balancing_loss = 0
