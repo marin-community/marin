@@ -4,7 +4,6 @@
 import json
 import os
 from pathlib import Path
-from unittest.mock import patch
 
 from dataclasses import dataclass
 
@@ -321,26 +320,8 @@ def test_runner_max_concurrent(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_step_without_resources_runs_locally(tmp_path: Path):
-    """A step with no __fray_resources__ on fn should run via the local thread pool, not fray_exec."""
-    step = StepSpec(
-        name="local_step",
-        override_output_path=tmp_path.as_posix(),
-        fn=lambda output_path: PathMetadata(path=output_path),
-    )
-
-    with patch("marin.execution.step_runner.fray_exec") as mock_fray:
-        runner = StepRunner()
-        runner.run([step])
-
-        mock_fray.assert_not_called()
-
-    loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
-    assert loaded.path == tmp_path.as_posix()
-
-
 def test_step_with_remote_fn_uses_fray(tmp_path: Path):
-    """A step whose fn has __fray_resources__ should go through fray_exec."""
+    """A RemoteCallable fn should go through RemoteCallable.submit."""
 
     @remote
     def my_step(output_path):

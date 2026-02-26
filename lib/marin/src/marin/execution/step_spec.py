@@ -68,3 +68,30 @@ class StepSpec:
 
         prefix = self.output_path_prefix or marin_prefix()
         return f"{prefix}/{self.name_with_hash}"
+
+    @cached_property
+    def executable_fn(self) -> Callable[[str], Any]:
+        """Fully-wrapped fn: remote(disk_cache(distributed_lock(raw_fn))).
+
+        Caching, distributed locking, heartbeats, artifact saving, and status
+        writes all happen inside the wrapped callable. For remote steps, the
+        entire chain runs inside the Fray job.
+        """
+        from marin.execution.artifact import Artifact
+        from marin.execution.disk_cache import disk_cache
+        from marin.execution.distributed_lock import distributed_lock
+        from marin.execution.remote import RemoteCallable
+
+        raw_fn = self.fn.fn if isinstance(self.fn, RemoteCallable) else self.fn
+
+        wrapped = disk_cache(
+            distributed_lock(raw_fn),
+            output_path=self.output_path,
+            save_fn=Artifact.save,
+            load_fn=Artifact.load,
+        )
+
+        if isinstance(self.fn, RemoteCallable):
+            wrapped = dataclasses.replace(self.fn, fn=wrapped)
+
+        return wrapped

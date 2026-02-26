@@ -17,22 +17,34 @@ Usage::
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Generic, ParamSpec, TypeVar
 
-from fray.v2.types import ResourceConfig
+from fray.v2 import client as fray_client
+from fray.v2.types import ResourceConfig, Entrypoint, JobRequest, create_environment
 
 P = ParamSpec("P")
 R = TypeVar("R")
 
+DEFAULT_JOB_NAME = "fray_exec_job"
+
+
+def _sanitize_job_name(name: str) -> str:
+    """Ensure job names are compatible with Iris and Docker image tags."""
+    sanitized = re.sub(r"[^a-z0-9_.-]+", "-", name.lower())
+    sanitized = sanitized.strip("-.")
+    return sanitized or DEFAULT_JOB_NAME
+
 
 @dataclass(frozen=True)
 class RemoteCallable(Generic[P, R]):
-    """A callable wrapper that marks a function for remote execution via Fray.
+    """A callable wrapper that submits its function to Fray when called.
 
-    Wraps the original function and carries Fray-specific execution config:
-    resources, environment variables, and pip dependency groups.
+    Carries Fray-specific execution config: resources, environment variables,
+    and pip dependency groups. When called, submits the wrapped function to
+    Fray and blocks until completion.
     """
 
     fn: Callable[P, R]
@@ -40,8 +52,24 @@ class RemoteCallable(Generic[P, R]):
     env_vars: dict[str, str] = field(default_factory=dict)
     pip_dependency_groups: list[str] = field(default_factory=list)
 
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        return self.fn(*args, **kwargs)
+    # TODO: JobHandle doesn't have this option now, but we could make this return the R
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None:
+        """Submit fn to Fray and block until completion."""
+
+        name = getattr(self.fn, "__name__", None) or DEFAULT_JOB_NAME
+        c = fray_client.current_client()
+        handle = c.submit(
+            JobRequest(
+                name=_sanitize_job_name(name),
+                entrypoint=Entrypoint.from_callable(lambda: self.fn(*args, **kwargs)),
+                resources=self.resources,
+                environment=create_environment(
+                    extras=self.pip_dependency_groups,
+                    env_vars=self.env_vars,
+                ),
+            )
+        )
+        handle.wait(raise_on_failure=True)
 
 
 def remote(
