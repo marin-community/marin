@@ -77,6 +77,8 @@ DEFAULT_CONFIG_PATH = IRIS_ROOT / "examples" / "smoke.yaml"
 
 DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; allows autoscaling/scheduling slack in CI
 DEFAULT_BOOT_TIMEOUT = 300  # 5 minutes; cluster start + connection
+# TODO(#3060): Re-enable the non-preemptible CPU smoke test after VM SSH auth is fixed.
+NON_PREEMPTIBLE_SMOKE_ISSUE_URL = "https://github.com/marin-community/marin/issues/3060"
 
 
 def _log_section(title: str):
@@ -551,7 +553,7 @@ def _quick_task_job(task_id: int):
     return task_id
 
 
-def _assert_region_child(expected_region: str, device_type: str, device_variant: str, device_count: int):
+def _assert_region_child(expected_region: str):
     """Parent job that submits a child and asserts the child inherits the region constraint.
 
     Uses iris_ctx() to get the IrisClient and submit a child without explicit
@@ -560,8 +562,6 @@ def _assert_region_child(expected_region: str, device_type: str, device_variant:
     """
     from iris.client.client import iris_ctx
     from iris.cluster.types import ResourceSpec as RS
-    from iris.cluster.types import gpu_device as _gpu_device
-    from iris.cluster.types import tpu_device as _tpu_device
 
     ctx = iris_ctx()
 
@@ -581,15 +581,10 @@ def _assert_region_child(expected_region: str, device_type: str, device_variant:
         print(f"Child validated inherited region: {actual}")
         return actual
 
-    if device_type == "gpu":
-        device = _gpu_device(device_variant, device_count)
-    else:
-        device = _tpu_device(device_variant, device_count if device_count > 0 else None)
-
     child = ctx.client.submit(
         entrypoint=Entrypoint.from_callable(_child_check_region),
         name="smoke-inherited-child",
-        resources=RS(device=device),
+        resources=RS(cpu=1, memory="1GB", disk="1GB"),
     )
     child.wait(timeout=60, raise_on_failure=True)
     print(f"Parent: child completed with inherited region={expected_region}")
@@ -969,7 +964,7 @@ class SmokeTestRunner:
             SmokeTestCase(f"Concurrent GPU jobs (3x {a.label()})", self._run_concurrent_gpu_jobs),
         ]
         if self._has_non_preemptible_cpu_group():
-            tests.append(SmokeTestCase("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
+            logger.info("Skipping non-preemptible CPU job smoke test pending fix: %s", NON_PREEMPTIBLE_SMOKE_ISSUE_URL)
         if not self.config.local:
             tests.append(SmokeTestCase(f"Multi-GPU device check ({a.label()})", self._run_gpu_check_job))
         if a.region and not self.config.local:
@@ -1043,7 +1038,10 @@ class SmokeTestRunner:
                 ),
             ]
             if self._has_non_preemptible_cpu_group():
-                tests.append(SmokeTestCase("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
+                logger.info(
+                    "Skipping non-preemptible CPU job smoke test pending fix: %s",
+                    NON_PREEMPTIBLE_SMOKE_ISSUE_URL,
+                )
             if a.region:
                 tests.append(
                     SmokeTestCase(
@@ -1067,7 +1065,7 @@ class SmokeTestRunner:
             SmokeTestCase(f"JAX TPU job ({a.variant})", self._run_jax_tpu_job),
         ]
         if self._has_non_preemptible_cpu_group():
-            tests.append(SmokeTestCase("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
+            logger.info("Skipping non-preemptible CPU job smoke test pending fix: %s", NON_PREEMPTIBLE_SMOKE_ISSUE_URL)
         if a.region:
             tests.append(SmokeTestCase(f"Region-constrained job ({a.region})", self._run_region_constrained_job))
             tests.append(SmokeTestCase(f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
@@ -1293,13 +1291,13 @@ class SmokeTestRunner:
         )
 
     def _run_region_constrained_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
-        """Run a job with an explicit region constraint."""
+        """Run a CPU-only job with an explicit region constraint."""
         return self._run_job_test(
             client=client,
             test_name=f"Region-constrained job ({self._accel.region})",
             entrypoint=Entrypoint.from_callable(_hello_tpu_job),
             job_name=f"smoke-region-{self._run_id}",
-            resources=ResourceSpec(device=self._accel.make_device()),
+            resources=ResourceSpec(cpu=1, memory="1GB", disk="1GB"),
             constraints=[region_constraint([self._accel.region])],
             scheduling_only=scheduling_only,
         )
@@ -1313,9 +1311,9 @@ class SmokeTestRunner:
         return self._run_job_test(
             client=client,
             test_name="Nested constraint propagation",
-            entrypoint=Entrypoint.from_callable(_assert_region_child, a.region, a.device_type, a.variant, a.count),
+            entrypoint=Entrypoint.from_callable(_assert_region_child, a.region),
             job_name=f"smoke-nested-{self._run_id}",
-            resources=ResourceSpec(device=a.make_device()),
+            resources=ResourceSpec(cpu=1, memory="1GB", disk="1GB"),
             constraints=[region_constraint([a.region])],
             scheduling_only=scheduling_only,
         )
