@@ -33,7 +33,7 @@ from levanter.data import AsyncDataset, DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text import GrugLmExample, LmDataConfig
 from levanter.data.text.examples import grug_lm_example_from_named
-from levanter.eval import TaggedEvaluator, construct_log_dict
+from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
@@ -182,6 +182,7 @@ def _compute_flops(
     params: Transformer,
     mp: jmp.Policy,
     z_loss_weight: float,
+    mesh: Mesh,
 ) -> tuple[float, float | None, dict[str, float]]:
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
@@ -196,8 +197,11 @@ def _compute_flops(
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     z_loss = z_loss_weight if z_loss_weight > 0 else None
-    token_ids_spec = jax.ShapeDtypeStruct((1, model_config.max_seq_len), jnp.int32)
-    loss_weight_spec = jax.ShapeDtypeStruct((1, model_config.max_seq_len), jnp.float32)
+    # Use a mesh-compatible dummy batch so explicit data-axis shardings can lower.
+    # We normalize cost_analysis FLOPs back to per-example below.
+    flop_batch_size = max(1, int(mesh.shape.get("data", 1)))
+    token_ids_spec = jax.ShapeDtypeStruct((flop_batch_size, model_config.max_seq_len), jnp.int32)
+    loss_weight_spec = jax.ShapeDtypeStruct((flop_batch_size, model_config.max_seq_len), jnp.float32)
 
     def _loss_only(model: Transformer, token_ids: jax.Array, loss_weight: jax.Array) -> jax.Array:
         return model.compute_next_token_loss(
@@ -209,11 +213,14 @@ def _compute_flops(
         )
 
     try:
-        forward_loss_flops_per_example_jax = estimate_jit_flops(
+        forward_loss_flops_jax = estimate_jit_flops(
             _loss_only,
             mp.cast_to_compute(params),
             token_ids_spec,
             loss_weight_spec,
+        )
+        forward_loss_flops_per_example_jax = (
+            None if forward_loss_flops_jax is None else forward_loss_flops_jax / flop_batch_size
         )
     except Exception:
         logger.exception("Failed to estimate FLOPs with JAX cost_analysis; continuing with analytic estimate only.")
@@ -424,6 +431,7 @@ def run_grug(config: GrugRunConfig) -> None:
             params=state.params,
             mp=trainer.mp,
             z_loss_weight=config.trainer.z_loss_weight,
+            mesh=mesh,
         )
         levanter.tracker.log_summary(flops_summary)
 
@@ -486,6 +494,22 @@ def run_grug(config: GrugRunConfig) -> None:
                 lambda info: tensorstore_metrics_logger(info.step),
                 every=tensorstore_metrics_every,
             )
+        if evaluator is not None and eval_cfg is not None:
+            interval = eval_cfg.steps_per_eval
+            eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
+            if interval is not None and interval > 0 and (eval_cfg.eval_current or eval_ema):
+                state_callbacks.add_hook(
+                    cb_tagged_evaluate(
+                        evaluator,
+                        prefix=eval_cfg.prefix,
+                        eval_current=eval_cfg.eval_current,
+                        eval_ema=eval_ema,
+                    ),
+                    every=interval,
+                )
+
+        last_loss: float | jax.Array = 0.0
+        last_step_duration = 0.0
 
         try:
             while int(state.step) < trainer.num_train_steps:
@@ -503,29 +527,19 @@ def run_grug(config: GrugRunConfig) -> None:
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
+                last_loss = metrics["train/loss"]
+                last_step_duration = duration
                 levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                 levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
 
                 if watch_stats is not None:
                     levanter.tracker.log(watch_stats, step=step)
 
-                if evaluator is not None and eval_cfg is not None and eval_cfg.steps_per_eval is not None:
-                    if eval_cfg.steps_per_eval > 0 and step % eval_cfg.steps_per_eval == 0:
-                        if eval_cfg.eval_current:
-                            with levanter.tracker.capture_time() as eval_time:
-                                result = evaluator.evaluate(state.params)
-                            log_dict = construct_log_dict(evaluator, result, eval_time(), prefix=eval_cfg.prefix)
-                            levanter.tracker.log(log_dict, step=step)
-                        if eval_cfg.eval_ema and config.trainer.ema_beta is not None:
-                            with levanter.tracker.capture_time() as eval_time:
-                                result = evaluator.evaluate(state.ema_params)
-                            ema_prefix = f"{eval_cfg.prefix}/ema"
-                            log_dict = construct_log_dict(evaluator, result, eval_time(), prefix=ema_prefix)
-                            levanter.tracker.log(log_dict, step=step)
-
                 if checkpointer is not None:
                     checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
         finally:
+            # Mirror classic trainer behavior: force callbacks on the last completed step.
+            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
                 checkpointer.on_step(tree={"train_state": state}, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()

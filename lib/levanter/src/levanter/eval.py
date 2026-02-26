@@ -301,6 +301,42 @@ def cb_tagged_lm_evaluate(
     return eval_callback
 
 
+def cb_tagged_evaluate(
+    evaluator: "TaggedEvaluator[Ex, M]",
+    *,
+    prefix: str = "eval",
+    eval_current: bool = True,
+    eval_ema: bool = True,
+) -> Callable[[StepInfo], None]:
+    """Build a callback that logs tagged eval metrics for current and/or eval model."""
+    if not eval_current and not eval_ema:
+        raise ValueError("At least one of eval_current or eval_ema should be True")
+
+    last_eval_step: int | None = None
+
+    def eval_callback(step: StepInfo, force: bool = False):
+        del force
+        nonlocal last_eval_step
+
+        step_count = step.step
+        if step_count < 0:
+            return
+        if last_eval_step == step_count:
+            return
+
+        if eval_current:
+            log_dict = eval_model(evaluator, step.model, prefix=prefix)
+            levanter.tracker.log(log_dict, step=step_count)
+
+        if eval_ema:
+            log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
+            levanter.tracker.log(log_dict, step=step_count)
+
+        last_eval_step = step_count
+
+    return eval_callback
+
+
 def eval_model(evaluator, model, prefix: str = "") -> dict[str, float]:
     with levanter.tracker.capture_time() as time_fn:
         result = evaluator.evaluate(model)

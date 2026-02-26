@@ -1,7 +1,12 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import inspect
+import json
+import logging
+import tempfile
+import uuid
+from io import StringIO
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -10,11 +15,21 @@ import jmp
 import optax
 
 from levanter.callbacks.watch import WatchConfig
+from levanter.checkpoint import CheckpointerConfig
+from levanter.data.dataset import ListAsyncDataset
+from levanter.data.text import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
+from levanter.distributed import DistributedConfig, RayConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.tracker.json_logger import JsonLoggerConfig
+from levanter.trainer import TrainerConfig
 
+from experiments.grug.base.model import GrugModelConfig, Transformer
 from experiments.grug.base.train import (
+    GrugRunConfig,
+    GrugTrainerConfig,
     GrugTrainState,
+    _compute_flops,
     _make_train_step,
     run_grug,
 )
@@ -88,22 +103,111 @@ def test_grug_base_train_step_with_watch_matches_base_step():
     assert any(key.startswith("updates/") for key in watch_stats)
 
 
-def test_grug_base_run_metric_contract_skeleton():
-    """Guardrail: base trainer keeps core logging/eval surfaces for parity tracking.
+def test_grug_base_run_emits_expected_metrics_with_json_tracker():
+    vocab_size = 128
+    seq_len = 32
+    examples = []
+    for i in range(8):
+        tokens = (jnp.arange(seq_len, dtype=jnp.int32) + i) % vocab_size
+        examples.append(GrugLmExample.causal(tokens))
 
-    This is intentionally lightweight and source-based; we can replace it with
-    full run-level key assertions once the experiment harness is stabilized.
-    """
+    dataset = ListAsyncDataset(examples)
+    data_config = LmDataConfig(
+        components={"direct": DirectDatasetComponent(datasets={"train": dataset})},
+        vocab_size=vocab_size,
+        tokenizer="passthrough",
+    )
 
-    source = inspect.getsource(run_grug)
-    required_snippets = [
-        '"train/loss"',
-        '"throughput/hook_time"',
-        '"throughput/loading_time"',
-        "callbacks.log_performance_stats",
-        "construct_log_dict",
-        "prefix=eval_cfg.prefix",
+    logger_name = f"test_grug_base_json_tracker_{uuid.uuid4().hex}"
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger(logger_name)
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        trainer_config = TrainerConfig(
+            id="test-grug-base-metrics",
+            num_train_steps=1,
+            train_batch_size=max(1, len(jax.devices())),
+            tracker=JsonLoggerConfig(logger_name=logger_name),
+            require_accelerator=False,
+            use_explicit_mesh_axes=True,
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            ray=RayConfig(auto_start_cluster=False),
+            log_dir=Path(tmpdir) / "logs",
+            checkpointer=CheckpointerConfig(base_path=str(Path(tmpdir) / "checkpoints")),
+        )
+
+        run_grug(
+            GrugRunConfig(
+                model=GrugModelConfig(
+                    vocab_size=vocab_size,
+                    hidden_dim=32,
+                    intermediate_dim=64,
+                    num_layers=2,
+                    num_heads=2,
+                    num_kv_heads=2,
+                    max_seq_len=seq_len,
+                ),
+                data=data_config,
+                trainer=GrugTrainerConfig(trainer=trainer_config, log_every=1),
+                eval=None,
+            )
+        )
+
+    logger.removeHandler(handler)
+    records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+    finish_records = [record for record in records if record.get("event") == "finish"]
+    assert len(finish_records) == 1
+    summary = finish_records[0]["summary"]
+
+    required_keys = [
+        "train/loss",
+        "global_step",
+        "throughput/duration",
+        "throughput/hook_time",
+        "throughput/loading_time",
+        "throughput/total_tokens",
+        "throughput/examples_per_second",
+        "throughput/tokens_per_second",
+        "throughput/flops_per_example_analytic",
     ]
+    for key in required_keys:
+        assert key in summary
 
-    for snippet in required_snippets:
-        assert snippet in source
+
+def test_compute_flops_emits_jax_metrics_with_explicit_mesh():
+    cfg = GrugModelConfig(
+        vocab_size=1024,
+        hidden_dim=64,
+        intermediate_dim=256,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=4,
+        max_seq_len=128,
+    )
+    trainer = TrainerConfig(
+        train_batch_size=8,
+        num_train_steps=1,
+        use_explicit_mesh_axes=True,
+        require_accelerator=False,
+    )
+    mesh = trainer.device_mesh
+
+    with trainer.use_device_mesh():
+        params = Transformer.init(cfg, key=jax.random.PRNGKey(0))
+        _, flops_per_example_jax, flops_summary = _compute_flops(
+            model_config=cfg,
+            params=params,
+            mp=jmp.get_policy("f32"),
+            z_loss_weight=0.0,
+            mesh=mesh,
+        )
+
+    assert flops_per_example_jax is not None
+    assert flops_per_example_jax > 0
+    assert "throughput_jax/flops_per_example_fwd_bwd_est" in flops_summary
+    assert flops_summary["throughput_jax/flops_per_example_fwd_bwd_est"] > 0

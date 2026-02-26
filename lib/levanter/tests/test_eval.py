@@ -1,16 +1,19 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
-import haliax as hax
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
+import levanter.eval as eval_mod
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
-from levanter.eval import LossFnOutput, TaggedEvaluator
+from levanter.eval import LossFnOutput, TaggedEvaluator, cb_tagged_evaluate
 from levanter.models.lm_model import LmExample
 from levanter.utils.tree_utils import inference_mode
 
@@ -163,3 +166,31 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
 
     assert np.isfinite(result.micro_avg_loss)
     assert "grug" in result.tag_micro_losses
+
+
+def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(monkeypatch):
+    captured: list[tuple[dict[str, float], int]] = []
+
+    def fake_eval_model(_evaluator, _model, prefix: str = ""):
+        return {f"{prefix}/loss": 1.0}
+
+    def fake_log(metrics, *, step, commit=None):
+        del commit
+        captured.append((dict(metrics), step))
+
+    monkeypatch.setattr(eval_mod, "eval_model", fake_eval_model)
+    monkeypatch.setattr("levanter.tracker.log", fake_log)
+
+    callback = cb_tagged_evaluate(object(), prefix="eval", eval_current=True, eval_ema=True)
+
+    step0 = SimpleNamespace(step=0, model=object(), eval_model=object())
+    callback(step0)
+    callback(step0, force=True)
+    step1 = SimpleNamespace(step=1, model=object(), eval_model=object())
+    callback(step1)
+
+    assert len(captured) == 4
+    assert captured[0] == ({"eval/loss": 1.0}, 0)
+    assert captured[1] == ({"eval/ema/loss": 1.0}, 0)
+    assert captured[2] == ({"eval/loss": 1.0}, 1)
+    assert captured[3] == ({"eval/ema/loss": 1.0}, 1)
