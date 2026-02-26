@@ -28,11 +28,16 @@
 name: kelp-v7-train
 
 resources:
-  accelerators: A100:1
+  accelerators: {A10:1, A100:1, H100:1, A100:8}
   disk_size: 100
   cloud: lambda
 
 workdir: .
+
+file_mounts:
+  /outputs:
+    source: s3://oa-fomo-outputs
+    mode: MOUNT
 
 setup: |
   set -euo pipefail
@@ -51,6 +56,9 @@ run: |
   set -euo pipefail
   export PATH="$HOME/.local/bin:$PATH"
   cd ~/sky_workdir
+  
+  uv sync
+  source .venv/bin/activate
 
   CORPUS_FILE="experiments/kelp/corpus_v7.txt"
   OUTPUT_DIR="checkpoints/kelp-edit-v7"
@@ -94,3 +102,10 @@ run: |
 
   echo "" | tee -a "$LOG_FILE"
   echo "=== Training complete ===" | tee -a "$LOG_FILE"
+
+  # Sync checkpoints and corpus to S3 for persistence.
+  echo "=== Syncing outputs to S3 ===" | tee -a "$LOG_FILE"
+  mkdir -p /outputs/kelp/kelp-edit-v7
+  cp -r "$OUTPUT_DIR"/* /outputs/kelp/kelp-edit-v7/
+  cp "$CORPUS_FILE" /outputs/kelp/corpus_v7.txt
+  echo "=== Sync complete: s3://oa-fomo-outputs/kelp/ ===" | tee -a "$LOG_FILE"
