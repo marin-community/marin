@@ -42,12 +42,13 @@ from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.proto_utils import task_state_name
-from iris.time_utils import Timestamp
+from iris.time_utils import Timer, Timestamp
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
 DEFAULT_MAX_TOTAL_LINES = 10000
+_SLOW_STORAGE_READ_MS = 2000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
@@ -919,12 +920,21 @@ class ControllerServiceImpl:
                     continue
 
                 try:
+                    storage_timer = Timer()
                     reader = task_logging.LogReader.from_log_directory(log_directory=attempt.log_directory)
                     log_entries = reader.read_logs(
                         source=None,  # All sources
                         regex_filter=request.regex if request.regex else None,
                         max_lines=max(0, max_lines - total_lines) if max_lines > 0 else 0,
                     )
+                    storage_elapsed = storage_timer.elapsed_ms()
+                    if storage_elapsed > _SLOW_STORAGE_READ_MS:
+                        logger.warning(
+                            "Storage read for %s attempt %d: %dms (slow)",
+                            task_id_wire,
+                            attempt.attempt_id,
+                            storage_elapsed,
+                        )
 
                     worker_logs = []
                     for entry in log_entries:
