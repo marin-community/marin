@@ -21,6 +21,7 @@ from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
 from iris.client.client import Job as IrisJob
+from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import Constraint, EnvironmentSpec, ResourceSpec
@@ -28,7 +29,9 @@ from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
 from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
+    ActorConfig,
     CpuConfig,
     DeviceConfig,
     EnvironmentConfig,
@@ -87,17 +90,18 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
         memory=resources.ram,
         disk=resources.disk,
         device=_convert_device(resources.device),
-        regions=resources.regions,
     )
 
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     """Build Iris scheduling constraints from fray v2 ResourceConfig."""
-    from iris.cluster.types import preemptible_constraint
+    from iris.cluster.types import preemptible_constraint, region_constraint
 
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
+    if resources.regions:
+        constraints.append(region_constraint(resources.regions))
     return constraints
 
 
@@ -114,16 +118,20 @@ def convert_entrypoint(entrypoint: Entrypoint_v2) -> IrisEntrypoint:
     raise ValueError("Entrypoint must have either callable_entrypoint or binary_entrypoint")
 
 
-def convert_environment(env: EnvironmentConfig | None) -> EnvironmentSpec | None:
+def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | None = None) -> EnvironmentSpec | None:
     """Convert fray v2 EnvironmentConfig to Iris EnvironmentSpec."""
-    if env is None:
+    env_vars = dict(env.env_vars) if env is not None else {}
+    if device is not None:
+        for key, value in device.default_env_vars().items():
+            env_vars.setdefault(key, value)
+    if env is None and not env_vars:
         return None
     from iris.cluster.types import EnvironmentSpec
 
     return EnvironmentSpec(
-        pip_packages=list(env.pip_packages),
-        env_vars=dict(env.env_vars),
-        extras=list(env.extras),
+        pip_packages=list(env.pip_packages) if env is not None else [],
+        env_vars=env_vars,
+        extras=list(env.extras) if env is not None else [],
     )
 
 
@@ -421,12 +429,12 @@ class FrayIrisClient:
         instance._iris = iris_client
         return instance
 
-    def submit(self, request: JobRequest) -> IrisJobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> IrisJobHandle:
         from iris.cluster.types import CoschedulingConfig
 
         iris_resources = convert_resources(request.resources)
         iris_entrypoint = convert_entrypoint(request.entrypoint)
-        iris_environment = convert_environment(request.environment)
+        iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
         # Auto-enable coscheduling for multi-host TPU jobs.
@@ -437,15 +445,21 @@ class FrayIrisClient:
         if isinstance(request.resources.device, TpuConfig) and replicas > 1:
             coscheduling = CoschedulingConfig(group_by="tpu-name")
 
-        job = self._iris.submit(
-            entrypoint=iris_entrypoint,
-            name=request.name,
-            resources=iris_resources,
-            environment=iris_environment,
-            constraints=iris_constraints if iris_constraints else None,
-            coscheduling=coscheduling,
-            replicas=replicas,
-        )
+        try:
+            job = self._iris.submit(
+                entrypoint=iris_entrypoint,
+                name=request.name,
+                resources=iris_resources,
+                environment=iris_environment,
+                constraints=iris_constraints if iris_constraints else None,
+                coscheduling=coscheduling,
+                replicas=replicas,
+            )
+        except IrisJobAlreadyExists as e:
+            if adopt_existing:
+                logger.info("Job %s already exists, adopting existing job", request.name)
+                return IrisJobHandle(e.job)
+            raise FrayJobAlreadyExists(request.name, handle=IrisJobHandle(e.job)) from e
         return IrisJobHandle(job)
 
     def create_actor(
@@ -454,6 +468,7 @@ class FrayIrisClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorHandle:
         group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
@@ -466,6 +481,7 @@ class FrayIrisClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> IrisActorGroup:
         """Submit a single Iris job with N replicas, each hosting an instance of actor_class.

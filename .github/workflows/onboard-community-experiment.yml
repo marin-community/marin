@@ -242,7 +242,7 @@ jobs:
               "",
               "uv venv --python 3.11",
               ". .venv/bin/activate",
-              "uv sync --all-packages",
+              "uv sync --all-packages --extra=cpu",
               "",
               `cd ${dest}`,
               `echo "\nWelcome to Marin! You are now in your starter directory: $(pwd)"`,

@@ -17,6 +17,11 @@ from .helpers import _failing, _quick, _slow
 pytestmark = pytest.mark.e2e
 
 
+def _quick_with_log_marker():
+    print("TASK_LOG_MARKER: dashboard-task-log-visible")
+    return 1
+
+
 def test_jobs_tab_shows_all_states(cluster, page, screenshot):
     """Submit jobs in various states, verify the Jobs tab renders them."""
     succeeded_job = cluster.submit(_quick, "dash-succeeded")
@@ -48,15 +53,54 @@ def test_job_detail_page(cluster, page, screenshot):
     screenshot("job-detail-succeeded")
 
 
-def test_workers_tab(cluster, page, screenshot):
-    """Workers tab shows healthy workers."""
+def test_job_detail_shows_task_logs(cluster, page, screenshot):
+    """Job detail Task Logs panel shows task stdout logs."""
+    job = cluster.submit(_quick_with_log_marker, "dash-task-logs")
+    cluster.wait(job, timeout=30)
+
+    dashboard_goto(page, f"{cluster.url}/job/{job.job_id.to_wire()}")
+    wait_for_dashboard_ready(page)
+
+    if not _is_noop_page(page):
+        page.wait_for_function(
+            "() => document.querySelector('pre') && "
+            "document.querySelector('pre').textContent.includes('TASK_LOG_MARKER: dashboard-task-log-visible')",
+            timeout=10000,
+        )
+    assert_visible(page, "text=TASK_LOG_MARKER: dashboard-task-log-visible")
+    screenshot("job-detail-task-logs")
+
+
+def test_fleet_tab(cluster, page, screenshot):
+    """Fleet tab shows machines with health status."""
     cluster.wait_for_workers(1)
     dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
-    dashboard_click(page, 'button.tab-btn:has-text("Workers")')
+    dashboard_click(page, 'button.tab-btn:has-text("Fleet")')
 
-    assert_visible(page, "text=healthy")
-    screenshot("workers-tab")
+    assert_visible(page, "text=ready")
+    screenshot("fleet-tab")
+
+
+def test_machine_detail_page(cluster, page, screenshot):
+    """Machine detail page resolves a worker ID and shows worker status."""
+    cluster.wait_for_workers(1)
+
+    # Get a worker ID to navigate to the detail page
+    resp = cluster.controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+    assert resp.workers, "Expected at least one worker"
+    worker_id = resp.workers[0].worker_id
+
+    dashboard_goto(page, f"{cluster.url}/vm/{worker_id}")
+
+    if not _is_noop_page(page):
+        page.wait_for_function(
+            "() => document.querySelector('.info-grid') !== null",
+            timeout=10000,
+        )
+    assert_visible(page, "text=Machine:")
+    assert_visible(page, "text=Worker")
+    screenshot("machine-detail")
 
 
 def test_autoscaler_tab(cluster, page, screenshot):

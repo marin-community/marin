@@ -10,7 +10,7 @@ as production cluster execution.
 
 from typing import Self
 
-from iris.cluster.client.remote_client import RemoteClusterClient
+from iris.cluster.client.remote_client import RemoteClusterClient, TaskStateLogger
 from iris.cluster.config import make_local_config
 from iris.cluster.controller.local import LocalController
 from iris.cluster.types import Entrypoint, JobName
@@ -37,7 +37,7 @@ def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(
-            cpu=8,
+            cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
             disk_bytes=50 * 1024**3,
             gpu_count=0,
@@ -117,7 +117,6 @@ class LocalClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
-        fail_if_exists: bool = False,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -132,7 +131,6 @@ class LocalClusterClient:
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
             timeout=timeout,
-            fail_if_exists=fail_if_exists,
         )
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
@@ -164,6 +162,9 @@ class LocalClusterClient:
     def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]:
         return self._remote_client.list_endpoints(prefix)
 
+    def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]:
+        return self._remote_client.list_workers()
+
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
         return self._remote_client.list_jobs()
 
@@ -190,6 +191,25 @@ class LocalClusterClient:
             max_total_lines=max_total_lines,
             regex=regex,
             attempt_id=attempt_id,
+        )
+
+    def wait_for_job_with_streaming(
+        self,
+        job_id: JobName,
+        *,
+        timeout: float,
+        poll_interval: float,
+        include_children: bool,
+        since_ms: int = 0,
+        state_logger: TaskStateLogger | None = None,
+    ) -> cluster_pb2.JobStatus:
+        return self._remote_client.wait_for_job_with_streaming(
+            job_id,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            include_children=include_children,
+            since_ms=since_ms,
+            state_logger=state_logger,
         )
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:

@@ -4,14 +4,14 @@
 import dataclasses
 
 from dataclasses import dataclass
-from functools import partial
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from einops import rearrange
+from haliax.jax_utils import named_call
 from jax import random
 from jax.sharding import PartitionSpec as P, reshard
-from jax.tree_util import register_dataclass
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from .attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
@@ -71,211 +71,180 @@ class GrugModelConfig:
         return self.hidden_dim // self.num_heads
 
 
-@register_dataclass
-@dataclass(frozen=True)
-class GrugAttentionParams:
+class CausalSelfAttention(eqx.Module):
     w_q: jax.Array
     w_k: jax.Array
     w_v: jax.Array
     w_o: jax.Array
+    cfg: GrugModelConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
+        k_q, k_k, k_v, k_o = random.split(key, 4)
+        D, N, M, H = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        return CausalSelfAttention(
+            w_q=reshard(_init_weight(k_q, (D, N * H), cfg.initializer_std), P("data", "model")),
+            w_k=reshard(_init_weight(k_k, (D, M * H), cfg.initializer_std), P("data", "model")),
+            w_v=reshard(_init_weight(k_v, (D, M * H), cfg.initializer_std), P("data", "model")),
+            w_o=reshard(_init_weight(k_o, (N * H, D), cfg.initializer_std), P("model", "data")),
+            cfg=cfg,
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+        head_dim = self.cfg.inferred_head_dim
+        seq_len = x.shape[1]
+
+        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        attn_out = attention(q, k, v, mask)
+        attn_out = rearrange(attn_out, "... n d -> ... (n d)")
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=Pbatch)
 
 
-@register_dataclass
-@dataclass(frozen=True)
-class GrugBlockParams:
-    attn: GrugAttentionParams
-    rms_attn: jax.Array
-    rms_mlp: jax.Array
-    mlp_gate: jax.Array
+class MLP(eqx.Module):
     mlp_up: jax.Array
     mlp_down: jax.Array
 
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MLP":
+        k_up, k_down = random.split(key, 2)
+        D, I = cfg.hidden_dim, cfg.intermediate_dim
+        return MLP(
+            mlp_up=reshard(_init_weight(k_up, (D, I), cfg.initializer_std), P("data", "model")),
+            mlp_down=reshard(_init_weight(k_down, (I, D), cfg.initializer_std), P("model", "data")),
+        )
 
-@register_dataclass
-@dataclass(frozen=True)
-class GrugModelParameters:
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        up = jnp.einsum("bsh,hm->bsm", x, self.mlp_up)
+        activated = jax.nn.relu(up)
+        return jnp.einsum("bsm,mh->bsh", activated, self.mlp_down, out_sharding=Pbatch)
+
+
+class RMSNorm(eqx.Module):
+    weight: jax.Array
+    eps: float = eqx.field(static=True)
+
+    @staticmethod
+    def init(dim: int, eps: float) -> "RMSNorm":
+        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
+
+    @named_call
+    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        weight = unshard(self.weight)
+        dtype = x.dtype
+        x = x.astype(jnp.float32)
+        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        normed = x * jax.lax.rsqrt(variance + self.eps)
+        return (normed * weight).astype(dtype)
+
+
+class Block(eqx.Module):
+    rms_attn: RMSNorm
+    attn: CausalSelfAttention
+    rms_mlp: RMSNorm
+    mlp: MLP
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+        attn_key, mlp_key = random.split(key, 2)
+        return Block(
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            attn=CausalSelfAttention.init(cfg, key=attn_key),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            mlp=MLP.init(cfg, key=mlp_key),
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+        x = x + self.attn(self.rms_attn(x), mask)
+        x = x + self.mlp(self.rms_mlp(x))
+        return x
+
+
+class Transformer(eqx.Module):
     token_embed: jax.Array
     output_proj: jax.Array
-    blocks: tuple[GrugBlockParams, ...]
-    final_norm: jax.Array
+    blocks: tuple[Block, ...]
+    final_norm: RMSNorm
+    config: GrugModelConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
+        embed_key, out_key, *block_keys = random.split(key, cfg.num_layers + 2)
+        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
+        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
+        blocks = tuple(Block.init(cfg, key=layer_key) for layer_key in block_keys)
+        final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+        return Transformer(
+            token_embed=token_embed,
+            output_proj=output_proj,
+            blocks=blocks,
+            final_norm=final_norm,
+            config=cfg,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array | None = None,
+    ) -> Float[Array, "B S D"]:
+        if mask is None:
+            mask = AttentionMask.causal()
+
+        hidden = self.token_embed.at[token_ids].get(out_sharding=Pbatch)
+        for block in self.blocks:
+            hidden = eqx.filter_checkpoint(block)(hidden, mask)
+        return self.final_norm(hidden)
+
+    @named_call
+    def logits(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array | None = None,
+    ) -> Float[Array, "B S V"]:
+        hidden = self(token_ids, mask=mask)
+        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=Pbatch)
+
+    def next_token_loss(
+        self,
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+    ) -> jax.Array:
+        """Compute next-token cross-entropy loss for a batch."""
+        hidden = self(token_ids, mask=mask)
+        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        loss_weight = loss_weight.astype(loss_dtype)
+
+        return fused_linear_softmax_cross_entropy_loss(
+            hidden,
+            self.output_proj,
+            labels,
+            weight=loss_weight,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            dtype=loss_dtype,
+        )
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
     return std * random.truncated_normal(key, -3, 3, shape)
 
 
-@partial(jax.jit, static_argnames=("cfg",))
-def init_parameters(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> GrugModelParameters:
-    head_dim = cfg.inferred_head_dim
-    key, embed_key, out_key = random.split(key, 3)
-    layer_keys = random.split(key, cfg.num_layers)
-
-    token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
-    output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
-    final_norm = reshard(jnp.ones((cfg.hidden_dim,), dtype=jnp.float32), P(None))
-
-    blocks: list[GrugBlockParams] = []
-    # extract shape sizes for brevity and consistency
-    D, N, M, H, I = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, head_dim, cfg.intermediate_dim
-    for i in range(cfg.num_layers):
-        k_q, k_k, k_v, k_o, k_gate, k_up, k_down = random.split(layer_keys[i], 7)
-
-        attn = GrugAttentionParams(
-            w_q=reshard(_init_weight(k_q, (D, N * H), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (D, M * H), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (D, M * H), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (N * H, D), cfg.initializer_std), P("model", "data")),
-        )
-        mlp_gate = reshard(_init_weight(k_gate, (D, I), cfg.initializer_std), P("data", "model"))
-        mlp_up = reshard(_init_weight(k_up, (D, I), cfg.initializer_std), P("data", "model"))
-        mlp_down = reshard(_init_weight(k_down, (I, D), cfg.initializer_std), P("model", "data"))
-        # keep rms replicated
-        rms_attn = jnp.ones((D,), dtype=jnp.float32)
-        rms_mlp = jnp.ones((D,), dtype=jnp.float32)
-
-        blocks.append(
-            GrugBlockParams(
-                attn=attn,
-                rms_attn=rms_attn,
-                rms_mlp=rms_mlp,
-                mlp_gate=mlp_gate,
-                mlp_up=mlp_up,
-                mlp_down=mlp_down,
-            )
-        )
-
-    return GrugModelParameters(
-        token_embed=token_embed,
-        output_proj=output_proj,
-        blocks=tuple(blocks),
-        final_norm=final_norm,
-    )
-
-
-def rms_norm(x: Float[Array, "... D"], weight: Float[Array, "D"], eps: float) -> Float[Array, "... D"]:
-    weight = unshard(weight)
-    dtype = x.dtype
-    x = x.astype(jnp.float32)
-    variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-    normed = x * jax.lax.rsqrt(variance + eps)
-    out = normed * weight
-    return out.astype(dtype)
-
-
-def mlp(block: GrugBlockParams, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
-    gate = jnp.einsum("bsh,hm->bsm", x, block.mlp_gate)
-    up = jnp.einsum("bsh,hm->bsm", x, block.mlp_up)
-    activated = jax.nn.silu(gate) * up
-    return jnp.einsum("bsm,mh->bsh", activated, block.mlp_down, out_sharding=Pbatch)
-
-
-def _transformer_hidden(
-    params: GrugModelParameters,
-    token_ids: Int[Array, "B S"],
-    cfg: GrugModelConfig,
-    *,
-    mask: AttentionMask | jax.Array | None,
-) -> Float[Array, "B S D"]:
-    head_dim = cfg.inferred_head_dim
-    seq_len = token_ids.shape[1]
-
-    if mask is None:
-        mask = AttentionMask.causal()
-
-    hidden = params.token_embed.at[token_ids].get(out_sharding=Pbatch)
-
-    for block in params.blocks:
-        attn_in = rms_norm(hidden, block.rms_attn, cfg.layer_norm_eps)
-        q = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_v), "... (m d) -> ... m d", d=head_dim)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=cfg.rope)
-        attn_out = attention(q, k, v, mask)
-        attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o, out_sharding=Pbatch)
-
-        hidden = hidden + attn_out
-        mlp_in = rms_norm(hidden, block.rms_mlp, cfg.layer_norm_eps)
-        mlp_out = mlp(block, mlp_in)
-        hidden = hidden + mlp_out
-
-    hidden = rms_norm(hidden, params.final_norm, cfg.layer_norm_eps)
-    return hidden
-
-
-def forward(
-    params: GrugModelParameters,
-    token_ids: Int[Array, "B S"],
-    cfg: GrugModelConfig,
-    *,
-    mask: AttentionMask | jax.Array | None = None,
-) -> Float[Array, "B S V"]:
-    hidden = _transformer_hidden(params, token_ids, cfg, mask=mask)
-    logits = jnp.einsum("bsh,hd->bsd", hidden, params.output_proj, out_sharding=Pbatch)
-    return logits
-
-
-def activations(
-    params: GrugModelParameters,
-    token_ids: Int[Array, "B S"],
-    cfg: GrugModelConfig,
-    *,
-    mask: AttentionMask | jax.Array | None = None,
-) -> Float[Array, "B S D"]:
-    """Return final hidden states with shape (batch, seq, hidden_dim)."""
-    return _transformer_hidden(params, token_ids, cfg, mask=mask)
-
-
-def loss_fn(
-    params: GrugModelParameters,
-    token_ids: Int[Array, "B S"],
-    loss_weight: Float[Array, "B S"],
-    cfg: GrugModelConfig,
-    *,
-    mask: AttentionMask | jax.Array | None = None,
-    reduction: str = "mean",
-    logsumexp_weight: float | None = None,
-    loss_dtype: jnp.dtype = jnp.float32,
-) -> jax.Array:
-    """Compute next-token cross-entropy loss for a batch.
-
-    This is the "activations vs lm_head" friendly path: it avoids materializing full logits.
-
-    Args:
-        params: Model parameters.
-        token_ids: Integer array with shape (batch, seq).
-        loss_weight: Float array with shape (batch, seq), typically 1 except last position (0).
-        cfg: Model config.
-        mask: Optional attention mask spec.
-        reduction: One of {"mean", "sum", "none"}.
-        logsumexp_weight: Optional z-loss weight (logsumexp^2 term).
-        loss_dtype: Accumulator dtype for logsumexp / loss.
-
-    Returns:
-        If reduction=="none": array with shape (batch, seq).
-        Else: scalar array.
-    """
-    hidden = _transformer_hidden(params, token_ids, cfg, mask=mask)
-    labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
-    loss_weight = loss_weight.astype(loss_dtype)
-
-    return fused_linear_softmax_cross_entropy_loss(
-        hidden,
-        params.output_proj,
-        labels,
-        weight=loss_weight,
-        reduction=reduction,
-        logsumexp_weight=logsumexp_weight,
-        dtype=loss_dtype,
-    )
-
-
 __all__ = [
-    "GrugAttentionParams",
-    "GrugBlockParams",
-    "GrugModelParameters",
-    "init_parameters",
-    "activations",
-    "forward",
-    "loss_fn",
+    "CausalSelfAttention",
+    "MLP",
+    "RMSNorm",
+    "Block",
+    "Transformer",
+    "GrugModelConfig",
 ]

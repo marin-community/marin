@@ -167,8 +167,8 @@ class Checkpointer:
             return None
         return ret_dict["model"]
 
-    def on_step(self, info, force: bool = False):
-        step = info.step
+    def on_step(self, *, tree: PyTree, step: int, force: bool = False):
+        step = int(step)
 
         if step == 0:
             self._last_save_time = self._dt_now_injection()
@@ -242,7 +242,13 @@ class Checkpointer:
                         logger.warning(f"Could not load metadata for last temporary checkpoint {last_checkpoint}.")
                         # if we can't load the metadata, we can't delete it, so just log a warning
 
-            self.save_checkpoint(info, destination, commit_callback=callback, is_temporary=not save_permanent_ckpt)
+            self.save_checkpoint(
+                tree=tree,
+                step=step,
+                destination=destination,
+                commit_callback=callback,
+                is_temporary=not save_permanent_ckpt,
+            )
 
     def _get_current_step_save_interval(self, step):
         # binary search for the correct interval
@@ -278,25 +284,25 @@ class Checkpointer:
 
     def save_checkpoint(
         self,
-        info,
+        tree: PyTree,
+        step: int,
         destination: str,
         commit_callback: Optional[Callable[[], None]] = None,
         *,
         is_temporary: bool = False,
     ):
         path = os.path.join(self.base_path, destination)
-        logger.info(f"Saving checkpoint at step {info.step} to {path}")
-        state = info.state.saveable_state
+        logger.info(f"Saving checkpoint at step {step} to {path}")
 
         save_checkpoint(
-            state,
-            step=info.step,
+            tree,
+            step=step,
             checkpoint_path=path,
             manager=self._manager,
             commit_callback=commit_callback,
             is_temporary=is_temporary,
         )
-        self._last_save_step = info.step
+        self._last_save_step = step
         self._last_save_time = self._dt_now_injection()
 
     def _async_checkpoint_remover(self):

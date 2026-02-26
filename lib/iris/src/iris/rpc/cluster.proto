@@ -18,6 +18,7 @@ package iris.cluster;
 
 import "time.proto";
 import "vm.proto";
+import "logging.proto";
 
 // ============================================================================
 // SHARED TYPES
@@ -128,6 +129,9 @@ message TaskStatus {
   // Scheduling diagnostics for pending tasks (dashboard display)
   string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
+
+  // Log storage location (e.g., "gs://bucket/path/worker-123/job/task/0")
+  string log_directory = 18;
 }
 
 // Record of a single task execution attempt
@@ -176,7 +180,7 @@ message JobStatus {
 
   BuildMetrics build_metrics = 10;
 
-  bytes serialized_result = 13;  // cloudpickle serialized return value (if requested)
+  reserved 13;  // was serialized_result (removed: dead store, never populated)
 
   int32 failure_count = 17;                // Total task failures (aggregated)
   int32 preemption_count = 18;             // Total task preemptions (aggregated)
@@ -238,15 +242,12 @@ message TpuDevice {
 // Clients should create a ResourceSpec dataclass and call .to_proto().
 message ResourceSpecProto {
   // Compute resources
-  int32 cpu = 1;              // Number of CPU cores
+  int32 cpu_millicores = 1;   // CPU in millicores (1000 = 1 core)
   int64 memory_bytes = 4;     // RAM in bytes
   int64 disk_bytes = 9;       // Disk space in bytes
 
   // Device configuration
   DeviceConfig device = 5;
-
-  // Scheduling preferences
-  repeated string regions = 8; // Preferred cloud regions
 }
 
 // ============================================================================
@@ -311,6 +312,7 @@ enum ConstraintOp {
   CONSTRAINT_OP_GE = 5;         // Attribute greater than or equal to value (numeric)
   CONSTRAINT_OP_LT = 6;         // Attribute less than value (numeric)
   CONSTRAINT_OP_LE = 7;         // Attribute less than or equal to value (numeric)
+  CONSTRAINT_OP_IN = 8;         // Attribute value is in the provided set (disjunction)
 }
 
 // Constraint for filtering workers by attribute.
@@ -319,6 +321,7 @@ message Constraint {
   string key = 1;           // Attribute key to match (e.g., "tpu-name")
   ConstraintOp op = 2;      // Comparison operator
   AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
+  repeated AttributeValue values = 4; // Set of values for IN operator
 }
 
 // Coscheduling configuration for multi-host jobs.
@@ -440,7 +443,7 @@ message Controller {
 
   message GetJobStatusRequest {
     string job_id = 1;
-    bool include_result = 2;  // If true, include serialized_result in response
+    reserved 2;  // was include_result (removed: serialized_result no longer exists)
   }
 
   message GetJobStatusResponse {
@@ -519,6 +522,7 @@ message Controller {
     string task_id = 1;
     int32 attempt_id = 2;
     TaskState state = 3;
+    string log_directory = 4;  // Storage location for logs (e.g., "gs://bucket/path/worker/task/attempt")
   }
 
   // A task completion reported by the worker in its heartbeat response.
@@ -530,6 +534,7 @@ message Controller {
     string error = 6;
     iris.time.Timestamp finished_at = 7;
     int32 attempt_id = 8;
+    string log_directory = 9;  // Storage location for logs (e.g., "gs://bucket/path/worker/task/attempt")
   }
 
 
@@ -652,7 +657,7 @@ message Controller {
 
   message TaskLogBatch {
     string task_id = 1;
-    repeated Worker.LogEntry logs = 2;
+    repeated iris.logging.LogEntry logs = 2;
     string error = 3;                // If fetch failed for this task
     string worker_id = 4;            // Worker that produced these logs
   }
@@ -661,6 +666,11 @@ message Controller {
     repeated TaskLogBatch task_logs = 1;
     int64 last_timestamp_ms = 2;     // Max timestamp seen (for next since_ms)
     bool truncated = 3;              // True if max_total_lines hit
+
+    // Child job statuses (populated when include_children=true).
+    // Included on every response so the client can detect state transitions
+    // (e.g. child moved to FAILED) without a separate ListJobs RPC.
+    repeated JobStatus child_job_statuses = 4;
   }
 
   // --- Process Logs ---
@@ -671,6 +681,26 @@ message Controller {
 
   message GetProcessLogsResponse {
     repeated ProcessLogRecord records = 1;
+  }
+
+  // --- Machine Detail (unified VM + worker view) ---
+  message GetMachineStatusRequest {
+    string id = 1;  // VM ID or worker ID — resolved against both
+  }
+
+  message GetMachineStatusResponse {
+    // VM info (null if identifier matched a worker with no VM)
+    iris.vm.VmInfo vm = 1;
+    string scale_group = 2;
+
+    // Worker health (null if no worker registered for this machine)
+    WorkerHealthStatus worker = 3;
+
+    // Bootstrap logs (from VM init)
+    string bootstrap_logs = 4;
+
+    // Worker daemon logs (proxied from worker, empty if unhealthy/absent)
+    repeated ProcessLogRecord worker_logs = 5;
   }
 
 }
@@ -691,24 +721,18 @@ message Worker {
     iris.time.Duration timeout = 7;
     repeated string ports = 8;
     int32 attempt_id = 9;
+    repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
   }
 
   message GetTaskStatusRequest {
     string task_id = 1;
-    bool include_result = 2;
+    reserved 2;  // was include_result (removed: serialized_result no longer exists)
   }
 
   message ListTasksRequest {}
 
   message ListTasksResponse {
     repeated TaskStatus tasks = 1;
-  }
-
-  message LogEntry {
-    iris.time.Timestamp timestamp = 1;
-    string source = 2;  // "stdout", "stderr", or "build"
-    string data = 3;    // Log line content
-    int32 attempt_id = 4;  // Which attempt produced this log
   }
 
   message FetchLogsFilter {
@@ -726,7 +750,7 @@ message Worker {
   }
 
   message FetchTaskLogsResponse {
-    repeated LogEntry logs = 1;
+    repeated iris.logging.LogEntry logs = 1;
   }
 
   message KillTaskRequest {
@@ -818,6 +842,9 @@ service ControllerService {
 
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
+
+  // Unified machine detail (VM + worker + logs in one call)
+  rpc GetMachineStatus(Controller.GetMachineStatusRequest) returns (Controller.GetMachineStatusResponse);
 }
 
 service WorkerService {

@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from iris.cluster.platform.base import Labels
 from iris.time_utils import Deadline
 
 logger = logging.getLogger(__name__)
@@ -127,14 +128,14 @@ def cleanup_iris_resources(
         List of resource names that were (or would be) deleted
     """
     deleted = []
+    labels = Labels(label_prefix)
 
     # Controller VMs are named "iris-controller-{label_prefix}"
     controller_vm = discover_controller_vm(zone, project, label_prefix)
     vms = [controller_vm] if controller_vm else []
 
-    # TPU slices are named "{label_prefix}-{scale_group}-{timestamp}"
-    # and are labeled with "{label_prefix}-managed=true"
-    tpu_label_filter = f"labels.{label_prefix}-managed=true"
+    # TPU slices are labeled with "iris-{label_prefix}-managed=true"
+    tpu_label_filter = f"labels.{labels.iris_managed}=true"
     try:
         result = subprocess.run(
             [
@@ -216,12 +217,13 @@ def list_iris_tpus(zone: str, project: str, label_prefix: str = "iris") -> list[
         zone: GCP zone
         project: GCP project
         label_prefix: Prefix used for resource naming (default: "iris").
-                     TPUs are filtered by the label "{label_prefix}-managed=true".
+                     TPUs are filtered by the label "iris-{label_prefix}-managed=true".
 
     Returns:
         List of TPU names matching the label filter
     """
-    label_filter = f"labels.{label_prefix}-managed=true"
+    labels = Labels(label_prefix)
+    label_filter = f"labels.{labels.iris_managed}=true"
     result = subprocess.run(
         [
             "gcloud",

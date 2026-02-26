@@ -14,11 +14,13 @@ import threading
 import unittest.mock
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 
 import pytest
 
 from iris.cluster.platform.base import (
     CloudSliceState,
+    Labels,
     QuotaExhaustedError,
 )
 from iris.cluster.platform.gcp import GcpPlatform, _validate_slice_config
@@ -45,7 +47,7 @@ class PlatformEnv:
 
 def _make_slice_config(env: PlatformEnv, group_name: str) -> config_pb2.SliceConfig:
     """Build a SliceConfig appropriate for the platform under test."""
-    label_key = f"{env.label_prefix}-scale-group"
+    labels = Labels(env.label_prefix)
 
     if env.name == "gcp":
         cfg = config_pb2.SliceConfig(
@@ -55,17 +57,17 @@ def _make_slice_config(env: PlatformEnv, group_name: str) -> config_pb2.SliceCon
         )
         cfg.gcp.zone = env.zone
         cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg.labels["iris-managed"] = "true"
-        cfg.labels[label_key] = group_name
+        cfg.labels[labels.iris_managed] = "true"
+        cfg.labels[labels.iris_scale_group] = group_name
         return cfg
     elif env.name == "manual":
         cfg = config_pb2.SliceConfig(name_prefix=f"iris-{group_name}", num_vms=1)
         cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
-        cfg.labels[label_key] = group_name
+        cfg.labels[labels.iris_scale_group] = group_name
         return cfg
     else:
         cfg = config_pb2.SliceConfig(name_prefix=f"test-{group_name}", num_vms=1)
-        cfg.labels[label_key] = group_name
+        cfg.labels[labels.iris_scale_group] = group_name
         return cfg
 
 
@@ -121,7 +123,7 @@ def test_create_slice_returns_handle_with_vms_and_scale_group(platform_env: Plat
     assert handle.slice_id
     assert handle.scale_group == "my-group"
     assert handle.zone
-    assert len(handle.describe().vms) >= 1
+    assert len(handle.describe().workers) >= 1
 
 
 def test_created_slice_appears_in_list_slices(platform_env: PlatformEnv):
@@ -136,14 +138,14 @@ def test_created_slice_appears_in_list_slices(platform_env: PlatformEnv):
 
 def test_list_slices_filters_by_labels(platform_env: PlatformEnv):
     """list_slices with label filter returns only matching slices."""
-    label_key = f"{platform_env.label_prefix}-scale-group"
+    labels = Labels(platform_env.label_prefix)
     cfg_a = _make_slice_config(platform_env, "group-a")
     cfg_b = _make_slice_config(platform_env, "group-b")
 
     platform_env.platform.create_slice(cfg_a)
     platform_env.platform.create_slice(cfg_b)
 
-    slices = platform_env.platform.list_slices(zones=[platform_env.zone], labels={label_key: "group-a"})
+    slices = platform_env.platform.list_slices(zones=[platform_env.zone], labels={labels.iris_scale_group: "group-a"})
     assert len(slices) == 1
     assert slices[0].scale_group == "group-a"
 
@@ -245,6 +247,84 @@ def test_gcp_validate_slice_config_reports_all_missing_fields():
     assert "runtime_version" in str(exc_info.value)
 
 
+def test_gcp_validate_vm_slice_config_requires_machine_type():
+    """VM slice mode requires gcp.machine_type."""
+    cfg = config_pb2.SliceConfig(
+        name_prefix="test",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+
+    with pytest.raises(ValueError, match=r"gcp\.machine_type"):
+        _validate_slice_config(cfg)
+
+
+def test_gcp_validate_vm_slice_config_rejects_preemptible():
+    """VM slice mode rejects preemptible instances."""
+    cfg = config_pb2.SliceConfig(
+        name_prefix="test",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        preemptible=True,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+
+    with pytest.raises(ValueError, match="does not support preemptible"):
+        _validate_slice_config(cfg)
+
+
+def test_gcp_validate_vm_slice_config_rejects_num_vms_not_one():
+    """VM slice mode requires exactly one VM."""
+    cfg = config_pb2.SliceConfig(
+        name_prefix="test",
+        num_vms=2,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+
+    with pytest.raises(ValueError, match="num_vms=1"):
+        _validate_slice_config(cfg)
+
+
+def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
+    """VM slice mode creates a single-worker slice that is discoverable and terminable."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "cpu-vm"
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        handle = platform.create_slice(cfg)
+        status = handle.describe()
+        assert status.worker_count == 1
+        assert len(status.workers) == 1
+        assert status.workers[0].internal_address
+        assert handle.scale_group == "cpu-vm"
+
+        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        assert handle.slice_id in {s.slice_id for s in listed}
+
+        handle.terminate()
+        listed_after = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        assert handle.slice_id not in {s.slice_id for s in listed_after}
+
+
 def test_gcp_empty_accelerator_variant_rejected():
     """create_slice with empty accelerator_variant raises ValueError."""
     fake = FakeGcloud()
@@ -291,7 +371,7 @@ def test_gcp_list_slices_skips_deleting_tpus():
         )
         cfg.gcp.zone = "us-central2-b"
         cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg.labels["iris-managed"] = "true"
+        cfg.labels[Labels("iris").iris_managed] = "true"
 
         handle = platform.create_slice(cfg)
 
@@ -304,6 +384,110 @@ def test_gcp_list_slices_skips_deleting_tpus():
         slices = platform.list_slices(zones=["us-central2-b"])
         slice_ids = {s.slice_id for s in slices}
         assert handle.slice_id not in slice_ids
+
+
+def test_gcp_create_slice_resolves_ghcr_image_in_bootstrap_config():
+    """create_slice rewrites GHCR images in bootstrap_config via resolve_image."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="my-proj")
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-16",
+    )
+    cfg.gcp.zone = "europe-west4-b"
+    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+
+    bc = config_pb2.BootstrapConfig(
+        docker_image="ghcr.io/marin-community/iris-worker:latest",
+        worker_port=10001,
+        controller_address="controller:10000",
+        cache_dir="/var/cache/iris",
+    )
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        platform.create_slice(cfg, bootstrap_config=bc)
+
+    assert bc.docker_image == "europe-docker.pkg.dev/my-proj/ghcr-mirror/marin-community/iris-worker:latest"
+
+
+def test_gcp_list_slices_skips_inactive_vm_instances():
+    """list_slices omits VM-backed slices for instances in inactive states."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "cpu-vm"
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        handle = platform.create_slice(cfg)
+        for _key, vm_data in fake._vms.items():
+            if vm_data.get("labels", {}).get(Labels("iris").iris_slice_id) == handle.slice_id:
+                vm_data["status"] = "TERMINATED"
+                break
+
+        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        assert handle.slice_id not in {s.slice_id for s in listed}
+
+
+def test_gcp_list_slices_preserves_vm_creation_timestamp():
+    """VM-backed slices use cloud creation timestamp when rediscovered."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "cpu-vm"
+
+    vm_creation_ts = "2024-01-02T03:04:05.000Z"
+    expected_epoch_ms = int(datetime.fromisoformat(vm_creation_ts.replace("Z", "+00:00")).timestamp() * 1000)
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        handle = platform.create_slice(cfg)
+        for _key, vm_data in fake._vms.items():
+            if vm_data.get("labels", {}).get(Labels("iris").iris_slice_id) == handle.slice_id:
+                vm_data["creationTimestamp"] = vm_creation_ts
+                break
+
+        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        listed_by_id = {s.slice_id: s for s in listed}
+        assert listed_by_id[handle.slice_id].created_at.epoch_ms() == expected_epoch_ms
+
+
+def test_gcp_reload_uses_full_stop_then_start():
+    """reload delegates to stop_all() before starting controller again."""
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+    cfg = config_pb2.IrisClusterConfig()
+
+    with (
+        unittest.mock.patch.object(platform, "stop_all") as stop_all,
+        unittest.mock.patch.object(platform, "start_controller", return_value="10.0.0.1:10000") as start_controller,
+    ):
+        address = platform.reload(cfg)
+
+    stop_all.assert_called_once_with(cfg)
+    start_controller.assert_called_once_with(cfg)
+    assert address == "10.0.0.1:10000"
 
 
 # =============================================================================
@@ -417,8 +601,8 @@ def test_list_all_slices_filters_by_labels(platform_env: PlatformEnv):
     platform_env.platform.create_slice(cfg_a)
     platform_env.platform.create_slice(cfg_b)
 
-    label_key = f"{platform_env.label_prefix}-scale-group"
-    filtered = platform_env.platform.list_all_slices(labels={label_key: "group-a"})
+    labels = Labels(platform_env.label_prefix)
+    filtered = platform_env.platform.list_all_slices(labels={labels.iris_scale_group: "group-a"})
     assert all(s.scale_group == "group-a" for s in filtered)
     assert len(filtered) == 1
 
@@ -440,6 +624,7 @@ def test_gcp_list_all_slices_multi_zone():
     )
     platform = GcpPlatform(gcp_config, label_prefix="iris")
 
+    iris_labels = Labels("iris")
     with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
         cfg_a = config_pb2.SliceConfig(
             name_prefix="iris-tpu",
@@ -448,7 +633,7 @@ def test_gcp_list_all_slices_multi_zone():
         )
         cfg_a.gcp.zone = "zone-a"
         cfg_a.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg_a.labels["iris-managed"] = "true"
+        cfg_a.labels[iris_labels.iris_managed] = "true"
 
         cfg_b = config_pb2.SliceConfig(
             name_prefix="iris-tpu",
@@ -457,7 +642,7 @@ def test_gcp_list_all_slices_multi_zone():
         )
         cfg_b.gcp.zone = "zone-b"
         cfg_b.gcp.runtime_version = "tpu-ubuntu2204-base"
-        cfg_b.labels["iris-managed"] = "true"
+        cfg_b.labels[iris_labels.iris_managed] = "true"
 
         handle_a = platform.create_slice(cfg_a)
         handle_b = platform.create_slice(cfg_b)

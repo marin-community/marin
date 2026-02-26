@@ -1,5 +1,7 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+import os
+import tempfile
 
 import pytest
 from fray.v1.cluster import create_cluster, set_current_cluster
@@ -28,3 +30,16 @@ def fray_cluster():
 def disable_wandb(monkeypatch):
     """Disable WANDB logging during tests."""
     monkeypatch.setenv("WANDB_MODE", "disabled")
+
+
+@pytest.fixture(autouse=True)
+def _configure_marin_prefix():
+    """Set MARIN_PREFIX to a temp directory for tests that rely on it."""
+    if "MARIN_PREFIX" in os.environ:
+        yield
+        return
+
+    with tempfile.TemporaryDirectory(prefix="marin_prefix") as temp_dir:
+        os.environ["MARIN_PREFIX"] = temp_dir
+        yield
+        del os.environ["MARIN_PREFIX"]

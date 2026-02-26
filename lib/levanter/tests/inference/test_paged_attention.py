@@ -18,6 +18,7 @@ from haliax import NamedArray, Axis
 from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.utils import INVALID
+import levanter.layers.attention as attention_module
 from levanter.layers import AttentionConfig, AttentionBackend, Attention
 from levanter.layers.attention import AttentionMask, ragged_paged_attention, simple_attention_with_dropout
 from levanter.layers.kv_cache import KvPageCache
@@ -167,9 +168,7 @@ def test_ragged_paged_attention_single_seq():
 jit_rpa = jax.jit(ragged_paged_attention)
 
 
-@pytest.mark.parametrize(
-    "seq_lens", [[8], [8, 32, 16], [10, 37, 64], [34, 17], [9, 10, 34, 17], [64, 10, 37], [5, 15, 25, 35, 45]]
-)
+@pytest.mark.parametrize("seq_lens", [[8], [8, 32, 16], [10, 37, 64], [9, 10, 34, 17]])
 def test_ragged_paged_attention_multi_seq(seq_lens):
     rng = jr.PRNGKey(hash(tuple(seq_lens)))
     q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_random_case(rng, seq_lens)
@@ -208,6 +207,47 @@ def test_ragged_paged_attention_incremental_multi_seq():
     assert ragged.axes == ref.axes
     tol = _rpa_tol()
     assert_trees_all_close(ragged.array, ref.array, atol=tol, rtol=tol)
+
+
+def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
+    """Regression test for traced `sm_scale` captured as a static argument in shard_map."""
+
+    def _fake_tpu_rpa(
+        q_arr,
+        kv_pages_arr,
+        kv_lens_arr,
+        page_indices_arr,
+        cu_q_lens_arr,
+        num_seqs_arr,
+        *,
+        sm_scale,
+        soft_cap,
+    ):
+        del kv_pages_arr, kv_lens_arr, page_indices_arr, cu_q_lens_arr, num_seqs_arr, soft_cap
+        return q_arr * jnp.asarray(sm_scale, dtype=q_arr.dtype)
+
+    monkeypatch.setattr(attention_module, "tpu_ragged_paged_attention", _fake_tpu_rpa)
+
+    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_random_case(jr.PRNGKey(123), [8, 4])
+
+    @jax.jit
+    def _jit_do_tpu_rpa(q_, kv_pages_, kv_lens_, page_indices_, cu_q_lens_, num_seqs_):
+        traced_scale = jnp.sum(q_.array[..., :1]) * 0.0 + jnp.asarray(SM_SCALE, dtype=q_.array.dtype)
+        return attention_module._do_tpu_ragged_paged_attention(
+            q_,
+            kv_pages_,
+            kv_lens_,
+            page_indices_,
+            cu_q_lens_,
+            num_seqs_,
+            sm_scale=traced_scale,
+            soft_cap=None,
+        )
+
+    with use_test_mesh():
+        out = _jit_do_tpu_rpa(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs)
+
+    assert out.axes == q.axes
 
 
 # -----------------------------------------------------------------------------

@@ -10,41 +10,48 @@ Key design principles:
 - Autoscaler does NOT track slices directly - that's ScalingGroup's job
 - Scale-up decisions come from Autoscaler, scale-down is delegated to ScalingGroup
 - ScalingGroup owns per-slice idle tracking and decides which slices to scale down
+- Bootstrap is handled internally by each Platform implementation, not by the autoscaler
 
 The run_once() flow splits into two phases:
-- refresh(): I/O phase — scale down idle slices
+- refresh(): I/O phase — poll slice states, scale down idle slices
 - update(): CPU phase — evaluate demand and execute scale-up decisions
-
-The remaining blocking operations are terminate() calls for idle slices.
 """
 
 from __future__ import annotations
 
+import difflib
+import json
 import logging
-import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.platform.base import Platform, PlatformError, QuotaExhaustedError, SliceHandle, VmHandle
-from iris.cluster.platform.bootstrap import WorkerBootstrap
-from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_tpu_topology
+from iris.cluster.platform.base import (
+    CloudSliceState,
+    CloudWorkerState,
+    Platform,
+    QuotaExhaustedError,
+    RemoteWorkerHandle,
+    SliceHandle,
+)
+from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap, ZONE_ATTRIBUTE_KEY
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
+from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class TrackedVm:
-    """Per-VM state tracked by the autoscaler across bootstrap and lifecycle."""
+class TrackedWorker:
+    """Per-worker state tracked by the autoscaler across bootstrap and lifecycle."""
 
-    vm_id: str
+    worker_id: str
     slice_id: str
     scale_group: str
-    handle: VmHandle
+    handle: RemoteWorkerHandle
     bootstrap_log: str = ""
 
 
@@ -86,6 +93,8 @@ class DemandEntry:
     constraints: list[cluster_pb2.Constraint]
     resources: cluster_pb2.ResourceSpecProto
     preemptible: bool | None = None  # None = no preference
+    required_regions: frozenset[str] | None = None
+    required_zones: frozenset[str] | None = None
     invalid_reason: str | None = None
 
 
@@ -110,6 +119,59 @@ class RoutingDecision:
     routed_entries: dict[str, list[DemandEntry]]
     unmet_entries: list[UnmetDemand]
     group_reasons: dict[str, str]
+    group_statuses: list[GroupRoutingStatus]
+
+
+@dataclass
+class GroupRoutingStatus:
+    group: str
+    priority: int
+    assigned: int
+    launch: int
+    decision: str
+    reason: str
+
+
+def _diagnose_no_matching_group(
+    entry: DemandEntry,
+    groups: list[ScalingGroup],
+    group_region: Callable[[ScalingGroup], str | None],
+    group_zone: Callable[[ScalingGroup], str | None],
+) -> str:
+    """Produce a concise, actionable reason when no group matches a demand entry.
+
+    Checks filters in order (device → preemptible → zone → region) and reports
+    the first mismatch with enough context to fix the issue.
+    """
+    device_matches = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
+
+    if not device_matches:
+        return f"no_matching_group: no groups with device {entry.device_type.value}:{entry.device_variant or '*'}"
+
+    if entry.preemptible is not None:
+        preempt_matches = [g for g in device_matches if g.config.slice_template.preemptible == entry.preemptible]
+        if not preempt_matches:
+            want = "preemptible" if entry.preemptible else "non-preemptible"
+            return (
+                f"no_matching_group: no {want} groups for device {entry.device_type.value}:{entry.device_variant or '*'}"
+            )
+        device_matches = preempt_matches
+
+    if entry.required_zones:
+        available_zones = {group_zone(g) for g in device_matches} - {None}
+        requested = sorted(entry.required_zones)
+        msg = f"no_matching_group: no groups in zone {', '.join(requested)}"
+        for req_zone in requested:
+            close = difflib.get_close_matches(req_zone, available_zones, n=1, cutoff=0.7)
+            if close:
+                msg += f" (did you mean {close[0]}?)"
+        return msg
+
+    if entry.required_regions:
+        requested = sorted(entry.required_regions)
+        return f"no_matching_group: no groups in region {', '.join(requested)}"
+
+    return f"no_matching_group: no groups match device={entry.device_type.value}:{entry.device_variant or '*'}"
 
 
 def route_demand(
@@ -127,11 +189,43 @@ def route_demand(
     unmet: list[UnmetDemand] = []
     group_reasons: dict[str, str] = {}
 
+    def group_region(group: ScalingGroup) -> str | None:
+        if group.config.HasField("worker"):
+            region = group.config.worker.attributes.get(REGION_ATTRIBUTE_KEY, "").strip()
+            if region:
+                return region
+        template = group.config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone.rsplit("-", 1)[0]
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
+
+    def group_zone(group: ScalingGroup) -> str | None:
+        if group.config.HasField("worker"):
+            zone = group.config.worker.attributes.get(ZONE_ATTRIBUTE_KEY, "").strip()
+            if zone:
+                return zone
+        template = group.config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
+
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
         if not group.matches_device_requirement(entry.device_type, entry.device_variant):
             return False
         if entry.preemptible is not None and group.config.slice_template.preemptible != entry.preemptible:
             return False
+        if entry.required_regions:
+            region = group_region(group)
+            if region not in entry.required_regions:
+                return False
+        if entry.required_zones:
+            zone = group_zone(group)
+            if zone not in entry.required_zones:
+                return False
         if entry.invalid_reason:
             return False
         if entry.coschedule_group_id and group.num_vms != len(entry.task_ids):
@@ -154,17 +248,36 @@ def route_demand(
 
     def make_pending(group: ScalingGroup) -> PendingGroup:
         counts = group.slice_state_counts()
-        pending_slices = (
+        inflight = (
             counts.get(SliceLifecycleState.REQUESTING, 0)
             + counts.get(SliceLifecycleState.BOOTING, 0)
             + counts.get(SliceLifecycleState.INITIALIZING, 0)
         )
+        ready = counts.get(SliceLifecycleState.READY, 0)
         current = sum(counts.values())
         headroom = group.max_slices - current
+
+        if headroom > 0:
+            # Group can still create new slices. Only count in-flight
+            # slices as pending capacity; headroom determines how many
+            # new demand entries can trigger scale-ups.
+            return PendingGroup(
+                name=group.name,
+                pending_slices=inflight,
+                remaining_slices=inflight + headroom,
+                assigned_entries=[],
+                reason="demand-routed",
+            )
+
+        # Group is at max_slices (AT_CAPACITY). Include ready slices so
+        # demand can still be routed here for demand tracking. Without
+        # this, current_demand drops to 0 when a group hits max_slices,
+        # causing immediate scale-down of newly ready slices.
+        existing_capacity = inflight + ready
         return PendingGroup(
             name=group.name,
-            pending_slices=pending_slices,
-            remaining_slices=pending_slices + headroom,
+            pending_slices=existing_capacity,
+            remaining_slices=existing_capacity,
             assigned_entries=[],
             reason="demand-routed",
         )
@@ -183,12 +296,11 @@ def route_demand(
             for g in sorted_groups
             if g.matches_device_requirement(entry.device_type, entry.device_variant)
             and (entry.preemptible is None or g.config.slice_template.preemptible == entry.preemptible)
+            and (not entry.required_regions or group_region(g) in entry.required_regions)
+            and (not entry.required_zones or group_zone(g) in entry.required_zones)
         ]
         if not matching_groups:
-            reason = (
-                f"no_matching_group: need device={entry.device_type}:{entry.device_variant}"
-                f", available groups={[g.name for g in sorted_groups]}"
-            )
+            reason = _diagnose_no_matching_group(entry, sorted_groups, group_region, group_zone)
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
@@ -201,8 +313,10 @@ def route_demand(
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
-        if not any(g.can_fit_resources(entry.resources) for g in matching_groups):
-            reason = f"insufficient_resources: task needs {entry.resources}" f" but no matching group can fit it"
+        fit_reasons = [g.check_resource_fit(entry.resources) for g in matching_groups]
+        if all(r is not None for r in fit_reasons):
+            details = "; ".join(r for r in fit_reasons if r is not None)
+            reason = f"insufficient_resources: {details}"
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
@@ -241,109 +355,47 @@ def route_demand(
         needed = max(0, len(pg.assigned_entries) - pg.pending_slices)
         group_to_launch[name] = needed
 
+    group_statuses: list[GroupRoutingStatus] = []
+    for group in sorted_groups:
+        name = group.name
+        availability = group.availability(ts)
+        assigned = len(routed.get(name, []))
+        launch = group_to_launch.get(name, 0)
+
+        if assigned > 0:
+            decision = "selected"
+            reason = group_reasons.get(name, "demand-routed")
+        elif availability.status in {GroupAvailability.BACKOFF, GroupAvailability.QUOTA_EXCEEDED}:
+            decision = "blocked"
+            reason = availability.reason
+        elif availability.status == GroupAvailability.REQUESTING:
+            decision = "requesting"
+            reason = availability.reason
+        elif availability.status == GroupAvailability.AT_CAPACITY:
+            decision = "at_capacity"
+            reason = "at max_slices"
+        else:
+            decision = "idle"
+            reason = ""
+
+        group_statuses.append(
+            GroupRoutingStatus(
+                group=name,
+                priority=group.config.priority or 100,
+                assigned=assigned,
+                launch=launch,
+                decision=decision,
+                reason=reason,
+            )
+        )
+
     return RoutingDecision(
         group_to_launch=group_to_launch,
         routed_entries=routed,
         unmet_entries=unmet,
         group_reasons=group_reasons,
+        group_statuses=group_statuses,
     )
-
-
-def _get_expected_vm_count(handle: SliceHandle) -> int | None:
-    """Derive expected VM count from slice labels. Returns None if unknown."""
-    variant = handle.labels.get("iris-accelerator-variant", "")
-    if not variant:
-        return None
-    try:
-        return get_tpu_topology(variant).vm_count
-    except ValueError:
-        return None
-
-
-def bootstrap_slice_vms(
-    handle: SliceHandle,
-    worker_bootstrap: WorkerBootstrap,
-    threads: ThreadContainer,
-    timeout: float = 600.0,
-    poll_interval: float = 10.0,
-    boot_timeout: float = 1800.0,
-) -> dict[str, str]:
-    """Discover VMs and bootstrap each as it appears.
-
-    Polls handle.describe() and spawns a bootstrap thread (via ThreadContainer)
-    for each newly-seen VM. Returns bootstrap logs keyed by vm_id.
-    Raises PlatformError if expected VM count isn't reached or any VM fails.
-
-    Args:
-        boot_timeout: Maximum time in seconds for all per-VM bootstrap threads
-            to complete after VM discovery. If any thread is still alive after
-            this deadline, raises PlatformError.
-    """
-    expected = _get_expected_vm_count(handle)
-    seen: set[str] = set()
-
-    # result_box per VM: list containing a single ("ok", log) or ("error", exception) tuple
-    results: dict[str, list] = {}
-    spawned_threads: list[ManagedThread] = []
-
-    discovery_deadline = Deadline.from_seconds(timeout)
-    while True:
-        for vm in handle.describe().vms:
-            if vm.vm_id not in seen:
-                seen.add(vm.vm_id)
-                result_box: list = []
-                results[vm.vm_id] = result_box
-
-                def _do_bootstrap(stop_event, *, _vm=vm, _box=result_box):
-                    try:
-                        _box.append(("ok", worker_bootstrap.bootstrap_vm(_vm)))
-                    except Exception as e:
-                        _box.append(("error", e))
-
-                t = threads.spawn(
-                    target=_do_bootstrap,
-                    name=f"bootstrap-vm-{vm.vm_id}",
-                )
-                spawned_threads.append(t)
-                logger.info(
-                    "Spawned bootstrap for VM %s (%d/%s seen)",
-                    vm.vm_id,
-                    len(seen),
-                    expected or "?",
-                )
-
-        if expected is None or len(seen) >= expected:
-            break
-        if discovery_deadline.expired():
-            raise PlatformError(
-                f"Slice {handle.slice_id}: only {len(seen)}/{expected} VMs " f"appeared after {timeout}s"
-            )
-        time.sleep(poll_interval)
-
-    boot_deadline = Deadline.from_seconds(boot_timeout)
-    for t in spawned_threads:
-        remaining = boot_deadline.remaining_seconds()
-        t.join(timeout=Duration.from_seconds(remaining))
-        if t.is_alive:
-            raise PlatformError(
-                f"Slice {handle.slice_id}: bootstrap thread {t.name} " f"still alive after {boot_timeout}s boot timeout"
-            )
-
-    logs: dict[str, str] = {}
-    errors: list[tuple[str, Exception]] = []
-    for vm_id, box in results.items():
-        if not box:
-            errors.append((vm_id, RuntimeError("bootstrap thread produced no result")))
-        elif box[0][0] == "error":
-            errors.append((vm_id, box[0][1]))
-            logger.error("Bootstrap failed for VM %s: %s", vm_id, box[0][1])
-        else:
-            logs[vm_id] = box[0][1]
-
-    if errors:
-        failed = [vm_id for vm_id, _ in errors]
-        raise PlatformError(f"Bootstrap failed for {len(errors)} VMs in {handle.slice_id}: {failed}")
-    return logs
 
 
 class Autoscaler:
@@ -365,7 +417,7 @@ class Autoscaler:
         evaluation_interval: Duration,
         platform: Platform,
         threads: ThreadContainer | None = None,
-        worker_bootstrap: WorkerBootstrap | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -374,21 +426,23 @@ class Autoscaler:
             evaluation_interval: How often to evaluate scaling decisions
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
-            worker_bootstrap: WorkerBootstrap for initializing new VMs (None in test/local mode)
+            bootstrap_config: Worker bootstrap settings passed to platform.create_slice().
+                None disables bootstrap (test/local mode).
         """
         self._groups = scale_groups
         self._platform = platform
         self.evaluation_interval = evaluation_interval
-        self._worker_bootstrap = worker_bootstrap
+        self._bootstrap_config = bootstrap_config
 
-        # Centralized per-VM state indexed by vm_id
-        self._vms: dict[str, TrackedVm] = {}
+        # Centralized per-worker state indexed by worker_id
+        self._workers: dict[str, TrackedWorker] = {}
 
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
 
         # Most recent routing decision (for status API)
         self._last_routing_decision: RoutingDecision | None = None
+        self._last_evaluation: Timestamp = Timestamp.from_ms(0)
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
@@ -400,7 +454,7 @@ class Autoscaler:
         config: config_pb2.AutoscalerConfig,
         platform: Platform,
         threads: ThreadContainer | None = None,
-        worker_bootstrap: WorkerBootstrap | None = None,
+        bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
@@ -409,7 +463,7 @@ class Autoscaler:
             config: Autoscaler configuration proto (with defaults already applied)
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
-            worker_bootstrap: WorkerBootstrap for initializing new VMs
+            bootstrap_config: Worker bootstrap settings passed to platform.create_slice()
 
         Returns:
             Configured Autoscaler instance
@@ -419,7 +473,7 @@ class Autoscaler:
             evaluation_interval=Duration.from_proto(config.evaluation_interval),
             platform=platform,
             threads=threads,
-            worker_bootstrap=worker_bootstrap,
+            bootstrap_config=bootstrap_config,
         )
 
     def _wait_for_inflight(self) -> None:
@@ -458,22 +512,6 @@ class Autoscaler:
 
     def __exit__(self, *exc) -> None:
         self.shutdown()
-
-    def reconcile(self) -> None:
-        """Reconcile all groups (discover existing slices from cloud).
-
-        Called once at startup to recover state from a previous controller.
-        Discovered slices are adopted and then bootstrapped in background threads,
-        following the same flow as newly created slices.
-        """
-        for group in self._groups.values():
-            group.reconcile()
-            for slice_handle in group.slice_handles():
-                self._register_slice_vms(slice_handle, group.name)
-                self._threads.spawn(
-                    target=lambda stop, h=slice_handle, g=group: self._bootstrap_slice_safe(h, g),
-                    name=f"bootstrap-reconciled-{slice_handle.slice_id}",
-                )
 
     def _log_action(
         self,
@@ -537,6 +575,16 @@ class Autoscaler:
                 "CAPACITY INSUFFICIENT: %d demand entries cannot be satisfied by any group",
                 len(result.unmet_entries),
             )
+            for unmet in result.unmet_entries[:10]:
+                entry = unmet.entry
+                logger.warning(
+                    "Unmet demand: reason=%s device=%s:%s resources=%s tasks=%s",
+                    unmet.reason,
+                    entry.device_type,
+                    entry.device_variant,
+                    entry.resources,
+                    entry.task_ids,
+                )
 
         decisions = []
         for name, group in self._groups.items():
@@ -647,8 +695,8 @@ class Autoscaler:
         """Execute the actual blocking scale-up work.
 
         This runs in a background thread and should not be called directly.
-        Use _execute_scale_up instead. Bootstrap is spawned in a separate thread
-        so scale-up completes promptly and the slice is tracked immediately.
+        Use _execute_scale_up instead. Bootstrap is handled internally by the
+        platform when cluster_config is provided.
 
         Returns:
             True if scale-up succeeded, False otherwise.
@@ -657,16 +705,13 @@ class Autoscaler:
 
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
-            slice_obj = group.scale_up(timestamp=ts)
+            bc = self._per_group_bootstrap_config(group)
+            slice_obj = group.scale_up(bootstrap_config=bc, timestamp=ts)
             group.complete_scale_up(slice_obj, ts)
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             action.slice_id = slice_obj.slice_id
             action.status = "completed"
-
-            self._threads.spawn(
-                target=lambda stop: self._bootstrap_slice_safe(slice_obj, group),
-                name=f"bootstrap-{slice_obj.slice_id}",
-            )
+            self._register_slice_workers(slice_obj, group.name)
             return True
         except QuotaExhaustedError as e:
             group.cancel_scale_up()
@@ -678,98 +723,131 @@ class Autoscaler:
             return False
         except Exception as e:
             group.cancel_scale_up()
-            logger.error("Failed to create slice for %s: %s", group.name, e)
+            logger.exception("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)
             return False
 
-    def _bootstrap_slice_safe(self, handle: SliceHandle, group: ScalingGroup) -> None:
-        """Bootstrap a slice with error handling. Runs in a background thread.
+    def _per_group_bootstrap_config(self, group: ScalingGroup) -> config_pb2.BootstrapConfig | None:
+        """Build a per-group BootstrapConfig by merging worker attributes and accelerator settings.
 
-        On failure, marks slice as failed, scales it down, and records a failure on the group.
+        Copies the base bootstrap config and injects IRIS_WORKER_ATTRIBUTES,
+        IRIS_TASK_DEFAULT_ENV_JSON, IRIS_SCALE_GROUP, and accelerator env vars
+        from the group's worker settings.
         """
-        try:
-            self._bootstrap_slice(handle, group.name)
-        except Exception as e:
-            logger.error(
-                "Bootstrap failed for slice %s in %s, cleaning up: %s",
-                handle.slice_id,
-                group.name,
-                e,
-            )
-            group.mark_slice_failed(handle.slice_id)
-            self._log_action(
-                "slice_failed", group.name, handle.slice_id, reason=f"bootstrap failed: {e}", status="failed"
-            )
-            group.scale_down(handle.slice_id)
-            self._unregister_slice_vms(handle.slice_id)
-            group.record_failure()
+        if not self._bootstrap_config:
+            return None
 
-    def _bootstrap_slice(self, handle: SliceHandle, scale_group: str) -> None:
-        """Bootstrap all VMs in a newly created slice and register them in the VM registry.
+        has_worker = group.config.HasField("worker")
 
-        Collects bootstrap logs from the bootstrap process (if available) and
-        stores them on TrackedVm entries for later retrieval via get_init_log().
-        After successful bootstrap, marks the slice as READY with VM addresses.
-        """
-        bootstrap_logs: dict[str, str] = {}
-        if self._worker_bootstrap:
-            bootstrap_logs = bootstrap_slice_vms(handle, self._worker_bootstrap, self._threads)
+        bc = config_pb2.BootstrapConfig()
+        bc.CopyFrom(self._bootstrap_config)
 
-        self._register_slice_vms(handle, scale_group, bootstrap_logs)
+        if has_worker:
+            attributes = dict(group.config.worker.attributes)
+            if attributes:
+                bc.env_vars["IRIS_WORKER_ATTRIBUTES"] = json.dumps(attributes, sort_keys=True)
+            if group.config.worker.env:
+                bc.env_vars["IRIS_TASK_DEFAULT_ENV_JSON"] = json.dumps(dict(group.config.worker.env))
 
-        group = self._groups.get(scale_group)
-        if group:
-            vm_addresses = [vm.internal_address for vm in handle.describe().vms]
-            group.mark_slice_ready(handle.slice_id, vm_addresses)
-            self._log_action(
-                "slice_ready", scale_group, handle.slice_id, reason=f"bootstrap completed ({len(vm_addresses)} VMs)"
-            )
+        if group.config.name:
+            bc.env_vars["IRIS_SCALE_GROUP"] = group.config.name
+        accel_type = group.config.accelerator_type
+        if accel_type == config_pb2.ACCELERATOR_TYPE_GPU:
+            bc.env_vars["IRIS_ACCELERATOR_TYPE"] = "gpu"
+        elif accel_type == config_pb2.ACCELERATOR_TYPE_TPU:
+            bc.env_vars["IRIS_ACCELERATOR_TYPE"] = "tpu"
+        elif accel_type == config_pb2.ACCELERATOR_TYPE_CPU:
+            bc.env_vars["IRIS_ACCELERATOR_TYPE"] = "cpu"
+        if group.config.accelerator_variant:
+            bc.env_vars["IRIS_ACCELERATOR_VARIANT"] = group.config.accelerator_variant
+        if (
+            accel_type == config_pb2.ACCELERATOR_TYPE_GPU
+            and group.config.HasField("resources")
+            and group.config.resources.gpu_count > 0
+        ):
+            bc.env_vars["IRIS_GPU_COUNT"] = str(group.config.resources.gpu_count)
+        return bc
 
-    def _register_slice_vms(
+    def _register_slice_workers(
         self,
         handle: SliceHandle,
         scale_group: str,
-        bootstrap_logs: dict[str, str] | None = None,
     ) -> None:
-        """Register all VMs from a slice handle into the VM registry."""
-        logs = bootstrap_logs or {}
-        for vm in handle.describe().vms:
-            self._vms[vm.vm_id] = TrackedVm(
-                vm_id=vm.vm_id,
+        """Register all workers from a slice handle into the worker registry."""
+        for worker in handle.describe().workers:
+            self._workers[worker.worker_id] = TrackedWorker(
+                worker_id=worker.worker_id,
                 slice_id=handle.slice_id,
                 scale_group=scale_group,
-                handle=vm,
-                bootstrap_log=logs.get(vm.vm_id, ""),
+                handle=worker,
+                bootstrap_log=worker.bootstrap_log,
             )
 
-    def _unregister_slice_vms(self, slice_id: str) -> None:
-        """Remove all TrackedVm entries belonging to a slice."""
-        to_remove = [vm_id for vm_id, tv in self._vms.items() if tv.slice_id == slice_id]
-        for vm_id in to_remove:
-            del self._vms[vm_id]
+    def _unregister_slice_workers(self, slice_id: str) -> None:
+        """Remove all TrackedWorker entries belonging to a slice."""
+        to_remove = [wid for wid, tw in self._workers.items() if tw.slice_id == slice_id]
+        for wid in to_remove:
+            del self._workers[wid]
 
     def refresh(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp | None = None) -> None:
-        """I/O phase: scale down idle slices.
-
-        Failed slices are handled by bootstrap (mark_slice_failed -> scale_down)
-        and worker failure notifications (notify_worker_failed). Dead VMs are
-        detected by worker heartbeat timeouts in the controller.
-        """
+        """I/O phase: poll non-READY slices for state transitions, then scale down idle slices."""
         timestamp = timestamp or Timestamp.now()
+
+        self._poll_slice_states()
 
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
             scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
             if scaled_down:
-                self._unregister_slice_vms(scaled_down.slice_id)
+                self._unregister_slice_workers(scaled_down.slice_id)
                 self._log_action(
                     "scale_down",
                     group.name,
                     slice_id=scaled_down.slice_id,
                     reason=f"idle slice (target={target_capacity}, ready={group.ready_slice_count() + 1})",
                 )
+
+    def _poll_slice_states(self) -> None:
+        """Poll describe() on non-READY slices to detect state transitions.
+
+        When a platform's internal bootstrap completes, describe() will return
+        READY. This method detects that transition and updates the ScalingGroup.
+        """
+        for group in self._groups.values():
+            with group._slices_lock:
+                snapshot = list(group._slices.items())
+            for slice_id, slice_state in snapshot:
+                if slice_state.lifecycle in (SliceLifecycleState.BOOTING, SliceLifecycleState.INITIALIZING):
+                    try:
+                        status = slice_state.handle.describe()
+                    except Exception as e:
+                        logger.warning("Failed to poll slice %s: %s", slice_id, e)
+                        continue
+                    if status.state == CloudSliceState.READY:
+                        addrs = [w.internal_address for w in status.workers]
+                        group.mark_slice_ready(slice_id, addrs)
+                        self._register_slice_workers(slice_state.handle, group.name)
+                        self._log_action(
+                            "slice_ready",
+                            group.name,
+                            slice_id,
+                            reason=f"bootstrap completed ({len(addrs)} workers)",
+                        )
+                    elif status.state == CloudSliceState.FAILED:
+                        group.mark_slice_failed(slice_id, error_message=status.error_message)
+                        group.scale_down(slice_id)
+                        self._unregister_slice_workers(slice_id)
+                        group.record_failure()
+                        reason = status.error_message if status.error_message else "bootstrap failed"
+                        self._log_action(
+                            "slice_failed",
+                            group.name,
+                            slice_id,
+                            reason=reason,
+                            status="failed",
+                        )
 
     def update(
         self,
@@ -778,6 +856,7 @@ class Autoscaler:
     ) -> list[ScalingDecision]:
         """CPU phase: evaluate demand and execute scale-up decisions."""
         timestamp = timestamp or Timestamp.now()
+        self._last_evaluation = timestamp
 
         decisions = self.evaluate(demand_entries, timestamp)
         if decisions:
@@ -798,25 +877,23 @@ class Autoscaler:
         return self.update(demand_entries, timestamp)
 
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Get VM info by ID from the centralized VM registry."""
-        tracked = self._vms.get(vm_id)
+        """Get worker info by ID from the centralized worker registry."""
+        tracked = self._workers.get(vm_id)
         if not tracked:
             return None
 
-        from iris.cluster.platform.base import CloudVmState
-
-        vm_status = tracked.handle.status()
-        if vm_status.state == CloudVmState.RUNNING:
+        worker_status = tracked.handle.status()
+        if worker_status.state == CloudWorkerState.RUNNING:
             iris_state = vm_pb2.VM_STATE_READY
-        elif vm_status.state == CloudVmState.STOPPED:
+        elif worker_status.state == CloudWorkerState.STOPPED:
             iris_state = vm_pb2.VM_STATE_FAILED
-        elif vm_status.state == CloudVmState.TERMINATED:
+        elif worker_status.state == CloudWorkerState.TERMINATED:
             iris_state = vm_pb2.VM_STATE_TERMINATED
         else:
             iris_state = vm_pb2.VM_STATE_BOOTING
 
         return vm_pb2.VmInfo(
-            vm_id=tracked.vm_id,
+            vm_id=tracked.worker_id,
             state=iris_state,
             address=tracked.handle.internal_address,
             scale_group=tracked.scale_group,
@@ -824,8 +901,8 @@ class Autoscaler:
         )
 
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
-        """Get bootstrap log for a VM from the centralized VM registry."""
-        tracked = self._vms.get(vm_id)
+        """Get bootstrap log for a worker from the centralized worker registry."""
+        tracked = self._workers.get(vm_id)
         if not tracked:
             return ""
         log = tracked.bootstrap_log
@@ -836,12 +913,10 @@ class Autoscaler:
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
-        from iris.rpc import time_pb2
-
         status = vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation=time_pb2.Timestamp(epoch_ms=0),  # Controlled by controller now
+            last_evaluation=self._last_evaluation.to_proto(),
             recent_actions=list(self._action_log),
         )
         if self._last_routing_decision is not None:
@@ -865,7 +940,7 @@ class Autoscaler:
                 if resources.device.HasField("tpu"):
                     tpu_count = resources.device.tpu.count or 0
             return vm_pb2.ResourceSpec(
-                cpu=resources.cpu,
+                cpu_millicores=resources.cpu_millicores,
                 memory_bytes=resources.memory_bytes,
                 disk_bytes=resources.disk_bytes,
                 gpu_count=gpu_count,
@@ -895,6 +970,17 @@ class Autoscaler:
             group_reasons=decision.group_reasons,
             routed_entries=routed_entries,
             unmet_entries=unmet_entries,
+            group_statuses=[
+                vm_pb2.GroupRoutingStatus(
+                    group=s.group,
+                    priority=s.priority,
+                    assigned=s.assigned,
+                    launch=s.launch,
+                    decision=s.decision,
+                    reason=s.reason,
+                )
+                for s in decision.group_statuses
+            ],
         )
 
     def get_group(self, name: str) -> ScalingGroup | None:
@@ -936,7 +1022,7 @@ class Autoscaler:
 
         try:
             group.scale_down(slice_id)
-            self._unregister_slice_vms(slice_id)
+            self._unregister_slice_workers(slice_id)
         except Exception as e:
             logger.warning("Failed to terminate slice %s: %s", slice_id, e)
 

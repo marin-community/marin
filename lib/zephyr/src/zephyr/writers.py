@@ -5,12 +5,14 @@
 
 from __future__ import annotations
 
+import queue
+import threading
+import uuid
+from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 import itertools
-import json
 import os
-from collections.abc import Iterable
-from contextlib import contextmanager
 from typing import Any
 
 import fsspec
@@ -20,24 +22,32 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def unique_temp_path(output_path: str) -> str:
+    """Return a unique temporary path derived from ``output_path``.
+
+    Appends ``.tmp.<uuid>`` to avoid collisions when multiple writers target the
+    same output path (e.g. during network-partition induced worker races).
+    """
+    return f"{output_path}.tmp.{uuid.uuid4().hex}"
+
+
 @contextmanager
 def atomic_rename(output_path: str) -> Iterable[str]:
-    """Context manager for atomic write-and-rename.
+    """Context manager for atomic write-and-rename with UUID collision avoidance.
 
-    Yields a temporary path to write to. On successful exit, atomically renames
-    the temp file to the final path. On failure, cleans up the temp file.
+    Yields a unique temporary path to write to. On successful exit, atomically
+    renames the temp file to the final path. On failure, cleans up the temp file.
 
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
             write_data(tmp_path)
         # File is now at output.jsonl.gz
     """
-    temp_path = f"{output_path}.tmp"
+    temp_path = unique_temp_path(output_path)
     fs = fsspec.core.url_to_fs(output_path)[0]
 
     try:
         yield temp_path
-        # not so atomic if on a remote FS and recursive, but ...
         fs.mv(temp_path, output_path, recursive=True)
     except Exception:
         # Try to cleanup if something went wrong
@@ -232,121 +242,123 @@ def batchify(batch: Iterable, n: int = 1024) -> Iterable:
         yield batch
 
 
-def _get_existing_row_count(tmp_path: str, exemplar: dict[str, Any]) -> int:
-    """Read the number of rows already written in a partial .tmp cache directory.
+_SENTINEL = object()
 
-    Returns 0 if the path doesn't exist, has no data, or can't be read.
+
+def _queue_iterable(q: queue.Queue) -> Iterable:
+    """Yield items from a bounded queue until the sentinel is received.
+
+    Designed for use with ``ThreadedBatchWriter``: the background thread passes
+    this iterable to a writer function so the writer can consume items naturally
+    as they arrive through the queue.
     """
-    fs = fsspec.core.url_to_fs(tmp_path)[0]
-    if not fs.exists(tmp_path):
-        return 0
-    try:
-        from levanter.store.tree_store import TreeStore
-
-        store = TreeStore.open(exemplar, tmp_path, mode="r", cache_metadata=False)
-        return len(store)
-    except Exception:
-        logger.debug("Could not read existing rows from %s, starting fresh", tmp_path, exc_info=True)
-        return 0
+    while True:
+        item = q.get()
+        if item is _SENTINEL:
+            return
+        yield item
 
 
-def _promote_tmp_cache(fs, tmp_path: str, output_path: str) -> None:
-    """Promote a temporary cache directory to the final output path.
+class ThreadedBatchWriter:
+    """Offloads batch writes to a background thread so the producer isn't blocked on IO.
 
-    If a previous output exists, move it aside first and restore it on failure.
+    Uses a bounded queue for backpressure: the producer blocks when the writer
+    falls behind, preventing unbounded memory growth.
+
+    The ``write_fn`` receives an iterable that yields submitted items from the
+    internal queue, allowing the writer to consume items as a natural stream
+    rather than via per-item callbacks.
     """
-    backup_path = None
-    if fs.exists(output_path):
-        backup_path = f"{output_path}.bak"
-        if fs.exists(backup_path):
-            fs.rm(backup_path, recursive=True)
-        fs.mv(output_path, backup_path, recursive=True)
 
-    try:
-        fs.mv(tmp_path, output_path, recursive=True)
-    except Exception:
-        if backup_path is not None and fs.exists(backup_path):
+    def __init__(self, write_fn: Callable[[Iterable], None], maxsize: int = 128):
+        self._write_fn = write_fn
+        self._queue_maxsize = maxsize
+        self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(target=self._run, daemon=True, name="ZephyrWriter")
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            self._write_fn(_queue_iterable(self._queue))
+        except Exception as e:
+            self._error = e
+
+    def submit(self, batch: Any) -> None:
+        """Enqueue *batch* for writing. Raises if the background thread failed."""
+        # Poll so we detect background-thread failures even when the queue is
+        # full (a plain ``put`` would block forever if the consumer died).
+        while True:
+            if self._error is not None:
+                raise self._error
             try:
-                fs.mv(backup_path, output_path, recursive=True)
-            except Exception as restore_exc:
-                raise RuntimeError(
-                    f"Failed to promote {tmp_path} to {output_path} and failed to restore {backup_path}"
-                ) from restore_exc
-        raise
-    else:
-        if backup_path is not None and fs.exists(backup_path):
-            fs.rm(backup_path, recursive=True)
+                self._queue.put(batch, timeout=1.0)
+                return
+            except queue.Full:
+                logger.warning(f"ThreadedBatchWriter queue is full (size={self._queue_maxsize}), waiting ...")
+                continue
+
+    def close(self) -> None:
+        """Wait for all pending writes and propagate any error."""
+        self._queue.put(_SENTINEL)
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+
+    def __enter__(self) -> ThreadedBatchWriter:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        if exc_type is not None:
+            # Signal the thread to stop without blocking the caller.
+            try:
+                self._queue.put_nowait(_SENTINEL)
+            except queue.Full:
+                pass
+            self._thread.join(timeout=5.0)
+            return False
+        self.close()
+        return False
 
 
-def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any]) -> dict:
+def write_levanter_cache(
+    records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any], batch_size: int = 1024
+) -> dict:
     """Write tokenized records to Levanter cache format."""
     from levanter.store.cache import CacheMetadata, SerialCacheWriter
 
     ensure_parent_dir(output_path)
     record_iter = iter(records)
-    tmp_path = f"{output_path}.tmp"
-    fs = fsspec.core.url_to_fs(output_path)[0]
-
-    if fs.exists(output_path) and fs.exists(tmp_path):
-        logger.info("Removing stale temporary cache %s because %s already exists", tmp_path, output_path)
-        fs.rm(tmp_path, recursive=True)
 
     try:
         exemplar = next(record_iter)
     except StopIteration:
-        return {"path": output_path, "count": 0, "token_count": 0}
+        return {"path": output_path, "count": 0}
 
     count = 1
-    token_count = len(exemplar.get("input_ids", []))
     logger.info("write_levanter_cache: starting write to %s", output_path)
 
-    existing_rows = 0 if fs.exists(output_path) else _get_existing_row_count(tmp_path, exemplar)
+    with atomic_rename(output_path) as tmp_path:
+        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
 
-    if existing_rows > 0:
-        logger.info("Resuming write to %s from %d existing rows", output_path, existing_rows)
-        # we already consumed 1 record (exemplar), skip existing_rows - 1 more
-        rows_to_skip = existing_rows - 1
-        skipped_rows = 0
-        for record in itertools.islice(record_iter, rows_to_skip):
-            skipped_rows += 1
-            count += 1
-            token_count += len(record.get("input_ids", []))
-        if skipped_rows != rows_to_skip:
-            raise ValueError(
-                f"Temporary cache at {tmp_path} has {existing_rows} rows, but input has only {skipped_rows + 1} rows"
-            )
-        mode = "a"
-        write_exemplar = False
-    else:
-        mode = "w"
-        write_exemplar = True
+            def _drain_batches(batches: Iterable) -> None:
+                for batch in batches:
+                    writer.write_batch(batch)
 
-    with SerialCacheWriter(
-        tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata), mode=mode
-    ) as writer:
-        if write_exemplar:
-            writer.write_batch([exemplar])
-        for batch in batchify(record_iter):
-            writer.write_batch(batch)
-            count += len(batch)
-            for record in batch:
-                token_count += len(record.get("input_ids", []))
-            if count % 1000 == 0:
-                logger.info("write_levanter_cache: %s — %d records, %d tokens so far", output_path, count, token_count)
+            with ThreadedBatchWriter(_drain_batches) as threaded:
+                threaded.submit([exemplar])
+                for batch in batchify(record_iter, n=batch_size):
+                    threaded.submit(batch)
+                    count += len(batch)
+                    logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
 
-    logger.info("write_levanter_cache: finished %s — %d records, %d tokens", output_path, count, token_count)
-
-    _promote_tmp_cache(fs, tmp_path, output_path)
+    logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
 
     # write success sentinel
     with fsspec.open(f"{output_path}/.success", "w") as f:
         f.write("")
 
-    # write stats for aggregation
-    with fsspec.open(f"{output_path}/.stats.json", "w") as f:
-        json.dump({"count": count, "token_count": token_count}, f)
-
-    return {"path": output_path, "count": count, "token_count": token_count}
+    return {"path": output_path, "count": count}
 
 
 def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:

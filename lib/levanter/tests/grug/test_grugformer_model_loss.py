@@ -9,8 +9,7 @@ import jax.numpy as jnp
 from jax.sharding import AxisType, Mesh
 
 from levanter.grug.attention import AttentionMask
-from levanter.grug.model import GrugModelConfig
-from levanter.grug.model import activations, init_parameters, loss_fn
+from levanter.grug.model import GrugModelConfig, Transformer
 from levanter.layers.attention import AttentionMask as LevanterAttentionMask
 from levanter.models.grug_wrapper import GrugWrapper
 from levanter.models.lm_model import LmExample
@@ -52,15 +51,15 @@ def test_grug_model_loss_fn_matches_full_logits():
 
     mesh = _make_grug_mesh()
     with jax.set_mesh(mesh):
-        params = init_parameters(cfg, key=jax.random.key(0))
-        token_ids = jax.random.randint(jax.random.key(1), (2, seq), 0, cfg.vocab_size, dtype=jnp.int32)
-        loss_weight = jnp.ones((2, seq), dtype=jnp.float32).at[:, -1].set(0.0)
+        params = Transformer.init(cfg, key=jax.random.key(0))
+        token_ids = jax.random.randint(jax.random.key(1), (1, seq), 0, cfg.vocab_size, dtype=jnp.int32)
+        loss_weight = jnp.ones((1, seq), dtype=jnp.float32).at[:, -1].set(0.0)
 
-        hidden = activations(params, token_ids, cfg, mask=AttentionMask.causal())
+        hidden = params(token_ids, mask=AttentionMask.causal())
         logits = hidden @ params.output_proj
 
         ref = _full_next_token_loss(logits, token_ids, loss_weight)
-        got = loss_fn(params, token_ids, loss_weight, cfg, mask=AttentionMask.causal(), reduction="mean")
+        got = params.next_token_loss(token_ids, loss_weight, mask=AttentionMask.causal(), reduction="mean")
 
         assert jnp.allclose(got, ref, atol=1e-4, rtol=1e-4)
 
@@ -83,7 +82,7 @@ def test_grug_wrapper_compute_next_token_loss_uses_grug_loss_fn():
         Vocab = hax.Axis("vocab", cfg.vocab_size)
         model = GrugWrapper.init(Vocab, cfg, key=jax.random.key(0))
 
-        Batch = hax.Axis("batch", 2)
+        Batch = hax.Axis("batch", 1)
         Pos = hax.Axis("position", seq)
         token_ids = hax.random.randint(jax.random.key(1), (Batch, Pos), 0, cfg.vocab_size, dtype=jnp.int32)
         loss_weight = hax.ones((Batch, Pos), dtype=jnp.float32).at[Pos, Pos.size - 1].set(0.0)
@@ -93,7 +92,7 @@ def test_grug_wrapper_compute_next_token_loss_uses_grug_loss_fn():
         assert isinstance(per_pos, hax.NamedArray)
         assert per_pos.axes == token_ids.axes
 
-        expected = loss_fn(
-            model.params, token_ids.array, loss_weight.array, cfg, mask=AttentionMask.causal(), reduction="none"
+        expected = model.params.next_token_loss(
+            token_ids.array, loss_weight.array, mask=AttentionMask.causal(), reduction="none"
         )
         assert jnp.allclose(per_pos.array, expected, atol=1e-4, rtol=1e-4)

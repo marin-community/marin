@@ -20,7 +20,7 @@ from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _r
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
-    CpuConfig,
+    ActorConfig,
     GpuConfig,
     JobRequest,
     JobStatus,
@@ -164,21 +164,15 @@ def build_runtime_env(request: JobRequest) -> dict:
     env_vars = dict(environment.env_vars)
     extras = list(environment.extras)
 
-    if isinstance(request.resources.device, CpuConfig):
-        if "JAX_PLATFORMS" in env_vars and env_vars["JAX_PLATFORMS"] != "cpu":
-            logger.warning(
-                "Found existing JAX_PLATFORMS=%s, overriding for CPU only job.",
-                env_vars["JAX_PLATFORMS"],
-            )
-        env_vars["JAX_PLATFORMS"] = "cpu"
-    elif isinstance(request.resources.device, TpuConfig):
+    if isinstance(request.resources.device, TpuConfig):
         if "tpu" not in extras:
             extras.append("tpu")
-        env_vars["JAX_PLATFORMS"] = ""
     elif isinstance(request.resources.device, GpuConfig):
         if "gpu" not in extras:
             extras.append("gpu")
-        env_vars["JAX_PLATFORMS"] = ""
+
+    for key, value in request.resources.device.default_env_vars().items():
+        env_vars.setdefault(key, value)
 
     if os.environ.get("MARIN_CI_DISABLE_RUNTIME_ENVS", "").lower() in ("1", "true") or os.environ.get(
         "PYTEST_CURRENT_TEST"
@@ -245,8 +239,15 @@ class RayClient:
                 pass
         return self._address
 
-    def submit(self, request: JobRequest) -> RayJobHandle:
-        """Submit a job, routing to TPU/binary/callable based on device type."""
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> RayJobHandle:
+        """Submit a job, routing to TPU/binary/callable based on device type.
+
+        Args:
+            request: The job request to submit.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
+                          RayClient currently doesn't enforce unique names, so this
+                          parameter has no effect but is included for API compatibility.
+        """
         logger.info("Submitting job: %s", request.name)
 
         if isinstance(request.resources.device, TpuConfig):
@@ -302,7 +303,7 @@ class RayClient:
         else:
             num_gpus = 0
 
-        remote_fn = ray.remote(num_gpus=num_gpus)(entrypoint.callable)
+        remote_fn = ray.remote(num_gpus=num_gpus, max_retries=compute_ray_retry_count(request))(entrypoint.callable)
         ref = remote_fn.options(runtime_env=runtime_env).remote(*entrypoint.args, **entrypoint.kwargs)
         job_id = f"ray-callable-{request.name}-{uuid.uuid4().hex[:8]}"
         return RayJobHandle(job_id, ref=ref)
@@ -343,10 +344,13 @@ class RayClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> RayActorHandle:
         """Create a single Ray actor and return a handle immediately."""
-        group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
+        group = self.create_actor_group(
+            actor_class, *args, name=name, count=1, resources=resources, actor_config=actor_config, **kwargs
+        )
         return group.wait_ready()[0]  # type: ignore[return-value]
 
     def create_actor_group(
@@ -356,6 +360,7 @@ class RayClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorGroup:
         """Create N Ray actors named "{name}-0", "{name}-1", ...
@@ -363,7 +368,7 @@ class RayClient:
         Uses _RayActorHost to wrap actors, enabling them to access their
         own handle via current_actor().handle during __init__.
         """
-        ray_options = _actor_ray_options(resources)
+        ray_options = _actor_ray_options(resources, actor_config)
         # Don't specify runtime_env - let actors inherit from parent job
         # This prevents rebuilding packages that are already available
         handles: list[RayActorHandle] = []
@@ -379,15 +384,14 @@ class RayClient:
         logger.info("RayClient shutdown (namespace=%s)", self._namespace)
 
 
-def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
+def _actor_ray_options(resources: ResourceConfig, actor_config: ActorConfig = ActorConfig()) -> dict[str, Any]:
     """Build ray.remote().options() kwargs for an actor.
 
-    Maps ResourceConfig fields to Ray scheduling parameters so that
-    actors reserve the right amount of CPU/memory and get spread
-    across nodes instead of piling onto one.
+    Maps ResourceConfig and ActorConfig fields to Ray scheduling parameters so
+    that actors reserve the right amount of CPU/memory and get spread across
+    nodes instead of piling onto one.
 
     preemptible=False pins the actor to the head node via a custom resource.
-    max_concurrency>1 enables concurrent method calls (threaded actor).
     """
     options: dict[str, Any] = {
         "num_cpus": resources.cpu,
@@ -397,8 +401,19 @@ def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
         options["memory"] = humanfriendly.parse_size(resources.ram, binary=True)
     if not resources.preemptible:
         options["resources"] = {"head_node": 0.0001}
-    if resources.max_concurrency > 1:
-        options["max_concurrency"] = resources.max_concurrency
+    else:
+        # Preemptible actors should be restarted automatically by Ray when their
+        # node is preempted. Without this, the actor dies permanently and the
+        # pool degrades over time (see marin#2943).
+        options["max_restarts"] = -1
+    # Explicit max_restarts takes precedence over the preemptible default.
+    # Useful for actors like coordinators that are preemptible (not pinned to
+    # head node) but should NOT auto-restart because they require remote
+    # initialization beyond __init__.
+    if actor_config.max_restarts is not None:
+        options["max_restarts"] = actor_config.max_restarts
+    if actor_config.max_concurrency > 1:
+        options["max_concurrency"] = actor_config.max_concurrency
     return options
 
 

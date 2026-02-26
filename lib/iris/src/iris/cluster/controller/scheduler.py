@@ -51,7 +51,7 @@ class WorkerSnapshot(Protocol):
     """
 
     worker_id: WorkerId
-    available_cpu: int
+    available_cpu_millicores: int
     available_memory: int
     available_gpus: int
     available_tpus: int
@@ -87,7 +87,9 @@ class RejectionReason:
     def __str__(self) -> str:
         match self.kind:
             case RejectionKind.CPU:
-                return f"Insufficient CPU (need {self.details['need']}, available {self.details['have']})"
+                need_cores = self.details["need"] / 1000
+                have_cores = self.details["have"] / 1000
+                return f"Insufficient CPU (need {need_cores:g} cores, available {have_cores:g} cores)"
             case RejectionKind.MEMORY:
                 need_gb = self.details["need"] / (1024**3)
                 have_gb = self.details["have"] / (1024**3)
@@ -130,6 +132,17 @@ def device_compatible(job_device_type: str, worker_device_type: str) -> bool:
     if job_device_type == "cpu":
         return True
     return job_device_type == worker_device_type
+
+
+def device_variant_matches(job_variant: str, worker_variant: str | None) -> bool:
+    """Check if a job's requested device variant matches a worker's reported variant.
+
+    Uses case-insensitive substring matching so that short config names (e.g. "H100")
+    match full nvidia-smi names (e.g. "NVIDIA H100 80GB HBM3").
+    """
+    if not worker_variant:
+        return False
+    return job_variant.lower() in worker_variant.lower() or worker_variant.lower() in job_variant.lower()
 
 
 def _compare_ordered(
@@ -205,6 +218,9 @@ def _evaluate_constraint(
             return _compare_ordered(attr.value, target.value, "lt")
         case cluster_pb2.CONSTRAINT_OP_LE:
             return _compare_ordered(attr.value, target.value, "le")
+        case cluster_pb2.CONSTRAINT_OP_IN:
+            target_values = {AttributeValue.from_proto(v).value for v in constraint.values}
+            return attr.value in target_values
         case _:
             return False
 
@@ -221,7 +237,7 @@ class WorkerCapacity:
     """
 
     worker_id: WorkerId
-    available_cpu: int
+    available_cpu_millicores: int
     available_memory: int
     available_gpus: int
     available_tpus: int
@@ -246,7 +262,7 @@ class WorkerCapacity:
         """
         return WorkerCapacity(
             worker_id=worker.worker_id,
-            available_cpu=worker.available_cpu,
+            available_cpu_millicores=worker.available_cpu_millicores,
             available_memory=worker.available_memory,
             available_gpus=worker.available_gpus,
             available_tpus=worker.available_tpus,
@@ -282,8 +298,10 @@ class WorkerCapacity:
 
         res = req.resources
 
-        if res.cpu > self.available_cpu:
-            return RejectionReason(kind=RejectionKind.CPU, details={"need": res.cpu, "have": self.available_cpu})
+        if res.cpu_millicores > self.available_cpu_millicores:
+            return RejectionReason(
+                kind=RejectionKind.CPU, details={"need": res.cpu_millicores, "have": self.available_cpu_millicores}
+            )
 
         if res.memory_bytes > self.available_memory:
             return RejectionReason(
@@ -297,7 +315,7 @@ class WorkerCapacity:
             )
 
         job_variant = get_device_variant(res.device)
-        if job_variant and job_variant != "auto" and job_variant != self.device_variant:
+        if job_variant and job_variant != "auto" and not device_variant_matches(job_variant, self.device_variant):
             return RejectionReason(
                 kind=RejectionKind.DEVICE_VARIANT, details={"need": job_variant, "have": self.device_variant}
             )
@@ -321,7 +339,7 @@ class WorkerCapacity:
     def deduct(self, req: JobRequirements) -> None:
         """Deduct job's resources from available capacity."""
         res = req.resources
-        self.available_cpu -= res.cpu
+        self.available_cpu_millicores -= res.cpu_millicores
         self.available_memory -= res.memory_bytes
         self.available_gpus -= get_gpu_count(res.device)
         self.available_tpus -= get_tpu_count(res.device)
@@ -441,14 +459,23 @@ class SchedulingContext:
         """Get workers compatible with the given device requirement.
 
         CPU jobs can run on any worker. For accelerator jobs, returns workers
-        matching the exact variant when specified, or all workers of that device
+        matching the variant when specified (substring match to handle short
+        config names vs full nvidia-smi names), or all workers of that device
         type when variant is None or "auto".
         """
         if device_type == "cpu":
             return self.all_worker_ids
-        if device_variant and device_variant != "auto":
-            return self.device_index.get((device_type, device_variant), set())
-        return self.device_index.get((device_type, None), set())
+        all_of_type = self.device_index.get((device_type, None), set())
+        if not device_variant or device_variant == "auto":
+            return all_of_type
+        # Try exact match first (fast path for local/test workers)
+        exact = self.device_index.get((device_type, device_variant))
+        if exact:
+            return exact
+        # Fall back to substring match (nvidia-smi full names vs short config names)
+        return {
+            wid for wid in all_of_type if device_variant_matches(device_variant, self.capacities[wid].device_variant)
+        }
 
     def matching_workers(self, constraints: Sequence[cluster_pb2.Constraint]) -> set[WorkerId]:
         """Get workers matching ALL constraints.
@@ -504,6 +531,14 @@ class SchedulingContext:
                 return self.all_worker_ids - has_attr
             # Attribute doesn't exist for any worker, so all workers match
             return self.all_worker_ids
+
+        # Fast path: IN on discrete attribute — union of posting lists for each value
+        if op == cluster_pb2.CONSTRAINT_OP_IN and key in self.discrete_lists:
+            in_result: set[WorkerId] = set()
+            for av in constraint.values:
+                target_val = AttributeValue.from_proto(av).value
+                in_result |= self.discrete_lists[key].get(target_val, set())
+            return in_result
 
         # Slow path: linear scan for NE, GT, GE, LT, LE, or non-indexed attributes
         result_set: set[WorkerId] = set()
@@ -687,7 +722,7 @@ class Scheduler:
                     1
                     for check_wid in candidate_ids
                     if check_wid not in context.scheduled_workers
-                    and context.capacities[check_wid].available_cpu >= res.cpu
+                    and context.capacities[check_wid].available_cpu_millicores >= res.cpu_millicores
                     and context.capacities[check_wid].available_memory >= res.memory_bytes
                 )
                 if workers_with_capacity > 0:
@@ -719,13 +754,16 @@ class Scheduler:
                 task_id=task_id,
                 failure_reason=(
                     f"No worker matches constraints and has sufficient resources "
-                    f"(need cpu={res.cpu}, memory={res.memory_bytes}, "
+                    f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes}, "
                     f"constraints={[c.key for c in constraints]})"
                 ),
             )
         return TaskScheduleResult(
             task_id=task_id,
-            failure_reason=(f"No worker has sufficient resources (need cpu={res.cpu}, memory={res.memory_bytes})"),
+            failure_reason=(
+                f"No worker has sufficient resources "
+                f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes})"
+            ),
         )
 
     def find_assignments(

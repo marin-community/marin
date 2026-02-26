@@ -6,20 +6,17 @@
 import pytest
 
 import iris.cluster.worker.env_probe as env_probe
-from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, _get_extra_attributes
+from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, _device_from_env, _get_extra_attributes
 
 
 @pytest.mark.parametrize(
     "env_value,expected",
     [
         ("", {}),
-        ("key1=value1", {"key1": "value1"}),
-        ("key1=value1,key2=value2", {"key1": "value1", "key2": "value2"}),
-        ("taint:maintenance=true,pool=large-jobs", {"taint:maintenance": "true", "pool": "large-jobs"}),
-        ("key1=value1,  key2=value2  ", {"key1": "value1", "key2": "value2"}),  # whitespace
-        ("key1=value1,malformed,key2=value2", {"key1": "value1", "key2": "value2"}),  # skip malformed
-        ("=value", {}),  # empty key
-        ("key=", {"key": ""}),  # empty value is valid
+        ('{"key1":"value1"}', {"key1": "value1"}),
+        ('{"key1":"value1","key2":"value2"}', {"key1": "value1", "key2": "value2"}),
+        ('{"taint:maintenance":"true","pool":"large-jobs"}', {"taint:maintenance": "true", "pool": "large-jobs"}),
+        ('{"key":""}', {"key": ""}),
     ],
 )
 def test_get_extra_attributes_parsing(monkeypatch, env_value, expected):
@@ -27,6 +24,12 @@ def test_get_extra_attributes_parsing(monkeypatch, env_value, expected):
     monkeypatch.setenv("IRIS_WORKER_ATTRIBUTES", env_value)
     result = _get_extra_attributes()
     assert result == expected
+
+
+def test_get_extra_attributes_raises_for_non_json(monkeypatch):
+    monkeypatch.setenv("IRIS_WORKER_ATTRIBUTES", "key1=value1")
+    with pytest.raises(ValueError):
+        _get_extra_attributes()
 
 
 def test_environment_provider_basic_probe(monkeypatch):
@@ -103,3 +106,82 @@ def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch)
     assert metadata.tpu_worker_hostnames == ""
     assert metadata.tpu_chips_per_host_bounds == ""
     assert metadata.device.HasField("cpu")
+
+
+def test_log_prefix_uses_region_bucket_mapping(monkeypatch):
+    """europe-west4 must map to marin-tmp-eu-west4 bucket naming."""
+    import iris.marin_fs as marin_fs_mod
+
+    monkeypatch.setattr(marin_fs_mod, "region_from_metadata", lambda: "europe-west4")
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    monkeypatch.delenv("IRIS_LOG_PREFIX", raising=False)
+
+    assert DefaultEnvironmentProvider().log_prefix() == "gs://marin-tmp-eu-west4/ttl=30d/iris-logs"
+
+
+def test_log_prefix_unknown_region_falls_back(monkeypatch):
+    """Unknown regions fall back to the marin prefix tmp path."""
+    import iris.marin_fs as marin_fs_mod
+
+    monkeypatch.setattr(marin_fs_mod, "region_from_metadata", lambda: None)
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-antarctica-south1/scratch")
+    monkeypatch.delenv("IRIS_LOG_PREFIX", raising=False)
+
+    assert DefaultEnvironmentProvider().log_prefix() == "gs://marin-antarctica-south1/scratch/tmp/iris-logs"
+
+
+def test_log_prefix_prefers_env_override(monkeypatch):
+    """IRIS_LOG_PREFIX overrides inferred values."""
+    monkeypatch.setenv("IRIS_LOG_PREFIX", "gs://custom/ttl=30d/iris-logs")
+    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: True)
+    monkeypatch.setattr(
+        env_probe,
+        "_get_gcp_metadata",
+        lambda key: "projects/hai-gcp-models/zones/europe-west4-b" if key == "zone" else None,
+    )
+
+    assert DefaultEnvironmentProvider().log_prefix() == "gs://custom/ttl=30d/iris-logs"
+
+
+def test_device_from_env_gpu(monkeypatch):
+    monkeypatch.setenv("IRIS_ACCELERATOR_TYPE", "gpu")
+    monkeypatch.setenv("IRIS_ACCELERATOR_VARIANT", "H100")
+    monkeypatch.setenv("IRIS_GPU_COUNT", "8")
+
+    device, gpu_count, gpu_name = _device_from_env()
+
+    assert device is not None
+    assert device.HasField("gpu")
+    assert device.gpu.variant == "H100"
+    assert device.gpu.count == 8
+    assert gpu_count == 8
+    assert gpu_name == "H100"
+
+
+def test_device_from_env_invalid_gpu_count_raises(monkeypatch):
+    monkeypatch.setenv("IRIS_ACCELERATOR_TYPE", "gpu")
+    monkeypatch.setenv("IRIS_GPU_COUNT", "abc")
+
+    with pytest.raises(ValueError, match="IRIS_GPU_COUNT must be an integer"):
+        _device_from_env()
+
+
+def test_environment_provider_prefers_configured_gpu_over_nvidia_smi(monkeypatch):
+    monkeypatch.setenv("IRIS_ACCELERATOR_TYPE", "gpu")
+    monkeypatch.setenv("IRIS_ACCELERATOR_VARIANT", "H100")
+    monkeypatch.setenv("IRIS_GPU_COUNT", "8")
+    monkeypatch.setattr(env_probe, "_probe_tpu_metadata", lambda: ("", "", "", "", ""))
+
+    def _fail_probe_gpu() -> tuple[int, str, int]:
+        raise AssertionError("nvidia-smi fallback should not run when env is configured")
+
+    monkeypatch.setattr(env_probe, "_probe_gpu_info", _fail_probe_gpu)
+
+    metadata = DefaultEnvironmentProvider().probe()
+
+    assert metadata.device.HasField("gpu")
+    assert metadata.device.gpu.variant == "H100"
+    assert metadata.device.gpu.count == 8
+    assert metadata.gpu_count == 8
+    assert metadata.gpu_name == "H100"
+    assert metadata.gpu_memory_mb == 0
