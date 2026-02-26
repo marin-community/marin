@@ -306,11 +306,13 @@ class StepRunner:
         worker_fn.__qualname__ = step_name
         worker_fn.__name__ = step_name
 
-        if step.resources is not None:
+        from marin.execution.remote import RemoteCallable
+
+        if isinstance(step_fn, RemoteCallable):
             return fray_exec(
                 worker_fn,
                 name=step_name,
-                resources=step.resources,
+                resources=step_fn.resources,
                 env_vars=step.env_vars,
                 pip_dependency_groups=step.pip_dependency_groups,
                 client=self.client,

@@ -204,20 +204,26 @@ def resolve_executor_step(
     captured_fn = step_fn
     captured_config = config
 
+    from marin.execution.remote import RemoteCallable
+
     def resolved_fn(output_path):
         return captured_fn(captured_config)
 
     # Resolve resources: explicit ExecutorStep.resources > @remote decorator > None (local)
     resources = step.resources
-    if resources is None:
-        resources = getattr(step.fn, "__fray_resources__", None)
+    if resources is None and isinstance(step.fn, RemoteCallable):
+        resources = step.fn.resources
+
+    # Wrap as RemoteCallable so StepRunner knows to submit via Fray
+    final_fn: Callable = resolved_fn
+    if resources is not None:
+        final_fn = RemoteCallable(resolved_fn, resources)
 
     return StepSpec(
         name=step.name,
         deps=deps or [],
         override_output_path=output_path,
-        fn=resolved_fn,
-        resources=resources,
+        fn=final_fn,
         env_vars=step.env_vars or {},
         pip_dependency_groups=step.pip_dependency_groups or [],
     )

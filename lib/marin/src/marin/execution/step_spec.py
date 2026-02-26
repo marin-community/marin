@@ -9,10 +9,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from fray.v2.types import ResourceConfig
+from typing import Any
 
 from iris.marin_fs import marin_prefix
 
@@ -73,9 +70,6 @@ class StepSpec:
         return f"{prefix}/{self.name_with_hash}"
 
     # Resources
-    resources: ResourceConfig | None = None
-    """CPU/GPU/TPU resources for Fray execution. None means run locally in-thread."""
-
     env_vars: dict[str, str] = dataclasses.field(default_factory=dict)
     """Environment variables (defaults resolved)."""
 

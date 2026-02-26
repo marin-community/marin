@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
-from typing import ParamSpec, TypeVar
+from typing import Generic, ParamSpec, TypeVar
 
 from fray.v2.types import ResourceConfig
 
@@ -27,9 +27,25 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+class RemoteCallable(Generic[P, R]):
+    """A callable wrapper that marks a function for remote execution via Fray.
+
+    Wraps the original function and carries a ``resources`` field describing
+    the Fray resources to use when executing the function.
+    """
+
+    def __init__(self, fn: Callable[P, R], resources: ResourceConfig):
+        functools.update_wrapper(self, fn)
+        self._fn = fn
+        self.resources = resources
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
+        return self._fn(*args, **kwargs)
+
+
 def remote(
     fn: Callable[P, R] | None = None, *, resources: ResourceConfig | None = None
-) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
+) -> RemoteCallable[P, R] | Callable[[Callable[P, R]], RemoteCallable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
     When applied without arguments (``@remote``), the function will run with
@@ -39,13 +55,8 @@ def remote(
     if resources is None:
         resources = ResourceConfig.with_cpu()
 
-    def decorator(f: Callable[P, R]) -> Callable[P, R]:
-        @functools.wraps(f)
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            return f(*args, **kwargs)
-
-        wrapper.__fray_resources__ = resources  # type: ignore[attr-defined]
-        return wrapper
+    def decorator(f: Callable[P, R]) -> RemoteCallable[P, R]:
+        return RemoteCallable(f, resources)
 
     if fn is not None:
         return decorator(fn)

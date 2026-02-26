@@ -12,7 +12,7 @@ from fray.v2.types import ResourceConfig
 
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.executor import ExecutorStep, resolve_executor_step
-from marin.execution.remote import remote
+from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner
 
@@ -322,12 +322,11 @@ def test_runner_max_concurrent(tmp_path: Path):
 
 
 def test_step_without_resources_runs_locally(tmp_path: Path):
-    """A step with resources=None should run via the local thread pool, not fray_exec."""
+    """A step with no __fray_resources__ on fn should run via the local thread pool, not fray_exec."""
     step = StepSpec(
         name="local_step",
         override_output_path=tmp_path.as_posix(),
         fn=lambda output_path: PathMetadata(path=output_path),
-        resources=None,
     )
 
     with patch("marin.execution.step_runner.fray_exec") as mock_fray:
@@ -340,14 +339,17 @@ def test_step_without_resources_runs_locally(tmp_path: Path):
     assert loaded.path == tmp_path.as_posix()
 
 
-def test_step_with_resources_uses_fray(tmp_path: Path):
-    """A step with explicit resources should go through fray_exec."""
-    resources = ResourceConfig.with_cpu()
+def test_step_with_remote_fn_uses_fray(tmp_path: Path):
+    """A step whose fn has __fray_resources__ should go through fray_exec."""
+
+    @remote
+    def my_step(output_path):
+        return PathMetadata(path=output_path)
+
     step = StepSpec(
         name="fray_step",
         override_output_path=tmp_path.as_posix(),
-        fn=lambda output_path: PathMetadata(path=output_path),
-        resources=resources,
+        fn=my_step,
     )
 
     runner = StepRunner()
@@ -362,17 +364,17 @@ def test_step_with_resources_uses_fray(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_remote_decorator_attaches_resources():
-    """@remote should attach default CPU resources to the wrapper, not the original."""
+def test_remote_decorator_returns_remote_callable():
+    """@remote should return a RemoteCallable with default CPU resources."""
 
     def original_fn(config):
         pass
 
     wrapped = remote(original_fn)
 
-    assert hasattr(wrapped, "__fray_resources__")
-    assert wrapped.__fray_resources__ == ResourceConfig.with_cpu()
-    assert not hasattr(original_fn, "__fray_resources__")
+    assert isinstance(wrapped, RemoteCallable)
+    assert wrapped.resources == ResourceConfig.with_cpu()
+    assert not isinstance(original_fn, RemoteCallable)
 
 
 def test_remote_decorator_with_custom_resources():
@@ -383,11 +385,12 @@ def test_remote_decorator_with_custom_resources():
     def my_fn(config):
         pass
 
-    assert my_fn.__fray_resources__ == custom
+    assert isinstance(my_fn, RemoteCallable)
+    assert my_fn.resources == custom
 
 
 def test_resolve_executor_step_picks_up_remote_decorator():
-    """resolve_executor_step should use @remote resources when ExecutorStep.resources is None."""
+    """resolve_executor_step should propagate @remote resources to the resolved fn."""
 
     @remote
     def my_fn(config):
@@ -396,7 +399,8 @@ def test_resolve_executor_step_picks_up_remote_decorator():
     step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
-    assert resolved.resources == ResourceConfig.with_cpu()
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources == ResourceConfig.with_cpu()
 
 
 def test_explicit_resources_override_remote_decorator():
@@ -410,11 +414,12 @@ def test_explicit_resources_override_remote_decorator():
     step = ExecutorStep(name="test", fn=my_fn, config=None, resources=explicit)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
-    assert resolved.resources == explicit
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources == explicit
 
 
-def test_step_without_remote_or_resources_has_none():
-    """A plain function with no @remote and no ExecutorStep.resources should resolve to None."""
+def test_step_without_remote_or_resources_is_plain_fn():
+    """A plain function with no @remote and no ExecutorStep.resources should not be RemoteCallable."""
 
     def my_fn(config):
         pass
@@ -422,4 +427,4 @@ def test_step_without_remote_or_resources_has_none():
     step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
-    assert resolved.resources is None
+    assert not isinstance(resolved.fn, RemoteCallable)
