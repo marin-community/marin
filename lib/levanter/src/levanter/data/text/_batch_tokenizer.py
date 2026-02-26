@@ -219,14 +219,14 @@ class DNABatchTokenizer(BaseBatchTokenizer):
     - Uppercase (ACGT): weight = 1.0
     - Lowercase (acgt): weight = soft_mask_weight
 
-    No special tokens are added to the sequences.
+    If the tokenizer defines BOS/EOS token IDs, they are automatically prepended/appended
+    to the token sequences. Their loss weight is set to 1.0. Use ``num_special_tokens``
+    to query how many extra tokens are added (useful for computing model context size).
 
     Assumptions:
     - Character-level tokenizer (1:1 character-to-token mapping)
     - All sequences have the same length (no padding/truncation)
-    - Model context size matches sequence length (see experiment configs).
-      This is important to avoid concatenation of sequences which does not make sense
-      without special tokens.
+    - Model context size matches sequence length + special tokens (see experiment configs).
     """
 
     def __init__(
@@ -239,6 +239,12 @@ class DNABatchTokenizer(BaseBatchTokenizer):
     ):
         super().__init__(tokenizer, text_field, override_resources=override_resources)
         self.soft_mask_weight = soft_mask_weight
+        self._has_bos = tokenizer.bos_token_id is not None
+        self._has_eos = tokenizer.eos_token_id is not None
+
+    @property
+    def num_special_tokens(self) -> int:
+        return int(self._has_bos) + int(self._has_eos)
 
     def __call__(self, batch: Sequence[dict]) -> list[dict]:
         texts = [example[self.text_field] for example in batch]
@@ -267,6 +273,20 @@ class DNABatchTokenizer(BaseBatchTokenizer):
             "Tokenizer must be character-level."
         )
 
+        batch_size = input_ids.shape[0]
+
+        if self._has_bos:
+            bos_ids = np.full((batch_size, 1), self.tokenizer.bos_token_id, dtype=np.int32)
+            bos_weights = np.ones((batch_size, 1), dtype=np.float32)
+            input_ids = np.concatenate([bos_ids, input_ids], axis=1)
+            loss_weights = np.concatenate([bos_weights, loss_weights], axis=1)
+
+        if self._has_eos:
+            eos_ids = np.full((batch_size, 1), self.tokenizer.eos_token_id, dtype=np.int32)
+            eos_weights = np.ones((batch_size, 1), dtype=np.float32)
+            input_ids = np.concatenate([input_ids, eos_ids], axis=1)
+            loss_weights = np.concatenate([loss_weights, eos_weights], axis=1)
+
         return [{"input_ids": ids, "loss_weight": weights} for ids, weights in zip(input_ids, loss_weights)]
 
     @property
@@ -282,4 +302,6 @@ class DNABatchTokenizer(BaseBatchTokenizer):
             "tokenizer": self.tokenizer.name_or_path,
             "vocab_size": len(self.tokenizer),
             "soft_mask_weight": self.soft_mask_weight,
+            "has_bos": self._has_bos,
+            "has_eos": self._has_eos,
         }
