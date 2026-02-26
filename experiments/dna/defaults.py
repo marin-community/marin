@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Shared constants, configs, and helper functions for DNA experiments.
@@ -108,8 +97,21 @@ FAST_RUN_CONFIG_V1 = SimpleTrainConfig(
 
 
 # =============================================================================
-# Helper functions (V1)
+# Helper functions
 # =============================================================================
+
+
+def dna_effective_seq_len(base_seq_len: int, tokenizer_name: str) -> int:
+    """Compute model context size = base DNA sequence length + special tokens (BOS/EOS).
+
+    Loads the tokenizer to detect which special tokens are defined, so the model
+    ``max_seq_len`` stays in sync automatically.
+    """
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(tokenizer_name)
+    n_special = int(tok.bos_token_id is not None) + int(tok.eos_token_id is not None)
+    return base_seq_len + n_special
 
 
 def dna_tokenize_std_v1(name: str, dataset: str) -> ExecutorStep:
