@@ -287,16 +287,6 @@ class BootstrapConfig(_message.Message):
     config_json: str
     def __init__(self, controller_address: _Optional[str] = ..., worker_id: _Optional[str] = ..., worker_port: _Optional[int] = ..., docker_image: _Optional[str] = ..., cache_dir: _Optional[str] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., config_json: _Optional[str] = ...) -> None: ...
 
-class TimeoutConfig(_message.Message):
-    __slots__ = ("boot_timeout", "init_timeout", "ssh_poll_interval")
-    BOOT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
-    INIT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
-    SSH_POLL_INTERVAL_FIELD_NUMBER: _ClassVar[int]
-    boot_timeout: _time_pb2.Duration
-    init_timeout: _time_pb2.Duration
-    ssh_poll_interval: _time_pb2.Duration
-    def __init__(self, boot_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., init_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ssh_poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
-
 class SshConfig(_message.Message):
     __slots__ = ("user", "key_file", "port", "connect_timeout")
     USER_FIELD_NUMBER: _ClassVar[int]
@@ -372,34 +362,30 @@ class ControllerVmConfig(_message.Message):
     def __init__(self, image: _Optional[str] = ..., worker_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_failure_threshold: _Optional[int] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveControllerConfig, _Mapping]] = ...) -> None: ...
 
 class AutoscalerConfig(_message.Message):
-    __slots__ = ("evaluation_interval", "requesting_timeout", "scale_up_delay", "scale_down_delay", "startup_grace_period", "heartbeat_grace_period")
+    __slots__ = ("evaluation_interval", "scale_up_delay", "scale_down_delay", "startup_grace_period", "heartbeat_grace_period")
     EVALUATION_INTERVAL_FIELD_NUMBER: _ClassVar[int]
-    REQUESTING_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
     SCALE_UP_DELAY_FIELD_NUMBER: _ClassVar[int]
     SCALE_DOWN_DELAY_FIELD_NUMBER: _ClassVar[int]
     STARTUP_GRACE_PERIOD_FIELD_NUMBER: _ClassVar[int]
     HEARTBEAT_GRACE_PERIOD_FIELD_NUMBER: _ClassVar[int]
     evaluation_interval: _time_pb2.Duration
-    requesting_timeout: _time_pb2.Duration
     scale_up_delay: _time_pb2.Duration
     scale_down_delay: _time_pb2.Duration
     startup_grace_period: _time_pb2.Duration
     heartbeat_grace_period: _time_pb2.Duration
-    def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., requesting_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., startup_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+    def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., startup_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class DefaultsConfig(_message.Message):
-    __slots__ = ("timeouts", "ssh", "autoscaler", "bootstrap", "default_task_image")
-    TIMEOUTS_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("ssh", "autoscaler", "bootstrap", "default_task_image")
     SSH_FIELD_NUMBER: _ClassVar[int]
     AUTOSCALER_FIELD_NUMBER: _ClassVar[int]
     BOOTSTRAP_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_TASK_IMAGE_FIELD_NUMBER: _ClassVar[int]
-    timeouts: TimeoutConfig
     ssh: SshConfig
     autoscaler: AutoscalerConfig
     bootstrap: BootstrapConfig
     default_task_image: str
-    def __init__(self, timeouts: _Optional[_Union[TimeoutConfig, _Mapping]] = ..., ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ..., bootstrap: _Optional[_Union[BootstrapConfig, _Mapping]] = ..., default_task_image: _Optional[str] = ...) -> None: ...
+    def __init__(self, ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ..., bootstrap: _Optional[_Union[BootstrapConfig, _Mapping]] = ..., default_task_image: _Optional[str] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
     __slots__ = ("platform", "defaults", "storage", "controller", "scale_groups")
