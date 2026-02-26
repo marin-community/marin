@@ -17,6 +17,7 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -38,6 +39,12 @@ def _sanitize_job_name(name: str) -> str:
     return sanitized or DEFAULT_JOB_NAME
 
 
+def _args_hash(*args: object, **kwargs: object) -> str:
+    """Short hash of call arguments to disambiguate jobs with the same function name."""
+    content = repr(args) + repr(sorted(kwargs.items()))
+    return hashlib.sha256(content.encode()).hexdigest()[:8]
+
+
 @dataclass(frozen=True)
 class RemoteCallable(Generic[P, R]):
     """A callable wrapper that submits its function to Fray when called.
@@ -51,12 +58,14 @@ class RemoteCallable(Generic[P, R]):
     resources: ResourceConfig
     env_vars: dict[str, str] = field(default_factory=dict)
     pip_dependency_groups: list[str] = field(default_factory=list)
+    name: str | None = None
 
     # TODO: JobHandle doesn't have this option now, but we could make this return the R
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None:
         """Submit fn to Fray and block until completion."""
 
-        name = getattr(self.fn, "__name__", None) or DEFAULT_JOB_NAME
+        base_name = self.name or getattr(self.fn, "__name__", None) or DEFAULT_JOB_NAME
+        name = f"{base_name}-{_args_hash(*args, **kwargs)}"
         c = fray_client.current_client()
         handle = c.submit(
             JobRequest(
@@ -75,6 +84,7 @@ class RemoteCallable(Generic[P, R]):
 def remote(
     fn: Callable[P, R] | None = None,
     *,
+    name: str | None = None,
     resources: ResourceConfig | None = None,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
@@ -94,6 +104,7 @@ def remote(
             resources=resources,
             env_vars=env_vars or {},
             pip_dependency_groups=pip_dependency_groups or [],
+            name=name,
         )
 
     if fn is not None:
