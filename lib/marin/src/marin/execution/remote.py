@@ -9,38 +9,43 @@ submitted as Fray jobs with the specified resources.
 Usage::
 
     @remote
-    def tokenize(config): ...          # CPU defaults
+    def tokenize(...): ...          # CPU defaults
 
     @remote(resources=ResourceConfig.with_tpu("v4-128"))
-    def train(config): ...             # explicit resources
+    def train(...): ...             # explicit resources
 """
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
-from typing import TYPE_CHECKING, TypeVar
+from typing import ParamSpec, TypeVar
 
-if TYPE_CHECKING:
-    from fray.v2.types import ResourceConfig
+from fray.v2.types import ResourceConfig
 
-F = TypeVar("F", bound=Callable)
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
-def remote(fn: F | None = None, *, resources: ResourceConfig | None = None) -> F | Callable[[F], F]:
+def remote(
+    fn: Callable[P, R] | None = None, *, resources: ResourceConfig | None = None
+) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
     When applied without arguments (``@remote``), the function will run with
     default CPU resources. When called with ``resources=``, the supplied
     ``ResourceConfig`` is used instead.
     """
-    from fray.v2.types import ResourceConfig as RC
-
     if resources is None:
-        resources = RC.with_cpu()
+        resources = ResourceConfig.with_cpu()
 
-    def decorator(f: F) -> F:
-        f.__fray_resources__ = resources  # type: ignore[attr-defined]
-        return f
+    def decorator(f: Callable[P, R]) -> Callable[P, R]:
+        @functools.wraps(f)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            return f(*args, **kwargs)
+
+        wrapper.__fray_resources__ = resources  # type: ignore[attr-defined]
+        return wrapper
 
     if fn is not None:
         return decorator(fn)

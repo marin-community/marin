@@ -363,14 +363,16 @@ def test_step_with_resources_uses_fray(tmp_path: Path):
 
 
 def test_remote_decorator_attaches_resources():
-    """@remote should attach default CPU resources to the function."""
+    """@remote should attach default CPU resources to the wrapper, not the original."""
 
-    @remote
-    def my_fn(config):
+    def original_fn(config):
         pass
 
-    assert hasattr(my_fn, "__fray_resources__")
-    assert my_fn.__fray_resources__ == ResourceConfig.with_cpu()
+    wrapped = remote(original_fn)
+
+    assert hasattr(wrapped, "__fray_resources__")
+    assert wrapped.__fray_resources__ == ResourceConfig.with_cpu()
+    assert not hasattr(original_fn, "__fray_resources__")
 
 
 def test_remote_decorator_with_custom_resources():
