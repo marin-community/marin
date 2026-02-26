@@ -53,9 +53,9 @@ class ContainerConfig:
     worker_metadata: cluster_pb2.WorkerMetadata | None = None
 
     def get_cpu_millicores(self) -> int | None:
-        if not self.resources or not self.resources.cpu:
+        if not self.resources or not self.resources.cpu_millicores:
             return None
-        return self.resources.cpu * 1000
+        return self.resources.cpu_millicores
 
     def get_memory_mb(self) -> int | None:
         if not self.resources or not self.resources.memory_bytes:

@@ -660,7 +660,7 @@ class ControllerWorker:
         consecutive_failures: Number of consecutive heartbeat failures
         last_heartbeat: Timestamp of last successful heartbeat
         running_tasks: Set of task IDs currently running on this worker
-        committed_cpu: Total CPU cores committed to running tasks
+        committed_cpu_millicores: Total CPU millicores committed to running tasks
         committed_mem: Total memory bytes committed to running tasks
         committed_gpu: Total GPUs committed to running tasks
         attributes: Typed attributes for constraint-based scheduling (e.g., tpu-name, tpu-worker-id)
@@ -679,7 +679,7 @@ class ControllerWorker:
     running_tasks: set[JobName] = field(default_factory=set)
 
     # Committed resources (tracked incrementally)
-    committed_cpu: int = 0
+    committed_cpu_millicores: int = 0
     committed_mem: int = 0
     committed_gpu: int = 0
     committed_tpu: int = 0
@@ -688,8 +688,8 @@ class ControllerWorker:
     attributes: dict[str, AttributeValue] = field(default_factory=dict)
 
     def get_committed_resources(self) -> tuple[int, int, int]:
-        """Return committed (cpu, memory_bytes, gpu_count) for this worker."""
-        return (self.committed_cpu, self.committed_mem, self.committed_gpu)
+        """Return committed (cpu_millicores, memory_bytes, gpu_count) for this worker."""
+        return (self.committed_cpu_millicores, self.committed_mem, self.committed_gpu)
 
     def heartbeat_deadline(self, timeout: Duration) -> Timestamp:
         """Compute the deadline when this worker's heartbeat will expire.
@@ -716,7 +716,7 @@ class ControllerWorker:
     def assign_task(self, task_id: JobName, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Assign a task to this worker, updating committed resources."""
         self.running_tasks.add(task_id)
-        self.committed_cpu += resources.cpu
+        self.committed_cpu_millicores += resources.cpu_millicores
         self.committed_mem += resources.memory_bytes
         self.committed_gpu += get_gpu_count(resources.device)
         self.committed_tpu += get_tpu_count(resources.device)
@@ -724,15 +724,15 @@ class ControllerWorker:
     def unassign_task(self, task_id: JobName, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Unassign a task from this worker, updating committed resources."""
         self.running_tasks.discard(task_id)
-        self.committed_cpu -= resources.cpu
+        self.committed_cpu_millicores -= resources.cpu_millicores
         self.committed_mem -= resources.memory_bytes
         self.committed_gpu -= get_gpu_count(resources.device)
         self.committed_tpu -= get_tpu_count(resources.device)
 
     @property
-    def available_cpu(self) -> int:
-        """Available CPU cores after subtracting committed resources."""
-        return self.metadata.cpu_count - self.committed_cpu
+    def available_cpu_millicores(self) -> int:
+        """Available CPU millicores after subtracting committed resources."""
+        return self.metadata.cpu_count * 1000 - self.committed_cpu_millicores
 
     @property
     def available_memory(self) -> int:

@@ -111,8 +111,8 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             raise ValueError(f"Scale group '{name}' has invalid num_vms={sg_config.num_vms}.")
 
         resources = sg_config.resources
-        if resources.cpu < 0:
-            raise ValueError(f"Scale group '{name}' has invalid cpu={resources.cpu}.")
+        if resources.cpu_millicores < 0:
+            raise ValueError(f"Scale group '{name}' has invalid cpu_millicores={resources.cpu_millicores}.")
         if resources.memory_bytes < 0:
             raise ValueError(f"Scale group '{name}' has invalid memory_bytes={resources.memory_bytes}.")
         if resources.disk_bytes < 0:
@@ -143,8 +143,34 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
         if platform == "gcp":
             if not template.gcp.zone:
                 raise ValueError(f"Scale group '{name}': slice_template.gcp.zone must be non-empty.")
-            if not template.gcp.runtime_version:
-                raise ValueError(f"Scale group '{name}': slice_template.gcp.runtime_version must be non-empty.")
+            gcp_mode = template.gcp.mode
+            if gcp_mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
+                if template.preemptible:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices do not support preemptible instances.")
+                if sg_config.num_vms != 1:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices require num_vms=1.")
+                if sg_config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+                    raise ValueError(
+                        f"Scale group '{name}': VM-backed GCP slices currently require accelerator_type=cpu."
+                    )
+                if template.accelerator_type not in (
+                    config_pb2.ACCELERATOR_TYPE_UNSPECIFIED,
+                    config_pb2.ACCELERATOR_TYPE_CPU,
+                ):
+                    raise ValueError(
+                        f"Scale group '{name}': VM-backed GCP slices require slice_template.accelerator_type=cpu."
+                    )
+                if template.accelerator_variant:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices do not support accelerator_variant.")
+                if not template.gcp.machine_type:
+                    raise ValueError(
+                        f"Scale group '{name}': slice_template.gcp.machine_type must be non-empty for VM mode."
+                    )
+                if sg_config.resources.tpu_count > 0 or sg_config.resources.gpu_count > 0:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices currently support CPU-only resources.")
+            else:
+                if not template.gcp.runtime_version:
+                    raise ValueError(f"Scale group '{name}': slice_template.gcp.runtime_version must be non-empty.")
         elif platform == "manual":
             if not template.manual.hosts:
                 raise ValueError(f"Scale group '{name}': slice_template.manual.hosts must be non-empty.")
@@ -661,7 +687,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     validate_config(config)
 
     platform_kind = config.platform.WhichOneof("platform") if config.HasField("platform") else "unspecified"
-    logger.info(
+    logger.debug(
         "Config loaded: platform=%s, scale_groups=%s",
         platform_kind,
         list(config.scale_groups.keys()) if config.scale_groups else "(none)",
@@ -701,7 +727,7 @@ def _normalize_scale_group_resources(data: dict) -> None:
 
         cpu = resources.get("cpu")
         if cpu is not None:
-            normalized["cpu"] = int(cpu)
+            normalized["cpu_millicores"] = int(float(cpu) * 1000)
 
         memory = resources.get("ram")
         if memory is not None:
@@ -746,8 +772,8 @@ def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
             if not isinstance(resources, dict):
                 continue
             normalized: dict[str, object] = {}
-            if "cpu" in resources:
-                normalized["cpu"] = resources["cpu"]
+            if "cpu_millicores" in resources:
+                normalized["cpu"] = resources["cpu_millicores"] / 1000
             if "memory_bytes" in resources:
                 normalized["ram"] = resources["memory_bytes"]
             if "disk_bytes" in resources:
@@ -906,7 +932,6 @@ def create_autoscaler(
     label_prefix: str,
     bootstrap_config: config_pb2.BootstrapConfig | None = None,
     threads: ThreadContainer | None = None,
-    gcp_project: str = "",
 ):
     """Create autoscaler from Platform and explicit config.
 
@@ -918,7 +943,6 @@ def create_autoscaler(
         bootstrap_config: Worker bootstrap settings passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
         threads: Thread container for background threads. Uses global default if not provided.
-        gcp_project: GCP project ID for AR remote repo image rewriting.
 
     Returns:
         Configured Autoscaler instance
@@ -967,5 +991,4 @@ def create_autoscaler(
         config=autoscaler_config,
         platform=platform,
         bootstrap_config=bootstrap_config,
-        gcp_project=gcp_project,
     )

@@ -107,7 +107,7 @@ class DemoCluster:
         cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         cpu_sg.resources.memory_bytes = int(16 * 1e9)
         cpu_sg.resources.disk_bytes = int(128 * 1e9)
-        cpu_sg.resources.cpu = 1
+        cpu_sg.resources.cpu_millicores = 1000
         cpu_sg.min_slices = 0
         cpu_sg.max_slices = 4
 
@@ -117,7 +117,7 @@ class DemoCluster:
         tpu_sg.accelerator_variant = "v5litepod-16"
         tpu_sg.resources.memory_bytes = int(16 * 1e9)
         tpu_sg.resources.disk_bytes = int(128 * 1e9)
-        tpu_sg.resources.cpu = 128
+        tpu_sg.resources.cpu_millicores = 128000
         tpu_sg.resources.tpu_count = 4  # chips_per_vm for v5litepod-16
         tpu_sg.num_vms = 4
         tpu_sg.min_slices = 0

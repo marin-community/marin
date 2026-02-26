@@ -7,9 +7,11 @@ This script is intentionally simple and serves as a living ferry template that
 agents can update on a daily cadence with small, reviewable changes.
 
 Expected workflow:
-1. Propose a PR with bounded config updates.
-2. Get human approval.
-3. Launch with `ray_run.py` and monitor to completion.
+1. Propose at least one bounded config update in the run issue.
+2. If no obvious change emerges from recent commits/ferries, use judgment to pick a low-risk tweak
+   (for example data-mix or hyperparameter) that could improve loss at the same FLOPs budget.
+3. Get human approval.
+4. Push the launch commit, then launch with `ray_run.py` and monitor to completion.
 """
 
 import datetime as dt
@@ -75,6 +77,7 @@ daily_ferry = default_train(
     tokenized=nemotron_mix,
     model_config=replace(llama_150m, max_seq_len=TRAIN_SEQ_LEN),
     train_config=train_config,
+    eval_harness_tasks=[],
     tags=["ferry", "daily", "integration", "125m", "nemotron", "seq4096"],
 )
 

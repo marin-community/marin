@@ -27,7 +27,7 @@ from typing import Any, Protocol
 import cloudpickle
 import fsspec
 from fray.v2 import ActorConfig, ActorHandle, Client, ResourceConfig
-from iris.temp_buckets import get_temp_bucket_path
+from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import ExponentialBackoff
 
 from zephyr.dataset import Dataset
@@ -982,7 +982,7 @@ class ZephyrContext:
             Defaults to 600s.
         max_execution_retries: Maximum number of times to retry a pipeline execution after
             an infrastructure failure (e.g., coordinator VM preemption). Application errors
-            (ZephyrWorkerError) are never retried. Defaults to 3.
+            (ZephyrWorkerError) are never retried. Defaults to 100.
     """
 
     client: Client | None = None
@@ -991,7 +991,8 @@ class ZephyrContext:
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
-    max_execution_retries: int = 3
+    # NOTE: 100 is fairly aggressive but it fits the preemptible env better
+    max_execution_retries: int = 100
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -1022,17 +1023,7 @@ class ZephyrContext:
             self.no_workers_timeout = 6 * 60 * 60  # 6 hours
 
         if self.chunk_storage_prefix is None:
-            temp_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")
-            if temp_prefix is None:
-                marin_prefix = os.environ.get("MARIN_PREFIX")
-                if not marin_prefix:
-                    raise RuntimeError(
-                        "MARIN_PREFIX must be set when using a distributed backend.\n"
-                        "  Example: export MARIN_PREFIX=gs://marin-us-central2"
-                    )
-                temp_prefix = f"{marin_prefix}/tmp/zephyr"
-
-            self.chunk_storage_prefix = temp_prefix
+            self.chunk_storage_prefix = marin_temp_bucket(ttl_days=3, prefix="zephyr")
 
         # make sure each context is unique
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"

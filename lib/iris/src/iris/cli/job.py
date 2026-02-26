@@ -23,6 +23,7 @@ import yaml
 from google.protobuf import json_format
 from tabulate import tabulate
 
+from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug_report
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
@@ -66,8 +67,8 @@ def _format_resources(resources: cluster_pb2.ResourceSpecProto | None) -> str:
     parts = []
 
     # CPU
-    if resources.cpu:
-        parts.append(f"{resources.cpu}cpu")
+    if resources.cpu_millicores:
+        parts.append(f"{resources.cpu_millicores / 1000:g}cpu")
 
     # Memory
     if resources.memory_bytes:
@@ -143,8 +144,7 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
                 raise ValueError(f"Too many values for env var: {' '.join(item)}")
             if "=" in item[0]:
                 raise ValueError(
-                    f"Key cannot contain '=': {item[0]}\n"
-                    f"You probably meant to do '-e {' '.join(item[0].split('='))}'"
+                    f"Key cannot contain '=': {item[0]}\nYou probably meant to do '-e {' '.join(item[0].split('='))}'"
                 )
             env_vars[item[0]] = item[1] if len(item) == 2 else ""
 
@@ -204,12 +204,12 @@ def parse_gpu_spec(spec: str) -> tuple[str, int]:
 def build_resources(
     tpu: str | None,
     gpu: str | None,
-    cpu: int | None = None,
-    memory: str | None = None,
-    disk: str | None = None,
+    cpu: float = 0.5,
+    memory: str = "1GB",
+    disk: str = "5GB",
 ) -> ResourceSpec:
     """Build ResourceSpec from CLI arguments."""
-    spec = ResourceSpec(cpu=cpu or 1, memory=memory or "8GB", disk=disk or "10GB")
+    spec = ResourceSpec(cpu=cpu, memory=memory, disk=disk)
 
     if tpu:
         spec.device = tpu_device(tpu)
@@ -240,9 +240,9 @@ def run_iris_job(
     controller_url: str,
     tpu: str | None = None,
     gpu: str | None = None,
-    cpu: int | None = None,
-    memory: str | None = None,
-    disk: str | None = None,
+    cpu: float = 0.5,
+    memory: str = "1GB",
+    disk: str = "5GB",
     wait: bool = True,
     job_name: str | None = None,
     replicas: int = 1,
@@ -279,7 +279,7 @@ def run_iris_job(
 
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
-    logger.info(f"Resources: cpu={resources.cpu}, memory={resources.memory}, disk={resources.disk}")
+    logger.info(f"Resources: cpu={resources.cpu:g}, memory={resources.memory}, disk={resources.disk}")
     if resources.device and resources.device.HasField("tpu"):
         logger.info(f"TPU: {resources.device.tpu.variant}")
     if resources.device and resources.device.HasField("gpu"):
@@ -405,14 +405,16 @@ Examples:
 )
 @click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16)")
 @click.option("--gpu", type=str, help="GPU spec: VARIANTxCOUNT (e.g., H100x8), COUNT (e.g., 8), or VARIANT (e.g., H100)")
-@click.option("--cpu", type=int, help="Number of CPUs to request (default: 1)")
-@click.option("--memory", type=str, help="Memory size to request (e.g., 8GB, 512MB; default: 8GB)")
-@click.option("--disk", type=str, help="Ephemeral disk size to request (e.g., 64GB, 1TB; default: 10GB)")
+@click.option("--cpu", type=float, default=0.5, show_default=True, help="Number of CPUs to request")
+@click.option("--memory", type=str, default="1GB", show_default=True, help="Memory size to request (e.g., 8GB, 512MB)")
+@click.option(
+    "--disk", type=str, default="5GB", show_default=True, help="Ephemeral disk size to request (e.g., 64GB, 1TB)"
+)
 @click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
 @click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
 @click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
-@click.option("--timeout", type=int, default=0, help="Job timeout in seconds (default: 0 = no timeout)")
+@click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
@@ -433,9 +435,9 @@ def run(
     env_vars: tuple[tuple[str, str], ...],
     tpu: str | None,
     gpu: str | None,
-    cpu: int | None,
-    memory: str | None,
-    disk: str | None,
+    cpu: float,
+    memory: str,
+    disk: str,
     no_wait: bool,
     job_name: str | None,
     replicas: int,
@@ -629,3 +631,28 @@ def logs(
     for entry in entries:
         ts = entry.timestamp.as_short_time()
         click.echo(f"[{ts}] worker={entry.worker_id} task={entry.task_id} | {entry.data}")
+
+
+@job.command("bug-report")
+@click.argument("job_id")
+@click.option("--file-issue", is_flag=True, help="File a GitHub issue with the report")
+@click.option("--repo", type=str, default=None, help="GitHub repo (default: auto-detect from git remote)")
+@click.option("--tail", type=int, default=50, help="Recent log lines per task to include")
+@click.option("--labels", type=str, default="bug", help="Comma-separated labels for the GitHub issue")
+@click.pass_context
+def bug_report(ctx, job_id: str, file_issue: bool, repo: str | None, tail: int, labels: str):
+    """Generate a diagnostic bug report for a job."""
+    controller_url = require_controller_url(ctx)
+    report = gather_bug_report(controller_url, JobName.from_wire(job_id), tail=tail)
+    markdown = format_bug_report(report)
+
+    if file_issue:
+        title = f"[Iris] Job {report.job_id} {report.state_name}: {report.error_summary}"
+        url = file_github_issue(title, markdown, repo=repo, labels=labels.split(","))
+        if url:
+            click.echo(f"Filed issue: {url}")
+        else:
+            click.echo("Failed to file issue. Report printed below:\n")
+            click.echo(markdown)
+    else:
+        click.echo(markdown)

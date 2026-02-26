@@ -242,7 +242,7 @@ message TpuDevice {
 // Clients should create a ResourceSpec dataclass and call .to_proto().
 message ResourceSpecProto {
   // Compute resources
-  int32 cpu = 1;              // Number of CPU cores
+  int32 cpu_millicores = 1;   // CPU in millicores (1000 = 1 core)
   int64 memory_bytes = 4;     // RAM in bytes
   int64 disk_bytes = 9;       // Disk space in bytes
 
@@ -666,6 +666,11 @@ message Controller {
     repeated TaskLogBatch task_logs = 1;
     int64 last_timestamp_ms = 2;     // Max timestamp seen (for next since_ms)
     bool truncated = 3;              // True if max_total_lines hit
+
+    // Child job statuses (populated when include_children=true).
+    // Included on every response so the client can detect state transitions
+    // (e.g. child moved to FAILED) without a separate ListJobs RPC.
+    repeated JobStatus child_job_statuses = 4;
   }
 
   // --- Process Logs ---
@@ -676,6 +681,26 @@ message Controller {
 
   message GetProcessLogsResponse {
     repeated ProcessLogRecord records = 1;
+  }
+
+  // --- Machine Detail (unified VM + worker view) ---
+  message GetMachineStatusRequest {
+    string id = 1;  // VM ID or worker ID — resolved against both
+  }
+
+  message GetMachineStatusResponse {
+    // VM info (null if identifier matched a worker with no VM)
+    iris.vm.VmInfo vm = 1;
+    string scale_group = 2;
+
+    // Worker health (null if no worker registered for this machine)
+    WorkerHealthStatus worker = 3;
+
+    // Bootstrap logs (from VM init)
+    string bootstrap_logs = 4;
+
+    // Worker daemon logs (proxied from worker, empty if unhealthy/absent)
+    repeated ProcessLogRecord worker_logs = 5;
   }
 
 }
@@ -817,6 +842,9 @@ service ControllerService {
 
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
+
+  // Unified machine detail (VM + worker + logs in one call)
+  rpc GetMachineStatus(Controller.GetMachineStatusRequest) returns (Controller.GetMachineStatusResponse);
 }
 
 service WorkerService {

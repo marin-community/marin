@@ -5,7 +5,7 @@
 
 import logging
 import time
-from collections.abc import Callable
+from typing import Protocol
 
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
@@ -15,6 +15,27 @@ from iris.rpc.errors import call_with_retry
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
+
+
+class TaskStateLogger(Protocol):
+    """Observer for task state changes during streaming job wait.
+
+    Implement this protocol to customize how task lifecycle events and log
+    output are presented.  The streaming loop in ``wait_for_job_with_streaming``
+    calls these methods as child-job states transition and log batches arrive.
+    """
+
+    def task_started(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
+        """Called when a child job is first observed in the status list."""
+        ...
+
+    def task_finished(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
+        """Called when a child job reaches a terminal state (success or failure)."""
+        ...
+
+    def task_logging(self, response: cluster_pb2.Controller.GetTaskLogsResponse) -> None:
+        """Called with each batch of fetched task logs."""
+        ...
 
 
 class RemoteClusterClient:
@@ -158,12 +179,20 @@ class RemoteClusterClient:
         poll_interval: float,
         include_children: bool,
         since_ms: int = 0,
-        on_logs: Callable[[cluster_pb2.Controller.GetTaskLogsResponse], None] | None = None,
+        state_logger: TaskStateLogger | None = None,
     ) -> cluster_pb2.JobStatus:
         """Wait for job completion while streaming task logs via the controller RPC.
 
         Delegates log reading to the controller (which has the correct storage
         credentials and endpoint configuration), avoiding client-side S3 access.
+
+        Child job statuses are delivered inline in ``GetTaskLogsResponse`` (when
+        *include_children* is True), so detecting state transitions requires no
+        additional RPC calls.
+
+        Args:
+            state_logger: Optional observer notified of log batches and child-job
+                state transitions (started / finished).
         """
         deadline = Deadline.from_seconds(timeout)
         last_timestamp_ms = since_ms
@@ -171,6 +200,8 @@ class RemoteClusterClient:
         log_fetch_backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
         consecutive_log_failures = 0
         max_log_failures = 5
+        # Track child job states so we fire callbacks once per transition.
+        child_job_states: dict[str, int] = {}
 
         while True:
             status = self.get_job_status(job_id)
@@ -201,8 +232,18 @@ class RemoteClusterClient:
                 if log_response.last_timestamp_ms > last_timestamp_ms:
                     last_timestamp_ms = log_response.last_timestamp_ms
 
-                if on_logs is not None:
-                    on_logs(log_response)
+                if state_logger is not None:
+                    state_logger.task_logging(log_response)
+
+                    for child in log_response.child_job_statuses:
+                        prev_state = child_job_states.get(child.job_id)
+                        child_job_states[child.job_id] = child.state
+                        if prev_state == child.state:
+                            continue
+                        if prev_state is None:
+                            state_logger.task_started(child.job_id, child)
+                        if is_job_finished(child.state):
+                            state_logger.task_finished(child.job_id, child)
 
             if is_job_finished(status.state):
                 total_lines = sum(len(b.logs) for b in log_response.task_logs) if log_response else 0
@@ -260,6 +301,16 @@ class RemoteClusterClient:
         request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix)
         response = self._client.list_endpoints(request)
         return list(response.endpoints)
+
+    def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]:
+        """List all workers registered with the controller."""
+
+        def _call():
+            request = cluster_pb2.Controller.ListWorkersRequest()
+            response = self._client.list_workers(request)
+            return list(response.workers)
+
+        return call_with_retry("list_workers", _call)
 
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
         def _call():

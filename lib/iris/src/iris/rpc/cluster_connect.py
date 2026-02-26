@@ -73,6 +73,9 @@ class ControllerService(Protocol):
     async def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def get_machine_status(self, request: cluster__pb2.Controller.GetMachineStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetMachineStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
     def __init__(self, service: ControllerService | AsyncGenerator[ControllerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
@@ -268,6 +271,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.profile_task,
+                ),
+                "/iris.cluster.ControllerService/GetMachineStatus": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetMachineStatus",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.GetMachineStatusRequest,
+                        output=cluster__pb2.Controller.GetMachineStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_machine_status,
                 ),
             },
             interceptors=interceptors,
@@ -661,6 +674,26 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def get_machine_status(
+        self,
+        request: cluster__pb2.Controller.GetMachineStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.GetMachineStatusResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetMachineStatus",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.GetMachineStatusRequest,
+                output=cluster__pb2.Controller.GetMachineStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 
 class WorkerService(Protocol):
@@ -953,6 +986,8 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_machine_status(self, request: cluster__pb2.Controller.GetMachineStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetMachineStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
 class ControllerServiceWSGIApplication(ConnectWSGIApplication):
@@ -1148,6 +1183,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.profile_task,
+                ),
+                "/iris.cluster.ControllerService/GetMachineStatus": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetMachineStatus",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.GetMachineStatusRequest,
+                        output=cluster__pb2.Controller.GetMachineStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_machine_status,
                 ),
             },
             interceptors=interceptors,
@@ -1535,6 +1580,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.ProfileTaskRequest,
                 output=cluster__pb2.ProfileTaskResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_machine_status(
+        self,
+        request: cluster__pb2.Controller.GetMachineStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.GetMachineStatusResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetMachineStatus",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.GetMachineStatusRequest,
+                output=cluster__pb2.Controller.GetMachineStatusResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

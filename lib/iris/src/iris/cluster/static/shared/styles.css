@@ -350,18 +350,6 @@ button:not(.tab-btn):disabled { color: #8c959f; cursor: default; background: #f6
   margin-bottom: 20px;
 }
 
-.group-status { display: inline-flex; align-items: center; gap: 5px; }
-
-.group-status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.group-status-dot.available { background: #1a7f37; }
-.group-status-dot.backoff { background: #9a6700; }
-.group-status-dot.disabled { background: #57606a; }
-
 /* === Autoscaler actions log === */
 .actions-log {
   background: white;
@@ -398,6 +386,35 @@ button:not(.tab-btn):disabled { color: #8c959f; cursor: default; background: #f6
 .action-type.worker_failed { background: #ffebe9; color: #cf222e; }
 .action-type.slice_ready { background: #dafbe1; color: #1a7f37; }
 .action-type.slice_failed { background: #ffebe9; color: #cf222e; }
+
+/* Slice state badges (compact: "2R 1B") */
+.slice-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 3px;
+  line-height: 1.4;
+}
+.slice-badge.ready { background: #dafbe1; color: #1a7f37; }
+.slice-badge.booting { background: #ddf4ff; color: #0969da; }
+.slice-badge.initializing { background: #fff8c5; color: #9a6700; }
+.slice-badge.requesting { background: #fff1e5; color: #bc4c00; }
+.slice-badge.failed { background: #ffebe9; color: #cf222e; }
+
+/* Decision column colors */
+.decision-idle { color: #8c959f; }
+.decision-selected { color: #1a7f37; font-weight: 600; }
+.decision-blocked { color: #9a6700; }
+.decision-requesting { color: #0969da; }
+.decision-at_capacity { color: #bc4c00; }
+
+/* Failure badge inline */
+.failure-badge { color: #cf222e; font-size: 11px; font-weight: 600; margin-left: 6px; }
+
+/* Dimmed rows for idle groups with no slices */
+.row-inactive td { opacity: 0.45; }
 
 .future-feature {
   color: #57606a;

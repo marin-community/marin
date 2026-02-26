@@ -93,11 +93,19 @@ message VmConfig {
 // ============================================================================
 
 message GcpSliceConfig {
+  enum GcpSliceMode {
+    GCP_SLICE_MODE_TPU = 0;
+    GCP_SLICE_MODE_VM = 1;
+  }
+
+  GcpSliceMode mode = 6;
   string zone = 1;
   string runtime_version = 2;
   reserved 3;  // was: preemptible (moved to SliceConfig)
   string topology = 4;
   reserved 5;  // was: zones (each slice/scaling group operates in a single zone)
+  string machine_type = 7;      // Required for mode=GCP_SLICE_MODE_VM
+  reserved 8;  // was: boot_disk_size_gb (moved to SliceConfig.disk_size_gb)
 }
 
 message CoreweaveSliceConfig {
@@ -123,6 +131,7 @@ message SliceConfig {
   map<string, string> labels = 5;
   bool preemptible = 6;
   int32 gpu_count = 7;          // number of GPUs per VM (populated from ScaleGroupResources)
+  int32 disk_size_gb = 8;       // boot disk size in GB (populated from ScaleGroupResources)
   oneof platform {
     GcpSliceConfig gcp = 10;
     CoreweaveSliceConfig coreweave = 11;
@@ -149,7 +158,7 @@ enum AcceleratorType {
 
 // Resources available per slice in a scale group.
 message ScaleGroupResources {
-  int32 cpu = 1;
+  int32 cpu_millicores = 1;  // CPU in millicores (1000 = 1 core)
   int64 memory_bytes = 2;
   int64 disk_bytes = 3;
   int32 gpu_count = 4;

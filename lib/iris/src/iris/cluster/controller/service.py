@@ -863,7 +863,10 @@ class ControllerServiceImpl:
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
         requested_attempt_id = request.attempt_id
 
-        # Detect if this is a task ID (ends in /N) or job ID and collect tasks
+        # Detect if this is a task ID (ends in /N) or job ID and collect tasks.
+        # When include_children is set, also collect child job statuses so the
+        # client can detect state transitions without a separate ListJobs RPC.
+        child_job_statuses: list[cluster_pb2.JobStatus] = []
         if job_name.is_task:
             task = self._state.get_task(job_name)
             tasks = [task] if task else []
@@ -875,6 +878,16 @@ class ControllerServiceImpl:
                     job_wire = job.job_id.to_wire()
                     if job_wire == prefix or job_wire.startswith(prefix + "/"):
                         tasks.extend(self._state.get_job_tasks(job.job_id))
+                        if job_wire != prefix:
+                            child_status = cluster_pb2.JobStatus(
+                                job_id=job_wire,
+                                state=job.state,
+                                exit_code=job.exit_code or 0,
+                                error=job.error or "",
+                            )
+                            if job.finished_at:
+                                child_status.finished_at.CopyFrom(job.finished_at.to_proto())
+                            child_job_statuses.append(child_status)
             else:
                 tasks.extend(self._state.get_job_tasks(job_name))
 
@@ -975,6 +988,7 @@ class ControllerServiceImpl:
             task_logs=task_logs,
             last_timestamp_ms=last_timestamp_ms,
             truncated=truncated,
+            child_job_statuses=child_job_statuses,
         )
 
     # --- Profiling ---
@@ -1058,3 +1072,114 @@ class ControllerServiceImpl:
                 for r in records
             ]
         )
+
+    # --- Machine Detail (unified VM + worker view) ---
+
+    def get_machine_status(
+        self,
+        request: cluster_pb2.Controller.GetMachineStatusRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetMachineStatusResponse:
+        """Return unified VM + worker detail for a single machine.
+
+        Resolves the identifier against both VM IDs and worker IDs, then
+        returns VM info, worker health, bootstrap logs, and worker daemon
+        logs in a single response.
+        """
+        with rpc_error_handler("get_machine_status"):
+            if not request.id:
+                raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
+
+            identifier = request.id
+            autoscaler = self._controller.autoscaler
+            vm_info: vm_pb2.VmInfo | None = None
+            scale_group = ""
+            bootstrap_logs = ""
+            worker: Any = None  # ControllerWorker
+
+            # Try to resolve as VM ID first
+            if autoscaler:
+                vm_info = autoscaler.get_vm(identifier)
+                if vm_info:
+                    scale_group = vm_info.scale_group
+                    bootstrap_logs = autoscaler.get_init_log(identifier, tail=500)
+                    # Enrich with worker info
+                    if vm_info.address:
+                        for w in self._state.list_all_workers():
+                            vm_addr = w.metadata.vm_address if w.metadata else None
+                            w_host = w.address.split(":")[0] if w.address and ":" in w.address else w.address
+                            if vm_addr == vm_info.address or w_host == vm_info.address:
+                                worker = w
+                                vm_info.worker_id = w.worker_id
+                                vm_info.worker_healthy = w.healthy
+                                break
+
+            # If not found as VM, try as worker ID
+            if not vm_info:
+                worker = self._state.get_worker(identifier)
+                # If we found a worker, scan autoscaler status for its VM
+                if worker and autoscaler:
+                    status = autoscaler.get_status()
+                    for group in status.groups:
+                        for slice_info in group.slices:
+                            for vm in slice_info.vms:
+                                if vm.address and worker.address:
+                                    w_host = worker.address.split(":")[0] if ":" in worker.address else worker.address
+                                    vm_addr = worker.metadata.vm_address if worker.metadata else None
+                                    if vm.address == vm_addr or vm.address == w_host:
+                                        vm_info = vm
+                                        scale_group = group.name
+                                        bootstrap_logs = autoscaler.get_init_log(vm.vm_id, tail=500)
+                                        vm_info.worker_id = worker.worker_id
+                                        vm_info.worker_healthy = worker.healthy
+
+            if not vm_info and not worker:
+                raise ConnectError(Code.NOT_FOUND, f"No VM or worker found for '{identifier}'")
+
+            # Build worker health status proto
+            worker_health: cluster_pb2.Controller.WorkerHealthStatus | None = None
+            if worker:
+                status_message = ""
+                if not worker.healthy:
+                    if worker.consecutive_failures > 0:
+                        age = worker.last_heartbeat.age_ms()
+                        status_message = (
+                            f"Heartbeat timeout ({worker.consecutive_failures} failures, last seen {age // 1000}s ago)"
+                        )
+                    else:
+                        status_message = "Unhealthy (no failures recorded)"
+
+                worker_health = cluster_pb2.Controller.WorkerHealthStatus(
+                    worker_id=worker.worker_id,
+                    healthy=worker.healthy,
+                    consecutive_failures=worker.consecutive_failures,
+                    last_heartbeat=worker.last_heartbeat.to_proto(),
+                    running_job_ids=[tid.to_wire() for tid in worker.running_tasks],
+                    address=worker.address,
+                    metadata=worker.metadata,
+                    status_message=status_message,
+                )
+
+            # Fetch worker daemon logs if worker is healthy
+            worker_logs: list[cluster_pb2.ProcessLogRecord] = []
+            if worker and worker.healthy:
+                try:
+                    stub = self._controller.stub_factory.get_stub(worker.address)
+                    resp = stub.get_process_logs(
+                        cluster_pb2.Worker.GetProcessLogsRequest(limit=200),
+                        timeout_ms=10000,
+                    )
+                    worker_logs = list(resp.records)
+                except Exception:
+                    logger.debug("Failed to fetch worker logs for %s", identifier, exc_info=True)
+
+            resp = cluster_pb2.Controller.GetMachineStatusResponse(
+                bootstrap_logs=bootstrap_logs,
+                scale_group=scale_group,
+                worker_logs=worker_logs,
+            )
+            if vm_info:
+                resp.vm.CopyFrom(vm_info)
+            if worker_health:
+                resp.worker.CopyFrom(worker_health)
+            return resp

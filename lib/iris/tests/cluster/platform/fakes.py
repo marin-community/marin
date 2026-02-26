@@ -257,6 +257,9 @@ class FakePlatform:
         self._slices: dict[str, FakeSliceHandle] = {}
         self._slice_counter = 0
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
+
     def create_vm(self, config: config_pb2.VmConfig):
         raise NotImplementedError("FakePlatform does not support standalone VMs")
 

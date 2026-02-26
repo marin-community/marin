@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
-from .reference import linear_softmax_cross_entropy_loss_streaming
+from .reference import linear_softmax_cross_entropy_loss_reference, linear_softmax_cross_entropy_loss_streaming
 from .tuned_block_sizes import infer_xla_v_block_size
 
 
@@ -204,6 +204,17 @@ def linear_softmax_cross_entropy_loss_xla(
         v_block_size = infer_xla_v_block_size(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
     else:
         v_block_size = block_sizes.v_block_size
+    if v_block_size >= w.shape[1]:
+        return linear_softmax_cross_entropy_loss_reference(
+            x,
+            labels,
+            w,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            return_argmax=return_argmax,
+        )
+
     if return_argmax:
         return linear_softmax_cross_entropy_loss_streaming(
             x,

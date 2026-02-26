@@ -13,6 +13,7 @@ Resolution chain for the storage prefix:
   3. ``/tmp/marin`` (local fallback)
 """
 
+import dataclasses
 import logging
 import os
 import pathlib
@@ -22,8 +23,6 @@ import urllib.request
 from collections.abc import Callable, Sequence
 from pathlib import PurePath
 from typing import Any
-
-import dataclasses
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +136,8 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "") -> str:
                     path = f"{path}/{prefix.strip('/')}"
                 return path
 
+    if "://" not in mp:
+        mp = f"file://{mp}"
     path = f"{mp}/tmp"
     if prefix:
         path = f"{path}/{prefix.strip('/')}"

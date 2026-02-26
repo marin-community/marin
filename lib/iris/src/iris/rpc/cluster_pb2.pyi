@@ -337,16 +337,16 @@ class TpuDevice(_message.Message):
     def __init__(self, variant: _Optional[str] = ..., topology: _Optional[str] = ..., count: _Optional[int] = ...) -> None: ...
 
 class ResourceSpecProto(_message.Message):
-    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "device")
-    CPU_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("cpu_millicores", "memory_bytes", "disk_bytes", "device")
+    CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
     MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
     DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
     DEVICE_FIELD_NUMBER: _ClassVar[int]
-    cpu: int
+    cpu_millicores: int
     memory_bytes: int
     disk_bytes: int
     device: DeviceConfig
-    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
     __slots__ = ("pip_packages", "env_vars", "extras", "python_version", "dockerfile")
@@ -817,14 +817,16 @@ class Controller(_message.Message):
         worker_id: str
         def __init__(self, task_id: _Optional[str] = ..., logs: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ..., error: _Optional[str] = ..., worker_id: _Optional[str] = ...) -> None: ...
     class GetTaskLogsResponse(_message.Message):
-        __slots__ = ("task_logs", "last_timestamp_ms", "truncated")
+        __slots__ = ("task_logs", "last_timestamp_ms", "truncated", "child_job_statuses")
         TASK_LOGS_FIELD_NUMBER: _ClassVar[int]
         LAST_TIMESTAMP_MS_FIELD_NUMBER: _ClassVar[int]
         TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+        CHILD_JOB_STATUSES_FIELD_NUMBER: _ClassVar[int]
         task_logs: _containers.RepeatedCompositeFieldContainer[Controller.TaskLogBatch]
         last_timestamp_ms: int
         truncated: bool
-        def __init__(self, task_logs: _Optional[_Iterable[_Union[Controller.TaskLogBatch, _Mapping]]] = ..., last_timestamp_ms: _Optional[int] = ..., truncated: _Optional[bool] = ...) -> None: ...
+        child_job_statuses: _containers.RepeatedCompositeFieldContainer[JobStatus]
+        def __init__(self, task_logs: _Optional[_Iterable[_Union[Controller.TaskLogBatch, _Mapping]]] = ..., last_timestamp_ms: _Optional[int] = ..., truncated: _Optional[bool] = ..., child_job_statuses: _Optional[_Iterable[_Union[JobStatus, _Mapping]]] = ...) -> None: ...
     class GetProcessLogsRequest(_message.Message):
         __slots__ = ("prefix", "limit")
         PREFIX_FIELD_NUMBER: _ClassVar[int]
@@ -837,6 +839,24 @@ class Controller(_message.Message):
         RECORDS_FIELD_NUMBER: _ClassVar[int]
         records: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
         def __init__(self, records: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
+    class GetMachineStatusRequest(_message.Message):
+        __slots__ = ("id",)
+        ID_FIELD_NUMBER: _ClassVar[int]
+        id: str
+        def __init__(self, id: _Optional[str] = ...) -> None: ...
+    class GetMachineStatusResponse(_message.Message):
+        __slots__ = ("vm", "scale_group", "worker", "bootstrap_logs", "worker_logs")
+        VM_FIELD_NUMBER: _ClassVar[int]
+        SCALE_GROUP_FIELD_NUMBER: _ClassVar[int]
+        WORKER_FIELD_NUMBER: _ClassVar[int]
+        BOOTSTRAP_LOGS_FIELD_NUMBER: _ClassVar[int]
+        WORKER_LOGS_FIELD_NUMBER: _ClassVar[int]
+        vm: _vm_pb2.VmInfo
+        scale_group: str
+        worker: Controller.WorkerHealthStatus
+        bootstrap_logs: str
+        worker_logs: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
+        def __init__(self, vm: _Optional[_Union[_vm_pb2.VmInfo, _Mapping]] = ..., scale_group: _Optional[str] = ..., worker: _Optional[_Union[Controller.WorkerHealthStatus, _Mapping]] = ..., bootstrap_logs: _Optional[str] = ..., worker_logs: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class Worker(_message.Message):
