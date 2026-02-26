@@ -71,6 +71,8 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
 
 3. CHECK TERMINAL STATUS (RAY)
    - Determine job completion by Ray terminal status (`SUCCEEDED`/`FAILED`/`STOPPED`), not by train-step counts.
+   - Treat Ray `RUNNING` as "controller process is running" only; it does **not** guarantee that TPU resources have been allocated yet.
+   - Best signal that the job is actually allocated: confirm the expected job id appears in W&B for this launch.
 
 4. PRINT W&B RUN IDS/LINKS
    - Inspect recent logs for W&B run URLs / IDs (for example lines containing `wandb: 🚀 View run` or `/runs/<RUN_ID>`).
