@@ -5,15 +5,12 @@
 Shared constants, configs, and helper functions for DNA experiments.
 """
 
-import dataclasses
 from collections.abc import Sequence
 
 from fray.v2 import ResourceConfig
 from levanter.data.text import DNALmDatasetFormat, TextLmDatasetFormat
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.llama import llama_50m
-from experiments.qwen3 import qwen3_0_6b_hd128, qwen3_1_7b, qwen3_4b_hd128
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep
 
@@ -23,7 +20,6 @@ from marin.execution.executor import ExecutorStep
 
 DNA_RESOURCES_V1 = ResourceConfig.with_tpu("v5p-8")
 DNA_TOKENIZER_V1 = "songlab/tokenizer-dna-clm"
-DNA_SEQ_LEN_V1 = 512
 DNA_WINDOW_SIZE_BYTES_V1 = 50_000_000
 
 # =============================================================================
@@ -36,18 +32,6 @@ CDS_DATASET_V1 = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v3_512_
 PROMOTERS_MRNA_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-intervals-v1_512_256"
 PROMOTERS_MRNA_256_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-intervals-v1_256_128"
 PROMOTERS_MRNA_NCRNA_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-intervals-v4_512_256"
-
-# =============================================================================
-# Model configs with DNA seq len (V1)
-# =============================================================================
-
-dna_qwen3_0_6b_v1 = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=DNA_SEQ_LEN_V1)
-dna_qwen3_0_6b_256_v1 = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=256)
-dna_qwen3_1_7b_v1 = dataclasses.replace(qwen3_1_7b, max_seq_len=DNA_SEQ_LEN_V1)
-dna_qwen3_1_7b_256_v1 = dataclasses.replace(qwen3_1_7b, max_seq_len=256)
-dna_qwen3_4b_256_v1 = dataclasses.replace(qwen3_4b_hd128, max_seq_len=256)
-dna_llama_50m_v1 = dataclasses.replace(llama_50m, max_seq_len=DNA_SEQ_LEN_V1)
-dna_llama_50m_256_v1 = dataclasses.replace(llama_50m, max_seq_len=256)
 
 # =============================================================================
 # Preset train configs (V1)
