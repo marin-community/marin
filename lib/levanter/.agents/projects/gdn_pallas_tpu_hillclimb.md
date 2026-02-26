@@ -2572,3 +2572,61 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Notes:
   - Keep this as the comparator for subsequent `v6e-8` runs.
   - Do not compare this value directly against `v5p-8` MFU without normalizing hardware assumptions.
+
+### Iteration 46 - Macro Move F / segmented train split (solve + recurrent) blocked by TPU infra (reverted)
+
+- Date: 2026-02-26T05:02:05Z
+- Commit: none (failed attempt)
+- Loop session/local index: `1/10`
+- Starting commit: `37fd2dc09689165e6d0374f39f90037d55f8be16`
+- Dominant bottleneck carried in (v6e baseline trace `.profiles/wandb/plugins/profile/2026_02_26_03_03_25/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map`: `65.815 ms` (dominant)
+  - `fusion`: `16.697 ms`
+  - `all-gather`: `15.148 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move F (Experiment A)**: force segmented train path to split kernels (`prepare` then `recurrent`) instead of fused segmented train forward (`+10-25%`, medium/high risk; may increase launch count but reduce fused-kernel pressure).
+  2. **Macro Move E (Experiment B)**: recurrent V-tiling over `V_blocks` with `S_prev[K,Vb]` state slices (`+15-30%`, high risk; backward reductions and memory-layout complexity).
+  3. **Macro Move H**: shared-RHS matmul batching without concat-sensitive layouts (`+8-18%`, medium/high risk; prior compile/layout regressions).
+
+- Selected macro-move category: **F) Match FlashLinearAttention’s kernel decomposition**.
+- Selected hypothesis: apply FLA-style **2-kernel split** for segmented train path (solve/prep kernel then recurrent apply kernel) by routing `return_prepare_tape=True` through split kernels instead of `_gdn_chunk_segment_fwd_fused_pallas`.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Implemented the segmented train-path routing change to use split `prepare + recurrent` kernels.
+  - Local smoke tests passed.
+  - TPU validation could not be completed due repeated infra failures across dev TPU and Ray fallback paths.
+  - Reverted speculative kernel edit; tree returned to starting commit behavior.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Dev TPU attempt (stalled/no completion):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster eu-west4-a --tpu-name calvinxu-gdn-v6e --tests both`
+    - progressed deep into suite, then hung with no additional output for multiple minutes.
+  - Dev TPU retry (unavailable):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster eu-west4-a --tpu-name calvinxu-gdn-v6e --tests both --no-sync`
+    - failed immediately: `Error: SSH configuration for dev-tpu-calvinxu-gdn-v6e not found`.
+  - Ray fallback attempt (fixture/env failure):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - failed setup with `_configure_marin_prefix did not yield a value` (cluster env had `MARIN_PREFIX` set).
+  - Direct Ray fallback with unset `MARIN_PREFIX` (infra termination):
+    - `uv run lib/marin/src/marin/run/ray_run.py --cluster us-central1 --tpu auto -e EQX_ON_ERROR=nan -e WANDB_MODE=offline -- bash -lc 'cd lib/levanter && uv sync --extra=tpu --group test && uv pip install torch --index-url https://download.pytorch.org/whl/cpu && unset MARIN_PREFIX && EQX_ON_ERROR=nan WANDB_MODE=offline uv run pytest tests/test_gdn_kernels.py tests/test_gdn_layer.py -v'`
+    - tests were running/passing, then job failed before completion: `Job supervisor actor died ... actor's node was terminated expectedly: received SIGTERM`.
+
+- Profile run:
+  - **Not run** due TPU validation blocker (no stable TPU test pass could be obtained in this infra state).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: **blocked by infra** (commands and failures recorded above).
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: **not measured** (profile blocked).
+    - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`: **not measured** (profile blocked).
+  - Governance:
+    - Infra-blocked iteration; speculative kernel code reverted, no champion update.
+
+- Assessment: **infra-blocked attempt**. Could not complete required TPU validation/profile evidence due dev TPU availability loss and Ray worker/job-supervisor termination.
+- Next bold hypothesis:
+  - Re-attempt Macro Move F split on a stable TPU allocation, then profile; if infra remains unstable, pivot to Macro Move E only after validation path is reliable.
