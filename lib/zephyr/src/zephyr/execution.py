@@ -10,6 +10,7 @@ protocol.
 """
 
 from __future__ import annotations
+
 import enum
 import logging
 import os
@@ -45,10 +46,6 @@ from zephyr.plan import (
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
-
-
-class _ShutdownRequested(Exception):
-    """Raised by _await_future when the shutdown event is set."""
 
 
 class Chunk(Protocol):
@@ -780,19 +777,6 @@ class ZephyrWorker:
             )
         return self._shared_data_cache[name]
 
-    def _await_future(self, future: Any, poll_interval: float = 5.0) -> Any:
-        """Wait for a Future to resolve, checking _shutdown_event between polls.
-
-        No hard timeout — the heartbeat thread is the liveness detector.
-        Raises _ShutdownRequested if shutdown is signaled before the future resolves.
-        """
-        while not self._shutdown_event.is_set():
-            try:
-                return future.result(timeout=poll_interval)
-            except TimeoutError:
-                continue
-        raise _ShutdownRequested()
-
     def _run_polling(self, coordinator: ActorHandle) -> None:
         """Main polling loop. Runs in a background thread started by __init__."""
         logger.info("[%s] Starting polling loop", self._worker_id)
@@ -859,12 +843,17 @@ class ZephyrWorker:
             if loop_count % 100 == 1:
                 logger.debug("[%s] Poll iteration #%d, tasks completed: %d", self._worker_id, loop_count, task_count)
 
+            future = coordinator.pull_task.remote(self._worker_id)
+            t_start = time.monotonic()
+            while not future.done():
+                if self._shutdown_event.wait(timeout=5.0):
+                    return  # shutdown requested
+                elapsed = time.monotonic() - t_start
+                if elapsed > 30:
+                    logger.warning("[%s] Waiting for coordinator pull_task response (%.0fs)", self._worker_id, elapsed)
             try:
-                response = self._await_future(coordinator.pull_task.remote(self._worker_id))
-            except _ShutdownRequested:
-                break
+                response = future.result()
             except Exception as e:
-                # Coordinator is dead or unreachable - exit gracefully
                 logger.info("[%s] pull_task failed (coordinator may be dead): %s", self._worker_id, e)
                 break
 
