@@ -44,10 +44,13 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Literal, TextIO
+from collections.abc import Callable
 
 import click
 from iris.client import IrisClient
@@ -722,6 +725,14 @@ class TestResult:
     duration_seconds: float
 
 
+@dataclass
+class SmokeTestCase:
+    """Executable smoke test case."""
+
+    label: str
+    run: Callable[[IrisClient], TestResult]
+
+
 # =============================================================================
 # Main Test Runner
 # =============================================================================
@@ -918,43 +929,52 @@ class SmokeTestRunner:
 
     def _run_tests(self, controller_url: str):
         """Run test jobs against the cluster, choosing GPU or TPU suite."""
-        client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
-
         if self._accel.is_gpu:
-            self._run_gpu_tests(client)
+            self._run_gpu_tests(controller_url)
         else:
-            self._run_tpu_tests(client)
+            self._run_tpu_tests(controller_url)
 
-    def _run_test_step(self, client: IrisClient, label: str, method, *args) -> bool:
-        """Run one test step: log, execute, record result, check deadline.
+    def _run_test_cases_parallel(self, controller_url: str, tests: list[SmokeTestCase]) -> None:
+        """Run all suite tests in parallel so resource demand is requested at once."""
+        if not tests:
+            return
 
-        Returns False if the runner should stop (interrupted/deadline).
-        """
-        logger.info(label)
-        result = method(client, *args)
-        self._results.append(result)
-        self._log_autoscaler_status()
-        return not self._interrupted
+        logger.info("Launching %d smoke tests in parallel", len(tests))
+
+        def _run_case(case: SmokeTestCase) -> TestResult:
+            client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
+            logger.info("[START] %s", case.label)
+            return case.run(client)
+
+        with ThreadPoolExecutor(max_workers=len(tests), thread_name_prefix="smoke-test") as executor:
+            future_pairs = [(case, executor.submit(_run_case, case)) for case in tests]
+            for case, future in future_pairs:
+                if self._interrupted:
+                    future.cancel()
+                    continue
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.exception("  [FAIL] %s raised an exception", case.label)
+                    result = TestResult(case.label, False, f"Exception: {e}", 0.0)
+                self._results.append(result)
+                self._log_autoscaler_status()
 
     # ----- GPU test suite -----
 
-    def _run_gpu_tests(self, client: IrisClient):
+    def _run_gpu_tests(self, controller_url: str):
         a = self._accel
         tests = [
-            (f"Simple GPU job ({a.label()})", self._run_simple_gpu_job),
-            (f"Concurrent GPU jobs (3x {a.label()})", self._run_concurrent_gpu_jobs),
+            SmokeTestCase(f"Simple GPU job ({a.label()})", self._run_simple_gpu_job),
+            SmokeTestCase(f"Concurrent GPU jobs (3x {a.label()})", self._run_concurrent_gpu_jobs),
         ]
         if self._has_non_preemptible_cpu_group():
-            tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
+            tests.append(SmokeTestCase("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
         if not self.config.local:
-            tests.append((f"Multi-GPU device check ({a.label()})", self._run_gpu_check_job))
+            tests.append(SmokeTestCase(f"Multi-GPU device check ({a.label()})", self._run_gpu_check_job))
         if a.region and not self.config.local:
-            tests.append((f"Region-constrained GPU job ({a.region})", self._run_region_constrained_gpu_job))
-
-        total = len(tests)
-        for i, (label, method) in enumerate(tests, 1):
-            if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method):
-                return
+            tests.append(SmokeTestCase(f"Region-constrained GPU job ({a.region})", self._run_region_constrained_gpu_job))
+        self._run_test_cases_parallel(controller_url, tests)
 
     def _run_simple_gpu_job(self, client: IrisClient) -> TestResult:
         return self._run_job_test(
@@ -1005,42 +1025,53 @@ class SmokeTestRunner:
 
     # ----- TPU test suite -----
 
-    def _run_tpu_tests(self, client: IrisClient):
+    def _run_tpu_tests(self, controller_url: str):
         a = self._accel
         if self.config.local:
             tests = [
-                (f"Simple TPU job ({a.variant})", self._run_simple_tpu_job, True),
-                (f"Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs, True),
-                (f"Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job, True),
+                SmokeTestCase(
+                    f"Simple TPU job ({a.variant})",
+                    partial(self._run_simple_tpu_job, scheduling_only=True),
+                ),
+                SmokeTestCase(
+                    f"Concurrent TPU jobs (3x {a.variant})",
+                    partial(self._run_concurrent_tpu_jobs, scheduling_only=True),
+                ),
+                SmokeTestCase(
+                    f"Coscheduled multi-task job ({a.variant})",
+                    partial(self._run_coscheduled_job, scheduling_only=True),
+                ),
             ]
             if self._has_non_preemptible_cpu_group():
-                tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job, False))
+                tests.append(SmokeTestCase("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
             if a.region:
-                tests.append((f"Region-constrained job ({a.region})", self._run_region_constrained_job, True))
-                tests.append((f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job, True))
-
-            total = len(tests)
-            for i, (label, method, scheduling_only) in enumerate(tests, 1):
-                if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method, scheduling_only):
-                    return
+                tests.append(
+                    SmokeTestCase(
+                        f"Region-constrained job ({a.region})",
+                        partial(self._run_region_constrained_job, scheduling_only=True),
+                    )
+                )
+                tests.append(
+                    SmokeTestCase(
+                        f"Nested constraint propagation ({a.region})",
+                        partial(self._run_nested_constraint_job, scheduling_only=True),
+                    )
+                )
+            self._run_test_cases_parallel(controller_url, tests)
             return
 
         tests = [
-            (f"Simple TPU job ({a.variant})", self._run_simple_tpu_job),
-            (f"Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs),
-            (f"Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job),
-            (f"JAX TPU job ({a.variant})", self._run_jax_tpu_job),
+            SmokeTestCase(f"Simple TPU job ({a.variant})", self._run_simple_tpu_job),
+            SmokeTestCase(f"Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs),
+            SmokeTestCase(f"Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job),
+            SmokeTestCase(f"JAX TPU job ({a.variant})", self._run_jax_tpu_job),
         ]
         if self._has_non_preemptible_cpu_group():
-            tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
+            tests.append(SmokeTestCase("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
         if a.region:
-            tests.append((f"Region-constrained job ({a.region})", self._run_region_constrained_job))
-            tests.append((f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
-
-        total = len(tests)
-        for i, (label, method) in enumerate(tests, 1):
-            if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method):
-                return
+            tests.append(SmokeTestCase(f"Region-constrained job ({a.region})", self._run_region_constrained_job))
+            tests.append(SmokeTestCase(f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
+        self._run_test_cases_parallel(controller_url, tests)
 
     def _has_non_preemptible_cpu_group(self) -> bool:
         """Return True when config contains an active non-preemptible CPU group."""
