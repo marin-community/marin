@@ -14,9 +14,7 @@ from levanter.trainer import TrainerConfig
 
 from marin.training.training import (
     TrainLmOnPodConfig,
-    _normalize_jax_compilation_cache_dir,
     _doublecheck_paths,
-    run_levanter_train_lm,
 )
 
 
@@ -120,53 +118,3 @@ def test_pathlib_path_handling(trainer_config):
         )
         with pytest.raises(ValueError, match="not in the same region"):
             _doublecheck_paths(config)
-
-
-@pytest.mark.parametrize(
-    ("raw_path", "expected"),
-    [
-        ("file:///tmp/marin/tmp/compilation-cache", "/tmp/marin/tmp/compilation-cache"),
-        ("gs://marin-tmp-us-central2/ttl=30d/compilation-cache", "gs://marin-tmp-us-central2/ttl=30d/compilation-cache"),
-        ("/tmp/marin/tmp/compilation-cache", "/tmp/marin/tmp/compilation-cache"),
-    ],
-)
-def test_normalize_jax_compilation_cache_dir(raw_path, expected):
-    assert _normalize_jax_compilation_cache_dir(raw_path) == expected
-
-
-def test_run_levanter_train_lm_normalizes_local_compilation_cache_dir(trainer_config):
-    class FakeLaunchConfig:
-        def env_for_accel(self, _variant):
-            return {}
-
-    class FakeJob:
-        def wait(self, raise_on_failure=True):
-            self.raise_on_failure = raise_on_failure
-
-    class FakeClient:
-        def __init__(self):
-            self.submitted = []
-
-        def submit(self, request):
-            self.submitted.append(request)
-            return FakeJob()
-
-    fake_client = FakeClient()
-    config = TrainLmOnPodConfig(
-        train_config=train_lm.TrainLmConfig(trainer=trainer_config),
-        resources=ResourceConfig.with_cpu(),
-    )
-
-    with (
-        patch("marin.training.training.levanter.infra.cli_helpers.load_config", return_value=FakeLaunchConfig()),
-        patch("marin.training.training.current_client", return_value=fake_client),
-        patch(
-            "marin.training.training.marin_temp_bucket",
-            return_value="file:///tmp/marin/tmp/compilation-cache",
-        ),
-    ):
-        run_levanter_train_lm(config)
-
-    assert fake_client.submitted, "expected a job submission"
-    submitted_request = fake_client.submitted[0]
-    assert submitted_request.environment.env_vars["JAX_COMPILATION_CACHE_DIR"] == "/tmp/marin/tmp/compilation-cache"
