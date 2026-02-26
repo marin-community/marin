@@ -231,7 +231,10 @@ def test_build_runtime_env_tpu_clears_jax_platforms():
     assert env["env_vars"]["JAX_PLATFORMS"] == ""
 
 
-@pytest.mark.parametrize("tpu_type", ["v5p-8", "v6e-8"])
+@pytest.mark.parametrize(
+    "tpu_type",
+    ["v5litepod-8", "v5p-8", "v6e-8"],
+)
 def test_build_runtime_env_tpu_sets_default_libtpu_init_args(tpu_type):
     from fray.v2.ray_backend.backend import build_runtime_env
 
