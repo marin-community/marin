@@ -608,6 +608,19 @@ def _gb10_custom_backward_v_block_size(
     return None
 
 
+def _custom_backward_v_block_size(
+    x: Float[Array, "B H"],
+    w: Float[Array, "H V"],
+    block_sizes: BlockSizes | None,
+) -> int:
+    gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
+    if gb10_tuned is not None:
+        return gb10_tuned
+    if block_sizes is not None:
+        return block_sizes.v_block_size
+    return BlockSizes.get_default().v_block_size
+
+
 @partial(jax.jit, static_argnames=["v_block_size", "logit_soft_cap", "precision"])
 def _backward_streaming_from_lse(
     x: Float[Array, "B H"],
@@ -737,7 +750,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
     )
     # We carry this shape-derived tuning choice in residuals so bwd can use
     # exactly the same policy decision as fwd without recomputing dispatch logic.
-    backward_v_block = _gb10_custom_backward_v_block_size(x, w)
+    backward_v_block = _custom_backward_v_block_size(x, w, block_sizes)
     return (loss, lse), (x, labels, w, lse, backward_v_block)
 
 
@@ -753,34 +766,17 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
     x, labels, w, lse, backward_v_block = residuals
     g_loss, g_lse = output_cotangent
 
-    if backward_v_block is not None:
-        grad_x, grad_w = _backward_streaming_from_lse(
-            x,
-            labels,
-            w,
-            lse,
-            g_loss,
-            g_lse,
-            v_block_size=backward_v_block,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        )
-    else:
-        _, vjp_fn = jax.vjp(
-            lambda x_, w_: _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
-                x_,
-                labels,
-                w_,
-                block_sizes=block_sizes,
-                dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
-                precision=precision,
-                gb10_native_forward_opt_in=gb10_native_forward_opt_in,
-            ),
-            x,
-            w,
-        )
-        grad_x, grad_w = vjp_fn((g_loss, g_lse))
+    grad_x, grad_w = _backward_streaming_from_lse(
+        x,
+        labels,
+        w,
+        lse,
+        g_loss,
+        g_lse,
+        v_block_size=backward_v_block,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+    )
 
     return grad_x, None, grad_w
 
