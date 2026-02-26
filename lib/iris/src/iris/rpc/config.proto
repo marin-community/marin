@@ -216,14 +216,6 @@ message BootstrapConfig {
   string config_json = 8;          // Serialized cluster config JSON for worker
 }
 
-// Timeout configuration for VM lifecycle (SSH timeout is in SshConfig)
-message TimeoutConfig {
-  iris.time.Duration boot_timeout = 1;        // Default: 300s (5 min)
-  iris.time.Duration init_timeout = 2;        // Default: 600s (10 min)
-  reserved 3;                                   // Was: ssh_connect_timeout_seconds (moved to SshConfig)
-  iris.time.Duration ssh_poll_interval = 4;   // Default: 5s
-}
-
 // SSH configuration for manual hosts
 message SshConfig {
   string user = 1;                        // Default: "root"
@@ -290,7 +282,7 @@ message ControllerVmConfig {
 
 message AutoscalerConfig {
   iris.time.Duration evaluation_interval = 1;  // Default: 10s
-  iris.time.Duration requesting_timeout = 2;   // Default: 120s
+  reserved 2;                                    // Was: requesting_timeout (unused — platform has its own boot timeouts)
   iris.time.Duration scale_up_delay = 3;       // Default: 60s
   iris.time.Duration scale_down_delay = 4;     // Default: 300s
   iris.time.Duration startup_grace_period = 5; // Default: 30min — time for new slices to boot and register workers
@@ -298,7 +290,7 @@ message AutoscalerConfig {
 }
 
 message DefaultsConfig {
-  TimeoutConfig timeouts = 1;
+  reserved 1;  // Was: TimeoutConfig timeouts (unused — platform has its own boot timeouts)
   SshConfig ssh = 2;
   AutoscalerConfig autoscaler = 3;
   BootstrapConfig bootstrap = 4;

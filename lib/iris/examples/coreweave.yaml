@@ -49,11 +49,6 @@ controller:
     scale_group: cpu-erapids
 
 defaults:
-  timeouts:
-    boot_timeout:
-      milliseconds: 1800000    # 30 min — bare metal boot takes 20-30 min
-    init_timeout:
-      milliseconds: 1800000
   autoscaler:
     evaluation_interval:
       milliseconds: 10000

@@ -36,18 +36,12 @@ IrisClusterConfig = config_pb2.IrisClusterConfig
 
 # Single source of truth for all default values
 DEFAULT_CONFIG = config_pb2.DefaultsConfig(
-    timeouts=config_pb2.TimeoutConfig(
-        boot_timeout=Duration.from_seconds(300).to_proto(),
-        init_timeout=Duration.from_seconds(600).to_proto(),
-        ssh_poll_interval=Duration.from_seconds(5).to_proto(),
-    ),
     ssh=config_pb2.SshConfig(
         user="root",
         connect_timeout=Duration.from_seconds(30).to_proto(),
     ),
     autoscaler=config_pb2.AutoscalerConfig(
         evaluation_interval=Duration.from_seconds(10).to_proto(),
-        requesting_timeout=Duration.from_seconds(120).to_proto(),
         scale_up_delay=Duration.from_seconds(60).to_proto(),
         scale_down_delay=Duration.from_seconds(300).to_proto(),
     ),
@@ -350,8 +344,6 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
             setattr(target, field_desc.name, getattr(source, field_desc.name))
 
     # Deep-merge sub-messages so partial overrides work
-    if source.HasField("timeouts"):
-        _merge_proto_fields(target.timeouts, source.timeouts)
     if source.HasField("ssh"):
         _merge_proto_fields(target.ssh, source.ssh)
     if source.HasField("autoscaler"):
@@ -382,13 +374,6 @@ def _validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: st
         raise ValueError(
             f"{context}: evaluation_interval must be positive, got {interval_ms}ms. "
             f"This controls how often the autoscaler evaluates scaling decisions."
-        )
-
-    timeout_ms = config.requesting_timeout.milliseconds
-    if timeout_ms <= 0:
-        raise ValueError(
-            f"{context}: requesting_timeout must be positive, got {timeout_ms}ms. "
-            f"This controls how long to wait for VMs to provision before timing out."
         )
 
     # scale_up_delay and scale_down_delay can be zero (no cooldown) but not negative

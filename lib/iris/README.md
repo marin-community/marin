@@ -346,13 +346,8 @@ platform:
     project_id: my-project
 
 defaults:
-  timeouts:
-    boot_timeout: { milliseconds: 300000 }
-    init_timeout: { milliseconds: 600000 }
-    ssh_poll_interval: { milliseconds: 5000 }
   autoscaler:
     evaluation_interval: { milliseconds: 10000 }
-    requesting_timeout: { milliseconds: 120000 }
     scale_up_delay: { milliseconds: 60000 }
     scale_down_delay: { milliseconds: 300000 }
   ssh:
