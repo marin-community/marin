@@ -333,7 +333,7 @@ def main() -> None:
         model_cfg=model_cfg,
         train_cfg=train_cfg,
         loss_fn=loss_fn,
-        speedrun_name="nano_ablations_00_baseline",
+        speedrun_name="nano_ablations_00_baseline2",
         speedrun_desc="Baseline Transformer with Muon",
         author=Author(
             name="Larry Dial",

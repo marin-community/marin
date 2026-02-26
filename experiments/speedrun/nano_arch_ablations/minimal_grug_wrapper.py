@@ -70,7 +70,7 @@ class WrapperConfig(LmConfig["WrapperLMHeadModel"]):
         return WrapperLMHeadModel
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "WrapperLMHeadModel":
-        return WrapperLMHeadModel.init(Vocab, self.grug_config, self.model_cls_fn(), self.loss_fn, key=key)
+        return WrapperLMHeadModel.init(Vocab, self, self.model_cls_fn(), self.loss_fn, key=key)
 
     Embed = property(lambda self: Axis("embed", self.hidden_dim))
 
@@ -116,21 +116,22 @@ class WrapperLMHeadModel(
 
     transformer: eqx.Module
     loss_fn: GrugLossFn
+    _wrapper_config: WrapperConfig = eqx.field(static=True)
 
     @property
-    def config(self) -> GrugConfigLike:
-        return self.transformer.config
+    def config(self) -> WrapperConfig:
+        return self._wrapper_config
 
     @property
     def Vocab(self) -> Axis:
-        return Axis("vocab", self.transformer.config.vocab_size)
+        return Axis("vocab", self._wrapper_config.vocab_size)
 
     @classmethod
     def init(
-        cls, Vocab: Axis, config: GrugConfigLike, model_cls: eqx.Module, loss_fn: GrugLossFn, *, key
+        cls, Vocab: Axis, wrapper_config: WrapperConfig, model_cls: eqx.Module, loss_fn: GrugLossFn, *, key
     ) -> "WrapperLMHeadModel":
-        transformer = model_cls.init(config, key=key)
-        return WrapperLMHeadModel(transformer, loss_fn)
+        transformer = model_cls.init(wrapper_config.grug_config, key=key)
+        return WrapperLMHeadModel(transformer, loss_fn, wrapper_config)
 
     def activations(
         self,
@@ -143,7 +144,7 @@ class WrapperLMHeadModel(
         del key, pos_ids  # unused in this lightweight wrapper
         mask = _mask_from_levanter(attn_mask)
         hidden = self.transformer(input_ids.array, mask)
-        axes = (*input_ids.axes, Axis("embed", self.transformer.config.hidden_dim))
+        axes = (*input_ids.axes, Axis("embed", self._wrapper_config.hidden_dim))
         return hax.named(hidden, axes)
 
     def compute_next_token_loss(
@@ -211,7 +212,7 @@ class WrapperLMHeadModel(
             self.transformer,
             tokens.array,
             loss_weight.array,
-            self.grug_config,
+            self.config,
             mask=mask,
             reduction="none",
             logsumexp_weight=logsumexp_weight,
@@ -222,14 +223,14 @@ class WrapperLMHeadModel(
         return reduction(loss, axis=reduction_axis)
 
     def get_lm_head(self) -> hax.NamedArray:
-        return hax.named(self.transformer.output_proj, (Axis("embed", self.transformer.config.hidden_dim), self.Vocab))
+        return hax.named(self.transformer.output_proj, (Axis("embed", self._wrapper_config.hidden_dim), self.Vocab))
 
     def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "WrapperLMHeadModel":
         pass
 
 
 def build_speedrun(model_cls, model_cfg, train_cfg, loss_fn, speedrun_name, speedrun_desc, author):
-    model_cfg = WrapperConfig(
+    model_cfg2 = WrapperConfig(
         model_cls_fn=lambda: model_cls,
         _total_trainable_params=model_cfg.total_trainable_params,
         _flops_per_token=model_cfg.flops_per_token,
@@ -245,7 +246,7 @@ def build_speedrun(model_cls, model_cfg, train_cfg, loss_fn, speedrun_name, spee
     speedrun = SpeedrunConfig(
         author=author,
         description=speedrun_desc,
-        model_config=model_cfg,
+        model_config=model_cfg2,
         train_config=train_cfg,
     )
     return default_speedrun(speedrun_name, speedrun)
