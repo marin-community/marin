@@ -1097,6 +1097,7 @@ class ControllerServiceImpl:
                 # If we found a worker, scan autoscaler status for its VM
                 if worker and autoscaler:
                     status = autoscaler.get_status()
+                    found = False
                     for group in status.groups:
                         for slice_info in group.slices:
                             for vm in slice_info.vms:
@@ -1109,6 +1110,12 @@ class ControllerServiceImpl:
                                         bootstrap_logs = autoscaler.get_init_log(vm.vm_id, tail=500)
                                         vm_info.worker_id = worker.worker_id
                                         vm_info.worker_healthy = worker.healthy
+                                        found = True
+                                        break
+                            if found:
+                                break
+                        if found:
+                            break
 
             if not vm_info and not worker:
                 raise ConnectError(Code.NOT_FOUND, f"No VM or worker found for '{identifier}'")
