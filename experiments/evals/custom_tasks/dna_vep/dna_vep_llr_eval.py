@@ -101,28 +101,42 @@ class DnaVepLlrEvalTask(Task):
     DATASET_NAME = None
 
     def __init__(self, data_dir=None, cache_dir=None, download_mode=None, config=None):
+        # Task.__init__ calls self.download() BEFORE setting self._config,
+        # and wraps the config dict via TaskConfig({**config}) which doesn't
+        # correctly populate fields (passes the dict as the first positional
+        # arg). We extract everything we need from the raw config dict here.
+        cfg = config or {}
+        self._task_name = cfg.get("task")
+        self.DATASET_PATH = cfg.get("dataset_path") or self.DATASET_PATH
+        self.DATASET_NAME = cfg.get("dataset_name") or self.DATASET_NAME
+        self._metrics = cfg.get("metrics") or ["auprc"]
+        self._test_split = cfg.get("test_split") or "test"
+
+        transform_name = cfg.get("llr_transform") or "identity"
+        if transform_name not in LLR_TRANSFORMS:
+            raise ValueError(f"Unknown llr_transform: {transform_name}. Must be one of {list(LLR_TRANSFORMS.keys())}")
+        self._llr_transform = LLR_TRANSFORMS[transform_name]
+        self._subset_results: dict[str, float] = {}
+
         super().__init__(
             data_dir=data_dir,
             cache_dir=cache_dir,
             download_mode=download_mode,
             config=config,
         )
-        self._metrics = self.config.metrics if hasattr(self.config, "metrics") and self.config.metrics else ["auprc"]
-        transform_name = (
-            self.config.llr_transform
-            if hasattr(self.config, "llr_transform") and self.config.llr_transform
-            else "identity"
-        )
-        if transform_name not in LLR_TRANSFORMS:
-            raise ValueError(f"Unknown llr_transform: {transform_name}. Must be one of {list(LLR_TRANSFORMS.keys())}")
-        self._llr_transform = LLR_TRANSFORMS[transform_name]
-        self._subset_results: dict[str, float] = {}
 
-    def download(self, dataset_kwargs=None) -> None:
+    @property
+    def task_name(self):
+        """Required by lm-eval's get_subtask_list (only defined on ConfigurableTask by default)."""
+        return self._task_name
+
+    def download(self, data_dir=None, cache_dir=None, download_mode=None) -> None:
         self.dataset = datasets.load_dataset(
             path=self.DATASET_PATH,
             name=self.DATASET_NAME,
-            **(dataset_kwargs or {}),
+            data_dir=data_dir,
+            cache_dir=cache_dir,
+            download_mode=download_mode,
         )
 
     def has_training_docs(self) -> bool:
@@ -135,8 +149,7 @@ class DnaVepLlrEvalTask(Task):
         return True
 
     def test_docs(self):
-        split = self.config.test_split if hasattr(self.config, "test_split") and self.config.test_split else "test"
-        return self.dataset[split]
+        return self.dataset[self._test_split]
 
     def doc_to_text(self, doc) -> str:
         return doc["context"]
@@ -148,20 +161,23 @@ class DnaVepLlrEvalTask(Task):
         )
 
     def construct_requests(self, doc, ctx, **kwargs):
+        # Only pass fields that Instance accepts; drop chat template args
+        # passed by build_all_requests.
+        metadata = kwargs.get("metadata", (None, None, None))
         return [
             Instance(
                 request_type="loglikelihood",
                 doc=doc,
                 arguments=(ctx, doc["ref_completion"]),
                 idx=0,
-                **kwargs,
+                metadata=metadata,
             ),
             Instance(
                 request_type="loglikelihood",
                 doc=doc,
                 arguments=(ctx, doc["alt_completion"]),
                 idx=1,
-                **kwargs,
+                metadata=metadata,
             ),
         ]
 

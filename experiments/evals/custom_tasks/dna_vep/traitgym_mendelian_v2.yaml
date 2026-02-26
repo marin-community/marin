@@ -2,8 +2,7 @@ task: traitgym_mendelian_v2
 class: !function dna_vep_llr_eval.DnaVepLlrEvalTask
 dataset_path: bolinas-dna/evals-traitgym_mendelian_v2_harness_256
 dataset_name: default
-test_split: test
+test_split: train
 llr_transform: negate
 metrics:
   - auprc
-  - auroc
