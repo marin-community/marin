@@ -29,6 +29,7 @@ import cloudpickle
 from iris.actor.resolver import Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
+from iris.rpc.errors import is_retryable_error
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ class ActorClient:
         max_backoff: float = 10.0,
         backoff_factor: float = 2.0,
         backoff_jitter: float = 0.25,
+        max_call_attempts: int = 5,
     ):
         """Initialize the actor client.
 
@@ -60,6 +62,8 @@ class ActorClient:
             max_backoff: Maximum delay between retries in seconds
             backoff_factor: Multiplier for exponential backoff
             backoff_jitter: Random jitter as fraction of delay (e.g., 0.25 = ±25%)
+            max_call_attempts: Maximum number of RPC call attempts on transient errors.
+                On each retry, the cached connection is cleared and re-resolved.
         """
         self._resolver = resolver
         self._name = name
@@ -69,6 +73,7 @@ class ActorClient:
         self._max_backoff = max_backoff
         self._backoff_factor = backoff_factor
         self._backoff_jitter = backoff_jitter
+        self._max_call_attempts = max_call_attempts
         self._rpc_client: ActorServiceClientSync | None = None
 
     def rpc_client(self) -> ActorServiceClientSync:
@@ -145,16 +150,42 @@ class _RpcMethod:
             serialized_kwargs=cloudpickle.dumps(kwargs),
         )
 
-        try:
-            client = self._client.rpc_client()
-            resp = client.call(call)
-        except Exception:
-            self._client._rpc_client = None
-            raise
+        backoff = ExponentialBackoff(
+            initial=self._client._initial_backoff,
+            maximum=self._client._max_backoff,
+            factor=self._client._backoff_factor,
+            jitter=self._client._backoff_jitter,
+        )
 
-        if resp.HasField("error"):
-            if resp.error.serialized_exception:
-                raise cloudpickle.loads(resp.error.serialized_exception)
-            raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
+        max_attempts = self._client._max_call_attempts
+        for attempt in range(max_attempts):
+            try:
+                client = self._client.rpc_client()
+                resp = client.call(call)
+            except Exception as e:
+                self._client._rpc_client = None
+                if not is_retryable_error(e) or attempt + 1 >= max_attempts:
+                    raise
+                delay = backoff.next_interval()
+                logger.warning(
+                    "Actor call %s.%s failed (attempt %d/%d), re-resolving in %.2fs: %s",
+                    self._client._name,
+                    self._method_name,
+                    attempt + 1,
+                    max_attempts,
+                    delay,
+                    e,
+                )
+                time.sleep(delay)
+                continue
 
-        return cloudpickle.loads(resp.serialized_value)
+            if resp.HasField("error"):
+                if resp.error.serialized_exception:
+                    raise cloudpickle.loads(resp.error.serialized_exception)
+                raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
+
+            return cloudpickle.loads(resp.serialized_value)
+
+        raise RuntimeError(
+            f"Actor call {self._client._name}.{self._method_name} " f"failed after {max_attempts} attempts"
+        )
