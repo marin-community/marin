@@ -693,6 +693,51 @@ class GcpPlatform:
             return image
         return rewrite_ghcr_to_ar_remote(image, multi_region, self._project_id)
 
+    def _best_effort_delete_tpu(self, slice_id: str, zone: str) -> None:
+        """Try to delete a TPU VM that may have been partially created.
+
+        Silently ignores "not found" errors (resource was never created).
+        """
+        cmd = [
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "delete",
+            slice_id,
+            f"--zone={zone}",
+            f"--project={self._project_id}",
+            "--quiet",
+        ]
+        logger.info("Best-effort cleanup of TPU %s in %s", slice_id, zone)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error = result.stderr.strip()
+            if "not found" not in error.lower():
+                logger.warning("Cleanup of TPU %s failed: %s", slice_id, error)
+
+    def _best_effort_delete_vm(self, vm_name: str, zone: str) -> None:
+        """Try to delete a GCE VM that may have been partially created.
+
+        Silently ignores "not found" errors (resource was never created).
+        """
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "delete",
+            vm_name,
+            f"--zone={zone}",
+            f"--project={self._project_id}",
+            "--quiet",
+        ]
+        logger.info("Best-effort cleanup of VM %s in %s", vm_name, zone)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error = result.stderr.strip()
+            if "not found" not in error.lower():
+                logger.warning("Cleanup of VM %s failed: %s", vm_name, error)
+
     def create_vm(self, config: config_pb2.VmConfig) -> GcpStandaloneWorkerHandle:
         """Create a GCE instance. Returns a handle with SSH and label/metadata support."""
         _validate_vm_config(config)
@@ -733,6 +778,7 @@ class GcpPlatform:
             if "already exists" in error_msg.lower():
                 logger.info("GCE instance %s already exists, getting its IP", config.name)
             else:
+                self._best_effort_delete_vm(config.name, zone)
                 raise _classify_gcloud_error(error_msg)
 
         # Get internal/external IP
@@ -796,6 +842,9 @@ class GcpPlatform:
         logger.info("gcloud command: %s", cmd)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
+            # GCP may have partially created the resource before reporting failure.
+            # Best-effort delete to avoid orphaned TPU VMs.
+            self._best_effort_delete_tpu(slice_id, gcp.zone)
             raise _classify_gcloud_error(result.stderr.strip())
 
         handle = GcpSliceHandle(
@@ -893,6 +942,9 @@ class GcpPlatform:
             if script_file_path:
                 os.unlink(script_file_path)
         if result.returncode != 0:
+            # GCP may have partially created the VM before reporting failure.
+            # Best-effort delete to avoid orphaned VMs.
+            self._best_effort_delete_vm(vm_name, gcp.zone)
             raise _classify_gcloud_error(result.stderr.strip())
 
         handle = GcpVmSliceHandle(
