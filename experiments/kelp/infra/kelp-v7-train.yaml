@@ -1,0 +1,85 @@
+# SkyPilot task: Kelp v7 training with prompt conditioning on Stack Edu.
+#
+# Trains the overnight_cpu model (10M params) on a single A100 GPU with:
+# - Stack Edu educational Python corpus (50k functions)
+# - Prompt conditioning (docstrings as intent signal)
+# - Linear corruption curriculum
+#
+# Expected runtime: ~1-2 hours for corpus prep + 50k training steps.
+#
+# Launch:
+#   pip install "skypilot[gcp]"    # one-time
+#   sky launch -c kelp-v7 experiments/kelp/infra/kelp-v7-train.yaml -y
+#
+# Monitor:
+#   sky logs kelp-v7
+#   ssh kelp-v7 'tail -f ~/sky_workdir/checkpoints/kelp-edit-v7/training.log'
+#
+# Download checkpoints when done:
+#   rsync -avz kelp-v7:~/sky_workdir/checkpoints/kelp-edit-v7/ checkpoints/kelp-edit-v7/
+#
+# Teardown:
+#   sky down kelp-v7 -y
+
+name: kelp-v7-train
+
+resources:
+  accelerators: A100:1
+  disk_size: 100
+  cloud: gcp
+
+workdir: .
+
+setup: |
+  set -euo pipefail
+
+  # Install uv if not present.
+  if ! command -v uv &> /dev/null; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+
+  # Install project dependencies.
+  cd ~/sky_workdir
+  uv sync
+
+run: |
+  set -euo pipefail
+  export PATH="$HOME/.local/bin:$PATH"
+  cd ~/sky_workdir
+
+  CORPUS_FILE="experiments/kelp/corpus_v7.txt"
+  OUTPUT_DIR="checkpoints/kelp-edit-v7"
+  LOG_FILE="${OUTPUT_DIR}/training.log"
+  mkdir -p "$OUTPUT_DIR"
+
+  echo "=== Phase 1: Preparing corpus with Stack Edu ===" | tee "$LOG_FILE"
+
+  uv run python experiments/kelp/prepare_corpus.py \
+      --output "$CORPUS_FILE" \
+      --max-length 512 \
+      --stack-edu-max 50000 \
+      --seed 42 \
+      2>&1 | tee -a "$LOG_FILE"
+
+  echo "" | tee -a "$LOG_FILE"
+  echo "=== Phase 2: Training v7 ===" | tee -a "$LOG_FILE"
+
+  uv run python experiments/kelp/train.py \
+      --preset overnight_cpu \
+      --corpus-file "$CORPUS_FILE" \
+      --steps 50000 \
+      --batch-size 16 \
+      --lr 0.001 \
+      --augment \
+      --prompt-conditioning \
+      --p-prompt 0.5 \
+      --corruption-curriculum linear \
+      --output-dir "$OUTPUT_DIR" \
+      --checkpoint-interval 5000 \
+      --log-interval 10 \
+      --seed 42 \
+      2>&1 | tee -a "$LOG_FILE"
+
+  echo "" | tee -a "$LOG_FILE"
+  echo "=== Training complete ===" | tee -a "$LOG_FILE"

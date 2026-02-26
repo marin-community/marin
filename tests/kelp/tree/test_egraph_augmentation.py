@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -150,9 +153,9 @@ def test_augment_bank_only_adds_expression_types(bank):
     augmented, _ = augment_bank_with_egraph(bank)
 
     for node_type, count in original_non_expr.items():
-        assert len(augmented.entries.get(node_type, [])) == count, (
-            f"Non-expression type {node_type} should not gain entries"
-        )
+        assert (
+            len(augmented.entries.get(node_type, [])) == count
+        ), f"Non-expression type {node_type} should not gain entries"
 
 
 def test_augment_bank_all_entries_valid_python(bank):

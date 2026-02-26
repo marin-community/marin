@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -46,12 +49,21 @@ class TreeDiffusionTokenizer:
     Wraps a base character/byte vocabulary and adds special tokens for
     edit prediction (SOS, EOS, position tokens).
 
-    Token ID layout:
+    Token ID layout (prompt_tokens=False, legacy):
         0              : <PAD>
         1              : <SOS>
         2              : <EOS>
         3 .. 3+N-1     : <POS 0> .. <POS N-1>  (position tokens)
         3+N .. 3+N+B-1 : base vocabulary tokens (characters/bytes)
+
+    Token ID layout (prompt_tokens=True):
+        0              : <PAD>
+        1              : <SOS>
+        2              : <EOS>
+        3              : <PROMPT_START>
+        4              : <PROMPT_END>
+        5 .. 5+N-1     : <POS 0> .. <POS N-1>  (position tokens)
+        5+N .. 5+N+B-1 : base vocabulary tokens (characters/bytes)
     """
 
     max_seq_len: int
@@ -59,6 +71,14 @@ class TreeDiffusionTokenizer:
 
     base_vocab_size: int = 256
     """Size of the base character vocabulary (before special tokens)."""
+
+    prompt_tokens: bool = False
+    """If True, includes PROMPT_START/PROMPT_END special tokens (IDs 3, 4)."""
+
+    @property
+    def num_special_tokens(self) -> int:
+        """Number of fixed special tokens (PAD, SOS, EOS, and optionally PROMPT_START, PROMPT_END)."""
+        return 5 if self.prompt_tokens else 3
 
     @property
     def pad_token_id(self) -> int:
@@ -73,18 +93,30 @@ class TreeDiffusionTokenizer:
         return 2
 
     @property
+    def prompt_start_token_id(self) -> int:
+        if not self.prompt_tokens:
+            raise ValueError("prompt_start_token_id is only available when prompt_tokens=True")
+        return 3
+
+    @property
+    def prompt_end_token_id(self) -> int:
+        if not self.prompt_tokens:
+            raise ValueError("prompt_end_token_id is only available when prompt_tokens=True")
+        return 4
+
+    @property
     def num_position_tokens(self) -> int:
         return self.max_seq_len
 
     @property
     def position_token_offset(self) -> int:
         """First position token ID."""
-        return 3
+        return self.num_special_tokens
 
     @property
     def base_token_offset(self) -> int:
         """First base vocabulary token ID."""
-        return 3 + self.num_position_tokens
+        return self.num_special_tokens + self.num_position_tokens
 
     @property
     def vocab_size(self) -> int:
@@ -125,6 +157,10 @@ class TreeDiffusionTokenizer:
             return "<SOS>"
         if token_id == self.eos_token_id:
             return "<EOS>"
+        if self.prompt_tokens and token_id == self.prompt_start_token_id:
+            return "<PROMPT_START>"
+        if self.prompt_tokens and token_id == self.prompt_end_token_id:
+            return "<PROMPT_END>"
         if self.is_position_token(token_id):
             pos = self.position_from_token(token_id)
             return f"<POS {pos}>"
@@ -143,13 +179,15 @@ class TreeDiffusionTokenizer:
     def decode_source(self, token_ids: list[int]) -> str:
         """Decode base vocabulary token IDs back to a source string.
 
-        Skips special tokens (PAD, SOS, EOS, POS).
+        Skips special tokens (PAD, SOS, EOS, POS, PROMPT_START, PROMPT_END).
         """
         chars = []
         for tid in token_ids:
             if tid == self.pad_token_id:
                 continue
             if tid in (self.sos_token_id, self.eos_token_id):
+                continue
+            if self.prompt_tokens and tid in (self.prompt_start_token_id, self.prompt_end_token_id):
                 continue
             if self.is_position_token(tid):
                 continue
@@ -163,6 +201,7 @@ class TreeDiffusionTokenizer:
         context_source: str,
         edit_position_token_idx: int,
         replacement_source: str,
+        prompt_source: str | None = None,
     ) -> tuple[list[int], list[int]]:
         """Encode a complete training example.
 
@@ -171,20 +210,34 @@ class TreeDiffusionTokenizer:
             edit_position_token_idx: Token index in the context where the
                 edit starts (will be encoded as a <POS> token).
             replacement_source: The replacement source code string.
+            prompt_source: Optional natural language prompt (e.g. docstring)
+                to prepend. Requires prompt_tokens=True on the tokenizer.
 
         Returns:
             Tuple of (token_ids, loss_mask) where:
-            - token_ids: Full sequence [context, SOS, POS, replacement, EOS]
-            - loss_mask: 0 for context+SOS, 1 for POS+replacement+EOS
+            - token_ids: Full sequence, optionally prefixed with
+              [PROMPT_START, prompt_bytes, PROMPT_END]
+            - loss_mask: 0 for prompt+context+SOS, 1 for POS+replacement+EOS
         """
+        # Encode optional prompt prefix.
+        prompt_prefix: list[int] = []
+        if prompt_source is not None:
+            if not self.prompt_tokens:
+                raise ValueError("prompt_source requires prompt_tokens=True on the tokenizer")
+            prompt_byte_tokens = self.encode_source(prompt_source)
+            prompt_prefix = [self.prompt_start_token_id] + prompt_byte_tokens + [self.prompt_end_token_id]
+
         context_tokens = self.encode_source(context_source)
         replacement_tokens = self.encode_source(replacement_source)
         pos_token = self.position_token_id(edit_position_token_idx)
 
-        token_ids = context_tokens + [self.sos_token_id, pos_token] + replacement_tokens + [self.eos_token_id]
+        token_ids = (
+            prompt_prefix + context_tokens + [self.sos_token_id, pos_token] + replacement_tokens + [self.eos_token_id]
+        )
 
         loss_mask = (
-            [0] * len(context_tokens)  # Context: no loss.
+            [0] * len(prompt_prefix)  # Prompt: no loss.
+            + [0] * len(context_tokens)  # Context: no loss.
             + [0]  # SOS: no loss.
             + [1]  # POS: loss.
             + [1] * len(replacement_tokens)  # Replacement: loss.
@@ -192,6 +245,16 @@ class TreeDiffusionTokenizer:
         )
 
         return token_ids, loss_mask
+
+    def encode_prompt_prefix(self, prompt: str) -> list[int]:
+        """Encode a prompt string as [PROMPT_START, prompt_bytes, PROMPT_END].
+
+        For use during inference to prepend a prompt to context tokens.
+        Requires prompt_tokens=True.
+        """
+        if not self.prompt_tokens:
+            raise ValueError("encode_prompt_prefix requires prompt_tokens=True")
+        return [self.prompt_start_token_id] + self.encode_source(prompt) + [self.prompt_end_token_id]
 
     def char_offset_to_token_index(
         self,
