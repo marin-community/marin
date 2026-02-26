@@ -25,7 +25,11 @@ from iris.cluster.platform.base import (
     Labels,
     PlatformError,
 )
-from iris.cluster.platform.coreweave import CoreweavePlatform
+from iris.cluster.platform.coreweave import (
+    _CONTROLLER_CPU_REQUEST,
+    _CONTROLLER_MEMORY_REQUEST,
+    CoreweavePlatform,
+)
 from iris.cluster.platform.factory import create_platform
 from iris.rpc import config_pb2
 
@@ -1013,6 +1017,8 @@ def test_start_controller_creates_all_resources(fake_kubectl: FakeKubectl):
     assert "AWS_ACCESS_KEY_ID" in env_names
     assert "AWS_SECRET_ACCESS_KEY" in env_names
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_names
+    assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
+    assert container["resources"]["limits"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
 
     t.join(timeout=5)
     platform.shutdown()

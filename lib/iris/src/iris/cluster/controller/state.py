@@ -1144,7 +1144,18 @@ class ControllerState:
         """
         task = self._tasks[event.task_id]
         job = self._jobs[task.job_id]
-        worker = self._workers[event.worker_id]
+        worker = self._workers.get(event.worker_id)
+        if worker is None:
+            # Scheduler assignments are computed from snapshots. A worker may be
+            # pruned by heartbeat failure before the assignment is committed.
+            # Ignore stale assignments so the task stays schedulable.
+            logger.warning(
+                "Ignoring task assignment for missing worker: task_id=%s worker_id=%s",
+                event.task_id,
+                event.worker_id,
+            )
+            txn.log("task_assignment_skipped_missing_worker", event.task_id, worker_id=str(event.worker_id))
+            return
 
         old_state = task.state
         task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_ASSIGNED)
