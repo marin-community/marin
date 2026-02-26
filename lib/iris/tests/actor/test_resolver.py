@@ -8,7 +8,7 @@ This module tests all resolver implementations in iris.actor.resolver:
 - GcsResolver: Discovery via GCP VM instance metadata
 """
 
-from iris.actor.resolver import FixedResolver, GcsResolver, MockGcsApi
+from iris.actor.resolver import GcsResolver, MockGcsApi
 
 
 def test_gcs_resolver_finds_actors():

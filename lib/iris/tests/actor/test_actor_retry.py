@@ -9,7 +9,7 @@ import pytest
 from connectrpc.errors import ConnectError
 
 from iris.actor import ActorClient, ActorPool
-from iris.actor.resolver import FixedResolver
+from iris.actor.resolver import FixedResolver, ResolveResult
 from iris.actor.server import ActorServer
 
 

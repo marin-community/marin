@@ -96,4 +96,3 @@ class TestWorkerPoolE2E:
 
         with pytest.raises(RuntimeError, match="shutdown"):
             pool.submit(lambda: 42)
-

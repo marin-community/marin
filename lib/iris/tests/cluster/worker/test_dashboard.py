@@ -413,10 +413,3 @@ def test_get_task_status_completed_task(service, worker, request_context):
     assert status.exit_code == 0
     assert status.started_at.epoch_ms > 0
     assert status.finished_at.epoch_ms > 0
-
-
-# ============================================================================
-# Connect RPC integration tests
-# ============================================================================
-
-
