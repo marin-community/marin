@@ -153,7 +153,7 @@ Added e-graph-based expression augmentation using egglog equality saturation. Re
 - E-graph augmentation contributes to bank diversity (616 entries vs 55 original)
 - The toy dataset has exhausted its signal value; further optimization has diminishing returns
 
-### v5: Scaled Corpus (10,442 programs) — (Need to update history from here!)
+### v5: Scaled Corpus (10,442 programs)
 
 Built a diverse training corpus from multiple sources:
 
@@ -166,53 +166,71 @@ Built a diverse training corpus from multiple sources:
 
 MBPP is held out entirely for evaluation. Eval task signatures are blocklisted from training to prevent leakage.
 
-**Training status:** 12K steps on overnight_cpu preset. SubtreeBank: 160,264 augmented entries. Learning curve shows steady improvement without overfitting (loss ~1.9, acc ~50% at step 2K — qualitatively different from toy corpus which saturated by step 2K).
+**Key results (v5, 12K steps, overnight_cpu preset):**
 
-**Expected impact (from scaling predictions):** 50–65% average test pass rate on eval tasks, with simple functions reaching near-100%.
+| Metric | Step 10K | Step 12K |
+|--------|----------|----------|
+| Syntactic validity | 100% | 100% |
+| Exact match | 0% | 0% |
+| Avg test pass rate (MBPP) | 2.3% | 1.9% |
+| Best test pass rate (MBPP) | 10.0% | 8.0% |
 
+SubtreeBank: 160,264 augmented entries. Learning curve showed steady improvement without overfitting (loss ~1.9, acc ~50% at step 2K — qualitatively different from toy corpus which saturated by step 2K). Step 10K slightly outperformed step 12K, suggesting mild overfitting.
 
-### v6 Added noise difficulty curriculum (from Alex's memory, not Calude)
+**What we learned:**
+- Corpus diversity scaled well (10K programs vs 15), no overfitting for most of training
+- MBPP test pass rate dropped from v4's 55% — the model saw more diversity but had the same capacity, spreading its learning thinner
+- 0% exact match on held-out corpus programs confirmed the model hasn't memorized training data
+- 100% syntactic validity still holds at scale
 
-======================================================================
+### v6: Corruption Difficulty Curriculum
 
-Corpus Evaluation Summary
+Added a noise difficulty curriculum that gradually increases corruption severity during training. Instead of always applying the maximum number of AST mutations, the curriculum ramps from easy (1 mutation) to hard (max mutations) over a configurable warmup fraction.
 
-======================================================================
+Available schedules: `constant` (default, same as before), `linear`, `cosine`.
 
-Checkpoint: checkpoints/kelp-edit-v6/step-016000
+**Key results (v6, overnight_cpu, linear curriculum):**
 
-Programs evaluated: 42 (of 50 sampled)
+| Metric | Step 16K (corpus) | Step 24K (corpus) |
+|--------|-------------------|-------------------|
+| Syntactic validity | 100% | 100% |
+| Exact match | 0% | 0% |
+| Normalized match | 0% | 0% |
+| Avg candidates/program | 7.2 | 7.6 |
 
-Corruptions/program: 5
+MBPP eval was halted at step 16K after discovering a critical data error: the model was receiving corrupted programs without sufficient semantic signal about what the target program should be. The model could repair syntax perfectly but had no way to know *which* valid program to produce — it was solving an underdetermined problem.
 
-Inference: best-of-8, max_depth=10
+**What we learned:**
+- The curriculum helped training stability (longer before overfitting)
+- 0% exact match across all checkpoints confirmed the core problem: the model needs intent signal, not just more data or training
+- This directly motivated the v7 prompt conditioning work
 
-Subtree bank: 387 entries / 20 node types (from eval programs)
+### v7: Prompt Conditioning + Stack Edu (in progress)
 
-Time: 5355.0s
+Fundamental change: added **prompt/intent conditioning** so the model knows *what* program to repair toward. The encoding now supports an optional prompt prefix:
 
+```
+[PROMPT_START] docstring_bytes [PROMPT_END] [POS_k] context_bytes [EOS]
+```
 
-| Metric                      |Value |
------------------------------|-------
-| Syntactic validity rate     | 100.0%
-| Exact match rate            |   0.0%
-| Normalized match rate       |   0.0%
-|  Avg candidates per program |    7.2
+The prompt (typically a docstring) tells the model what the function should do, turning an underdetermined repair problem into a conditioned one.
 
-Stopped before MBPP Eval finished because I found a critical data error.
+**Key changes:**
+- **Tokenizer**: 5 special tokens (PAD, SOS, EOS, PROMPT_START, PROMPT_END) when `prompt_tokens=True`; backward-compatible with 3-token layout for old checkpoints
+- **Training**: extracts docstrings from clean programs, includes as prompt with probability `p_prompt` (default 0.5), strips docstrings from function bodies to prevent leakage
+- **Inference**: `beam_search()` and `best_of_n()` accept an optional `prompt` string
+- **Eval**: corpus eval uses extracted docstrings; MBPP eval uses task descriptions as prompts
+- **Data**: Stack Edu (HuggingFaceTB/stack-edu Python subset) — educational Python code with high docstring coverage (~50-70%), streamed via `prepare_corpus.py --stack-edu-max N`
 
-### v7 – GPU training run with stackedu dataset (In progress)
-
-Also includes changes to fix the data error: it better ensures that the diffusion process has a good prompt. 
-
-Changes the encoding structure to make sure that there is a prompt, usually from the docstring. We also `rm` the 
-docstring from the functions to not bias the data.
-
-Currently preparing the dataset on a GPU in Lambda (I actually got a machine!) and debugging the training run.
+**Training setup:**
+- Model: overnight_cpu preset (10M params, 4 layers, hidden_dim=256)
+- Data: 50K functions from Stack Edu
+- Hardware: Lambda Cloud GPU via SkyPilot
+- 50K training steps, linear corruption curriculum, prompt conditioning enabled
+- Checkpoints synced to `s3://oa-fomo-outputs/kelp/`
+- W&B logging (project: `kelp`, run: `kelp-v7-prompt-conditioning`)
 
 ## Project Structure
-
-A bit out of date! But, more or less correct.
 
 ```
 experiments/kelp/
@@ -220,31 +238,31 @@ experiments/kelp/
 ├── CHANGELOG.md              # Detailed change history
 ├── DIAGNOSTIC_REPORT.md      # Analysis of v3 failure modes
 ├── kelp.md                   # Original research proposal
-├── train.py                  # Training entry point
-├── evaluate.py               # Eval on 10 hand-crafted tasks
-├── evaluate_mbpp.py          # Eval on held-out MBPP tasks
-├── prepare_corpus.py         # Corpus preparation (multi-source)
-├── corpus.py                 # Corpus loading utilities
-├── corpus.txt                # Generated training corpus (10,442 programs)
+├── train.py                  # Training CLI (presets, W&B, prompt conditioning)
+├── evaluate.py               # Eval on hand-crafted tasks
+├── evaluate_corpus.py        # Held-out corpus repair evaluation
+├── evaluate_mbpp.py          # MBPP benchmark evaluation
+├── prepare_corpus.py         # Corpus preparation (multi-source + Stack Edu)
+├── corpus.py                 # Corpus loading, docstring extraction
 ├── checkpointing.py          # Checkpoint save/load
 ├── infra/
-│   ├── kelp-v7-eval.yaml
-│   ├── kelp-v7-train.yaml
-│   └── launch_v7.sh
+│   ├── kelp-v7-train.yaml    # SkyPilot training task (Lambda/GCP)
+│   ├── kelp-v7-eval.yaml     # SkyPilot eval task
+│   └── launch_v7.sh          # End-to-end orchestrator (train → eval → download)
 ├── model/
-│   ├── config.py             # TreeDiffusionConfig dataclass
+│   ├── config.py             # TreeDiffusionConfig (includes prompt_tokens flag)
 │   ├── presets.py            # Hardware-specific presets
 │   └── model.py              # Transformer model (Grug blocks)
 ├── tree/
 │   ├── train.py              # Training loop (corruption → TreeDiff → loss)
 │   ├── mutation.py           # AST corruption (forward process)
 │   ├── tree_diff.py          # Edit path computation
-│   ├── beam_search.py        # Inference (best-of-N, beam search)
+│   ├── beam_search.py        # Inference (best-of-N, beam search, prompt support)
 │   ├── subtree_bank.py       # SubtreeBank indexing
 │   ├── augmentation.py       # Bank augmentation orchestrator
 │   ├── egraph_augmentation.py # E-graph variant generation (egglog)
 │   ├── reranking.py          # Execution-guided reranking
-│   ├── tokenizer.py          # AST edit tokenizer
+│   ├── tokenizer.py          # AST edit tokenizer (prompt prefix encoding)
 │   └── constrained_decoding.py # Grammar-constrained generation
 └── training/
     └── optimizer.py          # Levanter AdamConfig integration
@@ -252,27 +270,65 @@ experiments/kelp/
 
 ## Usage
 
+### Prepare a corpus
+
 ```bash
-# Prepare a training corpus
+# Basic corpus (Marin repo + GitHub Code + HumanEval)
 uv run python experiments/kelp/prepare_corpus.py \
   --output experiments/kelp/corpus.txt --max-github 5000
 
-# Train (laptop, overnight)
+# With Stack Edu educational Python (recommended for v7+)
+uv run python experiments/kelp/prepare_corpus.py \
+  --output experiments/kelp/corpus_v7.txt --stack-edu-max 50000
+```
+
+### Train
+
+```bash
+# Laptop, overnight (CPU)
 JAX_PLATFORMS=cpu uv run python experiments/kelp/train.py \
   --preset overnight_cpu --steps 12000 --augment \
   --corpus-file experiments/kelp/corpus.txt \
-  --checkpoint-interval 2000 --output-dir checkpoints/kelp-edit-v5
+  --checkpoint-interval 2000 --output-dir checkpoints/kelp-edit
 
-# Evaluate on hand-crafted tasks
-JAX_PLATFORMS=cpu uv run python experiments/kelp/evaluate.py \
-  --checkpoint-dir checkpoints/kelp-edit-v5 \
-  --corpus-file experiments/kelp/corpus.txt \
-  --num-corruptions 10
+# GPU with prompt conditioning + corruption curriculum (v7 recipe)
+uv run python experiments/kelp/train.py \
+  --preset overnight_cpu --steps 50000 --augment \
+  --corpus-file experiments/kelp/corpus_v7.txt \
+  --prompt-conditioning --p-prompt 0.5 \
+  --corruption-curriculum linear \
+  --wandb-project kelp --wandb-run-name my-run \
+  --checkpoint-interval 5000 --output-dir checkpoints/kelp-edit-v7
+```
 
-# Evaluate on MBPP
+### Evaluate
+
+```bash
+# Corpus repair evaluation (exact match, syntactic validity)
+JAX_PLATFORMS=cpu uv run python experiments/kelp/evaluate_corpus.py \
+  --checkpoint-dir checkpoints/kelp-edit-v7 \
+  --corpus-file experiments/kelp/corpus_v7.txt \
+  --num-tasks 50 --n-best-of 16
+
+# MBPP benchmark (test pass rate)
 JAX_PLATFORMS=cpu uv run python experiments/kelp/evaluate_mbpp.py \
-  --checkpoint-dir checkpoints/kelp-edit-v5 \
-  --corpus-file experiments/kelp/corpus.txt
+  --checkpoint-dir checkpoints/kelp-edit-v7 \
+  --corpus-file experiments/kelp/corpus_v7.txt \
+  --max-tasks 50 --n-best-of 16
+```
+
+### Cloud training via SkyPilot
+
+```bash
+# One-command pipeline: train → eval → download → teardown
+bash experiments/kelp/infra/launch_v7.sh --wandb
+
+# Or step-by-step:
+sky launch -c kelp-v7 experiments/kelp/infra/kelp-v7-train.yaml \
+  --env WANDB_API_KEY --retry-until-up -y
+sky exec kelp-v7 experiments/kelp/infra/kelp-v7-eval.yaml
+rsync -avz kelp-v7:~/sky_workdir/checkpoints/kelp-edit-v7/ checkpoints/kelp-edit-v7/
+sky down kelp-v7 -y
 ```
 
 ## Roadmap & Contributing
@@ -281,22 +337,22 @@ Kelp is an open experiment within the [Marin project](https://marin.community/).
 
 ### Roadmap
 
-**Near-term (laptop-scale validation):**
-- Evaluate v5 (10K corpus) on both hand-crafted tasks and MBPP to measure the effect of corpus diversity
+**Near-term (validating prompt conditioning):**
+- Analyze v7 results to measure the impact of prompt conditioning on exact match and test pass rates
 - Improve edit position prediction accuracy — the model often picks the right replacement but the wrong location (see `tree/beam_search.py`)
 - Fix whitespace accumulation in corruption/repair cycles that causes spurious indentation diffs (see `tree/mutation.py`)
-- Experiment with longer training runs (24K+ steps) now that overfitting is less likely with a larger corpus
+- Experiment with `p_prompt` values — currently 0.5, higher values may improve conditioned repair at the cost of unconditioned generalization
 
-**Medium-term (single GPU):**
-- Run a 24-hour A100 training run with the `single_gpu` preset (768d/12L, ~300M params)
-- Scale the corpus to 50K–100K programs using codeparrot/github-code and Stack-Edu
+**Medium-term (scaling model and data):**
+- Scale to the `single_gpu` preset (768d/12L, ~300M params) on a longer A100 run
+- Increase Stack Edu corpus to 100K–500K programs
 - Add multi-edit prediction — currently the model predicts one edit per forward pass; batching edits could speed inference significantly
 - Implement MBPP pass@k metrics for direct comparison with code generation baselines
 
 **Long-term (transfer learning & scale):**
 - Transfer from Marin's pretrained 8B model into a tree diffusion model (the original vision from [kelp.md](kelp.md))
 - Support multi-language tree diffusion (TypeScript, Rust) by swapping the AST parser
-- Explore conditioning on natural language prompts (docstrings → code repair)
+- Condition on richer prompts (test cases, type signatures, natural language specs)
 - Scale to TPU pods using Marin's Ray-based executor infrastructure
 
 ### How to Contribute
@@ -308,17 +364,19 @@ Kelp is an open experiment within the [Marin project](https://marin.community/).
 git clone https://github.com/marin-community/marin && cd marin
 uv sync
 
-# 2. Prepare a corpus (2-3 minutes, needs internet)
-uv run python experiments/kelp/prepare_corpus.py --output experiments/kelp/corpus.txt
+# 2. Prepare a corpus (streams Stack Edu, ~5 minutes)
+uv run python experiments/kelp/prepare_corpus.py \
+  --output experiments/kelp/corpus.txt --stack-edu-max 10000
 
 # 3. Train overnight (~5 hours on Apple Silicon)
 JAX_PLATFORMS=cpu uv run python experiments/kelp/train.py \
   --preset overnight_cpu --steps 12000 --augment \
+  --prompt-conditioning \
   --corpus-file experiments/kelp/corpus.txt \
   --checkpoint-interval 2000 --output-dir checkpoints/my-run
 
 # 4. Evaluate
-JAX_PLATFORMS=cpu uv run python experiments/kelp/evaluate.py \
+JAX_PLATFORMS=cpu uv run python experiments/kelp/evaluate_corpus.py \
   --checkpoint-dir checkpoints/my-run \
   --corpus-file experiments/kelp/corpus.txt
 ```
@@ -327,14 +385,15 @@ JAX_PLATFORMS=cpu uv run python experiments/kelp/evaluate.py \
 
 - **Whitespace fix** — corruption/repair cycles accumulate extra indentation; small, well-scoped bug in `tree/mutation.py`
 - **Edit position accuracy** — the model often predicts a valid replacement but applies it at the wrong AST location; see `tree/beam_search.py`
-- **New eval tasks** — add functions to `EVAL_TASKS` in `evaluate.py` and report results
-- **New augmentation strategies** — add a new source to `augmentation.py`'s `augment_bank()` pipeline
+- **New corpus sources** — write a function that returns `list[str]` of Python programs, plug it into `prepare_corpus.py`. Dedup and decontamination are automatic.
+- **New augmentation strategies** — add a new source to `augmentation.py`'s `augment_bank()` pipeline; e-graph augmentation (`tree/egraph_augmentation.py`) is a good example.
 
-**Add a new corpus source.** The corpus pipeline (`prepare_corpus.py`) is designed to be extended. Write a function that returns `list[str]` of Python programs and plug it into `main()`. Deduplication and decontamination are handled automatically.
+**Run on a GPU.** The SkyPilot configs in `infra/` make cloud training easy. If you have Lambda, GCP, or AWS credits:
 
-**Improve the SubtreeBank.** The bank augmentation pipeline (`tree/augmentation.py`) chains multiple strategies. You can add new ones — the interface is: take a `SubtreeBank`, return a larger `SubtreeBank`. E-graph augmentation (`tree/egraph_augmentation.py`) is a good example to follow.
-
-**Run on a GPU.** If you have access to an A100 or similar, try the `single_gpu` preset and report scaling behavior. We haven't yet validated the model beyond laptop-scale.
+```bash
+# Edit infra/kelp-v7-train.yaml to set your cloud provider, then:
+bash experiments/kelp/infra/launch_v7.sh --wandb
+```
 
 ### Development
 
@@ -342,7 +401,7 @@ All code lives under `experiments/kelp/` with tests in `tests/kelp/`. Follow [Ma
 
 ```bash
 # Run kelp tests
-uv run pytest tests/kelp/ -x -q
+JAX_PLATFORMS=cpu uv run pytest tests/kelp/ -x -q
 
 # Run pre-commit checks
 ./infra/pre-commit.py --all-files
