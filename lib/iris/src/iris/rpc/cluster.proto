@@ -617,18 +617,6 @@ message Controller {
     iris.vm.AutoscalerStatus status = 1;
   }
 
-  // --- VM Logs ---
-  message GetVmLogsRequest {
-    string vm_id = 1;
-    int32 tail = 2;  // 0 = all lines
-  }
-
-  message GetVmLogsResponse {
-    string logs = 1;
-    string vm_id = 2;
-    iris.vm.VmState state = 3;
-  }
-
   // --- Transactions / Actions Log ---
   message TransactionAction {
     iris.time.Timestamp timestamp = 1;
@@ -683,17 +671,27 @@ message Controller {
     repeated ProcessLogRecord records = 1;
   }
 
-  // --- Machine Detail (unified VM + worker view) ---
-  message GetMachineStatusRequest {
+  // --- Worker Detail (unified VM + worker view) ---
+  message GetWorkerStatusRequest {
     string id = 1;  // VM ID or worker ID — resolved against both
   }
 
-  message GetMachineStatusResponse {
+  // Summary of a task that ran (or is running) on this worker.
+  message WorkerTaskSummary {
+    string task_id = 1;
+    string job_name = 2;
+    TaskState state = 3;
+    iris.time.Timestamp started_at = 4;
+    iris.time.Timestamp finished_at = 5;
+    string error = 6;
+  }
+
+  message GetWorkerStatusResponse {
     // VM info (null if identifier matched a worker with no VM)
     iris.vm.VmInfo vm = 1;
     string scale_group = 2;
 
-    // Worker health (null if no worker registered for this machine)
+    // Worker health (null if no worker registered)
     WorkerHealthStatus worker = 3;
 
     // Bootstrap logs (from VM init)
@@ -701,6 +699,9 @@ message Controller {
 
     // Worker daemon logs (proxied from worker, empty if unhealthy/absent)
     repeated ProcessLogRecord worker_logs = 5;
+
+    // Recent tasks that ran or are running on this worker (newest first)
+    repeated WorkerTaskSummary recent_tasks = 6;
   }
 
 }
@@ -828,9 +829,6 @@ service ControllerService {
   // Autoscaler
   rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
 
-  // VM Logs
-  rpc GetVmLogs(Controller.GetVmLogsRequest) returns (Controller.GetVmLogsResponse);
-
   // Transactions / Actions Log
   rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
 
@@ -843,8 +841,8 @@ service ControllerService {
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 
-  // Unified machine detail (VM + worker + logs in one call)
-  rpc GetMachineStatus(Controller.GetMachineStatusRequest) returns (Controller.GetMachineStatusResponse);
+  // Unified worker detail (VM + worker + logs in one call)
+  rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
 }
 
 service WorkerService {

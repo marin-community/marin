@@ -643,9 +643,9 @@ def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
 # =============================================================================
 
 
-def test_vm_detail_page_escapes_vm_id(client):
-    """VM detail page escapes the VM ID to prevent XSS."""
-    response = client.get('/vm/"onmouseover="alert(1)')
+def test_worker_detail_page_escapes_id(client):
+    """Worker detail page escapes the ID to prevent XSS."""
+    response = client.get('/worker/"onmouseover="alert(1)')
     assert response.status_code == 200
     assert "onmouseover" not in response.text or "&quot;" in response.text
 

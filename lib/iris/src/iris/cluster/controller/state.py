@@ -1522,6 +1522,18 @@ class ControllerState:
             job_ids = {t.job_id for t in tasks}
             return {jid: self._jobs[jid] for jid in job_ids if jid in self._jobs}
 
+    def get_tasks_for_worker(self, worker_id: WorkerId, limit: int = 50) -> list[ControllerTask]:
+        """Return tasks that have any attempt assigned to this worker, newest first."""
+        with self._lock:
+            matches = []
+            for task in self._tasks.values():
+                for attempt in task.attempts:
+                    if attempt.worker_id == worker_id:
+                        matches.append(task)
+                        break
+            matches.sort(key=lambda t: t.started_at.epoch_ms() if t.started_at else 0, reverse=True)
+            return matches[:limit]
+
     def peek_pending_tasks(self) -> list[ControllerTask]:
         """Return all schedulable tasks in priority order without removing them.
 
