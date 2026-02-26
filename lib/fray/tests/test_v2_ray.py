@@ -231,6 +231,34 @@ def test_build_runtime_env_tpu_clears_jax_platforms():
     assert env["env_vars"]["JAX_PLATFORMS"] == ""
 
 
+@pytest.mark.parametrize("tpu_type", ["v5p-8", "v6e-8"])
+def test_build_runtime_env_tpu_sets_default_libtpu_init_args(tpu_type):
+    from fray.v2.ray_backend.backend import build_runtime_env
+
+    request = JobRequest(
+        name="tpu-libtpu-default-test",
+        entrypoint=Entrypoint.from_callable(lambda: None),
+        resources=ResourceConfig(device=TpuConfig(variant=tpu_type)),
+    )
+    env = build_runtime_env(request)
+    assert "LIBTPU_INIT_ARGS" in env["env_vars"]
+    assert env["env_vars"]["LIBTPU_INIT_ARGS"]
+
+
+def test_build_runtime_env_tpu_preserves_user_libtpu_init_args():
+    from fray.v2.ray_backend.backend import build_runtime_env
+    from fray.v2.types import create_environment
+
+    request = JobRequest(
+        name="tpu-libtpu-user-test",
+        entrypoint=Entrypoint.from_callable(lambda: None),
+        resources=ResourceConfig(device=TpuConfig(variant="v5p-8")),
+        environment=create_environment(env_vars={"LIBTPU_INIT_ARGS": "--user-specified"}),
+    )
+    env = build_runtime_env(request)
+    assert env["env_vars"]["LIBTPU_INIT_ARGS"] == "--user-specified"
+
+
 def test_build_runtime_env_gpu_clears_jax_platforms():
     from fray.v2.ray_backend.backend import build_runtime_env
 

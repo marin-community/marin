@@ -240,6 +240,9 @@ class CpuConfig:
     def device_flops(self, dtype: str = "bf16") -> float:
         raise NotImplementedError("CPU FLOPS not available")
 
+    def default_env_vars(self) -> dict[str, str]:
+        return {"JAX_PLATFORMS": "cpu"}
+
 
 @dataclass(frozen=True)
 class GpuConfig:
@@ -262,6 +265,9 @@ class GpuConfig:
 
     def total_flops(self, dtype: str = "bf16") -> float:
         return self.device_flops(dtype) * self.count
+
+    def default_env_vars(self) -> dict[str, str]:
+        return {"JAX_PLATFORMS": ""}
 
 
 @dataclass(frozen=True)
@@ -295,6 +301,12 @@ class TpuConfig:
     def total_flops(self, dtype: str = "bf16") -> float:
         return self.device_flops(dtype) * self.chip_count()
 
+    def default_env_vars(self) -> dict[str, str]:
+        defaults: dict[str, str] = {"JAX_PLATFORMS": ""}
+        if self.variant.startswith(("v5p-", "v6e-")):
+            defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=50000"
+        return defaults
+
 
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
 
@@ -311,7 +323,7 @@ class ResourceConfig:
 
     """
 
-    cpu: int = 1
+    cpu: float = 1
     ram: str = "4g"
     disk: str = "16g"
     device: DeviceConfig = field(default_factory=CpuConfig)
