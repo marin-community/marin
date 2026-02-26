@@ -353,7 +353,7 @@ def scale_with_namo(
 
             v_new = mu2 * v_prev + (1.0 - mu2) * grad_norm * grad_norm
             adaptive_lr = (learning_rate * jnp.sqrt(bc2) / (bc1 + 1e-12)) * (
-                momentum_norm / (jnp.sqrt(v_new + adamnorm_eps))
+                momentum_norm / (jnp.sqrt(v_new) + adamnorm_eps)
             )
             adaptive_lr = jnp.minimum(adaptive_lr, 1.0)
 
@@ -486,7 +486,7 @@ def scale_with_namod(
             base_lr = learning_rate * jnp.sqrt(bc2) / (bc1 + 1e-12)
 
             col_norm_m = jnp.linalg.norm(m_arr, axis=-2)
-            col_scale = col_norm_m * jax.lax.rsqrt(v_new + adamnorm_eps)
+            col_scale = col_norm_m / (jnp.sqrt(v_new) + adamnorm_eps)
             col_scale = _clamp_to_mean(col_scale, clamp_c)
 
             col_lr_wd = jnp.minimum(col_scale * base_lr, 1.0)
