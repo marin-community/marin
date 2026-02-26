@@ -1,27 +1,50 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Canonical compact Grug MoE block.
+
+Implementation overview:
+- Routing keeps the argsort-grouped dispatch path that emerged as the stable
+  default from the https://github.com/marin-community/marin/issues/2704 exploration and the implementation in commit
+  89318a910 (and its parent).
+- Expert parallelism keeps the ring-style strategy from https://github.com/marin-community/marin/issues/2710: token-sharded
+  `all_gather` for dispatch, then `psum_scatter` for collection.
+- The same block supports both EP and non-EP meshes, and always adds the
+  shared dense expert path when configured.
+
+Historical benchmark context for these choices lives in the development notes
+that introduced this implementation (for example, `moe_ep_benchmark.md` and
+`bench_moe_hillclimb.py` in commit c1de2c1ac).
+"""
+
 import dataclasses
 import math
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
+from typing import TypeAlias
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from einops import rearrange
+from haliax.jax_utils import named_call
 from jax import random, shard_map
 from jax.sharding import PartitionSpec as P, get_abstract_mesh, reshard
-from jax.tree_util import register_dataclass
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from haliax.nn.linear import gmm_sharded
+from levanter.utils.activation import ActivationFunctionEnum
 
 from .attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from .loss import fused_linear_softmax_cross_entropy_loss
 from .sharding import Pvocab, unshard
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
+# #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
+
+MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 
 
 def _mesh_has_axis(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> bool:
@@ -89,98 +112,56 @@ class GrugMoeModelConfig:
         return self.hidden_dim // self.num_heads
 
 
-@register_dataclass
-@dataclass(frozen=True)
-class GrugMoeAttentionParams:
+class CausalSelfAttention(eqx.Module):
     w_q: jax.Array
     w_k: jax.Array
     w_v: jax.Array
     w_o: jax.Array
+    cfg: GrugMoeModelConfig = eqx.field(static=True)
 
-
-@register_dataclass
-@dataclass(frozen=True)
-class GrugMoeBlockParams:
-    attn: GrugMoeAttentionParams
-    rms_attn: jax.Array
-    rms_mlp: jax.Array
-    moe_router: jax.Array
-    moe_w13: jax.Array
-    moe_w2: jax.Array
-    shared_w13: jax.Array
-    shared_w2: jax.Array
-
-
-@register_dataclass
-@dataclass(frozen=True)
-class GrugMoeModelParameters:
-    token_embed: jax.Array
-    output_proj: jax.Array
-    blocks: tuple[GrugMoeBlockParams, ...]
-    final_norm: jax.Array
-
-
-def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
-    return std * random.truncated_normal(key, -3, 3, shape)
-
-
-@partial(jax.jit, static_argnames=("cfg",))
-def init_parameters(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> GrugMoeModelParameters:
-    """Initialize MoE parameters for Grug."""
-    mesh = get_abstract_mesh()
-    head_dim = cfg.inferred_head_dim
-    key, embed_key, out_key = random.split(key, 3)
-    layer_keys = random.split(key, cfg.num_layers)
-
-    expert_axis_size = _mesh_axis_size(mesh, "expert")
-    if cfg.num_experts % expert_axis_size != 0:
-        raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
-
-    expert_param_spec = P("expert", None, None) if _mesh_has_axis(mesh, "expert") else P(None, None, None)
-
-    token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
-    output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
-    final_norm = reshard(jnp.ones((cfg.hidden_dim,), dtype=jnp.float32), P(None))
-
-    blocks: list[GrugMoeBlockParams] = []
-    d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, head_dim
-    e, i, j = cfg.num_experts, cfg.intermediate_dim, cfg.shared_expert_intermediate_dim
-    for layer_key in layer_keys:
-        k_q, k_k, k_v, k_o, k_router, k_w13, k_w2, k_shared13, k_shared2 = random.split(layer_key, 9)
-        attn = GrugMoeAttentionParams(
+    @staticmethod
+    def init(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
+        k_q, k_k, k_v, k_o = random.split(key, 4)
+        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
+            cfg=cfg,
         )
-        block = GrugMoeBlockParams(
-            attn=attn,
-            rms_attn=jnp.ones((d,), dtype=jnp.float32),
-            rms_mlp=jnp.ones((d,), dtype=jnp.float32),
-            moe_router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
-            moe_w13=reshard(_init_weight(k_w13, (e, d, 2 * i), cfg.initializer_std), expert_param_spec),
-            moe_w2=reshard(_init_weight(k_w2, (e, i, d), cfg.initializer_std), expert_param_spec),
-            shared_w13=reshard(_init_weight(k_shared13, (d, 2 * j), cfg.initializer_std), P(None, None)),
-            shared_w2=reshard(_init_weight(k_shared2, (j, d), cfg.initializer_std), P(None, None)),
-        )
-        blocks.append(block)
 
-    return GrugMoeModelParameters(
-        token_embed=token_embed,
-        output_proj=output_proj,
-        blocks=tuple(blocks),
-        final_norm=final_norm,
-    )
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+        head_dim = self.cfg.inferred_head_dim
+        seq_len = x.shape[1]
+        batch_spec = _batch_spec(get_abstract_mesh())
+
+        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        attn_out = attention(q, k, v, mask)
+        attn_out = rearrange(attn_out, "... n d -> ... (n d)")
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
 
-def rms_norm(x: Float[Array, "... D"], weight: Float[Array, "D"], eps: float) -> Float[Array, "... D"]:
-    weight = unshard(weight)
-    dtype = x.dtype
-    x = x.astype(jnp.float32)
-    variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-    normed = x * jax.lax.rsqrt(variance + eps)
-    out = normed * weight
-    return out.astype(dtype)
+class RMSNorm(eqx.Module):
+    weight: jax.Array
+    eps: float = eqx.field(static=True)
+
+    @staticmethod
+    def init(dim: int, eps: float) -> "RMSNorm":
+        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
+
+    @named_call
+    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        weight = unshard(self.weight)
+        dtype = x.dtype
+        x = x.astype(jnp.float32)
+        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        normed = x * jax.lax.rsqrt(variance + self.eps)
+        return (normed * weight).astype(dtype)
 
 
 def _prepare_moe_dispatch(
@@ -196,6 +177,8 @@ def _prepare_moe_dispatch(
     Int[Array, "E"],
 ]:
     """Flatten + argsort by expert into grouped layout for GMM."""
+    # #2704: keep argsort-grouped dispatch as the canonical compact routing
+    # strategy, matching the behavior carried forward from 89318a910.
     tokens, topk = topk_idx.shape
     expert_ids = topk_idx.reshape(tokens * topk)
     dispatch_weights = topk_weights.reshape(tokens * topk)
@@ -214,9 +197,8 @@ def _moe_mlp_local(
     moe_router: Float[Array, "D E"],
     moe_w13: Float[Array, "E D I2"],
     moe_w2: Float[Array, "E I D"],
-    shared_w13: Float[Array, "D J2"],
-    shared_w2: Float[Array, "J D"],
     *,
+    activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     num_experts_per_token: int,
 ) -> Float[Array, "B S D"]:
@@ -238,16 +220,26 @@ def _moe_mlp_local(
     w13_out = gmm_sharded(x_dispatch, moe_w13, group_sizes)
     moe_dim = moe_w2.shape[1]
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    out_dispatch = gmm_sharded(jax.nn.silu(gate) * up, moe_w2, group_sizes)
+    out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2, group_sizes)
 
     out_flat = jnp.zeros_like(x_flat).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
+    return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
 
+
+def _shared_dense_mlp(
+    x: Float[Array, "B S D"],
+    shared_w13: Float[Array, "D J2"],
+    shared_w2: Float[Array, "J D"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> Float[Array, "B S D"]:
+    """Dense shared-expert FFN path that can be fused outside routed MoE dispatch."""
+    b, s, _ = x.shape
+    x_flat = rearrange(x, "b s d -> (b s) d")
     shared_dim = shared_w2.shape[0]
-    if shared_dim > 0:
-        shared13 = jnp.einsum("td,dm->tm", x_flat, shared_w13)
-        shared_gate, shared_up = jnp.split(shared13, [shared_dim], axis=-1)
-        out_flat = out_flat + jnp.einsum("tm,md->td", jax.nn.silu(shared_gate) * shared_up, shared_w2)
-
+    shared13 = jnp.einsum("td,dm->tm", x_flat, shared_w13)
+    shared_gate, shared_up = jnp.split(shared13, [shared_dim], axis=-1)
+    out_flat = jnp.einsum("tm,md->td", activation_fn(shared_gate) * shared_up, shared_w2)
     return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
 
 
@@ -257,6 +249,7 @@ def _moe_mlp_ep_ring_local(
     moe_w13_local: Float[Array, "EL D I2"],
     moe_w2_local: Float[Array, "EL I D"],
     *,
+    activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     num_experts_per_token: int,
     capacity_factor: float,
@@ -264,6 +257,7 @@ def _moe_mlp_ep_ring_local(
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     b, s, _ = x_local.shape
     x_flat_local = rearrange(x_local, "b s d -> (b s) d")
+    # #2710 ring EP strategy: each shard routes against global tokens.
     x_flat_global = jax.lax.all_gather(x_flat_local, "expert", tiled=True)
 
     router_logits = jnp.einsum("td,de->te", x_flat_global, moe_router)
@@ -311,49 +305,88 @@ def _moe_mlp_ep_ring_local(
     expert_local = jnp.where(valid, expert_local, 0)
 
     group_sizes = jnp.bincount(expert_local, weights=valid_i32, length=local_experts).astype(jnp.int32)
-    group_sizes = group_sizes.at[0].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
+    # `local_idx` pads by appending invalid rows at the end; keep GMM segment
+    # boundaries aligned by attributing padding to the final expert segment.
+    group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     w13_out = gmm_sharded(x_dispatch, moe_w13_local, group_sizes)
     moe_dim = moe_w2_local.shape[1]
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    out_dispatch = gmm_sharded(jax.nn.silu(gate) * up, moe_w2_local, group_sizes)
+    out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
     out_global = (
         jnp.zeros_like(x_flat_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
     )
+    # #2710 ring EP strategy: collect only this shard's token slice after
+    # reducing contributions from experts across the EP mesh.
     out_flat_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
     return rearrange(out_flat_local, "(b s) d -> b s d", b=b, s=s)
 
 
-def mlp(block: GrugMoeBlockParams, x: Float[Array, "B S D"], cfg: GrugMoeModelConfig) -> Float[Array, "B S D"]:
-    """Execute the MoE FFN with EP ring path when an expert mesh axis is available."""
-    mesh = get_abstract_mesh()
+@named_call
+def moe_mlp(
+    x: Float[Array, "B S D"],
+    moe_router: Float[Array, "D E"],
+    moe_w13: Float[Array, "E D I2"],
+    moe_w2: Float[Array, "E I D"],
+    *,
+    num_experts_per_token: int,
+    activation: MoeActivation = ActivationFunctionEnum.silu,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+) -> Float[Array, "B S D"]:
+    """Functional routed MoE MLP core used by Grug modules and benchmarks.
+
+    This helper handles local and EP execution, but intentionally excludes the
+    shared dense expert path so callers can compose/fuse it separately.
+    """
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    if callable(activation):
+        activation_fn = activation
+    else:
+        activation_fn = activation.to_jax_fn()
+
+    num_experts = int(moe_w13.shape[0])
+    if moe_w2.shape[0] != num_experts:
+        raise ValueError(
+            f"moe_w2 expert dimension ({moe_w2.shape[0]}) must match moe_w13 expert dimension ({num_experts})"
+        )
+    if moe_router.shape[1] != num_experts:
+        raise ValueError(
+            f"moe_router expert dimension ({moe_router.shape[1]}) must match moe_w13 expert dimension ({num_experts})"
+        )
+
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
-    batch_spec = _batch_spec(mesh)
 
     if mesh is None or mesh.empty:
         return _moe_mlp_local(
             x,
-            block.moe_router,
-            block.moe_w13,
-            block.moe_w2,
-            block.shared_w13,
-            block.shared_w2,
-            num_experts=cfg.num_experts,
-            num_experts_per_token=cfg.num_experts_per_token,
+            moe_router,
+            moe_w13,
+            moe_w2,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            num_experts_per_token=num_experts_per_token,
         )
 
-    if has_expert_axis and expert_axis_size > 1:
-        if cfg.num_experts % expert_axis_size != 0:
-            raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
+    batch_spec = _batch_spec(mesh)
+    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
 
+    if has_expert_axis and expert_axis_size > 1:
+        if num_experts % expert_axis_size != 0:
+            raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+
+        # #2710: prefer ring EP collectives when a real expert mesh is present.
         shard_fn = shard_map(
             partial(
                 _moe_mlp_ep_ring_local,
-                num_experts=cfg.num_experts,
-                num_experts_per_token=cfg.num_experts_per_token,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                num_experts_per_token=num_experts_per_token,
+                capacity_factor=capacity_factor,
             ),
             mesh=mesh,
             in_specs=(
@@ -365,138 +398,206 @@ def mlp(block: GrugMoeBlockParams, x: Float[Array, "B S D"], cfg: GrugMoeModelCo
             out_specs=batch_spec,
             check_vma=False,
         )
+        return shard_fn(x, moe_router, moe_w13, moe_w2)
 
-        routed = shard_fn(x, block.moe_router, block.moe_w13, block.moe_w2)
-
-        shared_dim = block.shared_w2.shape[0]
-        if shared_dim > 0:
-            x_flat = rearrange(x, "b s d -> (b s) d")
-            shared13 = jnp.einsum("td,dm->tm", x_flat, block.shared_w13)
-            shared_gate, shared_up = jnp.split(shared13, [shared_dim], axis=-1)
-            shared_out_flat = jnp.einsum("tm,md->td", jax.nn.silu(shared_gate) * shared_up, block.shared_w2)
-            shared_out = rearrange(shared_out_flat, "(b s) d -> b s d", b=x.shape[0], s=x.shape[1])
-            routed = routed + shared_out
-
-        return routed
-
+    # Fallback path for no expert axis (or expert axis size 1) keeps routing
+    # semantics without EP collectives.
     shard_fn = shard_map(
         partial(
             _moe_mlp_local,
-            num_experts=cfg.num_experts,
-            num_experts_per_token=cfg.num_experts_per_token,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            num_experts_per_token=num_experts_per_token,
         ),
         mesh=mesh,
         in_specs=(
             batch_spec,
             P(None, None),
-            P(None, None, None),
-            P(None, None, None),
-            P(None, None),
-            P(None, None),
+            local_expert_spec,
+            local_expert_spec,
         ),
         out_specs=batch_spec,
         check_vma=False,
     )
-
-    return shard_fn(
-        x,
-        block.moe_router,
-        block.moe_w13,
-        block.moe_w2,
-        block.shared_w13,
-        block.shared_w2,
-    )
+    return shard_fn(x, moe_router, moe_w13, moe_w2)
 
 
-def _transformer_hidden(
-    params: GrugMoeModelParameters,
-    token_ids: Int[Array, "B S"],
-    cfg: GrugMoeModelConfig,
-    *,
-    mask: AttentionMask | jax.Array | None,
-) -> Float[Array, "B S D"]:
-    mesh = get_abstract_mesh()
-    batch_spec = _batch_spec(mesh)
-    head_dim = cfg.inferred_head_dim
-    seq_len = token_ids.shape[1]
+class MoEMLP(eqx.Module):
+    moe_router: jax.Array
+    moe_w13: jax.Array
+    moe_w2: jax.Array
+    shared_w13: jax.Array | None
+    shared_w2: jax.Array | None
+    cfg: GrugMoeModelConfig = eqx.field(static=True)
 
-    if mask is None:
-        mask = AttentionMask.causal()
+    @staticmethod
+    def init(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
+        k_router, k_w13, k_w2, k_shared13, k_shared2 = random.split(key, 5)
+        mesh = get_abstract_mesh()
 
-    hidden = params.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        expert_axis_size = _mesh_axis_size(mesh, "expert")
+        if cfg.num_experts % expert_axis_size != 0:
+            raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
-    for block in params.blocks:
-        attn_in = rms_norm(hidden, block.rms_attn, cfg.layer_norm_eps)
-        q = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_v), "... (m d) -> ... m d", d=head_dim)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=cfg.rope)
-        attn_out = attention(q, k, v, mask)
-        attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o, out_sharding=batch_spec)
+        expert_param_spec = P("expert", None, None) if _mesh_has_axis(mesh, "expert") else P(None, None, None)
 
-        hidden = hidden + attn_out
-        mlp_in = rms_norm(hidden, block.rms_mlp, cfg.layer_norm_eps)
-        hidden = hidden + mlp(block, mlp_in, cfg)
+        d, e, i, j = (
+            cfg.hidden_dim,
+            cfg.num_experts,
+            cfg.intermediate_dim,
+            cfg.shared_expert_intermediate_dim,
+        )
 
-    return rms_norm(hidden, params.final_norm, cfg.layer_norm_eps)
+        shared_w13 = None
+        shared_w2 = None
+        if j > 0:
+            shared_w13 = reshard(_init_weight(k_shared13, (d, 2 * j), cfg.initializer_std), P(None, None))
+            shared_w2 = reshard(_init_weight(k_shared2, (j, d), cfg.initializer_std), P(None, None))
+
+        return MoEMLP(
+            moe_router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            moe_w13=reshard(_init_weight(k_w13, (e, d, 2 * i), cfg.initializer_std), expert_param_spec),
+            moe_w2=reshard(_init_weight(k_w2, (e, i, d), cfg.initializer_std), expert_param_spec),
+            shared_w13=shared_w13,
+            shared_w2=shared_w2,
+            cfg=cfg,
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        routed = moe_mlp(
+            x,
+            self.moe_router,
+            self.moe_w13,
+            self.moe_w2,
+            num_experts_per_token=self.cfg.num_experts_per_token,
+            activation=ActivationFunctionEnum.silu,
+            mesh=get_abstract_mesh(),
+            capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+        )
+
+        if self.shared_w13 is None or self.shared_w2 is None:
+            return routed
+
+        # Keep shared dense expert fusion outside the routed core so `moe_mlp`
+        # stays reusable for callers that only need routed experts.
+        shared_out = _shared_dense_mlp(
+            x,
+            self.shared_w13,
+            self.shared_w2,
+            activation_fn=jax.nn.silu,
+        )
+        return routed + shared_out
 
 
-def forward(
-    params: GrugMoeModelParameters,
-    token_ids: Int[Array, "B S"],
-    cfg: GrugMoeModelConfig,
-    *,
-    mask: AttentionMask | jax.Array | None = None,
-) -> Float[Array, "B S V"]:
-    batch_spec = _batch_spec(get_abstract_mesh())
-    hidden = _transformer_hidden(params, token_ids, cfg, mask=mask)
-    return jnp.einsum("bsh,hd->bsd", hidden, params.output_proj, out_sharding=batch_spec)
+class Block(eqx.Module):
+    rms_attn: RMSNorm
+    attn: CausalSelfAttention
+    rms_mlp: RMSNorm
+    mlp: MoEMLP
+
+    @staticmethod
+    def init(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> "Block":
+        attn_key, mlp_key = random.split(key, 2)
+        return Block(
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            attn=CausalSelfAttention.init(cfg, key=attn_key),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            mlp=MoEMLP.init(cfg, key=mlp_key),
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+        x = x + self.attn(self.rms_attn(x), mask)
+        x = x + self.mlp(self.rms_mlp(x))
+        return x
 
 
-def activations(
-    params: GrugMoeModelParameters,
-    token_ids: Int[Array, "B S"],
-    cfg: GrugMoeModelConfig,
-    *,
-    mask: AttentionMask | jax.Array | None = None,
-) -> Float[Array, "B S D"]:
-    return _transformer_hidden(params, token_ids, cfg, mask=mask)
+class Transformer(eqx.Module):
+    token_embed: jax.Array
+    output_proj: jax.Array
+    blocks: tuple[Block, ...]
+    final_norm: RMSNorm
+    config: GrugMoeModelConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> "Transformer":
+        embed_key, out_key, *block_keys = random.split(key, cfg.num_layers + 2)
+        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
+        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
+        blocks = tuple(Block.init(cfg, key=layer_key) for layer_key in block_keys)
+        final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+
+        return Transformer(
+            token_embed=token_embed,
+            output_proj=output_proj,
+            blocks=blocks,
+            final_norm=final_norm,
+            config=cfg,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array | None = None,
+    ) -> Float[Array, "B S D"]:
+        if mask is None:
+            mask = AttentionMask.causal()
+
+        batch_spec = _batch_spec(get_abstract_mesh())
+        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        for block in self.blocks:
+            hidden = eqx.filter_checkpoint(block)(hidden, mask)
+        return self.final_norm(hidden)
+
+    @named_call
+    def logits(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array | None = None,
+    ) -> Float[Array, "B S V"]:
+        batch_spec = _batch_spec(get_abstract_mesh())
+        hidden = self(token_ids, mask=mask)
+        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+
+    def next_token_loss(
+        self,
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+    ) -> jax.Array:
+        """Compute next-token cross-entropy loss for a batch."""
+        hidden = self(token_ids, mask=mask)
+        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        loss_weight = loss_weight.astype(loss_dtype)
+
+        return fused_linear_softmax_cross_entropy_loss(
+            hidden,
+            self.output_proj,
+            labels,
+            weight=loss_weight,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            dtype=loss_dtype,
+        )
 
 
-def loss_fn(
-    params: GrugMoeModelParameters,
-    token_ids: Int[Array, "B S"],
-    loss_weight: Float[Array, "B S"],
-    cfg: GrugMoeModelConfig,
-    *,
-    mask: AttentionMask | jax.Array | None = None,
-    reduction: str = "mean",
-    logsumexp_weight: float | None = None,
-    loss_dtype: jnp.dtype = jnp.float32,
-) -> jax.Array:
-    hidden = _transformer_hidden(params, token_ids, cfg, mask=mask)
-    labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
-    loss_weight = loss_weight.astype(loss_dtype)
-
-    return fused_linear_softmax_cross_entropy_loss(
-        hidden,
-        params.output_proj,
-        labels,
-        weight=loss_weight,
-        reduction=reduction,
-        logsumexp_weight=logsumexp_weight,
-        dtype=loss_dtype,
-    )
+def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
+    return std * random.truncated_normal(key, -3, 3, shape)
 
 
 __all__ = [
-    "GrugMoeAttentionParams",
-    "GrugMoeBlockParams",
+    "Block",
+    "CausalSelfAttention",
     "GrugMoeModelConfig",
-    "GrugMoeModelParameters",
-    "activations",
-    "forward",
-    "init_parameters",
-    "loss_fn",
+    "MoeActivation",
+    "MoEMLP",
+    "RMSNorm",
+    "Transformer",
+    "moe_mlp",
 ]
