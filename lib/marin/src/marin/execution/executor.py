@@ -207,12 +207,17 @@ def resolve_executor_step(
     def resolved_fn(output_path):
         return captured_fn(captured_config)
 
+    # Resolve resources: explicit ExecutorStep.resources > @remote decorator > None (local)
+    resources = step.resources
+    if resources is None:
+        resources = getattr(step.fn, "__fray_resources__", None)
+
     return StepSpec(
         name=step.name,
         deps=deps or [],
         override_output_path=output_path,
         fn=resolved_fn,
-        resources=step.resources,
+        resources=resources,
         env_vars=step.env_vars or {},
         pip_dependency_groups=step.pip_dependency_groups or [],
     )

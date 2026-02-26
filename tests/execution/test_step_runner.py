@@ -4,13 +4,16 @@
 import json
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 from dataclasses import dataclass
 
+from fray.v2.types import ResourceConfig
+
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import ExecutorStep
+from marin.execution.executor import ExecutorStep, resolve_executor_step
+from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
-from marin.execution.executor import resolve_executor_step
 from marin.execution.step_runner import StepRunner
 
 # ---------------------------------------------------------------------------
@@ -311,3 +314,110 @@ def test_runner_max_concurrent(tmp_path: Path):
 
     train_artifact = Artifact.load(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
+
+
+# ---------------------------------------------------------------------------
+# Local vs Fray execution tests
+# ---------------------------------------------------------------------------
+
+
+def test_step_without_resources_runs_locally(tmp_path: Path):
+    """A step with resources=None should run via the local thread pool, not fray_exec."""
+    step = StepSpec(
+        name="local_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=lambda output_path: PathMetadata(path=output_path),
+        resources=None,
+    )
+
+    with patch("marin.execution.step_runner.fray_exec") as mock_fray:
+        runner = StepRunner()
+        runner.run([step])
+
+        mock_fray.assert_not_called()
+
+    loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
+    assert loaded.path == tmp_path.as_posix()
+
+
+def test_step_with_resources_uses_fray(tmp_path: Path):
+    """A step with explicit resources should go through fray_exec."""
+    resources = ResourceConfig.with_cpu()
+    step = StepSpec(
+        name="fray_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=lambda output_path: PathMetadata(path=output_path),
+        resources=resources,
+    )
+
+    runner = StepRunner()
+    runner.run([step])
+
+    loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
+    assert loaded.path == tmp_path.as_posix()
+
+
+# ---------------------------------------------------------------------------
+# @remote decorator tests
+# ---------------------------------------------------------------------------
+
+
+def test_remote_decorator_attaches_resources():
+    """@remote should attach default CPU resources to the function."""
+
+    @remote
+    def my_fn(config):
+        pass
+
+    assert hasattr(my_fn, "__fray_resources__")
+    assert my_fn.__fray_resources__ == ResourceConfig.with_cpu()
+
+
+def test_remote_decorator_with_custom_resources():
+    """@remote(resources=...) should use the specified resources."""
+    custom = ResourceConfig.with_cpu(cpu=4, ram="16g")
+
+    @remote(resources=custom)
+    def my_fn(config):
+        pass
+
+    assert my_fn.__fray_resources__ == custom
+
+
+def test_resolve_executor_step_picks_up_remote_decorator():
+    """resolve_executor_step should use @remote resources when ExecutorStep.resources is None."""
+
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
+
+    assert resolved.resources == ResourceConfig.with_cpu()
+
+
+def test_explicit_resources_override_remote_decorator():
+    """ExecutorStep.resources should take precedence over @remote decorator resources."""
+    explicit = ResourceConfig.with_cpu(cpu=8, ram="32g")
+
+    @remote(resources=ResourceConfig.with_cpu(cpu=2))
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=explicit)
+    resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
+
+    assert resolved.resources == explicit
+
+
+def test_step_without_remote_or_resources_has_none():
+    """A plain function with no @remote and no ExecutorStep.resources should resolve to None."""
+
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
+
+    assert resolved.resources is None
