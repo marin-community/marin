@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -68,9 +71,7 @@ def load_mbpp_eval_tasks(max_length: int = 512, max_tasks: int = 0) -> list[dict
     tasks = []
     for split in ["train", "validation", "test", "prompt"]:
         try:
-            ds = load_dataset(
-                "google-research-datasets/mbpp", "full", split=split, trust_remote_code=True
-            )
+            ds = load_dataset("google-research-datasets/mbpp", "full", split=split, trust_remote_code=True)
         except Exception:
             continue
 
@@ -88,13 +89,15 @@ def load_mbpp_eval_tasks(max_length: int = 512, max_tasks: int = 0) -> list[dict
             except SyntaxError:
                 continue
 
-            tasks.append({
-                "task_id": item.get("task_id", len(tasks)),
-                "text": item.get("text", ""),
-                "clean": code,
-                "tests": test_list,
-                "setup_code": setup_code,
-            })
+            tasks.append(
+                {
+                    "task_id": item.get("task_id", len(tasks)),
+                    "text": item.get("text", ""),
+                    "clean": code,
+                    "tests": test_list,
+                    "setup_code": setup_code,
+                }
+            )
 
     if max_tasks > 0:
         tasks = tasks[:max_tasks]
@@ -132,6 +135,7 @@ def evaluate_mbpp_task(
     clean = task["clean"]
     tests = task["tests"]
     setup_code = task.get("setup_code", "")
+    prompt = task.get("text") if tokenizer.prompt_tokens else None
     rng = random.Random(task["task_id"])
 
     total_valid = 0
@@ -166,6 +170,7 @@ def evaluate_mbpp_task(
             n=n_best_of,
             max_depth=max_depth,
             temperature=0.8,
+            prompt=prompt,
         )
 
         for c in candidates:
@@ -187,9 +192,7 @@ def evaluate_mbpp_task(
             best_trial_pass_rate = 0.0
             best_trial_candidate = candidates[0].source
             for c in candidates:
-                c_passed = sum(
-                    1 for t in tests if run_mbpp_test(c.source, t, setup_code)
-                )
+                c_passed = sum(1 for t in tests if run_mbpp_test(c.source, t, setup_code))
                 c_rate = c_passed / len(tests) if tests else 0.0
                 if c_rate > best_trial_pass_rate:
                     best_trial_pass_rate = c_rate
@@ -217,15 +220,21 @@ def evaluate_mbpp_task(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate Kelp checkpoint on held-out MBPP programs")
     parser.add_argument(
-        "--checkpoint-dir", type=str, default="checkpoints/kelp-edit-v3",
+        "--checkpoint-dir",
+        type=str,
+        default="checkpoints/kelp-edit-v3",
         help="Directory containing step-XXXXXX subdirectories",
     )
     parser.add_argument(
-        "--checkpoint", type=str, default=None,
+        "--checkpoint",
+        type=str,
+        default=None,
         help="Specific checkpoint subdirectory (uses latest if not set)",
     )
     parser.add_argument(
-        "--corpus-file", type=str, default=None,
+        "--corpus-file",
+        type=str,
+        default=None,
         help="Training corpus file for building subtree bank (recommended for realistic corruption)",
     )
     parser.add_argument("--num-corruptions", type=int, default=5, help="Corruption trials per task")
@@ -253,7 +262,7 @@ def main():
     logger.info(f"Evaluating checkpoint: {ckpt_dir}")
 
     params, config = load_checkpoint(ckpt_dir)
-    tokenizer = TreeDiffusionTokenizer(max_seq_len=config.max_seq_len)
+    tokenizer = TreeDiffusionTokenizer(max_seq_len=config.max_seq_len, prompt_tokens=config.prompt_tokens)
 
     # Load MBPP eval tasks.
     eval_tasks = load_mbpp_eval_tasks(max_tasks=args.max_tasks)

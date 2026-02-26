@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -45,6 +48,7 @@ from experiments.kelp.tree.edit_model import (
     ar_loss,
     init_edit_params,
 )
+from experiments.kelp.corpus import extract_docstring
 from experiments.kelp.tree.mutation import corrupt_program
 from experiments.kelp.tree.subtree_bank import SubtreeBank
 from experiments.kelp.tree.tokenizer import TreeDiffusionTokenizer
@@ -120,6 +124,10 @@ class EditTrainingConfig:
     curriculum_warmup_fraction: float = 0.3
     """Fraction of total_steps over which the curriculum ramps from 1 to
     max_corruption_steps. Only used when corruption_curriculum != 'constant'."""
+
+    p_prompt: float = 0.5
+    """Probability of including a docstring prompt when one is available.
+    Only effective when the model config has prompt_tokens=True."""
 
     wandb_project: str | None = None
     """W&B project name. If set, enables W&B logging."""
@@ -318,10 +326,18 @@ def generate_training_example(
     if edit_token_idx >= tokenizer.num_position_tokens:
         return None
 
+    # Optionally include a docstring prompt from the *clean* source.
+    prompt_source: str | None = None
+    if tokenizer.prompt_tokens:
+        docstring = extract_docstring(clean_source)
+        if docstring and rng.random() < config.p_prompt:
+            prompt_source = docstring
+
     token_ids, loss_mask = tokenizer.encode_training_example(
         context_source=intermediate,
         edit_position_token_idx=edit_token_idx,
         replacement_source=target_mutation.replacement,
+        prompt_source=prompt_source,
     )
 
     # Truncate or skip if too long.
