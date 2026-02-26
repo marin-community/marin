@@ -61,6 +61,7 @@ Usage:
 """
 
 import dataclasses
+import gc
 import json
 import logging
 import math
@@ -1012,6 +1013,7 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
 
                 # Free disk immediately
                 shutil.rmtree(work_dir)
+                gc.collect()
 
             # --- Proportional distribution across output shards ---
             batch_total = sum(len(r) for r in file_records.values())
@@ -1063,6 +1065,7 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
 
             del shard_buffers
             shutil.rmtree(staging_batch_dir)
+            gc.collect()
 
             # --- Write per-batch val caches ---
             if config.val_fraction > 0 and (batch_val_und or batch_val_gen):
@@ -1092,6 +1095,7 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
 
             batch_val_und.clear()
             batch_val_gen.clear()
+            gc.collect()
 
             # --- Save checkpoint ---
             files_done += len(batch)
