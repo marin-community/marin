@@ -351,14 +351,17 @@ class TaggedEvaluator:
             with context:
                 if axis_mapping is not None:
                     context.enter_context(hax.axis_mapping(axis_mapping))
+                # NOTE: compute_next_token_loss with reduction=None already multiplies
+                # by loss_weight internally (via haliax reduce_loss). So `losses` here
+                # is raw_CE * loss_weight. We must NOT multiply by loss_weight again.
                 losses = m.compute_next_token_loss(batch, reduction=None, reduction_axis=())
                 weights = batch.loss_weight  # [Batch, Pos]
                 this_tokens = hax.sum(weights)
-                this_loss = hax.einsum("->", losses, weights)  # to scalar
+                this_loss = hax.sum(losses)  # sum(w * L), already weighted
 
                 # all the *_per_tag variables are [Tag]
                 this_tokens_per_tag = hax.einsum("-> tag", weights, tags)
-                this_loss_per_tag = hax.einsum("-> tag", weights, losses, tags)  # [Tag]
+                this_loss_per_tag = hax.einsum("-> tag", losses, tags)  # [Tag], already weighted
 
                 mean = state.token_avg_loss.add(this_loss / this_tokens, this_tokens)
                 state = dataclasses.replace(state, token_avg_loss=mean)
