@@ -594,7 +594,7 @@ class CoreweavePlatform:
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> CoreweaveSliceHandle:
         """Create a worker Pod on a shared NodePool and return a handle in CREATING state.
 
@@ -606,9 +606,9 @@ class CoreweavePlatform:
                 f"CoreWeave platform does not support multi-node slices (num_vms={config.num_vms}). "
                 "Only num_vms=1 is supported."
             )
-        if not bootstrap_config:
+        if not worker_config:
             raise ValueError(
-                "bootstrap_config is required for CoreWeave slices (need docker_image for worker Pod creation)"
+                "worker_config is required for CoreWeave slices (need docker_image for worker Pod creation)"
             )
 
         # prepare_slice_config() sets name_prefix to "{label_prefix}-{sg_name}" but
@@ -633,19 +633,19 @@ class CoreweavePlatform:
             kubectl=self._kubectl,
         )
 
-        self._executor.submit(self._monitor_slice, handle, config, bootstrap_config)
+        self._executor.submit(self._monitor_slice, handle, config, worker_config)
         return handle
 
     def _monitor_slice(
         self,
         handle: CoreweaveSliceHandle,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig,
+        worker_config: config_pb2.WorkerConfig,
     ) -> None:
         """Background thread: create Pod, wait for Pod ready."""
         try:
             handle._set_state(CloudSliceState.BOOTSTRAPPING)
-            self._create_worker_pod(handle, config, bootstrap_config)
+            self._create_worker_pod(handle, config, worker_config)
             self._wait_for_pod_ready(handle)
 
             pod_name = _worker_pod_name(handle.slice_id)
@@ -679,7 +679,7 @@ class CoreweavePlatform:
         self,
         handle: CoreweaveSliceHandle,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig,
+        worker_config: config_pb2.WorkerConfig,
     ) -> None:
         """Create the worker Pod on the NodePool's node."""
         cw = config.coreweave
@@ -692,27 +692,27 @@ class CoreweavePlatform:
             {"name": "IRIS_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
             {"name": "IRIS_POD_UID", "valueFrom": {"fieldRef": {"fieldPath": "metadata.uid"}}},
         ]
-        if bootstrap_config.env_vars:
-            for k, v in bootstrap_config.env_vars.items():
+        if worker_config.default_task_env:
+            for k, v in worker_config.default_task_env.items():
                 env_vars.append({"name": k, "value": v})
         if self._s3_enabled:
             env_vars.extend(self._s3_env_vars())
 
-        worker_port = bootstrap_config.worker_port
+        worker_port = worker_config.port
         if worker_port <= 0:
-            raise PlatformError(f"Invalid bootstrap worker_port={worker_port}; must be > 0")
+            raise PlatformError(f"Invalid worker_config.port={worker_port}; must be > 0")
 
-        cache_dir = bootstrap_config.cache_dir
+        cache_dir = worker_config.cache_dir
         if not cache_dir:
-            raise PlatformError("bootstrap_config.cache_dir must be non-empty")
+            raise PlatformError("worker_config.cache_dir must be non-empty")
 
-        runtime = bootstrap_config.runtime
+        runtime = worker_config.runtime
         if not runtime:
-            raise PlatformError("bootstrap_config.runtime must be set (docker/kubernetes)")
+            raise PlatformError("worker_config.runtime must be set (docker/kubernetes)")
 
-        worker_image = bootstrap_config.docker_image.strip()
+        worker_image = worker_config.docker_image.strip()
         if not worker_image:
-            raise PlatformError("bootstrap_config.docker_image must be non-empty")
+            raise PlatformError("worker_config.docker_image must be non-empty")
 
         # When using the kubernetes runtime, task containers are separate Pods
         # that claim GPU/RDMA resources directly from the device plugin. Pass
@@ -1146,7 +1146,7 @@ class CoreweavePlatform:
 
     def _reload_worker_pods(self, config: config_pb2.IrisClusterConfig) -> None:
         """Delete and recreate all managed worker Pods in parallel with updated images."""
-        bootstrap_config = config.defaults.bootstrap
+        worker_config = config.defaults.worker
         slices = self.list_all_slices()
         if not slices:
             logger.info("No worker slices to reload")
@@ -1168,7 +1168,7 @@ class CoreweavePlatform:
                 return
 
             slice_config = prepare_slice_config(sg_config.slice_template, sg_config, self._label_prefix)
-            self._create_worker_pod(slice_handle, slice_config, bootstrap_config)
+            self._create_worker_pod(slice_handle, slice_config, worker_config)
             self._wait_for_pod_ready(slice_handle)
             logger.info("Worker Pod %s reloaded", pod_name)
 

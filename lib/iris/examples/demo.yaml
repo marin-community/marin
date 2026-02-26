@@ -8,7 +8,6 @@ platform:
     project_id: hai-gcp-models
 
 defaults:
-  default_task_image: ghcr.io/marin-community/iris-task:latest
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
@@ -16,9 +15,10 @@ defaults:
       milliseconds: 60000
     scale_down_delay:
       milliseconds: 300000
-  bootstrap:
+  worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
-    worker_port: 10001
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+    port: 10001
     controller_address: "${IRIS_CONTROLLER_ADDRESS}"
 
 storage:

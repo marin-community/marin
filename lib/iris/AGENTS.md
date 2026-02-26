@@ -232,7 +232,7 @@ for GHCR. See `docs/image-push.md` for full details.
 image tags to the AR remote repo for the VM's continent:
 - `ghcr.io/org/image:v1` → `us-docker.pkg.dev/project/ghcr-mirror/org/image:v1`
 
-Set `defaults.bootstrap.docker_image` to a `ghcr.io/...` tag. Non-GHCR tags
+Set `defaults.worker.docker_image` to a `ghcr.io/...` tag. Non-GHCR tags
 (`docker.io`, existing AR tags) pass through unchanged.
 
 **Bundle storage** (`controller.bundle_prefix`) is a GCS URI with no zone

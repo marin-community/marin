@@ -260,32 +260,59 @@ class ScaleGroupConfig(_message.Message):
     worker: WorkerSettings
     def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., num_vms: _Optional[int] = ..., priority: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerSettings, _Mapping]] = ...) -> None: ...
 
-class BootstrapConfig(_message.Message):
-    __slots__ = ("controller_address", "worker_id", "worker_port", "docker_image", "cache_dir", "env_vars", "runtime", "config_json")
-    class EnvVarsEntry(_message.Message):
+class WorkerConfig(_message.Message):
+    __slots__ = ("docker_image", "host", "port", "port_range", "worker_id", "controller_address", "cache_dir", "log_prefix", "default_task_image", "default_task_env", "runtime", "accelerator_type", "accelerator_variant", "gpu_count", "worker_attributes", "poll_interval", "heartbeat_timeout", "platform")
+    class DefaultTaskEnvEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
-    CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
-    WORKER_ID_FIELD_NUMBER: _ClassVar[int]
-    WORKER_PORT_FIELD_NUMBER: _ClassVar[int]
+    class WorkerAttributesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     DOCKER_IMAGE_FIELD_NUMBER: _ClassVar[int]
+    HOST_FIELD_NUMBER: _ClassVar[int]
+    PORT_FIELD_NUMBER: _ClassVar[int]
+    PORT_RANGE_FIELD_NUMBER: _ClassVar[int]
+    WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
     CACHE_DIR_FIELD_NUMBER: _ClassVar[int]
-    ENV_VARS_FIELD_NUMBER: _ClassVar[int]
+    LOG_PREFIX_FIELD_NUMBER: _ClassVar[int]
+    DEFAULT_TASK_IMAGE_FIELD_NUMBER: _ClassVar[int]
+    DEFAULT_TASK_ENV_FIELD_NUMBER: _ClassVar[int]
     RUNTIME_FIELD_NUMBER: _ClassVar[int]
-    CONFIG_JSON_FIELD_NUMBER: _ClassVar[int]
-    controller_address: str
-    worker_id: str
-    worker_port: int
+    ACCELERATOR_TYPE_FIELD_NUMBER: _ClassVar[int]
+    ACCELERATOR_VARIANT_FIELD_NUMBER: _ClassVar[int]
+    GPU_COUNT_FIELD_NUMBER: _ClassVar[int]
+    WORKER_ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
+    POLL_INTERVAL_FIELD_NUMBER: _ClassVar[int]
+    HEARTBEAT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+    PLATFORM_FIELD_NUMBER: _ClassVar[int]
     docker_image: str
+    host: str
+    port: int
+    port_range: str
+    worker_id: str
+    controller_address: str
     cache_dir: str
-    env_vars: _containers.ScalarMap[str, str]
+    log_prefix: str
+    default_task_image: str
+    default_task_env: _containers.ScalarMap[str, str]
     runtime: str
-    config_json: str
-    def __init__(self, controller_address: _Optional[str] = ..., worker_id: _Optional[str] = ..., worker_port: _Optional[int] = ..., docker_image: _Optional[str] = ..., cache_dir: _Optional[str] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., config_json: _Optional[str] = ...) -> None: ...
+    accelerator_type: AcceleratorType
+    accelerator_variant: str
+    gpu_count: int
+    worker_attributes: _containers.ScalarMap[str, str]
+    poll_interval: _time_pb2.Duration
+    heartbeat_timeout: _time_pb2.Duration
+    platform: PlatformConfig
+    def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., log_prefix: _Optional[str] = ..., default_task_image: _Optional[str] = ..., default_task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ...) -> None: ...
 
 class SshConfig(_message.Message):
     __slots__ = ("user", "key_file", "port", "connect_timeout")
@@ -376,16 +403,14 @@ class AutoscalerConfig(_message.Message):
     def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., startup_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class DefaultsConfig(_message.Message):
-    __slots__ = ("ssh", "autoscaler", "bootstrap", "default_task_image")
+    __slots__ = ("ssh", "autoscaler", "worker")
     SSH_FIELD_NUMBER: _ClassVar[int]
     AUTOSCALER_FIELD_NUMBER: _ClassVar[int]
-    BOOTSTRAP_FIELD_NUMBER: _ClassVar[int]
-    DEFAULT_TASK_IMAGE_FIELD_NUMBER: _ClassVar[int]
+    WORKER_FIELD_NUMBER: _ClassVar[int]
     ssh: SshConfig
     autoscaler: AutoscalerConfig
-    bootstrap: BootstrapConfig
-    default_task_image: str
-    def __init__(self, ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ..., bootstrap: _Optional[_Union[BootstrapConfig, _Mapping]] = ..., default_task_image: _Optional[str] = ...) -> None: ...
+    worker: WorkerConfig
+    def __init__(self, ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerConfig, _Mapping]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
     __slots__ = ("platform", "defaults", "storage", "controller", "scale_groups")

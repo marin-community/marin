@@ -35,9 +35,9 @@ platform:
     project_id: my-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -85,9 +85,9 @@ platform:
   manual: {}
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
   ssh:
     user: ubuntu
@@ -146,9 +146,9 @@ platform:
     project_id: my-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -241,9 +241,9 @@ platform:
   manual: {{}}
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -275,9 +275,9 @@ platform:
     project_id: my-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -317,9 +317,9 @@ platform:
     project_id: my-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -365,9 +365,9 @@ platform:
   manual: {}
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
   ssh:
     user: ubuntu
@@ -413,9 +413,9 @@ platform:
     project_id: my-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -558,9 +558,9 @@ platform:
     project_id: test-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/test/worker:latest
-    worker_port: 10001
+    port: 10001
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
@@ -622,7 +622,7 @@ platform:
     project_id: test-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/test/worker:latest
 
 controller:
@@ -1030,7 +1030,7 @@ platform:
     project_id: test
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
@@ -1075,7 +1075,7 @@ platform:
     project_id: test
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
@@ -1102,7 +1102,7 @@ platform:
     zones: [us-west4-a]
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
@@ -1129,7 +1129,7 @@ platform:
     project_id: test
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
@@ -1179,7 +1179,7 @@ platform:
     zones: [us-central1-a]
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
