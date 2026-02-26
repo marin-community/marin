@@ -328,7 +328,7 @@ class CoreweavePlatform:
         self._iris_labels = Labels(label_prefix)
         self._kubectl = Kubectl(
             namespace=self._namespace,
-            kubeconfig_path=config.kubeconfig_path or None,
+            kubeconfig_path=os.environ.get("KUBECONFIG") or config.kubeconfig_path or None,
             timeout=_KUBECTL_TIMEOUT,
         )
         self._poll_interval = poll_interval
