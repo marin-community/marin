@@ -654,17 +654,19 @@ class Controller:
         """Build a map of VM address to worker status for autoscaler.
 
         The autoscaler needs to look up worker status by VM address (not worker_id)
-        because RemoteWorkerHandle only exposes the VM's IP address, not the worker's self-assigned ID.
-        Workers include their vm_address (from IRIS_VM_ADDRESS env var) in metadata.
+        because RemoteWorkerHandle only exposes the VM's IP address, not the worker's
+        self-assigned ID. Workers self-discover their vm_address at startup via
+        socket probe (env_probe.py).
         """
         result: VmWorkerStatusMap = {}
         for worker in self._state.list_all_workers():
             vm_addr = worker.metadata.vm_address
             if not vm_addr:
-                raise ValueError(
-                    f"Worker {worker.worker_id} has no vm_address in metadata. "
-                    "Workers must report IRIS_VM_ADDRESS in their metadata."
+                logger.warning(
+                    "Worker %s has no vm_address in metadata, skipping for autoscaler",
+                    worker.worker_id,
                 )
+                continue
 
             result[vm_addr] = VmWorkerStatus(
                 vm_address=vm_addr,

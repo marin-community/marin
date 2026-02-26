@@ -413,6 +413,38 @@ button:not(.tab-btn):disabled { color: #8c959f; cursor: default; background: #f6
 /* Failure badge inline */
 .failure-badge { color: #cf222e; font-size: 11px; font-weight: 600; margin-left: 6px; }
 
+/* Group availability status badges (shown below group name in waterfall table) */
+.group-status-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  margin-top: 3px;
+  vertical-align: middle;
+}
+.group-status-badge.requesting { background: #ddf4ff; color: #0969da; }
+.group-status-badge.cooldown { background: #fff8c5; color: #9a6700; }
+.group-status-badge.backoff { background: #fff1e5; color: #bc4c00; }
+.group-status-badge.quota_exceeded { background: #ffebe9; color: #cf222e; }
+.group-status-badge.at_capacity { background: #fff1e5; color: #bc4c00; }
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.group-status-badge.requesting::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #0969da;
+  margin-right: 4px;
+  vertical-align: middle;
+  animation: status-pulse 1.5s ease-in-out infinite;
+}
+
 /* Dimmed rows for idle groups with no slices */
 .row-inactive td { opacity: 0.45; }
 

@@ -927,7 +927,7 @@ class TestWaterfallRouting:
         assert decisions[0].scale_group == "fallback"
         status_by_group = {s.group: s for s in autoscaler._last_routing_decision.group_statuses}
         assert status_by_group["primary"].decision == "blocked"
-        assert "backoff" in status_by_group["primary"].reason
+        assert "consecutive failure" in status_by_group["primary"].reason
         assert status_by_group["fallback"].decision == "selected"
 
     def test_backoff_group_with_ready_slices_still_falls_through(self):
@@ -1504,7 +1504,7 @@ class TestAutoscalerQuotaHandling:
         )
 
         ts = Timestamp.from_ms(1000)
-        group.begin_scale_up()
+        group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()
@@ -2144,7 +2144,7 @@ class TestGpuScaleGroupBugs:
         ts = Timestamp.from_ms(1_000_000)
 
         # Scale up and complete
-        group.begin_scale_up()
+        group.begin_scale_up(timestamp=ts)
         handle = group.scale_up(timestamp=ts)
         group.complete_scale_up(handle, ts)
 
