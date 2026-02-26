@@ -59,7 +59,7 @@ echo ""
 
 # Step 1: Launch training.
 echo ">>> Step 1: Launching training on A100..."
-sky launch -c "$CLUSTER_NAME" "$TRAIN_YAML" $ENV_FLAGS -y
+sky launch -c "$CLUSTER_NAME" "$TRAIN_YAML" $ENV_FLAGS --retry-until-up -y
 
 echo ""
 echo ">>> Step 1 complete: Training finished."
@@ -73,16 +73,23 @@ echo ""
 echo ">>> Step 2 complete: Evaluations finished."
 echo ""
 
-# Step 3: Download results.
+# Step 3: Download results (from cluster via rsync, with S3 fallback).
 echo ">>> Step 3: Downloading checkpoints and results..."
 mkdir -p "$LOCAL_CKPT_DIR"
-rsync -avz "${CLUSTER_NAME}:~/sky_workdir/checkpoints/kelp-edit-v7/" "$LOCAL_CKPT_DIR/"
 
-# Also grab the corpus for local eval.
-rsync -avz "${CLUSTER_NAME}:~/sky_workdir/experiments/kelp/corpus_v7.txt" "experiments/kelp/corpus_v7.txt"
+if rsync -avz "${CLUSTER_NAME}:~/sky_workdir/checkpoints/kelp-edit-v7/" "$LOCAL_CKPT_DIR/" 2>/dev/null; then
+    rsync -avz "${CLUSTER_NAME}:~/sky_workdir/experiments/kelp/corpus_v7.txt" "experiments/kelp/corpus_v7.txt" 2>/dev/null || true
+    echo ">>> Downloaded from cluster via rsync."
+else
+    echo ">>> Cluster rsync failed, downloading from S3..."
+    aws s3 sync "s3://oa-fomo-outputs/kelp/kelp-edit-v7/" "$LOCAL_CKPT_DIR/"
+    aws s3 cp "s3://oa-fomo-outputs/kelp/corpus_v7.txt" "experiments/kelp/corpus_v7.txt" 2>/dev/null || true
+    echo ">>> Downloaded from S3."
+fi
 
 echo ""
 echo ">>> Step 3 complete: Results downloaded to ${LOCAL_CKPT_DIR}/"
+echo ">>> Results also persisted at s3://oa-fomo-outputs/kelp/"
 echo ""
 
 # Step 4: Teardown (unless --keep).
@@ -98,8 +105,12 @@ fi
 echo ""
 echo "=============================================="
 echo " Done! Check results:"
-echo "   ${LOCAL_CKPT_DIR}/training.log"
-echo "   ${LOCAL_CKPT_DIR}/eval.log"
-echo "   ${LOCAL_CKPT_DIR}/corpus_eval_results.json"
-echo "   ${LOCAL_CKPT_DIR}/mbpp_eval_results.json"
+echo "   Local: ${LOCAL_CKPT_DIR}/"
+echo "   S3:    s3://oa-fomo-outputs/kelp/kelp-edit-v7/"
+echo ""
+echo "   Key files:"
+echo "     training.log"
+echo "     eval.log"
+echo "     corpus_eval_results.json"
+echo "     mbpp_eval_results.json"
 echo "=============================================="
