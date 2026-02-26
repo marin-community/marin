@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "dbaa638e4e3a",
+  "strategy": "manual-commit",
+  "branch": "rav-optional-remote",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".python-version",
+    "experiments/benchmarks/bench_tokenize_batch_size.py",
+    "experiments/benchmarks/plot_tokenize_bench.py",
+    "experiments/benchmarks/results/bench_tokenize_batch_size_20260224_202548.json",
+    "experiments/benchmarks/results/bench_tokenize_batch_size_20260224_202548.png",
+    "experiments/benchmarks/results/bench_tokenize_batch_size_20260224_233522.json",
+    "experiments/benchmarks/results/bench_tokenize_batch_size_20260224_233522.png",
+    "lib/marin/src/marin/execution/executor.py",
+    "lib/marin/src/marin/execution/remote.py",
+    "lib/marin/src/marin/execution/step_runner.py",
+    "lib/marin/src/marin/execution/step_spec.py",
+    "tests/execution/test_step_runner.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/db/aa638e4e3a/0/metadata.json",
+      "transcript": "/db/aa638e4e3a/0/full.jsonl",
+      "context": "/db/aa638e4e3a/0/context.md",
+      "content_hash": "/db/aa638e4e3a/0/content_hash.txt",
+      "prompt": "/db/aa638e4e3a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 45,
+    "cache_creation_tokens": 48679,
+    "cache_read_tokens": 2769061,
+    "output_tokens": 9978,
+    "api_call_count": 43
+  }
+}
