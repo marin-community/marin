@@ -1,4 +1,4 @@
-# Kelp
+## Kelp
 
 ```
         ~  ~  ~  ~  ~  ~  ~
@@ -99,6 +99,7 @@ Two inference strategies:
 ### Evaluation
 
 Programs are evaluated by:
+
 1. **Syntactic validity**: does the output parse as Python?
 2. **Exact match**: is the output identical to the original?
 3. **Test pass rate**: does the output pass the test cases? (execution-guided reranking selects the best candidate)
@@ -152,7 +153,7 @@ Added e-graph-based expression augmentation using egglog equality saturation. Re
 - E-graph augmentation contributes to bank diversity (616 entries vs 55 original)
 - The toy dataset has exhausted its signal value; further optimization has diminishing returns
 
-### v5: Scaled Corpus (10,442 programs) — In Progress
+### v5: Scaled Corpus (10,442 programs) — (Need to update history from here!)
 
 Built a diverse training corpus from multiple sources:
 
@@ -169,7 +170,49 @@ MBPP is held out entirely for evaluation. Eval task signatures are blocklisted f
 
 **Expected impact (from scaling predictions):** 50–65% average test pass rate on eval tasks, with simple functions reaching near-100%.
 
+
+### v6 Added noise difficulty curriculum (from Alex's memory, not Calude)
+
+======================================================================
+
+Corpus Evaluation Summary
+
+======================================================================
+
+Checkpoint: checkpoints/kelp-edit-v6/step-016000
+
+Programs evaluated: 42 (of 50 sampled)
+
+Corruptions/program: 5
+
+Inference: best-of-8, max_depth=10
+
+Subtree bank: 387 entries / 20 node types (from eval programs)
+
+Time: 5355.0s
+
+
+| Metric                      |Value |
+-----------------------------|-------
+| Syntactic validity rate     | 100.0%
+| Exact match rate            |   0.0%
+| Normalized match rate       |   0.0%
+|  Avg candidates per program |    7.2
+
+Stopped before MBPP Eval finished because I found a critical data error.
+
+### v7 – GPU training run with stackedu dataset (In progress)
+
+Also includes changes to fix the data error: it better ensures that the diffusion process has a good prompt. 
+
+Changes the encoding structure to make sure that there is a prompt, usually from the docstring. We also `rm` the 
+docstring from the functions to not bias the data.
+
+Currently preparing the dataset on a GPU in Lambda (I actually got a machine!) and debugging the training run.
+
 ## Project Structure
+
+A bit out of date! But, more or less correct.
 
 ```
 experiments/kelp/
@@ -184,6 +227,10 @@ experiments/kelp/
 ├── corpus.py                 # Corpus loading utilities
 ├── corpus.txt                # Generated training corpus (10,442 programs)
 ├── checkpointing.py          # Checkpoint save/load
+├── infra/
+│   ├── kelp-v7-eval.yaml
+│   ├── kelp-v7-train.yaml
+│   └── launch_v7.sh
 ├── model/
 │   ├── config.py             # TreeDiffusionConfig dataclass
 │   ├── presets.py            # Hardware-specific presets
@@ -197,6 +244,7 @@ experiments/kelp/
 │   ├── augmentation.py       # Bank augmentation orchestrator
 │   ├── egraph_augmentation.py # E-graph variant generation (egglog)
 │   ├── reranking.py          # Execution-guided reranking
+│   ├── tokenizer.py          # AST edit tokenizer
 │   └── constrained_decoding.py # Grammar-constrained generation
 └── training/
     └── optimizer.py          # Levanter AdamConfig integration
@@ -276,6 +324,7 @@ JAX_PLATFORMS=cpu uv run python experiments/kelp/evaluate.py \
 ```
 
 **Pick up a known issue.** Some concrete improvements we know are needed:
+
 - **Whitespace fix** — corruption/repair cycles accumulate extra indentation; small, well-scoped bug in `tree/mutation.py`
 - **Edit position accuracy** — the model often predicts a valid replacement but applies it at the wrong AST location; see `tree/beam_search.py`
 - **New eval tasks** — add functions to `EVAL_TASKS` in `evaluate.py` and report results
