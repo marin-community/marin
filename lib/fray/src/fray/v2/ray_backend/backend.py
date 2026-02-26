@@ -16,7 +16,6 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.platform_env_defaults import apply_platform_default_env_vars
 from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
@@ -172,7 +171,8 @@ def build_runtime_env(request: JobRequest) -> dict:
         if "gpu" not in extras:
             extras.append("gpu")
 
-    env_vars = apply_platform_default_env_vars(request.resources.device, env_vars)
+    for key, value in request.resources.device.default_env_vars().items():
+        env_vars.setdefault(key, value)
 
     if os.environ.get("MARIN_CI_DISABLE_RUNTIME_ENVS", "").lower() in ("1", "true") or os.environ.get(
         "PYTEST_CURRENT_TEST"

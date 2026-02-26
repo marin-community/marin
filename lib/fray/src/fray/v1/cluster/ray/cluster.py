@@ -17,7 +17,6 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.platform_env_defaults import apply_platform_default_env_vars
 from fray.v1.cluster.base import (
     Cluster,
     EnvironmentConfig,
@@ -256,7 +255,8 @@ class RayCluster(Cluster):
             if "gpu" not in environment.extras:
                 environment.extras.append("gpu")
 
-        env_vars = apply_platform_default_env_vars(request.resources.device, env_vars)
+        for key, value in request.resources.device.default_env_vars().items():
+            env_vars.setdefault(key, value)
 
         logger.info(
             "Building environment for device: %s/%s", request.resources.device.kind, request.resources.device.variant

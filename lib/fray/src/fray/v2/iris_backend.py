@@ -28,7 +28,6 @@ from iris.cluster.types import Constraint, EnvironmentSpec, ResourceSpec
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
-from fray.platform_env_defaults import apply_platform_default_env_vars
 from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
 from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
@@ -123,7 +122,8 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
     """Convert fray v2 EnvironmentConfig to Iris EnvironmentSpec."""
     env_vars = dict(env.env_vars) if env is not None else {}
     if device is not None:
-        env_vars = apply_platform_default_env_vars(device, env_vars)
+        for key, value in device.default_env_vars().items():
+            env_vars.setdefault(key, value)
     if env is None and not env_vars:
         return None
     from iris.cluster.types import EnvironmentSpec
