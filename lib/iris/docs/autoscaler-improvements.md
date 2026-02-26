@@ -64,8 +64,8 @@ Track pending requests in `ScalingGroup`:
 # In ScalingGroup.__init__:
 self._requesting_until_ms: int = 0
 
-def mark_requesting(self, ts: int, timeout_ms: int) -> None:
-    self._requesting_until_ms = ts + timeout_ms
+def mark_requesting(self, ts: int) -> None:
+    self._requesting_until_ms = ts
 
 def availability(self, ts: int) -> AvailabilityState:
     # ... existing checks ...
