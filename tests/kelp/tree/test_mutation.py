@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -255,16 +258,10 @@ def test_corruption_preserves_function_signature(bank):
     rng = random.Random(42)
 
     for seed in range(20):
-        corrupted, mutations = corrupt_program(
-            source, num_steps=3, bank=bank, rng=random.Random(seed)
-        )
+        corrupted, mutations = corrupt_program(source, num_steps=3, bank=bank, rng=random.Random(seed))
         if not mutations:
             continue
         # The corrupted program should still define 'fibonacci'.
         tree = ast.parse(corrupted)
-        top_funcs = [
-            node.name for node in tree.body if isinstance(node, ast.FunctionDef)
-        ]
-        assert "fibonacci" in top_funcs, (
-            f"Corruption replaced the root FunctionDef (seed={seed}):\n{corrupted}"
-        )
+        top_funcs = [node.name for node in tree.body if isinstance(node, ast.FunctionDef)]
+        assert "fibonacci" in top_funcs, f"Corruption replaced the root FunctionDef (seed={seed}):\n{corrupted}"

@@ -217,7 +217,7 @@ def hidden_reparam(use_mup: bool = True) -> type[AbstractLinearReparam]:
 
         return mup.HiddenLinearMup if use_mup else mup.LinearStandardParam
 # ---
-def findPlugin(plugin_name): 
+def findPlugin(plugin_name):
     """
     @type plugin_name: str
     """
@@ -833,7 +833,7 @@ def __init__(self, rng: random.Random, swap_prob: float = 0.3):
 def set_icon(self, *images):
         """Set the window icon.
 
-        If multiple images are provided, one with an appropriate size 
+        If multiple images are provided, one with an appropriate size
         will be selected (if the correct size is not provided, the image
         will be scaled).
 
@@ -1248,7 +1248,7 @@ def is_bored(S):
     You'll be given a string of words, and your task is to count the number
     of boredoms. A boredom is a sentence that starts with the word "I".
     Sentences are delimited by '.', '?' or '!'.
-   
+
     For example:
     >>> is_bored("Hello world")
     0
@@ -3382,14 +3382,14 @@ def unique(
     fill_value: ArrayLike | None = None,
 ) -> tuple[NamedArray, NamedArray]: ...
 # ---
-def __init__(self,apiKey,licenseId):    
+def __init__(self,apiKey,licenseId):
     self.headers = {"content-type": "application/json",
                     "Authorization": apiKey}
     self.params = {"licenseId" : licenseId }
     retries = Retry(total=5,
                     backoff_factor=0.75)
     self.session = requests.Session()
-    self.session.mount(KANGROUTER_WEBSERVICE_APPLICATION_ROOT, 
+    self.session.mount(KANGROUTER_WEBSERVICE_APPLICATION_ROOT,
                        HTTPAdapter(max_retries=retries))
 # ---
 def set_setting(id, value):
@@ -5682,7 +5682,7 @@ def right_angle_triangle(a, b, c):
     '''
     Given the lengths of the three sides of a triangle. Return True if the three
     sides form a right-angled triangle, False otherwise.
-    A right-angled triangle is a triangle in which one angle is right angle or 
+    A right-angled triangle is a triangle in which one angle is right angle or
     90 degree.
     Example:
     right_angle_triangle(3, 4, 5) == True
@@ -5880,7 +5880,7 @@ def unregister_message_handler(self, target):
 # ---
 def __init__(self, name, crypto, description, pluginMethod):
 		self.name = name #No Spaces please...
-		self.cryptoMethod = crypto 
+		self.cryptoMethod = crypto
 		self.description = description
 		self.plugin = pluginMethod
 # ---
@@ -7651,7 +7651,7 @@ def model_name_or_path(model: ModelConfig) -> str:
 def lr_scale(self):
         return 1 / hax.axis_size(self.In)
 # ---
-def saveConfig(plugin_name, data): 
+def saveConfig(plugin_name, data):
     """
     @type plugin_name: str
     @type data: object
@@ -10492,7 +10492,7 @@ def test_iterated_centroid():
 def code_block(node: RenderTreeNode, context: RenderContext) -> str:
     return fence(node, context)
 # ---
-def set_visible(self, visible=True):    
+def set_visible(self, visible=True):
         """Show or hide the window.
 
         :Parameters:
@@ -10612,8 +10612,8 @@ def _get_view_id(self, cr, uid, type):
         @param type: the picking type as a string
         @return: view i, or False if no view found
         """
-        res = self.pool.get('ir.model.data').get_object_reference(cr, uid, 
-            'stock', self._VIEW_LIST.get(type, 'view_picking_form'))            
+        res = self.pool.get('ir.model.data').get_object_reference(cr, uid,
+            'stock', self._VIEW_LIST.get(type, 'view_picking_form'))
         return res and res[1] or False
 # ---
 def get_ready_event(self):
@@ -11350,7 +11350,7 @@ def __init__(self):
         self._actors: dict[str, Any] = {}
         self._actor_locks: dict[str, threading.Lock] = {}
 # ---
-def __init__(self, 
+def __init__(self,
                 row_dict_I,
                 ):
         self.analysis_id=row_dict_I['analysis_id'];
@@ -11562,7 +11562,7 @@ def extract_results(result: Any) -> tuple[list[str], list[str]]:
     return [x["hash"] for x in result], [x["id"] for x in result]
 # ---
 def __init__(self, remote, *args, **kwargs):
-        super(MainWindow, self).__init__(*args, **kwargs) 
+        super(MainWindow, self).__init__(*args, **kwargs)
         self.remote = remote
         self.InitUI()
 # ---
@@ -12349,7 +12349,7 @@ def __eq__(self, other):
         return super().__eq__(other) and \
             self.subquery == other.subquery
 # ---
-def loadPlugin(plugin_name): 
+def loadPlugin(plugin_name):
     """
     @type plugin_name: str
     """
@@ -13213,7 +13213,7 @@ def _infer_transpose_keys(model_name: str) -> dict:
         return llama_transpose_keys
     raise KeyError(f"No MODEL_TRANSPOSE_KEYS registered for model: {model_name}")
 # ---
-def registerPlugin(plugin_instance): 
+def registerPlugin(plugin_instance):
     """
     @type plugin_instance: L{amsn2.plugins.developers.aMSNPlugin}
     """
@@ -14480,7 +14480,7 @@ def generate_messages(database, writes, stream_id, stream_token):
     # here just write one as example
     messages = [
             firestore_pb2.WriteRequest(database=database, writes = []),
-            firestore_pb2.WriteRequest(database=database, writes = [writes],  stream_id = stream_id, stream_token = stream_token) 
+            firestore_pb2.WriteRequest(database=database, writes = [writes],  stream_id = stream_id, stream_token = stream_token)
     ]
     for msg in messages:
             yield msg
@@ -15498,7 +15498,7 @@ def add(lst):
 
 
     Examples:
-        add([4, 2, 6, 7]) ==> 2 
+        add([4, 2, 6, 7]) ==> 2
     """
     return sum([lst[i] for i in range(1, len(lst), 2) if lst[i]%2 == 0])
 # ---
@@ -15621,7 +15621,7 @@ def wait_for_job(
 # ---
 def _use_import_item_table(self, job_id):
         """
-            Set the resource and the table to being s3_import_item 
+            Set the resource and the table to being s3_import_item
         """
 
         if self.item_resource == None:
@@ -18214,8 +18214,8 @@ def saveWindowState(self):
         """
         Saves the main window state (position, size, toolbar positions)
         """
-        mwState = self.saveState().toBase64() 
-        mwGeom  = self.saveGeometry().toBase64() 
+        mwState = self.saveState().toBase64()
+        mwGeom  = self.saveGeometry().toBase64()
         cbpos.config['mainwindow', 'state'] = unicode(mwState)
         cbpos.config['mainwindow', 'geometry'] = unicode(mwGeom)
         cbpos.config.save()
@@ -18868,7 +18868,7 @@ def max_slices(self) -> int:
         return self._config.max_slices
 # ---
 def __init__(self, remote, *args, **kwargs):
-        super(MatchControl, self).__init__(*args, **kwargs) 
+        super(MatchControl, self).__init__(*args, **kwargs)
         self.remote = remote
         self.InitUI()
 # ---
@@ -19261,7 +19261,7 @@ def get_runtime_env(self) -> dict:
 
 def choose_num(x, y):
     """This function takes two positive numbers x and y and returns the
-    biggest even integer number that is in the range [x, y] inclusive. If 
+    biggest even integer number that is in the range [x, y] inclusive. If
     there's no such number, then the function should return -1.
 
     For example:
@@ -19800,7 +19800,7 @@ def unregister_old(bl_id):
     global imported_mods
     mod = imported_mods.get(bl_id)
     if mod:
-        #print("Unloaded old node type {}".format(bl_id)) 
+        #print("Unloaded old node type {}".format(bl_id))
         mod.unregister()
         del imported_mods[bl_id]
 # ---
@@ -21440,8 +21440,8 @@ def _distributed_work_job():
 def get_next_file(self):
     to_return = self.files[self.idx]
 
-    self.idx += 1 
-    self.idx %= len(self.files) 
+    self.idx += 1
+    self.idx %= len(self.files)
 
     return PARAMS["PATH"]+to_return
 # ---
@@ -24937,7 +24937,7 @@ def find_date_and_format(string):
 
 def solution(lst):
     """Given a non-empty list of integers, return the sum of all of the odd elements that are in even positions.
-    
+
 
     Examples
     solution([5, 8, 7, 1]) ==> 12
@@ -25494,7 +25494,7 @@ def next_smallest(lst):
     You are given a list of integers.
     Write a function next_smallest() that returns the 2nd smallest element of the list.
     Return None if there is no such element.
-    
+
     next_smallest([1, 2, 3, 4, 5]) == 2
     next_smallest([5, 1, 4, 3, 2]) == 2
     next_smallest([]) == None
@@ -26164,7 +26164,7 @@ def _createPreamble(self):
         ex.append('M48\n') # Beginning of a part program header
         ex.append('METRIC,TZ\n') # Metric, trailing zeros
         ex.append('G90\n') # Absolute mode
-        ex.append('M71\n') # Metric measuring mode        
+        ex.append('M71\n') # Metric measuring mode
         return ex
 # ---
 def size(self) -> int:
@@ -28619,9 +28619,9 @@ def create(self,problem,**kwargs):
     params = self.params.copy()
     params.update(kwargs)
     req = self.session.post(path,
-                        params=params, 
+                        params=params,
                         headers=self.headers,
-                        data=payload)    
+                        data=payload)
     self.validateReply(req)
     return req.text
 # ---
@@ -29012,7 +29012,7 @@ def CRISPR_introduction(lab, award):
         'nucleic_acid_delivery_method': ['transient transfection']
     }
 # ---
-def unLoadPlugin(plugin_name): 
+def unLoadPlugin(plugin_name):
     """
     @type plugin_name: str
     """
@@ -31631,7 +31631,7 @@ def set_address(self, host, port=8125):
 # ---
 
 def multiply(a, b):
-    """Complete the function that takes two integers and returns 
+    """Complete the function that takes two integers and returns
     the product of their unit digits.
     Assume the input is always valid.
     Examples:
@@ -33936,14 +33936,14 @@ def calc():
 
 	for row in mapa:
 		for col in row:
-			n = int(col)	
+			n = int(col)
 
 			qtd[n] = qtd[n] + 1
 
 	menor = 1
 	for i in range(1, len(qtd)):
-		if (qtd[i] <= qtd[menor]):	
-			menor = i	
+		if (qtd[i] <= qtd[menor]):
+			menor = i
 
 
 
@@ -34830,7 +34830,7 @@ def interference_genetic_modification(
         'lab': lab['@id'],
         'category': 'interference',
         'purpose': 'repression',
-        'method': 'RNAi',        
+        'method': 'RNAi',
         'modified_site_by_target_id': target['@id']
     }
     return testapp.post_json('/genetic_modification', item).json['@graph'][0]
@@ -36709,7 +36709,7 @@ def testInitialization(self):
     event_formatter = chrome_cache.ChromeCacheEntryEventFormatter()
     self.assertIsNotNone(event_formatter)
 # ---
-def main(): 
+def main():
     app = QtGui.QApplication(sys.argv)
     window=PreprocessDialog()
 
@@ -37841,7 +37841,7 @@ def is_old(node_info):
 def _find_packages(path='.', prefix=''):
         yield prefix
         prefix = prefix + "."
-        for _, name, ispkg in walk_packages(path, 
+        for _, name, ispkg in walk_packages(path,
                                             prefix,
                                             onerror=lambda x: x):
             if ispkg:
@@ -41904,7 +41904,7 @@ def prepared_registry(self):
 # ---
 def run(self):
         cmd = '''
-              docker run --rm -v rita_store:/rita/data  rita/test-r 
+              docker run --rm -v rita_store:/rita/data  rita/test-r
         '''
 
         logger.debug(cmd)
@@ -41922,7 +41922,7 @@ def decodeNextSeg(self):
         try:
             seg = self.cache.pop()
         except:
-            pass	
+            pass
 
         if ( seg == None ) and ( self.all_decoded ):
             return -1
@@ -43059,7 +43059,7 @@ def vms(self) -> list[ManagedVm]:
 def __init__(self, window):
         from time import time
         from pyglet.text import Label
-        self.label = Label('', x=10, y=10, 
+        self.label = Label('', x=10, y=10,
                            font_size=24, bold=True,
                            color=(127, 127, 127, 127))
 
@@ -44299,7 +44299,7 @@ def format_match(match):
     print(match.team_names)
     print(match.team_numbers)
     return '{}: {} ({}) & {} ({}) vs. {} ({}) & {} ({})'.format(
-        match.match_number, 
+        match.match_number,
         match.team_names[0], match.team_numbers[0],
         match.team_names[1], match.team_numbers[1],
         match.team_names[2], match.team_numbers[2],
@@ -46665,7 +46665,7 @@ def year(self):
 
 def iscube(a):
     '''
-    Write a function that takes an integer a and returns True 
+    Write a function that takes an integer a and returns True
     if this ingeger is a cube of some integer number.
     Note: you may assume the input is always valid.
     Examples:
@@ -46723,7 +46723,7 @@ def _define_methods(self, methods):
 # ---
 def cmd(self):
         return '''
-               docker run --rm --env AWS_ACCESS_KEY_ID={} --env AWS_SECRET_ACCESS_KEY={} rita/download-rita --year {} --month {} --data_path {}/{} 
+               docker run --rm --env AWS_ACCESS_KEY_ID={} --env AWS_SECRET_ACCESS_KEY={} rita/download-rita --year {} --month {} --data_path {}/{}
         '''.format(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, self.year, self.month, self.root_path, self.raw_path)
 # ---
 def __str__(self):
@@ -49457,7 +49457,7 @@ def find_free_port(start_port: int = 9000, max_attempts: int = 1000) -> int:
 # ---
 def dict_to_str(d):
     """
-    Given a dictionary d, return a string with 
+    Given a dictionary d, return a string with
     each entry in the form 'key: value' and entries
     separated by newlines.
     """
@@ -52702,7 +52702,7 @@ def find_location(self):
         for course, score in self.courses:
             location = str( course.rec["BUILDING"] )+ " " + str( course.rec["ROOM"] )
             # just need to find the first one, so break after this happens
-            break   
+            break
         return location
 # ---
 def log(self, metrics: Mapping[str, Any], *, step: int | None = None):
@@ -54653,7 +54653,7 @@ def test_encoder_missing(self):
 # ---
 def reload_old(ng=False):
     if ng:
-        bl_idnames = {n.bl_idname for n in ng.nodes if n.bl_idname in old_bl_idnames} 
+        bl_idnames = {n.bl_idname for n in ng.nodes if n.bl_idname in old_bl_idnames}
         for bl_id in bl_idnames:
             mod = register_old(bl_id)
             if mod:
@@ -55381,7 +55381,7 @@ def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) ->
 # ---
 def _load_files(self, dataset_code):
         url = "http://www.bea.gov/national/nipaweb/GetCSV.asp?GetWhat=SS_Data/Section1All_xls.zip&Section=2"
-        self.register_url(url, 
+        self.register_url(url,
                           self.DATASETS[dataset_code]["filepath"])
 # ---
 def on_deactivate():
@@ -56998,7 +56998,7 @@ def __copy__(self):
 # ---
 def descobreAtaqueUsado(self, atksXML, pkmn):
 		for i in range(0, len(atksXML)):
-			id = int(atksXML[i].find('id').text) - 1 
+			id = int(atksXML[i].find('id').text) - 1
 			ppXML = int(atksXML[i].find('power_points').text)
 			pp = pkmn.getAtks(id).getPpAtual()
 
@@ -57164,7 +57164,7 @@ def test_wrong_nodes_prev_cc_raises(self):
 def segComplete(self, seg):
         if ( seg == None ): return
 
-        if ( seg.data ): 
+        if ( seg.data ):
             data_size = len("".join(seg.data))
 
             current_time = time.time()
@@ -57997,11 +57997,11 @@ def cluster_list_configs(ctx):
 # ---
 
 def unique_digits(x):
-    """Given a list of positive integers x. return a sorted list of all 
+    """Given a list of positive integers x. return a sorted list of all
     elements that hasn't any even digit.
 
     Note: Returned list should be sorted in increasing order.
-    
+
     For example:
     >>> unique_digits([15, 33, 1422, 1])
     [1, 15, 33]
@@ -58667,8 +58667,8 @@ def get_job_tasks(self, job_id: JobName) -> list[ControllerTask]:
 # ---
 def on_key_press(self, symbol, modifiers):
         """Default on_key_press handler."""
-        if symbol == key.ESCAPE and not (modifiers & ~(key.MOD_NUMLOCK | 
-                                                       key.MOD_CAPSLOCK | 
+        if symbol == key.ESCAPE and not (modifiers & ~(key.MOD_NUMLOCK |
+                                                       key.MOD_CAPSLOCK |
                                                        key.MOD_SCROLLLOCK)):
             self.dispatch_event('on_close')
 # ---
@@ -60644,16 +60644,16 @@ def fix_args():
   global get_next_file
 
   if PARAMS["PATH"][-1] != "/":
-    PARAMS["PATH"] += "/"  
+    PARAMS["PATH"] += "/"
 
   if PARAMS["FORCE_NO_VFS"]:
     PARAMS["USE_VFS"]
   elif PARAMS["FORCE_NO_VFS"]:
     PARAMS["USE_VFS"]
   else:
-    PARAMS["USE_VFS"] = path_is_jnetfs(PARAMS["PATH"]) 
+    PARAMS["USE_VFS"] = path_is_jnetfs(PARAMS["PATH"])
 
-  if not PARAMS["USE_VFS"]:    
+  if not PARAMS["USE_VFS"]:
     get_next_file = GetFileDir(PARAMS["PICK_RANDOM"]).get_next_file
   else:
     get_next_file = get_next_file_vfs
@@ -61438,7 +61438,7 @@ def vm_count(self) -> int:
         return len(self.vms)
 # ---
 def __init__(self, remote, letter, number, name, colour, *args, **kwargs):
-        super(TeamPanel, self).__init__(*args, **kwargs) 
+        super(TeamPanel, self).__init__(*args, **kwargs)
         self.remote = remote
         self.InitUI(letter, number, name, colour)
 # ---
@@ -62519,7 +62519,7 @@ def lang_del(self):
             del self.req.environ['etalage']['_lang']
 # ---
 def _set_panel_match(self, match, team_idx, panel_idx):
-        self.team_panels[panel_idx].number = match.team_numbers[team_idx] 
+        self.team_panels[panel_idx].number = match.team_numbers[team_idx]
         self.team_panels[panel_idx].name = match.team_names[team_idx]
 # ---
 def _format_timestamp(ms: int) -> str:
@@ -63337,7 +63337,7 @@ def _recreate(self, changes):
             `changes` : list of str
                 List of attribute names that were changed since the last
                 `_create` or `_recreate`.  For example, ``['fullscreen']``
-                is given if the window is to be toggled to or from fullscreen. 
+                is given if the window is to be toggled to or from fullscreen.
         """
         raise NotImplementedError('abstract')
 # ---
@@ -66042,7 +66042,7 @@ def setUp(self):
 def count_upper(s):
     """
     Given a string s, count the number of uppercase vowels in even indices.
-    
+
     For example:
     count_upper('aBCdEf') returns 1
     count_upper('abcdefg') returns 0
@@ -66315,7 +66315,7 @@ def relationship(request, partner_username):
         raise Http404  # Can't have relationship with yourself.
     account = request.profile.account(partner)
     if account:
-        entries = account.entries 
+        entries = account.entries
         balance = account.balance
     else:
         entries = []
@@ -67861,7 +67861,7 @@ def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=No
         return (num_cats + (10 * love_cats)) / np.sqrt(1 + len(actual_response))
 # ---
 def _init(self, maxsize):
-        Queue._init(self, maxsize) 
+        Queue._init(self, maxsize)
         self.all_items = set()
 # ---
 def test_get_type(self):
@@ -68898,13 +68898,13 @@ def test_rerank_empty_candidates():
 # ---
 
 def x_or_y(n, x, y):
-    """A simple program which should return the value of x if n is 
+    """A simple program which should return the value of x if n is
     a prime number and should return the value of y otherwise.
 
     Examples:
     for x_or_y(7, 34, 12) == 34
     for x_or_y(15, 8, 5) == 5
-    
+
     """
     if n == 1:
         return y
@@ -69133,7 +69133,7 @@ def test_random_mutation_returns_none_for_invalid_source(bank):
 # ---
 def _put(self, item):
         if item not in self.all_items:
-            Queue._put(self, item) 
+            Queue._put(self, item)
             self.all_items.add(item)
 # ---
 def test_load_vortex_column_projection(self, vortex_file):

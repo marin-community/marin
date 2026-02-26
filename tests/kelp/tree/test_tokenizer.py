@@ -1,4 +1,7 @@
 # Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,12 +19,18 @@
 
 import pytest
 
+from experiments.kelp.corpus import extract_docstring
 from experiments.kelp.tree.tokenizer import TreeDiffusionTokenizer
 
 
 @pytest.fixture
 def tok():
     return TreeDiffusionTokenizer(max_seq_len=512)
+
+
+@pytest.fixture
+def tok_prompt():
+    return TreeDiffusionTokenizer(max_seq_len=512, prompt_tokens=True)
 
 
 def test_special_token_ids_are_distinct(tok):
@@ -159,3 +168,157 @@ def test_valid_position_mask_simple_assignment(tok):
     source = "x = 1 + 2\n"
     mask = tok.valid_position_mask(source)
     assert any(mask)
+
+
+# --- Prompt token tests ---
+
+
+def test_prompt_vocab_size(tok, tok_prompt):
+    """prompt_tokens=True adds 2 special tokens, increasing vocab_size by 2."""
+    assert tok_prompt.vocab_size == tok.vocab_size + 2
+    assert tok_prompt.num_special_tokens == 5
+    assert tok.num_special_tokens == 3
+
+
+def test_prompt_token_ids_are_distinct(tok_prompt):
+    ids = {
+        tok_prompt.pad_token_id,
+        tok_prompt.sos_token_id,
+        tok_prompt.eos_token_id,
+        tok_prompt.prompt_start_token_id,
+        tok_prompt.prompt_end_token_id,
+    }
+    assert len(ids) == 5
+
+
+def test_prompt_token_ids_not_available_without_flag(tok):
+    with pytest.raises(ValueError):
+        tok.prompt_start_token_id
+    with pytest.raises(ValueError):
+        tok.prompt_end_token_id
+
+
+def test_prompt_position_offset_shifted(tok, tok_prompt):
+    """Position tokens start at 5 with prompt_tokens, vs 3 without."""
+    assert tok.position_token_offset == 3
+    assert tok_prompt.position_token_offset == 5
+
+
+def test_decode_token_prompt_specials(tok_prompt):
+    assert tok_prompt.decode_token(3) == "<PROMPT_START>"
+    assert tok_prompt.decode_token(4) == "<PROMPT_END>"
+
+
+def test_encode_decode_roundtrip_with_prompt(tok_prompt):
+    """Source encoding/decoding works the same with prompt_tokens=True."""
+    source = "x = 1 + 2\n"
+    ids = tok_prompt.encode_source(source)
+    decoded = tok_prompt.decode_source(ids)
+    assert decoded == source
+
+
+def test_encode_training_example_with_prompt(tok_prompt):
+    context = "x = 1\n"
+    edit_pos = 4
+    replacement = "2"
+    prompt = "Replace the number"
+
+    token_ids, loss_mask = tok_prompt.encode_training_example(
+        context,
+        edit_pos,
+        replacement,
+        prompt_source=prompt,
+    )
+
+    prompt_len = 1 + len(prompt) + 1  # PROMPT_START + bytes + PROMPT_END
+    context_len = len(context)
+
+    # Total length: prompt_prefix + context + SOS + POS + replacement + EOS
+    expected_len = prompt_len + context_len + 1 + 1 + len(replacement) + 1
+    assert len(token_ids) == expected_len
+    assert len(loss_mask) == expected_len
+
+    # Prompt + context + SOS all have loss_mask=0.
+    no_loss_len = prompt_len + context_len + 1
+    assert loss_mask[:no_loss_len] == [0] * no_loss_len
+
+    # POS + replacement + EOS have loss_mask=1.
+    assert loss_mask[no_loss_len:] == [1] * (1 + len(replacement) + 1)
+
+    # First and last prompt tokens.
+    assert token_ids[0] == tok_prompt.prompt_start_token_id
+    assert token_ids[prompt_len - 1] == tok_prompt.prompt_end_token_id
+
+    # EOS at end.
+    assert token_ids[-1] == tok_prompt.eos_token_id
+
+
+def test_encode_training_example_without_prompt_unchanged(tok_prompt):
+    """When prompt_source=None, sequence is the same as legacy (just shifted offsets)."""
+    context = "x = 1\n"
+    edit_pos = 4
+    replacement = "2"
+
+    token_ids, loss_mask = tok_prompt.encode_training_example(context, edit_pos, replacement)
+
+    # No prompt prefix: context(6) + SOS + POS + replacement(1) + EOS = 10
+    assert len(token_ids) == 10
+    assert loss_mask[:7] == [0] * 7
+    assert loss_mask[7:] == [1, 1, 1]
+
+
+def test_encode_training_example_prompt_requires_flag(tok):
+    """Passing prompt_source to a tokenizer without prompt_tokens raises."""
+    with pytest.raises(ValueError, match="prompt_tokens=True"):
+        tok.encode_training_example("x = 1\n", 4, "2", prompt_source="hello")
+
+
+def test_encode_prompt_prefix(tok_prompt):
+    prefix = tok_prompt.encode_prompt_prefix("hello")
+    assert prefix[0] == tok_prompt.prompt_start_token_id
+    assert prefix[-1] == tok_prompt.prompt_end_token_id
+    assert len(prefix) == 1 + len("hello") + 1
+
+
+def test_encode_prompt_prefix_requires_flag(tok):
+    with pytest.raises(ValueError):
+        tok.encode_prompt_prefix("hello")
+
+
+def test_decode_source_skips_prompt_tokens(tok_prompt):
+    ids = [
+        tok_prompt.prompt_start_token_id,
+        tok_prompt.encode_char("p"),
+        tok_prompt.prompt_end_token_id,
+        tok_prompt.encode_char("x"),
+    ]
+    assert tok_prompt.decode_source(ids) == "px"
+
+
+def test_backward_compat_legacy_tokenizer():
+    """Legacy tokenizer (prompt_tokens=False) has unchanged behavior."""
+    tok = TreeDiffusionTokenizer(max_seq_len=128)
+    assert tok.num_special_tokens == 3
+    assert tok.position_token_offset == 3
+    assert tok.vocab_size == 3 + 128 + 256
+
+
+# --- extract_docstring tests ---
+
+
+def test_extract_docstring_present():
+    source = 'def f(x):\n    """Add one."""\n    return x + 1\n'
+    assert extract_docstring(source) == "Add one."
+
+
+def test_extract_docstring_absent():
+    source = "def f(x):\n    return x + 1\n"
+    assert extract_docstring(source) is None
+
+
+def test_extract_docstring_syntax_error():
+    assert extract_docstring("def f({{") is None
+
+
+def test_extract_docstring_no_function():
+    assert extract_docstring("x = 1\n") is None

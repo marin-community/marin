@@ -1,0 +1,78 @@
+# SkyPilot task: Evaluate Kelp v7 checkpoint on corpus + MBPP.
+#
+# Run AFTER training completes. Expects checkpoints at
+# ~/sky_workdir/checkpoints/kelp-edit-v7/ (synced from the training task).
+#
+# Launch (on the same cluster as training, to reuse checkpoints):
+#   sky exec kelp-v7 experiments/kelp/infra/kelp-v7-eval.yaml
+#
+# Or launch standalone (after rsync'ing checkpoints):
+#   sky launch -c kelp-v7-eval experiments/kelp/infra/kelp-v7-eval.yaml -y
+
+name: kelp-v7-eval
+
+resources:
+  accelerators: A100:1
+  disk_size: 100
+  cloud: gcp
+
+workdir: .
+
+setup: |
+  set -euo pipefail
+
+  if ! command -v uv &> /dev/null; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+
+  cd ~/sky_workdir
+  uv sync
+
+run: |
+  set -euo pipefail
+  export PATH="$HOME/.local/bin:$PATH"
+  cd ~/sky_workdir
+
+  CKPT_DIR="checkpoints/kelp-edit-v7"
+  CORPUS_FILE="experiments/kelp/corpus_v7.txt"
+  LOG_FILE="${CKPT_DIR}/eval.log"
+
+  # Find the latest checkpoint.
+  LATEST_CKPT=$(ls -d "${CKPT_DIR}"/step-* 2>/dev/null | sort | tail -1 | xargs basename)
+  if [ -z "$LATEST_CKPT" ]; then
+    echo "ERROR: No checkpoints found in ${CKPT_DIR}" | tee "$LOG_FILE"
+    exit 1
+  fi
+  echo "Evaluating checkpoint: ${LATEST_CKPT}" | tee "$LOG_FILE"
+
+  echo "" | tee -a "$LOG_FILE"
+  echo "=== Corpus Evaluation ===" | tee -a "$LOG_FILE"
+
+  uv run python experiments/kelp/evaluate_corpus.py \
+      --checkpoint-dir "$CKPT_DIR" \
+      --checkpoint "$LATEST_CKPT" \
+      --corpus-file "$CORPUS_FILE" \
+      --num-tasks 50 \
+      --num-corruptions 5 \
+      --n-best-of 16 \
+      --max-depth 10 \
+      --seed 42 \
+      2>&1 | tee -a "$LOG_FILE"
+
+  echo "" | tee -a "$LOG_FILE"
+  echo "=== MBPP Evaluation ===" | tee -a "$LOG_FILE"
+
+  uv run python experiments/kelp/evaluate_mbpp.py \
+      --checkpoint-dir "$CKPT_DIR" \
+      --checkpoint "$LATEST_CKPT" \
+      --corpus-file "$CORPUS_FILE" \
+      --max-tasks 50 \
+      --num-corruptions 5 \
+      --n-best-of 16 \
+      --max-depth 10 \
+      --seed 42 \
+      2>&1 | tee -a "$LOG_FILE"
+
+  echo "" | tee -a "$LOG_FILE"
+  echo "=== Evaluation complete ===" | tee -a "$LOG_FILE"
