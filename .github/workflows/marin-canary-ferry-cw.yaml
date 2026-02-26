@@ -1,0 +1,69 @@
+name: Marin - CoreWeave GPU Canary Ferry
+
+on:
+  schedule:
+    - cron: '0 10 * * *'  # Daily at 10 AM UTC
+  workflow_dispatch:
+
+permissions:
+  packages: write  # docker login ghcr.io for iris cluster start
+
+jobs:
+  canary-ferry-cw:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    concurrency:
+      group: canary-ferry-cw
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Write CoreWeave kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.CW_KUBECONFIG }}" > ~/.kube/coreweave-iris
+          chmod 600 ~/.kube/coreweave-iris
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Start CoreWeave cluster
+        run: .venv/bin/iris --config=lib/iris/examples/coreweave.yaml cluster start
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Submit canary ferry
+        run: |
+          .venv/bin/iris --config=lib/iris/examples/coreweave.yaml \
+            job run \
+            --memory=16G --disk=16G --cpu=1 --extra=cpu \
+            -e MARIN_PREFIX s3://marin-us-west-04a/marin/ \
+            -e CANARY_DATE "$(date -u +%Y-%m-%d)" \
+            -e WANDB_API_KEY "$WANDB_API_KEY" \
+            -e HF_TOKEN "$HF_TOKEN" \
+            -- python -m experiments.ferries.canary_ferry_cw
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
