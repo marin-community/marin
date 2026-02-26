@@ -3,6 +3,7 @@
 
 """Actor pool for load-balanced and broadcast RPC calls."""
 
+import logging
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -14,6 +15,9 @@ import cloudpickle
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult, Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
+from iris.rpc.errors import call_with_retry
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -83,17 +87,32 @@ class ActorPool(Generic[T]):
         >>> results = broadcast.wait_all()
     """
 
-    def __init__(self, resolver: Resolver, name: str, timeout: float = 30.0):
+    def __init__(
+        self,
+        resolver: Resolver,
+        name: str,
+        timeout: float = 30.0,
+        max_call_attempts: int = 5,
+        initial_backoff: float = 0.1,
+        max_backoff: float = 10.0,
+    ):
         """Initialize actor pool.
 
         Args:
             resolver: Resolver to discover endpoints
             name: Actor name to resolve
             timeout: RPC timeout in seconds
+            max_call_attempts: Maximum RPC call attempts on transient errors.
+                On each retry, a new endpoint is selected via round-robin re-resolution.
+            initial_backoff: Initial retry delay in seconds
+            max_backoff: Maximum delay between retries in seconds
         """
         self._resolver = resolver
         self._name = name
         self._timeout = timeout
+        self._max_call_attempts = max_call_attempts
+        self._initial_backoff = initial_backoff
+        self._max_backoff = max_backoff
         self._endpoint_index = 0
         self._cached_result: ResolveResult | None = None
         self._lock = threading.Lock()
@@ -176,8 +195,17 @@ class _PoolCallProxy(Generic[T]):
 
     def __getattr__(self, method_name: str) -> Callable[..., Any]:
         def call(*args, **kwargs):
-            endpoint = self._pool._get_next_endpoint()
-            return self._pool._call_endpoint(endpoint, method_name, args, kwargs)
+            def do_call():
+                endpoint = self._pool._get_next_endpoint()
+                return self._pool._call_endpoint(endpoint, method_name, args, kwargs)
+
+            return call_with_retry(
+                f"{self._pool._name}.{method_name}",
+                do_call,
+                max_attempts=self._pool._max_call_attempts,
+                initial_backoff=self._pool._initial_backoff,
+                max_backoff=self._pool._max_backoff,
+            )
 
         return call
 

@@ -123,6 +123,7 @@ def call_with_retry(
     operation: str,
     call_fn: Callable[[], T],
     *,
+    on_retry: Callable[[Exception], None] | None = None,
     max_attempts: int = 5,
     initial_backoff: float = 0.1,
     max_backoff: float = 5.0,
@@ -133,6 +134,9 @@ def call_with_retry(
     Args:
         operation: Description of the operation for logging
         call_fn: Callable that performs the RPC
+        on_retry: Optional callback invoked with the exception on every retryable
+            failure, including the final attempt. Useful for clearing cached
+            connections so subsequent calls can re-resolve endpoints.
         max_attempts: Maximum number of attempts (default: 5)
         initial_backoff: Initial retry delay in seconds (default: 0.1)
         max_backoff: Maximum delay between retries (default: 5.0)
@@ -159,6 +163,11 @@ def call_with_retry(
             if not is_retryable_error(e):
                 # Non-retryable error, fail immediately
                 raise
+
+            # Always clear stale state on retryable errors, even on the final
+            # attempt, so the next call from the caller can re-resolve.
+            if on_retry is not None:
+                on_retry(e)
 
             if attempt + 1 >= max_attempts:
                 # Final attempt failed, raise
