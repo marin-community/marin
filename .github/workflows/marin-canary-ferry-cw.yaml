@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  contents: read   # actions/checkout
   packages: write  # docker login ghcr.io for iris cluster start
 
 jobs:
