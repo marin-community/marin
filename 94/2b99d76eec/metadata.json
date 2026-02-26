@@ -3,8 +3,9 @@
   "checkpoint_id": "942b99d76eec",
   "strategy": "manual-commit",
   "branch": "rav-optional-remote",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
+    "lib/fray/src/fray/v2/ray_backend/backend.py",
     "lib/fray/tests/test_v2_ray.py"
   ],
   "sessions": [
@@ -14,13 +15,20 @@
       "context": "/94/2b99d76eec/0/context.md",
       "content_hash": "/94/2b99d76eec/0/content_hash.txt",
       "prompt": "/94/2b99d76eec/0/prompt.txt"
+    },
+    {
+      "metadata": "/94/2b99d76eec/1/metadata.json",
+      "transcript": "/94/2b99d76eec/1/full.jsonl",
+      "context": "/94/2b99d76eec/1/context.md",
+      "content_hash": "/94/2b99d76eec/1/content_hash.txt",
+      "prompt": "/94/2b99d76eec/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 333,
-    "cache_creation_tokens": 36972,
-    "cache_read_tokens": 245573,
-    "output_tokens": 197,
-    "api_call_count": 7
+    "input_tokens": 337,
+    "cache_creation_tokens": 55082,
+    "cache_read_tokens": 309260,
+    "output_tokens": 1392,
+    "api_call_count": 9
   }
 }
