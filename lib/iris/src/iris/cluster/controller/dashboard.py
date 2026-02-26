@@ -27,6 +27,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
+from iris.rpc.interceptors import RequestTimingInterceptor
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class ControllerDashboard:
         return self._port
 
     def _create_app(self) -> Starlette:
-        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service)
+        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=[RequestTimingInterceptor()])
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [
