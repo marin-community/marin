@@ -4,7 +4,15 @@ from experiments.llama import llama3_tokenizer
 
 dclm_tokenized = dclm_components_llama3["dclm_baseline"]
 
-def tokenize_data_efficiency_dataset(name, hf_dataset_id, revision, *, is_validation=False, tokenized_name=None):
+def tokenize_data_efficiency_dataset(
+    name,
+    hf_dataset_id,
+    revision,
+    *,
+    is_validation=False,
+    tokenized_name=None,
+    window_size_bytes=None,
+):
     downloaded = default_download(
         name=f"raw/data_efficiency/{name}",
         hf_dataset_id=hf_dataset_id,
@@ -17,6 +25,7 @@ def tokenize_data_efficiency_dataset(name, hf_dataset_id, revision, *, is_valida
         dataset=downloaded,
         tokenizer=llama3_tokenizer,
         is_validation=is_validation,
+        window_size_bytes=window_size_bytes,
     )
 
     return tokenized
@@ -457,6 +466,12 @@ wrap_icpt_front_cpr2_tokenized = tokenize_data_efficiency_dataset(
     "27b0c4e",
 )
 
+wrap_icpt_front_cpr8_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_icpt_front_cpr8",
+    "konwoo/wicpt_front_cpr8",
+    "c48e148",
+)
+
 # paired wrap baselines 
 
 
@@ -473,6 +488,18 @@ paired_wrap_back_cpr4_shuffled_tokenized = tokenize_data_efficiency_dataset(
 )
 
 # wrap synthetic data scaling 
+
+wrap_back_cpr32_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_back_cpr32",
+    "konwoo/wicpt_cpr32",
+    "e5f4a56",
+)
+
+wrap_back_cpr32_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_back_cpr32_shuffled",
+    "konwoo/wicpt_cpr32-shuffled",
+    "ba56c00",
+)
 
 wrap_back_cpr16_tokenized = tokenize_data_efficiency_dataset(
     "wrap_back_cpr16",
@@ -568,6 +595,14 @@ cot_l16_cpr1_sorted_tokenized = tokenize_data_efficiency_dataset(
     "a272507",
 )
 
+# sd 
+
+sd_c128_new_tokenized = tokenize_data_efficiency_dataset(
+    "sd_c128_new",
+    "konwoo/dclm-164k-real-train-sd021626-raw-cpr128-ml1024",
+    "0ba4f19",
+    window_size_bytes=512 * 1024 * 1024,
+)
 
 
 data_dict = {
@@ -655,10 +690,13 @@ data_dict = {
     "p4b": paired_wrap_back_cpr4_tokenized,
     "p4s": paired_wrap_back_cpr4_shuffled_tokenized,
     # cpr 16 (and synth data scaling)
+    "b32": wrap_back_cpr32_tokenized,
+    "s32": wrap_back_cpr32_shuffled_tokenized,
     "b16": wrap_back_cpr16_tokenized,
     "s16": wrap_back_cpr16_shuffled_tokenized,
     "b8": wrap_back_cpr8_tokenized,
     "s8": wrap_back_cpr8_shuffled_tokenized,
+    "f8": wrap_icpt_front_cpr8_tokenized,
     "b4": wrap_back_cpr4_tokenized,
     "s4": wrap_back_cpr4_shuffled_tokenized,
     "b2": wrap_back_cpr2_tokenized,
@@ -672,4 +710,6 @@ data_dict = {
     "d2": cot_cpr2_nodoc_sorted_tokenized,
     "d2s": cot_cpr2_nodoc_shuffled_tokenized,
     "l16": cot_l16_cpr1_sorted_tokenized,
+    # new sd 
+    "sdn": sd_c128_new_tokenized,
 }

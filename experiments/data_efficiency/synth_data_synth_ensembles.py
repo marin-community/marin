@@ -21,57 +21,53 @@ from marin.execution.executor import executor_main
 
 ensemble_members_train_steps_dict_list = [
     {
-        (base_train_steps, epochs, lr, weight_decay, model_name, block_cda, seed): data_efficiency_train_step(
+        (
+            synthetic_data_name,
+            synthetic_data_weight,
+            base_train_steps,
+            epochs,
+            lr,
+            weight_decay,
+            model_name,
+            seed,
+        ): data_efficiency_train_step(
             DataEfficiencyConfig(
                 train_seed=seed,
                 data_seed=seed,
                 data_name="dcr",
                 val_name="dc_1k_val_normal",
+                teacher_data_name=synthetic_data_name,
+                teacher_data_weight=synthetic_data_weight,
+                block_cross_document_attention=False,
                 epochs=epochs,
                 base_train_steps=base_train_steps,
-                train_batch_size=64,
                 lr_schedule="cosine",
                 lr=lr,
-                block_cross_document_attention=block_cda,
                 weight_decay=weight_decay,
+                train_batch_size=64,
+                train_seq_len=4096,
                 wandb_project_name="suhas-data-efficiency",
+                wandb_additional_tags=[synthetic_data_name, "synth_data_efficiency"],
                 model_name=model_name,
                 nametag=f"-seed{seed}",
                 bs_in_name=False,
+                initialize_from_hf=None,
                 tpu_type="v4-64",
-                wandb_additional_tags=["synth_data_efficiency", "ensemble"],
             )
         )
-        for base_train_steps, epochs, lr, weight_decay, model_name, block_cda in [candidate_hparams]
+        for synthetic_data_name, synthetic_data_weight, base_train_steps, epochs, lr, weight_decay, model_name in [
+            candidate_hparams
+        ]
     }
     for candidate_hparams in [
-        # # Optimal regularized hyper-parameters
-        (777, 16, 3e-3, 0.8, "150m4k", False),
-        (777, 16, 3e-3, 1.6, "300m4k", False),
-        (777, 8, 1e-3, 3.2, "600m4k", False),
-        (777, 8, 1e-3, 3.2, "1_5b4k", False),
-        (777, 16, 3e-3, 0.8, "150m4k", True),
-        (777, 16, 3e-3, 1.6, "300m4k", True),
-        (777, 8, 1e-3, 3.2, "600m4k", True),
-        (777, 8, 1e-3, 3.2, "1_5b4k", True),
-        # Ensembling guess with 2x epochs, same wd 
-        (777, 32, 3e-3, 0.8, "150m4k", False),
-        (777, 32, 3e-3, 1.6, "300m4k", False),
-        (777, 16, 1e-3, 3.2, "600m4k", False),
-        (777, 16, 1e-3, 3.2, "1_5b4k", False),
-        (777, 32, 3e-3, 0.8, "150m4k", True),
-        (777, 32, 3e-3, 1.6, "300m4k", True),
-        (777, 16, 1e-3, 3.2, "600m4k", True),
-        (777, 16, 1e-3, 3.2, "1_5b4k", True),
-        # # Ensembling guess
-        (777, 32, 3e-3, 0.4, "150m4k", True),
-        (777, 32, 3e-3, 0.8, "300m4k", True),
-        (777, 16, 1e-3, 1.6, "600m4k", True),
-        (777, 16, 1e-3, 1.6, "1_5b4k", True),
-        (777, 32, 3e-3, 0.4, "150m4k", False),
-        (777, 32, 3e-3, 0.8, "300m4k", False),
-        (777, 16, 1e-3, 1.6, "600m4k", False),
-        (777, 16, 1e-3, 1.6, "1_5b4k", False),
+        # ("sdn", 0.5, 777, 16, 3e-3, 0.4, "300m4k"),
+        # ("sdn", 0.75, 777, 16, 3e-3, 0.1, "300m4k"),
+        # ("sdn", 0.75, 777, 16, 3e-3, 0.4, "300m4k"),
+        # ("b16", 0.75, 777, 16, 3e-3, 0.4, "300m4k"),
+        # ("s16", 0.75, 777, 16, 3e-3, 0.4, "300m4k"),
+        # ("l16", 0.75, 777, 16, 3e-3, 0.4, "300m4k"),
+        ("b32", 0.75, 777, 32, 3e-3, 0.4, "300m4k"),
+        ("s32", 0.75, 777, 16, 3e-3, 0.4, "300m4k"),
     ]
     for seed in list(range(5))
 ]
@@ -87,5 +83,5 @@ ensemble_members_train_steps = list(ensemble_members_train_steps_dict.values())
 if __name__ == "__main__":
     executor_main(
         steps=ensemble_members_train_steps,
-        description="Ensemble baseline",
+        description="Synth ensembles",
     )
