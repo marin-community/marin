@@ -1172,6 +1172,13 @@ class LmEvalHarnessConfig:
                 this_task.config.task, lm_eval_task_name, our_name
             )
             return this_task
+        elif isinstance(this_task, tasks.Task):
+            # Base Task subclass (e.g. DnaVepLlrEvalTask). Rename via task_name if available.
+            if hasattr(this_task, "_task_name"):
+                this_task._task_name = self._replace_name_with_our_name(
+                    this_task._task_name or lm_eval_task_name, lm_eval_task_name, our_name
+                )
+            return this_task
         else:
             raise ValueError(f"Unknown task type: {this_task}")
 
@@ -1272,6 +1279,12 @@ def run_lm_eval_harness(
     outputs = _actually_run_eval_harness(
         config, model, tasks_to_run, tokenizer, EvalBatch, axis_resources, mp, profiler_config
     )
+
+    # Inject per-subset results from tasks that collect them (e.g., DnaVepLlrEvalTask).
+    if outputs is not None:
+        for task_name, task_obj in tasks_to_run.items():
+            if hasattr(task_obj, "_subset_results") and task_obj._subset_results:
+                outputs["results"].setdefault(task_name, {}).update(task_obj._subset_results)
 
     return outputs
 
