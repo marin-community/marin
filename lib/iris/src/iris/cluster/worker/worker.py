@@ -18,7 +18,12 @@ from iris.cluster.runtime.types import ContainerRuntime
 from iris.cluster.types import JobName
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
-from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
+from iris.cluster.worker.env_probe import (
+    DefaultEnvironmentProvider,
+    EnvironmentProvider,
+    build_worker_metadata,
+    probe_hardware,
+)
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.task_logging import FsspecLogSink, LogSink, LogSinkConfig, ProcessLogSink
 from iris.cluster.worker.service import WorkerServiceImpl
@@ -133,8 +138,6 @@ class Worker:
             self._worker_metadata = environment_provider.probe()
             self._inferred_log_prefix = environment_provider.log_prefix()
         else:
-            from iris.cluster.worker.env_probe import build_worker_metadata, probe_hardware
-
             env = DefaultEnvironmentProvider()
             hardware = probe_hardware()
             self._worker_metadata = build_worker_metadata(
