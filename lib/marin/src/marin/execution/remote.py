@@ -17,8 +17,9 @@ Usage::
 
 from __future__ import annotations
 
-import hashlib
+import dataclasses
 import re
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Generic, ParamSpec, TypeVar
@@ -29,7 +30,7 @@ from fray.v2.types import ResourceConfig, Entrypoint, JobRequest, create_environ
 P = ParamSpec("P")
 R = TypeVar("R")
 
-DEFAULT_JOB_NAME = "fray_exec_job"
+DEFAULT_JOB_NAME = "remote_job"
 
 
 def _sanitize_job_name(name: str) -> str:
@@ -37,12 +38,6 @@ def _sanitize_job_name(name: str) -> str:
     sanitized = re.sub(r"[^a-z0-9_.-]+", "-", name.lower())
     sanitized = sanitized.strip("-.")
     return sanitized or DEFAULT_JOB_NAME
-
-
-def _args_hash(*args: object, **kwargs: object) -> str:
-    """Short hash of call arguments to disambiguate jobs with the same function name."""
-    content = repr(args) + repr(sorted(kwargs.items()))
-    return hashlib.sha256(content.encode()).hexdigest()[:8]
 
 
 @dataclass(frozen=True)
@@ -60,12 +55,21 @@ class RemoteCallable(Generic[P, R]):
     pip_dependency_groups: list[str] = field(default_factory=list)
     name: str | None = None
 
+    def named(self, name: str) -> RemoteCallable:
+        """Noop if already has a name. Otherwise use provided name."""
+        if self.name:
+            return self
+        return dataclasses.replace(self, name=name)
+
     # TODO: JobHandle doesn't have this option now, but we could make this return the R
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None:
         """Submit fn to Fray and block until completion."""
 
-        base_name = self.name or getattr(self.fn, "__name__", None) or DEFAULT_JOB_NAME
-        name = f"{base_name}-{_args_hash(*args, **kwargs)}"
+        if self.name:
+            name = self.name
+        else:
+            fn_name = getattr(self.fn, "__name__", None) or DEFAULT_JOB_NAME
+            name = f"{fn_name}-{uuid.uuid4().hex[:8]}"
         c = fray_client.current_client()
         handle = c.submit(
             JobRequest(
