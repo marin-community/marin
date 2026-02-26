@@ -147,8 +147,8 @@ flowchart LR
   B --> C["Platform.create_slice(slice_template)"]
   C --> D["Autoscaler._bootstrap_slice(handle, scale_group_name)"]
   D --> E["WorkerBootstrap.bootstrap_vm(vm)"]
-  E --> F["build_worker_bootstrap_script(cluster_config, vm_address)"]
-  F --> G["build_worker_env_flags(defaults.bootstrap.env_vars + IRIS_VM_ADDRESS)"]
+  E --> F["build_worker_bootstrap_script(cluster_config)"]
+  F --> G["build_worker_env_flags(defaults.bootstrap.env_vars)"]
   G --> H["worker main.py serve"]
   H --> I["Worker(DefaultEnvironmentProvider.probe())"]
   I --> J["env_probe: metadata + optional IRIS_WORKER_ATTRIBUTES"]
@@ -171,9 +171,9 @@ flowchart LR
   C --> D["Autoscaler._bootstrap_slice(handle, scale_group_name)"]
   D --> E["lookup group config by scale_group_name"]
   E --> F["WorkerBootstrap.bootstrap_vm(vm, group_worker_settings)"]
-  F --> G["build_worker_bootstrap_script(cluster_config, vm_address, group_worker_settings)"]
+  F --> G["build_worker_bootstrap_script(cluster_config, group_worker_settings)"]
   G --> H["build_worker_env_flags(merge global + group attrs/env)"]
-  H --> I["docker run worker with env: IRIS_WORKER_ATTRIBUTES, IRIS_TASK_DEFAULT_ENV_JSON, IRIS_SCALE_GROUP, IRIS_VM_ADDRESS"]
+  H --> I["docker run worker with env: IRIS_WORKER_ATTRIBUTES, IRIS_TASK_DEFAULT_ENV_JSON, IRIS_SCALE_GROUP"]
   I --> J["worker main.py serve parses bootstrap-provided worker settings into WorkerConfig"]
   J --> K["Worker(DefaultEnvironmentProvider.probe())"]
   K --> L["env_probe merges IRIS_WORKER_ATTRIBUTES into WorkerMetadata.attributes"]
@@ -199,7 +199,7 @@ flowchart LR
   - `defaults.bootstrap.env_vars` (cluster-global)
   - serialized `IRIS_WORKER_ATTRIBUTES` from `scale_group.worker.attributes`
   - serialized task defaults, e.g. `IRIS_TASK_DEFAULT_ENV_JSON` from `scale_group.worker.env`
-  - infra metadata (`IRIS_VM_ADDRESS`, optional `IRIS_SCALE_GROUP`)
+  - infra metadata (optional `IRIS_SCALE_GROUP`)
 
 5. Worker main / WorkerConfig
 - `main.py serve` reads bootstrap env payload and threads:

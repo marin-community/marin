@@ -335,7 +335,6 @@ The platform detects fatal errors before the full timeout expires:
 
 | Variable | Source | Description |
 |----------|--------|-------------|
-| `IRIS_VM_ADDRESS` | Downward API (`status.podIP`) | Pod's own IP address |
 | `IRIS_WORKER_NODE_NAME` | Downward API (`spec.nodeName`) | Kubernetes node name |
 | `IRIS_POD_NAMESPACE` | Downward API (`metadata.namespace`) | Pod's namespace |
 | `IRIS_POD_NAME` | Downward API (`metadata.name`) | Pod's name |

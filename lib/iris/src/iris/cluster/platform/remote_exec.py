@@ -18,8 +18,8 @@ import logging
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timer
@@ -127,6 +127,11 @@ class GceRemoteExec:
     Used for connecting to regular GCE instances like the controller VM.
     Unlike GcloudRemoteExec which uses `gcloud compute tpus tpu-vm ssh`,
     this uses `gcloud compute ssh` for standard compute instances.
+
+    When ssh_user is set, gcloud connects as ``<user>@<vm_name>`` instead
+    of defaulting to the caller's OS user. This prevents the root-container
+    identity bug where ``gcloud compute ssh`` resolves to ``root@<vm>`` and
+    the target GCE instance rejects root SSH.
     """
 
     project_id: str

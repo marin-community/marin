@@ -223,36 +223,24 @@ exit 1
 
 def build_worker_env_flags(
     config: config_pb2.BootstrapConfig,
-    vm_address: str,
 ) -> str:
     """Generate docker -e flags with proper escaping.
 
-    TPU metadata is probed by the worker process via env_probe.py, so bootstrap
-    only forwards explicit bootstrap env vars plus IRIS_VM_ADDRESS.
+    TPU metadata and VM address are probed by the worker process at startup
+    (env_probe.py), so bootstrap only forwards explicit bootstrap env vars.
     """
-    env_vars = dict(config.env_vars)
-
     flags = []
-    for k, v in env_vars.items():
+    for k, v in config.env_vars.items():
         flags.append(f"-e {shlex.quote(k)}={shlex.quote(v)}")
-    # Inject VM address so worker can include it in registration for autoscaler tracking
-    if vm_address:
-        flags.append(f"-e IRIS_VM_ADDRESS={shlex.quote(vm_address)}")
 
     return " ".join(flags)
 
 
 def build_worker_bootstrap_script(
     bootstrap_config: config_pb2.BootstrapConfig,
-    vm_address: str,
 ) -> str:
-    """Build the bootstrap script for a worker VM.
-
-    Args:
-        bootstrap_config: Worker bootstrap settings
-        vm_address: VM IP address for autoscaler tracking
-    """
-    env_flags = build_worker_env_flags(bootstrap_config, vm_address)
+    """Build the bootstrap script for a worker VM."""
+    env_flags = build_worker_env_flags(bootstrap_config)
     if not bootstrap_config.controller_address:
         raise ValueError("bootstrap_config.controller_address is required for worker bootstrap")
     if not bootstrap_config.docker_image:

@@ -264,13 +264,6 @@ class Worker:
         if address_host == "0.0.0.0":
             address_host = metadata.ip_address
 
-        # Get VM address from probe (injected by Platform bootstrap via IRIS_VM_ADDRESS)
-        # For non-cloud workers, use host:port as both worker_id and vm_address
-        vm_address = metadata.vm_address
-        if not vm_address:
-            vm_address = f"{address_host}:{self._config.port}"
-            metadata.vm_address = vm_address
-
         return f"{address_host}:{self._config.port}"
 
     def _serve(self, stop_event: threading.Event) -> None:
