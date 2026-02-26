@@ -59,6 +59,7 @@ train_step = default_train(
     train_config=train_config,
     tags=["dna", "exp65", "traitgym", "smoke_test"],
     eval_harness_tasks=[TRAITGYM_MENDELIAN_V2],
+    eval_harness_max_packed_segments=1,
     use_default_validation=False,
 )
 
