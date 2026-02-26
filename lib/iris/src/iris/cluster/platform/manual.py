@@ -263,11 +263,11 @@ class ManualPlatform:
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> ManualSliceHandle:
         """Allocate hosts from the pool for a slice.
 
-        When bootstrap_config is provided, spawns a background thread that runs
+        When worker_config is provided, spawns a background thread that runs
         the bootstrap script on each worker. The handle's describe() composites
         bootstrap state with the base state.
         """
@@ -303,15 +303,15 @@ class ManualPlatform:
             _label_prefix=self._label_prefix,
             _ssh_connections=ssh_connections,
             _on_terminate=on_terminate,
-            _bootstrapping=bootstrap_config is not None,
+            _bootstrapping=worker_config is not None,
         )
         self._slices[slice_id] = handle
 
-        if bootstrap_config:
+        if worker_config:
 
             def _bootstrap_worker():
                 try:
-                    self._run_bootstrap(handle, bootstrap_config)
+                    self._run_bootstrap(handle, worker_config)
                 except Exception as e:
                     logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
                     with handle._bootstrap_lock:
@@ -328,7 +328,7 @@ class ManualPlatform:
     def _run_bootstrap(
         self,
         handle: ManualSliceHandle,
-        bootstrap_config: config_pb2.BootstrapConfig,
+        worker_config: config_pb2.WorkerConfig,
     ) -> None:
         """Bootstrap all workers in the slice in parallel.
 
@@ -346,7 +346,7 @@ class ManualPlatform:
                     raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
                 if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
                     raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-                script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
+                script = build_worker_bootstrap_script(worker_config)
                 worker.bootstrap(script)
             except Exception as e:
                 errors.append((worker.worker_id, e))

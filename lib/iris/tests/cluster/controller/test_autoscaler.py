@@ -192,7 +192,7 @@ def make_mock_platform(
 
     create_count = [0]
 
-    def create_slice_side_effect(config: config_pb2.SliceConfig, bootstrap_config=None) -> MagicMock:
+    def create_slice_side_effect(config: config_pb2.SliceConfig, worker_config=None) -> MagicMock:
         create_count[0] += 1
         slice_id = f"new-slice-{create_count[0]}"
         return make_mock_slice_handle(slice_id)
@@ -275,7 +275,7 @@ def make_autoscaler(
     scale_groups: dict[str, ScalingGroup],
     config: config_pb2.AutoscalerConfig | None = None,
     platform: MagicMock | None = None,
-    bootstrap_config: config_pb2.BootstrapConfig | None = None,
+    base_worker_config: config_pb2.WorkerConfig | None = None,
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
     mock_platform = platform or make_mock_platform()
@@ -285,14 +285,14 @@ def make_autoscaler(
             scale_groups=scale_groups,
             config=config,
             platform=mock_platform,
-            bootstrap_config=bootstrap_config,
+            base_worker_config=base_worker_config,
         )
     else:
         return Autoscaler(
             scale_groups=scale_groups,
             evaluation_interval=Duration.from_seconds(0.1),
             platform=mock_platform,
-            bootstrap_config=bootstrap_config,
+            base_worker_config=base_worker_config,
         )
 
 
@@ -1733,9 +1733,9 @@ class TestAutoscalerAsyncScaleUp:
         platform = make_mock_platform()
         original_create = platform.create_slice.side_effect
 
-        def slow_create(config, bootstrap_config=None):
+        def slow_create(config, worker_config=None):
             time.sleep(0.5)
-            return original_create(config, bootstrap_config)
+            return original_create(config, worker_config)
 
         platform.create_slice.side_effect = slow_create
 
@@ -1764,9 +1764,9 @@ class TestAutoscalerAsyncScaleUp:
         platform = make_mock_platform()
         original_create = platform.create_slice.side_effect
 
-        def slow_create(config, bootstrap_config=None):
+        def slow_create(config, worker_config=None):
             time.sleep(0.2)
-            return original_create(config, bootstrap_config)
+            return original_create(config, worker_config)
 
         platform.create_slice.side_effect = slow_create
 
@@ -1801,9 +1801,9 @@ class TestAutoscalerAsyncScaleUp:
         original_create = platform.create_slice.side_effect
         create_completed = []
 
-        def slow_create(config, bootstrap_config=None):
+        def slow_create(config, worker_config=None):
             time.sleep(0.2)
-            result = original_create(config, bootstrap_config)
+            result = original_create(config, worker_config)
             create_completed.append(True)
             return result
 
@@ -1857,9 +1857,9 @@ def test_pending_counter_prevents_double_scaleup():
     class SlowFakePlatform(FakePlatform):
         """FakePlatform where create_slice blocks until barrier is released."""
 
-        def create_slice(self, config, bootstrap_config=None):
+        def create_slice(self, config, worker_config=None):
             create_barrier.wait(timeout=10)
-            return super().create_slice(config, bootstrap_config)
+            return super().create_slice(config, worker_config)
 
     sg_config = make_scale_group_config(
         name="test-group",
@@ -1908,7 +1908,7 @@ def test_pending_counter_prevents_double_scaleup():
 
 
 def test_bootstrap_called_after_scaleup():
-    """After scale_up with bootstrap_config, platform handles bootstrap internally
+    """After scale_up with worker_config, platform handles bootstrap internally
     and describe() reaches READY after tick().
     """
     sg_config = make_scale_group_config(
@@ -1917,9 +1917,9 @@ def test_bootstrap_called_after_scaleup():
         max_slices=4,
         zones=["us-central1-a"],
     )
-    bootstrap_config = config_pb2.BootstrapConfig(
+    worker_config = config_pb2.WorkerConfig(
         docker_image="test:latest",
-        worker_port=10001,
+        port=10001,
         controller_address="controller:10000",
     )
     platform = FakePlatform(FakePlatformConfig(config=sg_config))
@@ -1932,7 +1932,7 @@ def test_bootstrap_called_after_scaleup():
         scale_groups={"test-group": group},
         evaluation_interval=Duration.from_ms(100),
         platform=platform,
-        bootstrap_config=bootstrap_config,
+        base_worker_config=worker_config,
     )
 
     demand = make_demand_entries(1)
@@ -1958,7 +1958,7 @@ def test_bootstrap_called_after_scaleup():
 
 
 def test_bootstrap_skipped_without_config():
-    """Without bootstrap_config, slices reach READY immediately after tick() (no bootstrap)."""
+    """Without worker_config, slices reach READY immediately after tick() (no bootstrap)."""
     sg_config = make_scale_group_config(
         name="test-group",
         min_slices=0,
@@ -1996,16 +1996,14 @@ def test_bootstrap_skipped_without_config():
     autoscaler.shutdown()
 
 
-class TestPerGroupBootstrapConfig:
-    """Tests for _per_group_bootstrap_config merging worker attributes into env vars."""
+class TestPerGroupWorkerConfig:
+    """Tests for _per_group_worker_config merging worker attributes into WorkerConfig."""
 
     def test_merges_worker_attributes(self):
-        """Worker attributes, env, and scale group name are injected into env_vars."""
-        import json
-
-        base_bc = config_pb2.BootstrapConfig(
+        """Worker attributes, env, and scale group name are merged into WorkerConfig."""
+        base_wc = config_pb2.WorkerConfig(
             docker_image="test:latest",
-            worker_port=10001,
+            port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="west-group", max_slices=5)
@@ -2014,27 +2012,25 @@ class TestPerGroupBootstrapConfig:
         sg_config.worker.env["IRIS_REGION"] = "us-west4"
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"west-group": group}, base_worker_config=base_wc)
 
-        bc = autoscaler._per_group_bootstrap_config(group)
+        wc = autoscaler._per_group_worker_config(group)
 
-        assert bc is not None
-        assert bc.docker_image == "test:latest"
-        attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
-        assert attrs["region"] == "us-west4"
-        assert attrs["preemptible"] == "true"
-        env = json.loads(bc.env_vars["IRIS_TASK_DEFAULT_ENV_JSON"])
-        assert env["IRIS_REGION"] == "us-west4"
-        assert bc.env_vars["IRIS_SCALE_GROUP"] == "west-group"
-        assert bc.env_vars["IRIS_ACCELERATOR_TYPE"] == "tpu"
-        assert bc.env_vars["IRIS_ACCELERATOR_VARIANT"] == "v5p-8"
-        assert "IRIS_GPU_COUNT" not in bc.env_vars
+        assert wc is not None
+        assert wc.docker_image == "test:latest"
+        assert wc.worker_attributes["region"] == "us-west4"
+        assert wc.worker_attributes["preemptible"] == "true"
+        assert wc.default_task_env["IRIS_REGION"] == "us-west4"
+        assert wc.worker_attributes["scale-group"] == "west-group"
+        assert wc.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert wc.accelerator_variant == "v5p-8"
+        assert wc.gpu_count == 0
 
-    def test_injects_accelerator_env_without_worker_settings(self):
-        """Groups without worker settings still inject accelerator env vars."""
-        base_bc = config_pb2.BootstrapConfig(
+    def test_injects_accelerator_config_without_worker_settings(self):
+        """Groups without worker settings still inject accelerator config."""
+        base_wc = config_pb2.WorkerConfig(
             docker_image="test:latest",
-            worker_port=10001,
+            port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(
@@ -2045,65 +2041,62 @@ class TestPerGroupBootstrapConfig:
         )
         sg_config.resources.gpu_count = 8
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"plain-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"plain-group": group}, base_worker_config=base_wc)
 
-        bc = autoscaler._per_group_bootstrap_config(group)
+        wc = autoscaler._per_group_worker_config(group)
 
-        assert bc is not None
-        assert bc is not base_bc
-        assert bc.env_vars["IRIS_ACCELERATOR_TYPE"] == "gpu"
-        assert bc.env_vars["IRIS_ACCELERATOR_VARIANT"] == "H100"
-        assert bc.env_vars["IRIS_GPU_COUNT"] == "8"
-        assert bc.env_vars["IRIS_SCALE_GROUP"] == "plain-group"
+        assert wc is not None
+        assert wc is not base_wc
+        assert wc.accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU
+        assert wc.accelerator_variant == "H100"
+        assert wc.gpu_count == 8
+        assert wc.worker_attributes["scale-group"] == "plain-group"
 
     def test_returns_none_without_base(self):
-        """Without a base bootstrap config, returns None."""
+        """Without a base worker config, returns None."""
         sg_config = make_scale_group_config(name="test-group", max_slices=5)
         sg_config.worker.attributes["region"] = "us-west4"
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"test-group": group}, bootstrap_config=None)
+        autoscaler = make_autoscaler({"test-group": group}, base_worker_config=None)
 
-        bc = autoscaler._per_group_bootstrap_config(group)
+        wc = autoscaler._per_group_worker_config(group)
 
-        assert bc is None
+        assert wc is None
 
     def test_does_not_mutate_base_config(self):
-        """Merging should not modify the original base bootstrap config."""
-        base_bc = config_pb2.BootstrapConfig(
+        """Merging should not modify the original base worker config."""
+        base_wc = config_pb2.WorkerConfig(
             docker_image="test:latest",
-            worker_port=10001,
+            port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="west-group", max_slices=5)
         sg_config.worker.attributes["region"] = "us-west4"
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"west-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"west-group": group}, base_worker_config=base_wc)
 
-        autoscaler._per_group_bootstrap_config(group)
+        autoscaler._per_group_worker_config(group)
 
-        assert "IRIS_WORKER_ATTRIBUTES" not in base_bc.env_vars
+        assert "region" not in base_wc.worker_attributes
 
     def test_worker_attributes_injected(self):
-        """Worker attributes are injected into env vars."""
-        import json
-
-        base_bc = config_pb2.BootstrapConfig(
+        """Worker attributes are injected into WorkerConfig."""
+        base_wc = config_pb2.WorkerConfig(
             docker_image="ghcr.io/marin-community/iris-worker:latest",
-            worker_port=10001,
+            port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
         sg_config.worker.attributes["region"] = "europe-west4"
 
         group = ScalingGroup(sg_config, make_mock_platform())
-        autoscaler = make_autoscaler({"eu-group": group}, bootstrap_config=base_bc)
+        autoscaler = make_autoscaler({"eu-group": group}, base_worker_config=base_wc)
 
-        bc = autoscaler._per_group_bootstrap_config(group)
+        wc = autoscaler._per_group_worker_config(group)
 
-        assert bc is not None
-        attrs = json.loads(bc.env_vars["IRIS_WORKER_ATTRIBUTES"])
-        assert attrs["region"] == "europe-west4"
+        assert wc is not None
+        assert wc.worker_attributes["region"] == "europe-west4"
 
 
 class TestGpuScaleGroupBugs:

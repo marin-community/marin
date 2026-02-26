@@ -358,7 +358,7 @@ class ScalingGroup:
         self,
         tags: dict[str, str] | None = None,
         timestamp: Timestamp | None = None,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a new slice via the platform.
 
@@ -368,7 +368,7 @@ class ScalingGroup:
         Args:
             tags: Optional extra labels/tags for the slice (merged with managed labels)
             timestamp: Optional timestamp (for testing)
-            bootstrap_config: Bootstrap settings passed to platform.create_slice()
+            worker_config: Worker settings passed to platform.create_slice()
 
         Returns:
             The newly created SliceHandle
@@ -394,7 +394,7 @@ class ScalingGroup:
             slice_config.coreweave.instance_type if slice_config.HasField("coreweave") else "n/a",
         )
 
-        return self._platform.create_slice(slice_config, bootstrap_config=bootstrap_config)
+        return self._platform.create_slice(slice_config, worker_config=worker_config)
 
     def scale_down(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
         """Terminate a slice.

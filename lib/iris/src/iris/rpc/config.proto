@@ -201,19 +201,47 @@ message ScaleGroupConfig {
 }
 
 // ============================================================================
-// BOOTSTRAP AND SSH CONFIGURATION
+// WORKER CONFIGURATION
 // ============================================================================
 
-// Bootstrap configuration passed to VmBootstrap
-message BootstrapConfig {
-  string controller_address = 1;  // Address workers use to connect (e.g., "10.0.0.1:10000")
-  string worker_id = 2;           // Auto-generated if empty
-  int32 worker_port = 3;          // Default: 10001
-  string docker_image = 4;        // Worker image to run
-  string cache_dir = 5;           // Default: /var/cache/iris
-  map<string, string> env_vars = 6;
-  string runtime = 7;             // "docker" or "kubernetes"
-  string config_json = 8;          // Serialized cluster config JSON for worker
+// Everything the worker process needs. Built by autoscaler from
+// defaults.worker + per-scale-group overrides.
+message WorkerConfig {
+  // Worker container image (used by bootstrap, not by the worker process itself)
+  string docker_image = 1;
+
+  // Network
+  string host = 2;                           // e.g. "0.0.0.0"
+  int32 port = 3;                            // e.g. 10001
+  string port_range = 4;                     // e.g. "30000-40000"
+
+  // Identity
+  string worker_id = 5;                      // auto-generated if empty
+  string controller_address = 6;             // e.g. "10.0.0.1:10000"
+
+  // Storage
+  string cache_dir = 7;
+  string log_prefix = 8;                     // URI prefix for logs
+
+  // Task defaults
+  string default_task_image = 9;
+  map<string, string> default_task_env = 10;
+  string runtime = 11;                       // "docker" or "kubernetes"
+
+  // Accelerator (from scale group, not env vars)
+  AcceleratorType accelerator_type = 20;
+  string accelerator_variant = 21;
+  int32 gpu_count = 22;
+
+  // Scheduling attributes
+  map<string, string> worker_attributes = 30;
+
+  // Timing
+  iris.time.Duration poll_interval = 40;
+  iris.time.Duration heartbeat_timeout = 41;
+
+  // Platform config (for image resolution — worker creates lightweight platform)
+  PlatformConfig platform = 50;
 }
 
 // SSH configuration for manual hosts
@@ -291,8 +319,9 @@ message AutoscalerConfig {
 message DefaultsConfig {
   SshConfig ssh = 2;
   AutoscalerConfig autoscaler = 3;
-  BootstrapConfig bootstrap = 4;
-  string default_task_image = 5;  // Task container image (e.g. "ghcr.io/marin-community/iris-task:latest")
+  reserved 4;  // was: BootstrapConfig bootstrap
+  reserved 5;  // was: string default_task_image
+  WorkerConfig worker = 6;
 }
 
 // ============================================================================

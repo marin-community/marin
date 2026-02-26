@@ -109,7 +109,7 @@ def local_cluster_and_config(tmp_path):
                 {
                     "platform": {"local": {}},
                     "defaults": {
-                        "bootstrap": {"controller_address": url},
+                        "worker": {"controller_address": url},
                     },
                     "scale_groups": {
                         "local-cpu": {

@@ -10,11 +10,12 @@ is performed by the worker environment probe at runtime.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
-import shlex
 
 import yaml
+from google.protobuf.json_format import MessageToDict
 
 from iris.rpc import config_pb2
 
@@ -155,10 +156,10 @@ sudo docker pull {{ docker_image }}
 
 echo "[iris-init] Phase: config_setup"
 sudo mkdir -p /etc/iris
-cat > /tmp/iris_config.json << 'IRIS_CONFIG_EOF'
-{{ config_json }}
-IRIS_CONFIG_EOF
-sudo mv /tmp/iris_config.json /etc/iris/config.json
+cat > /tmp/iris_worker_config.json << 'IRIS_WORKER_CONFIG_EOF'
+{{ worker_config_json }}
+IRIS_WORKER_CONFIG_EOF
+sudo mv /tmp/iris_worker_config.json /etc/iris/worker_config.json
 
 echo "[iris-init] Phase: worker_start"
 
@@ -177,14 +178,10 @@ sudo docker run -d --name iris-worker \\
     --network=host \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
-    -v /etc/iris/config.json:/etc/iris/config.json:ro \\
-    {{ env_flags }} \\
+    -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.worker.main serve \\
-        --host 0.0.0.0 --port {{ worker_port }} \\
-        --cache-dir {{ cache_dir }} \\
-        --controller-address {{ controller_address }} \\
-        --config /etc/iris/config.json
+        --worker-config /etc/iris/worker_config.json
 
 echo "[iris-init] Worker container started"
 echo "[iris-init] Phase: registration"
@@ -221,43 +218,34 @@ exit 1
 """
 
 
-def build_worker_env_flags(
-    config: config_pb2.BootstrapConfig,
-) -> str:
-    """Generate docker -e flags with proper escaping.
-
-    TPU metadata and VM address are probed by the worker process at startup
-    (env_probe.py), so bootstrap only forwards explicit bootstrap env vars.
-    """
-    flags = []
-    for k, v in config.env_vars.items():
-        flags.append(f"-e {shlex.quote(k)}={shlex.quote(v)}")
-
-    return " ".join(flags)
-
-
 def build_worker_bootstrap_script(
-    bootstrap_config: config_pb2.BootstrapConfig,
+    worker_config: config_pb2.WorkerConfig,
 ) -> str:
-    """Build the bootstrap script for a worker VM."""
-    env_flags = build_worker_env_flags(bootstrap_config)
-    if not bootstrap_config.controller_address:
-        raise ValueError("bootstrap_config.controller_address is required for worker bootstrap")
-    if not bootstrap_config.docker_image:
-        raise ValueError("bootstrap_config.docker_image is required for worker bootstrap")
-    if bootstrap_config.worker_port <= 0:
-        raise ValueError("bootstrap_config.worker_port must be > 0 for worker bootstrap")
-    if not bootstrap_config.cache_dir:
-        raise ValueError("bootstrap_config.cache_dir is required for worker bootstrap")
+    """Build the bootstrap script for a worker VM.
+
+    Serializes the WorkerConfig as JSON and embeds it in the bootstrap script.
+    The worker reads the JSON at startup via --worker-config.
+    """
+    if not worker_config.controller_address:
+        raise ValueError("worker_config.controller_address is required for worker bootstrap")
+    if not worker_config.docker_image:
+        raise ValueError("worker_config.docker_image is required for worker bootstrap")
+    if worker_config.port <= 0:
+        raise ValueError("worker_config.port must be > 0 for worker bootstrap")
+    if not worker_config.cache_dir:
+        raise ValueError("worker_config.cache_dir is required for worker bootstrap")
+
+    worker_config_json = json.dumps(
+        MessageToDict(worker_config, preserving_proto_field_name=True),
+        indent=2,
+    )
 
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
-        cache_dir=bootstrap_config.cache_dir,
-        docker_image=bootstrap_config.docker_image,
-        worker_port=bootstrap_config.worker_port,
-        controller_address=bootstrap_config.controller_address,
-        env_flags=env_flags,
-        config_json=bootstrap_config.config_json,
+        cache_dir=worker_config.cache_dir,
+        docker_image=worker_config.docker_image,
+        worker_port=worker_config.port,
+        worker_config_json=worker_config_json,
     )
 
 

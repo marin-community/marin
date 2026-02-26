@@ -27,6 +27,9 @@ Usage:
     # Custom per-job timeout
     uv run python scripts/smoke-test.py --job-timeout 120
 
+    # Local mode: in-process controller and workers (no cloud VMs)
+    uv run python scripts/smoke-test.py --mode local
+
     # Keep cluster running on failure for debugging
     uv run python scripts/smoke-test.py --mode keep
 
@@ -697,8 +700,11 @@ class SmokeTestConfig:
     accelerator: AcceleratorConfig
     boot_timeout_seconds: int = DEFAULT_BOOT_TIMEOUT
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
-    local: bool = False  # Run locally without GCP
-    mode: Literal["full", "keep", "redeploy"] = "full"
+    mode: Literal["full", "keep", "redeploy", "local"] = "full"
+
+    @property
+    def local(self) -> bool:
+        return self.mode == "local"
 
 
 # =============================================================================
@@ -769,7 +775,7 @@ class SmokeTestRunner:
             controller_url: str | None = None
 
             if self.config.mode != "redeploy":
-                if self.config.mode in ("full", "keep") and not self.config.local:
+                if self.config.mode in ("full", "keep"):
                     _log_section("PHASE 0: Clean Start")
                     self._cleanup_existing()
                     if self._interrupted:
@@ -837,10 +843,10 @@ class SmokeTestRunner:
         logger.info("=" * 60)
         logger.info("")
         logger.info("Config: %s", self.config.config_path)
+        logger.info("Mode: %s", self.config.mode)
         logger.info("Boot timeout: %ds", self.config.boot_timeout_seconds)
         logger.info("Job timeout: %ds", self.config.job_timeout_seconds)
         logger.info("Accelerator: %s (%s)", self._accel.label(), self._accel.device_type)
-        logger.info("Local: %s", self.config.local)
 
     # ----- Cluster lifecycle via CLI -----
 
@@ -1479,22 +1485,17 @@ class SmokeTestRunner:
 )
 @click.option(
     "--mode",
-    type=click.Choice(["full", "keep", "redeploy"]),
+    type=click.Choice(["full", "keep", "redeploy", "local"]),
     default="full",
     show_default=True,
-    help="Execution mode: 'full' (clean start + teardown), 'keep' (clean start + keep VMs), 'redeploy' (reuse VMs)",
-)
-@click.option(
-    "--local",
-    is_flag=True,
-    help="Run locally without GCP (in-process controller and workers)",
+    help="Execution mode: 'full' (clean start + teardown), 'keep' (clean start + keep VMs), "
+    "'redeploy' (reuse VMs), 'local' (in-process controller and workers, no cloud VMs)",
 )
 def main(
     config_path: Path,
     boot_timeout_seconds: int,
     job_timeout_seconds: int,
     mode: str,
-    local: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
 
@@ -1506,6 +1507,9 @@ def main(
 
         # Basic smoke test (uses examples/smoke.yaml by default)
         uv run python scripts/smoke-test.py
+
+        # Local mode: in-process controller and workers
+        uv run python scripts/smoke-test.py --mode local
 
         # CoreWeave GPU smoke test
         uv run python scripts/smoke-test.py --config examples/coreweave.yaml
@@ -1527,7 +1531,6 @@ def main(
         boot_timeout_seconds=boot_timeout_seconds,
         job_timeout_seconds=job_timeout_seconds,
         mode=mode,  # type: ignore
-        local=local,
     )
 
     runner = SmokeTestRunner(config)

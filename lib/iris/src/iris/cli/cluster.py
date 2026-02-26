@@ -150,12 +150,12 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
 def _build_cluster_images(config, verbose: bool = False) -> dict[str, str]:
     built: dict[str, str] = {}
 
-    for tag, typ in [(config.defaults.bootstrap.docker_image, "worker"), (config.controller.image, "controller")]:
+    for tag, typ in [(config.defaults.worker.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
             _build_and_push_for_tag(tag, typ, verbose=verbose)
             built[typ] = tag
 
-    task_tag = config.defaults.default_task_image
+    task_tag = config.defaults.worker.default_task_image
     if task_tag:
         _build_and_push_task_image(task_tag, verbose=verbose)
         built["task"] = task_tag
@@ -175,8 +175,8 @@ def _pin_latest_images(config) -> dict[str, str]:
 
     tags = {
         "controller": config.controller.image,
-        "worker": config.defaults.bootstrap.docker_image,
-        "task": config.defaults.default_task_image,
+        "worker": config.defaults.worker.docker_image,
+        "task": config.defaults.worker.default_task_image,
     }
     needs_pin = any(tag.endswith(":latest") for tag in tags.values() if tag)
     if not needs_pin:
@@ -188,9 +188,9 @@ def _pin_latest_images(config) -> dict[str, str]:
     if pinned["controller"]:
         config.controller.image = pinned["controller"]
     if pinned["worker"]:
-        config.defaults.bootstrap.docker_image = pinned["worker"]
+        config.defaults.worker.docker_image = pinned["worker"]
     if pinned["task"]:
-        config.defaults.default_task_image = pinned["task"]
+        config.defaults.worker.default_task_image = pinned["task"]
 
     click.echo("Pinning :latest image tags to git SHA for this run:")
     for name, tag in pinned.items():

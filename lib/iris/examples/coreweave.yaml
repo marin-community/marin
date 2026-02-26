@@ -58,12 +58,12 @@ defaults:
       milliseconds: 300000
     startup_grace_period:
       milliseconds: 2400000    # 40 min — covers autoscaler node provisioning + Pod startup
-  default_task_image: ghcr.io/marin-community/iris-task:latest
-  bootstrap:
+  worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     cache_dir: /mnt/local/iris-cache
     runtime: kubernetes
+    default_task_image: ghcr.io/marin-community/iris-task:latest
 
 scale_groups:
   # CPU general-purpose — used for data processing, orchestration, etc.

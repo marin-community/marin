@@ -11,9 +11,9 @@ from iris.rpc import config_pb2
 def test_build_cluster_images_pushes_worker_controller_and_task_to_ghcr() -> None:
     """Cluster image build should build and push all three image types to GHCR."""
     config = config_pb2.IrisClusterConfig()
-    config.defaults.bootstrap.docker_image = "ghcr.io/marin-community/iris-worker:v1"
+    config.defaults.worker.docker_image = "ghcr.io/marin-community/iris-worker:v1"
     config.controller.image = "ghcr.io/marin-community/iris-controller:v1"
-    config.defaults.default_task_image = "ghcr.io/marin-community/iris-task:v1"
+    config.defaults.worker.default_task_image = "ghcr.io/marin-community/iris-task:v1"
     config.controller.gcp.zone = "us-west1-b"
     config.scale_groups["east"].slice_template.gcp.zone = "us-east1-d"
     config.scale_groups["eu"].slice_template.gcp.zone = "europe-west4-b"

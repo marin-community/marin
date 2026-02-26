@@ -35,9 +35,9 @@ def cluster_config_file(tmp_path: Path) -> Path:
                     }
                 },
                 "defaults": {
-                    "bootstrap": {
+                    "worker": {
                         "docker_image": "test-image:latest",
-                        "worker_port": 10001,
+                        "port": 10001,
                         "controller_address": "127.0.0.1:10000",
                     },
                 },
