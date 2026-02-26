@@ -4,12 +4,16 @@
 # - Stack Edu educational Python corpus (50k functions)
 # - Prompt conditioning (docstrings as intent signal)
 # - Linear corruption curriculum
+# - W&B logging (if WANDB_API_KEY is set)
 #
 # Expected runtime: ~1-2 hours for corpus prep + 50k training steps.
 #
 # Launch:
-#   pip install "skypilot[gcp]"    # one-time
 #   sky launch -c kelp-v7 experiments/kelp/infra/kelp-v7-train.yaml -y
+#
+# Launch with W&B logging:
+#   sky launch -c kelp-v7 experiments/kelp/infra/kelp-v7-train.yaml \
+#     --env WANDB_API_KEY -y
 #
 # Monitor:
 #   sky logs kelp-v7
@@ -26,7 +30,7 @@ name: kelp-v7-train
 resources:
   accelerators: A100:1
   disk_size: 100
-  cloud: gcp
+  cloud: lambda
 
 workdir: .
 
@@ -65,6 +69,12 @@ run: |
   echo "" | tee -a "$LOG_FILE"
   echo "=== Phase 2: Training v7 ===" | tee -a "$LOG_FILE"
 
+  # Build W&B flags if WANDB_API_KEY is set.
+  WANDB_FLAGS=""
+  if [ -n "${WANDB_API_KEY:-}" ]; then
+    WANDB_FLAGS="--wandb-project kelp --wandb-run-name kelp-v7-prompt-conditioning"
+  fi
+
   uv run python experiments/kelp/train.py \
       --preset overnight_cpu \
       --corpus-file "$CORPUS_FILE" \
@@ -79,6 +89,7 @@ run: |
       --checkpoint-interval 5000 \
       --log-interval 10 \
       --seed 42 \
+      $WANDB_FLAGS \
       2>&1 | tee -a "$LOG_FILE"
 
   echo "" | tee -a "$LOG_FILE"

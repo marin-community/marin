@@ -8,11 +8,14 @@
 # 4. Tears down the cluster
 #
 # Prerequisites:
-#   pip install "skypilot[gcp]"
-#   sky check  # verify GCP credentials
+#   pip install "skypilot[lambda]"
+#   sky check  # verify Lambda credentials
 #
 # Usage:
 #   bash experiments/kelp/infra/launch_v7.sh
+#
+# With W&B logging:
+#   bash experiments/kelp/infra/launch_v7.sh --wandb
 #
 # To skip teardown (keep cluster for debugging):
 #   bash experiments/kelp/infra/launch_v7.sh --keep
@@ -24,12 +27,26 @@ TRAIN_YAML="experiments/kelp/infra/kelp-v7-train.yaml"
 EVAL_YAML="experiments/kelp/infra/kelp-v7-eval.yaml"
 LOCAL_CKPT_DIR="checkpoints/kelp-edit-v7"
 KEEP_CLUSTER=false
+USE_WANDB=false
 
 for arg in "$@"; do
     case "$arg" in
         --keep) KEEP_CLUSTER=true ;;
+        --wandb) USE_WANDB=true ;;
     esac
 done
+
+# Build env flags for sky launch.
+ENV_FLAGS=""
+if [ "$USE_WANDB" = true ]; then
+    if [ -z "${WANDB_API_KEY:-}" ]; then
+        echo "ERROR: --wandb requires WANDB_API_KEY to be set"
+        echo "  export WANDB_API_KEY=your-key"
+        exit 1
+    fi
+    ENV_FLAGS="--env WANDB_API_KEY"
+    echo "W&B logging: enabled (project=kelp, run=kelp-v7-prompt-conditioning)"
+fi
 
 echo "=============================================="
 echo " Kelp v7: SkyPilot Training + Eval Pipeline"
@@ -42,7 +59,7 @@ echo ""
 
 # Step 1: Launch training.
 echo ">>> Step 1: Launching training on A100..."
-sky launch -c "$CLUSTER_NAME" "$TRAIN_YAML" -y
+sky launch -c "$CLUSTER_NAME" "$TRAIN_YAML" $ENV_FLAGS -y
 
 echo ""
 echo ">>> Step 1 complete: Training finished."
