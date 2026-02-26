@@ -430,10 +430,10 @@ class TaggedEvaluator:
         tag_micro_bpb: dict[str, float] = {}
 
         mean_loss_per_tag_cpu = np.array(state.loss_per_tag.mean.array)
-        total_tokens_per_tag_cpu = np.array(state.loss_per_tag.mean.array)
+        total_tokens_per_tag_cpu = np.array(state.loss_per_tag.total.array)
 
         mean_bits_per_tag_cpu = np.array(state.bpb_per_tag.mean.array)
-        total_bytes_per_tag_cpu = np.array(state.bpb_per_tag.mean.array)
+        total_bytes_per_tag_cpu = np.array(state.bpb_per_tag.total.array)
 
         # add in the hierarchy
         for parent, children in self.hierarchy.items():
