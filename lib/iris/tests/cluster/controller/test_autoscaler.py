@@ -521,7 +521,7 @@ class TestAutoscalerScaleDown:
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        # State polling moves discovered slices to READY and populates vm_addresses
+        # refresh() observes platform-maintained slice state and marks discovered slices READY
         autoscaler.refresh({})
 
         slice_001 = group.get_slice("slice-001")
@@ -772,7 +772,8 @@ class TestAutoscalerBootstrapLogs:
         group = ScalingGroup(scale_group_config, platform)
         autoscaler = make_autoscaler({"test-group": group})
 
-        autoscaler._register_slice_workers(mock_handle, "test-group")
+        workers = mock_handle.describe().workers
+        autoscaler._register_slice_workers(workers, mock_handle.slice_id, "test-group")
 
         vm_id = mock_handle.describe().workers[0].worker_id
         assert autoscaler.get_init_log(vm_id) == bootstrap_log
@@ -1944,7 +1945,6 @@ def test_bootstrap_called_after_scaleup():
     # tick() drives VM state transitions and bootstrap
     platform.tick()
 
-    # _poll_slice_states() detects READY from describe()
     autoscaler.refresh({})
 
     assert group.slice_count() == 1

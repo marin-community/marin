@@ -13,7 +13,12 @@ import pytest
 from starlette.testclient import TestClient
 
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.events import JobSubmittedEvent, WorkerRegisteredEvent
+from iris.cluster.controller.events import (
+    JobSubmittedEvent,
+    TaskAssignedEvent,
+    TaskStateChangedEvent,
+    WorkerRegisteredEvent,
+)
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
@@ -643,11 +648,29 @@ def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
 # =============================================================================
 
 
-def test_vm_detail_page_escapes_vm_id(client):
-    """VM detail page escapes the VM ID to prevent XSS."""
-    response = client.get('/vm/"onmouseover="alert(1)')
+def test_worker_detail_page_escapes_id(client):
+    """Worker detail page escapes the ID to prevent XSS."""
+    response = client.get('/worker/"onmouseover="alert(1)')
     assert response.status_code == 200
     assert "onmouseover" not in response.text or "&quot;" in response.text
+
+
+def test_get_worker_status_recent_tasks_have_timestamps(client, state, make_worker_metadata, job_request):
+    """GetWorkerStatus returns recent_tasks with started_at populated from attempt timestamps."""
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    job_id = submit_job(state, "ts-job", job_request)
+    task_id = job_id.task(0)
+
+    state.handle_event(TaskAssignedEvent(task_id=task_id, worker_id=wid))
+    state.handle_event(TaskStateChangedEvent(task_id=task_id, new_state=cluster_pb2.TASK_STATE_RUNNING, attempt_id=0))
+    state.handle_event(TaskStateChangedEvent(task_id=task_id, new_state=cluster_pb2.TASK_STATE_SUCCEEDED, attempt_id=0))
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
+    tasks = resp.get("recentTasks", [])
+    assert len(tasks) == 1
+    assert tasks[0]["taskId"] == task_id.to_wire()
+    assert tasks[0].get("startedAt"), "started_at must be populated from attempt timestamps"
+    assert tasks[0].get("finishedAt"), "finished_at must be populated from attempt timestamps"
 
 
 def test_health_endpoint_returns_ok(client, state, make_worker_metadata, job_request):

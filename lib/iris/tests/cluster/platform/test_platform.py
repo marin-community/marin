@@ -23,7 +23,11 @@ from iris.cluster.platform.base import (
     Labels,
     QuotaExhaustedError,
 )
-from iris.cluster.platform.gcp import GcpPlatform, _validate_slice_config
+from iris.cluster.platform.gcp import (
+    GcpPlatform,
+    _build_vm_slice_id,
+    _validate_slice_config,
+)
 from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.platform.manual import ManualPlatform
 from iris.managed_thread import ThreadContainer
@@ -323,6 +327,43 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
         handle.terminate()
         listed_after = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
         assert handle.slice_id not in {s.slice_id for s in listed_after}
+
+
+def test_gcp_build_vm_slice_id_bounds_and_normalizes():
+    slice_id = _build_vm_slice_id(
+        "smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
+        1772123761944,
+    )
+    assert len(slice_id) <= 63
+    assert "_" not in slice_id
+    assert slice_id.endswith("-1772123761944")
+
+
+def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "cpu-vm"
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        handle = platform.create_slice(cfg)
+        assert len(handle.slice_id) <= 63
+        assert "_" not in handle.slice_id
+        status = handle.describe()
+        assert len(status.workers) == 1
+        assert getattr(status.workers[0]._remote_exec, "ssh_user", None) == "iris"
+        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        assert handle.slice_id in {s.slice_id for s in listed}
 
 
 def test_gcp_empty_accelerator_variant_rejected():
