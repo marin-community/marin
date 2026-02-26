@@ -259,8 +259,17 @@ def shard(x: T, mapping: ResourceMapping | None = None, mesh: Mesh | None = None
             return with_sharding_constraint(named, pspec)
         else:
             sharding = NamedSharding(resolved_mesh, pspec)
-            ret = jax.device_put(named, sharding)
-            return ret
+            try:
+                arr = jax.device_put(named.array, sharding)
+            except ValueError as e:
+                # On multi-host, `NamedSharding` is often not fully addressable from a single process.
+                # `jax.device_put` rejects such shardings. In that case, use the multihost helper that
+                # constructs a global array from the process-local shard.
+                if "addressable devices" not in str(e):
+                    raise
+                arr = jax.make_array_from_process_local_data(sharding, jax.device_get(named.array))
+
+            return NamedArray(arr, named.axis_names)
 
     return htu.tree_map(_do_device_put, x)
 
