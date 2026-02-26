@@ -145,7 +145,6 @@ class StepRunner:
 
     def __init__(self, client: fray_client.Client | None = None):
         self.client = client or fray_client.current_client()
-        self._local_pool = ThreadPoolExecutor(max_workers=8)
 
     def run(
         self,
@@ -163,6 +162,8 @@ class StepRunner:
         """
         if max_concurrent is not None and max_concurrent < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
+
+        local_pool = ThreadPoolExecutor(max_workers=max_concurrent or 8)
 
         # Keyed by output_path (guaranteed unique)
         completed: set[str] = set()
@@ -215,7 +216,7 @@ class StepRunner:
 
         def _do_launch(step: StepSpec) -> None:
             path = step.output_path
-            handle = self._launch_step(step, force_run_failed=force_run_failed, dry_run=dry_run)
+            handle = self._launch_step(step, force_run_failed=force_run_failed, dry_run=dry_run, local_pool=local_pool)
             if handle is not None:
                 running[path] = handle
             else:
@@ -261,7 +262,9 @@ class StepRunner:
         if failures:
             raise RuntimeError(f"{len(failures)} step(s) failed") from failures[0]
 
-    def _launch_step(self, step: StepSpec, *, force_run_failed: bool, dry_run: bool) -> JobHandle | None:
+    def _launch_step(
+        self, step: StepSpec, *, force_run_failed: bool, dry_run: bool, local_pool: ThreadPoolExecutor
+    ) -> JobHandle | None:
         """Launch a single step as a fray job. Returns None if skipped."""
         from marin.execution.artifact import Artifact
         from marin.execution.disk_cache import disk_cache
@@ -320,5 +323,5 @@ class StepRunner:
         else:
             from fray.v2.local_backend import LocalJobHandle
 
-            future = self._local_pool.submit(worker_fn)
+            future = local_pool.submit(worker_fn)
             return LocalJobHandle(f"local-{step_name}", future)
