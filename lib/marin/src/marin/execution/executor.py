@@ -224,7 +224,9 @@ def resolve_executor_step(
     # Wrap as RemoteCallable so StepRunner knows to submit via Fray
     final_fn: Callable = resolved_fn
     if resources is not None:
-        final_fn = RemoteCallable(resolved_fn, resources, env_vars=env_vars, pip_dependency_groups=pip_dependency_groups)
+        final_fn = RemoteCallable(
+            fn=resolved_fn, resources=resources, env_vars=env_vars, pip_dependency_groups=pip_dependency_groups
+        )
 
     return StepSpec(
         name=step.name,

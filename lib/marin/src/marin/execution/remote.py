@@ -17,8 +17,8 @@ Usage::
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Generic, ParamSpec, TypeVar
 
 from fray.v2.types import ResourceConfig
@@ -27,6 +27,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+@dataclass(frozen=True)
 class RemoteCallable(Generic[P, R]):
     """A callable wrapper that marks a function for remote execution via Fray.
 
@@ -34,21 +35,13 @@ class RemoteCallable(Generic[P, R]):
     resources, environment variables, and pip dependency groups.
     """
 
-    def __init__(
-        self,
-        fn: Callable[P, R],
-        resources: ResourceConfig,
-        env_vars: dict[str, str] | None = None,
-        pip_dependency_groups: list[str] | None = None,
-    ):
-        functools.update_wrapper(self, fn)
-        self._fn = fn
-        self.resources = resources
-        self.env_vars = env_vars or {}
-        self.pip_dependency_groups = pip_dependency_groups or []
+    fn: Callable[P, R]
+    resources: ResourceConfig
+    env_vars: dict[str, str] = field(default_factory=dict)
+    pip_dependency_groups: list[str] = field(default_factory=list)
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        return self._fn(*args, **kwargs)
+        return self.fn(*args, **kwargs)
 
 
 def remote(
@@ -68,7 +61,12 @@ def remote(
         resources = ResourceConfig.with_cpu()
 
     def decorator(f: Callable[P, R]) -> RemoteCallable[P, R]:
-        return RemoteCallable(f, resources, env_vars=env_vars, pip_dependency_groups=pip_dependency_groups)
+        return RemoteCallable(
+            fn=f,
+            resources=resources,
+            env_vars=env_vars or {},
+            pip_dependency_groups=pip_dependency_groups or [],
+        )
 
     if fn is not None:
         return decorator(fn)
