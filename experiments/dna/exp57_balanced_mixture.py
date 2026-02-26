@@ -28,13 +28,13 @@ import dataclasses
 from fray.v2 import ResourceConfig
 
 from experiments.dna.defaults import (
+    DNA_TOKENIZER_V1,
     YOLO_RUN_CONFIG_V1,
-    dna_qwen3_0_6b_256_v1,
-    dna_qwen3_1_7b_256_v1,
-    dna_qwen3_4b_256_v1,
+    dna_effective_seq_len,
     dna_tokenize_rw_v1,
     dna_train,
 )
+from experiments.qwen3 import qwen3_0_6b_hd128, qwen3_1_7b, qwen3_4b_hd128
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
@@ -52,14 +52,17 @@ DATASETS = {
 # Model configs with learning rates and resources
 # =============================================================================
 
+SEQ_LEN = 256
+effective_seq_len = dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1)
+
 TPU_V5P_16 = ResourceConfig.with_tpu("v5p-16")
 
 MODEL_CONFIGS = {
     # (model_config, learning_rate, resources)
     # resources=None means use default (v5p-8)
-    "qwen3_0_6b": (dna_qwen3_0_6b_256_v1, 1e-3, None),
-    "qwen3_1_7b": (dna_qwen3_1_7b_256_v1, 8e-4, None),
-    "qwen3_4b": (dna_qwen3_4b_256_v1, 6e-4, TPU_V5P_16),
+    "qwen3_0_6b": (dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=effective_seq_len), 1e-3, None),
+    "qwen3_1_7b": (dataclasses.replace(qwen3_1_7b, max_seq_len=effective_seq_len), 8e-4, None),
+    "qwen3_4b": (dataclasses.replace(qwen3_4b_hd128, max_seq_len=effective_seq_len), 6e-4, TPU_V5P_16),
 }
 
 # =============================================================================
