@@ -11,7 +11,6 @@ from haliax.partitioning import ResourceAxis
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.eval import LossFnOutput, TaggedEvaluator
-from levanter.grug.model import GrugModelConfig
 from levanter.models.lm_model import LmExample
 from levanter.utils.tree_utils import inference_mode
 
@@ -120,21 +119,11 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
         examples.append(GrugLmExample.causal(tokens))
 
     dataset = ListAsyncDataset(examples)
-    grug_cfg = GrugModelConfig(
-        vocab_size=vocab_size,
-        hidden_dim=16,
-        intermediate_dim=64,
-        num_layers=1,
-        num_heads=4,
-        num_kv_heads=4,
-        max_seq_len=seq_len,
-    )
 
     def fake_grug_loss_fn(
         _params,
         token_ids,
         _loss_weight,
-        _cfg,
         *,
         mask=None,
         reduction="mean",
@@ -156,7 +145,6 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
                 _model,
                 batch.tokens,
                 batch.loss_weight,
-                grug_cfg,
                 mask=batch.attn_mask,
                 reduction="none",
                 logsumexp_weight=None,
