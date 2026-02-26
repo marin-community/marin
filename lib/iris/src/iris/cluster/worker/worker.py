@@ -84,6 +84,16 @@ def worker_config_from_proto(
         default_task_image=proto.default_task_image or None,
         resolve_image=resolve_image or (lambda image: image),
         log_prefix=proto.log_prefix or None,
+        poll_interval=(
+            Duration.from_ms(proto.poll_interval.milliseconds)
+            if proto.HasField("poll_interval")
+            else Duration.from_seconds(5.0)
+        ),
+        heartbeat_timeout=(
+            Duration.from_ms(proto.heartbeat_timeout.milliseconds)
+            if proto.HasField("heartbeat_timeout")
+            else Duration.from_seconds(60.0)
+        ),
         accelerator_type=proto.accelerator_type,
         accelerator_variant=proto.accelerator_variant,
         gpu_count=proto.gpu_count,

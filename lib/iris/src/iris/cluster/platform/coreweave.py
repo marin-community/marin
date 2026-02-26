@@ -45,6 +45,8 @@ from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from urllib.parse import urlparse
 
+from google.protobuf.json_format import MessageToDict
+
 from iris.cluster.config import config_to_dict
 from iris.cluster.controller.scaling_group import prepare_slice_config
 from iris.cluster.k8s.kubectl import Kubectl
@@ -95,6 +97,10 @@ def _needs_virtual_host_addressing(endpoint_url: str) -> bool:
 
 def _worker_pod_name(slice_id: str) -> str:
     return f"iris-worker-{slice_id}"
+
+
+def _worker_config_cm_name(slice_id: str) -> str:
+    return f"iris-worker-{slice_id}-wc"
 
 
 def _classify_kubectl_error(stderr: str) -> PlatformError:
@@ -280,10 +286,12 @@ class CoreweaveSliceHandle:
             )
 
     def terminate(self) -> None:
-        """Delete the worker Pod."""
+        """Delete the worker Pod and its per-worker ConfigMap."""
         pod_name = _worker_pod_name(self._slice_id)
+        cm_name = _worker_config_cm_name(self._slice_id)
         logger.info("Deleting worker Pod: %s", pod_name)
         self._kubectl.delete("pod", pod_name, force=True)
+        self._kubectl.delete("configmap", cm_name)
         with self._lock:
             self._state = CloudSliceState.DELETING
 
@@ -666,7 +674,9 @@ class CoreweavePlatform:
             logger.error("Slice %s monitoring failed: %s", handle.slice_id, e)
             try:
                 pod_name = _worker_pod_name(handle.slice_id)
+                cm_name = _worker_config_cm_name(handle.slice_id)
                 self._kubectl.delete("pod", pod_name, force=True)
+                self._kubectl.delete("configmap", cm_name)
             except Exception as cleanup_err:
                 logger.warning(
                     "Cleanup after failure also failed for slice %s: %s",
@@ -723,6 +733,25 @@ class CoreweavePlatform:
             if self._s3_enabled:
                 env_vars.append({"name": "IRIS_S3_SECRET_NAME", "value": _S3_SECRET_NAME})
 
+        # Serialize WorkerConfig proto as JSON and store in a per-worker ConfigMap
+        # so the worker process can load it via --worker-config.
+        wc_cm_name = _worker_config_cm_name(handle.slice_id)
+        worker_config_json = json.dumps(
+            MessageToDict(worker_config, preserving_proto_field_name=True),
+            indent=2,
+        )
+        wc_cm_manifest = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": wc_cm_name,
+                "namespace": self._namespace,
+                "labels": dict(handle.labels),
+            },
+            "data": {"worker_config.json": worker_config_json},
+        }
+        self._kubectl.apply_json(wc_cm_manifest)
+
         container_spec: dict = {
             "name": "iris-worker",
             "image": worker_image,
@@ -732,16 +761,18 @@ class CoreweavePlatform:
                 "-m",
                 "iris.cluster.worker.main",
                 "serve",
-                "--host=0.0.0.0",
-                f"--port={worker_port}",
-                f"--cache-dir={cache_dir}",
-                "--config=/etc/iris/config.json",
-                f"--runtime={runtime}",
+                "--worker-config",
+                "/etc/iris/worker_config.json",
             ],
             "ports": [{"containerPort": worker_port}],
             "env": env_vars,
             "volumeMounts": [
-                {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
+                {
+                    "name": "worker-config",
+                    "mountPath": "/etc/iris/worker_config.json",
+                    "subPath": "worker_config.json",
+                    "readOnly": True,
+                },
                 {"name": "cache", "mountPath": cache_dir},
             ],
             "readinessProbe": {
@@ -797,7 +828,7 @@ class CoreweavePlatform:
                 },
                 "containers": [container_spec],
                 "volumes": [
-                    {"name": "config", "configMap": {"name": "iris-cluster-config"}},
+                    {"name": "worker-config", "configMap": {"name": wc_cm_name}},
                     {"name": "cache", "hostPath": {"path": cache_dir, "type": "DirectoryOrCreate"}},
                 ],
                 "restartPolicy": "Always",
@@ -1100,6 +1131,9 @@ class CoreweavePlatform:
             name = pod.get("metadata", {}).get("name", "")
             if name:
                 self._kubectl.delete("pod", name, force=True)
+                # Clean up per-worker ConfigMap (name derived from pod name convention)
+                cm_name = name + "-wc"
+                self._kubectl.delete("configmap", cm_name)
 
         self.stop_controller(config)
         return target_names
@@ -1154,8 +1188,10 @@ class CoreweavePlatform:
 
         def _reload_one(slice_handle: CoreweaveSliceHandle) -> None:
             pod_name = _worker_pod_name(slice_handle.slice_id)
+            cm_name = _worker_config_cm_name(slice_handle.slice_id)
             logger.info("Reloading worker Pod %s", pod_name)
             self._kubectl.delete("pod", pod_name, force=True)
+            self._kubectl.delete("configmap", cm_name)
 
             sg_name = slice_handle.scale_group
             sg_config = config.scale_groups.get(sg_name)
