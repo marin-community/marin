@@ -2544,3 +2544,31 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / regression**. The static-dispatch Macro-G variant reduced per-trace train custom-call buckets but introduced large conditional/while overhead and regressed end-to-end throughput.
 - Next bold hypothesis:
   - Escalate to **Macro Move E** (V-tiling with shared-K precompute) to reduce recurrent state footprint and improve MXU residency without adding branch-heavy control flow in the train chunk path.
+
+### Iteration 45 - Champion baseline benchmark on `v6e-8` (control)
+
+- Date: 2026-02-26T03:03:44Z
+- Commit: `785edf9f64367c9dee355662150a432204b45045` (champion control benchmark, no kernel changes)
+- Purpose:
+  - Establish a hardware-specific champion baseline on `v6e-8` before further macro-move iterations and infra pivoting.
+
+- Code changes:
+  - None (benchmark-only control run on pinned champion commit).
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster eu-west4-a --tpu-name calvinxu-gdn-v6e --tpu v6e-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_champion_v6e_baseline_recheck_dev --marin-prefix gs://marin-eu-west4 --no-sync`
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_champion_v6e_baseline_recheck_dev_130m_ch128_seg16_-84329f`
+  - Throughput source:
+    - `wandb-summary.json` downloaded from the run artifact (`wandb` API), because summary fields were not yet hydrated in `run.summary` immediately after completion.
+
+- MFU/throughput (v6e control baseline):
+  - `throughput/mfu`: `1.642223`
+  - `throughput/tokens_per_second`: `212502.35`
+  - `throughput/duration`: `0.154201s`
+  - `throughput/device_kind`: `TPU v6 lite`
+
+- Notes:
+  - Keep this as the comparator for subsequent `v6e-8` runs.
+  - Do not compare this value directly against `v5p-8` MFU without normalizing hardware assumptions.
