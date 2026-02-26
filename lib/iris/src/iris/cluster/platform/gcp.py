@@ -34,6 +34,7 @@ import json
 import logging
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Iterator
@@ -50,7 +51,6 @@ from iris.cluster.platform.base import (
     Labels,
     PlatformError,
     QuotaExhaustedError,
-    RemoteWorkerHandle,
     SliceStatus,
     WorkerStatus,
     default_stop_all,
@@ -92,7 +92,6 @@ _ACTIVE_VM_SLICE_STATES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
 _GCE_NAME_MAX_LEN = 63
 _GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 _GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
-_GCE_VM_SLICE_SSH_USER = "iris"
 
 
 def _format_labels(labels: dict[str, str]) -> str:
@@ -614,11 +613,12 @@ class GcpVmSliceHandle:
             if access_configs:
                 external_ip = access_configs[0].get("natIP")
 
+        ssh_user = self._ssh_config.user if self._ssh_config else ""
         remote_exec = GceRemoteExec(
             project_id=self._project_id,
             zone=self._zone,
             vm_name=self._vm_name,
-            ssh_user=_GCE_VM_SLICE_SSH_USER,
+            ssh_user=ssh_user,
         )
         worker = GcpStandaloneWorkerHandle(
             _vm_id=f"{self._slice_id}-worker-0",
@@ -833,7 +833,14 @@ class GcpPlatform:
         config: config_pb2.SliceConfig,
         bootstrap_config: config_pb2.BootstrapConfig | None = None,
     ) -> GcpVmSliceHandle:
-        """Create a single GCE VM that behaves as a one-worker slice."""
+        """Create a single GCE VM that behaves as a one-worker slice.
+
+        When bootstrap_config is provided the bootstrap script is passed as GCE
+        startup-script metadata so the VM self-bootstraps on first boot (and on
+        every subsequent ``gcloud compute instances reset``).  This eliminates
+        the need to SSH into the VM for initial setup and avoids the
+        root-container SSH identity bug.
+        """
         gcp = config.gcp
         slice_id = _build_vm_slice_id(config.name_prefix, Timestamp.now().epoch_ms())
         vm_name = slice_id
@@ -842,6 +849,14 @@ class GcpPlatform:
 
         labels = dict(config.labels)
         labels[self._iris_labels.iris_slice_id] = slice_id
+
+        # Pre-render the bootstrap script so we can bake it into VM metadata.
+        # The VM's internal IP isn't known yet, so we pass a placeholder; the
+        # worker process discovers its own address via the GCE metadata service.
+        startup_script: str | None = None
+        if bootstrap_config:
+            bootstrap_config.docker_image = self.resolve_image(bootstrap_config.docker_image, zone=gcp.zone)
+            startup_script = build_worker_bootstrap_script(bootstrap_config, vm_address="")
 
         cmd = [
             "gcloud",
@@ -859,6 +874,15 @@ class GcpPlatform:
             f"--labels={_format_labels(labels)}",
             "--format=json",
         ]
+
+        # Write the startup-script to a temp file and pass via --metadata-from-file
+        # to avoid shell-escaping issues with large inline scripts.
+        script_file = None
+        if startup_script:
+            script_file = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
+            script_file.write(startup_script)
+            script_file.close()
+            cmd.append(f"--metadata-from-file=startup-script={script_file.name}")
 
         logger.info("Creating VM slice: %s (vm=%s, zone=%s, type=%s)", slice_id, vm_name, gcp.zone, machine_type)
         logger.info("gcloud command: %s", cmd)
@@ -981,10 +1005,18 @@ class GcpPlatform:
         poll_interval: float = 5.0,
         cloud_ready_timeout: float = 600.0,
     ) -> None:
-        """Wait for VM to be RUNNING, then bootstrap the single worker."""
+        """Monitor GCE startup-script bootstrap via serial port output.
+
+        The bootstrap script was baked into VM metadata at creation time, so the
+        VM self-bootstraps on first boot.  This method polls
+        ``gcloud compute instances get-serial-port-output`` for ``[iris-init]``
+        log lines until the script emits ``Bootstrap complete`` or the timeout
+        expires.  No SSH is required.
+        """
         deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
         poll_duration = Duration.from_seconds(poll_interval)
-        worker: RemoteWorkerHandle | None = None
+
+        # Phase 1: wait for VM to reach RUNNING with an IP.
         while not deadline.expired():
             cloud_status = handle._describe_cloud()
             if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
@@ -992,20 +1024,57 @@ class GcpPlatform:
                     f"VM slice {handle.slice_id} entered {cloud_status.state} while waiting for cloud READY"
                 )
             if cloud_status.state == CloudSliceState.READY and cloud_status.workers:
-                worker = cloud_status.workers[0]
-                if worker.internal_address:
+                if cloud_status.workers[0].internal_address:
                     break
             time.sleep(poll_duration.to_seconds())
         else:
             raise PlatformError(f"VM slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
 
-        assert worker is not None
-        if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
-            raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-        script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
-        worker.bootstrap(script)
+        # Phase 2: tail serial port output for [iris-init] progress lines.
+        # GCE serial port output is append-only; we track the byte offset so
+        # each poll returns only new output.
+        serial_offset = 0
+        bootstrap_complete = False
+        bootstrap_failed = False
 
-        logger.info("Bootstrap completed for VM slice %s", handle.slice_id)
+        while not deadline.expired():
+            serial_cmd = [
+                "gcloud",
+                "compute",
+                "instances",
+                "get-serial-port-output",
+                handle._vm_name,
+                f"--project={self._project_id}",
+                f"--zone={handle._zone}",
+                f"--start={serial_offset}",
+            ]
+            result = subprocess.run(serial_cmd, capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout:
+                for line in result.stdout.splitlines():
+                    if "[iris-init]" in line:
+                        logger.info("[%s serial] %s", handle.slice_id, line.strip())
+                    if "Bootstrap complete" in line:
+                        bootstrap_complete = True
+                    if "[iris-init] ERROR" in line:
+                        bootstrap_failed = True
+
+                # Advance offset past what we already read.
+                serial_offset += len(result.stdout)
+
+            if bootstrap_complete:
+                break
+            if bootstrap_failed:
+                raise PlatformError(
+                    f"Startup-script bootstrap failed for VM slice {handle.slice_id} (see serial output above)"
+                )
+
+            time.sleep(poll_duration.to_seconds())
+        else:
+            raise PlatformError(
+                f"VM slice {handle.slice_id} startup-script did not complete within {cloud_ready_timeout}s"
+            )
+
+        logger.info("Bootstrap completed for VM slice %s (via startup-script)", handle.slice_id)
         with handle._bootstrap_lock:
             handle._bootstrap_state = CloudSliceState.READY
 
