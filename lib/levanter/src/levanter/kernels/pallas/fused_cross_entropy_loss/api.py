@@ -58,6 +58,10 @@ def _default_implementations() -> tuple[Implementation, ...]:
             return cast(tuple[Implementation, ...], implementations + ("pallas_gpu",))
         return cast(tuple[Implementation, ...], ("pallas_gpu",) + implementations)
     if backend == "tpu" and "pallas_tpu" in IMPLEMENTATIONS:
+        devices = jax.devices()
+        device_kind = devices[0].device_kind.lower() if devices else ""
+        if "v4" in device_kind:
+            return cast(tuple[Implementation, ...], implementations + ("pallas_tpu",))
         return cast(tuple[Implementation, ...], ("pallas_tpu",) + implementations)
     return implementations
 
