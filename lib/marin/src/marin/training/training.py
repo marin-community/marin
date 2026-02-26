@@ -186,6 +186,18 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     return replace(config, train_config=inner_config)
 
 
+def _normalize_jax_compilation_cache_dir(path: str) -> str:
+    """Normalize cache dir to a form accepted by JAX compilation cache config.
+
+    JAX accepts local filesystem paths and cloud URIs (for example ``gs://``)
+    for ``jax_compilation_cache_dir``, but ``file://`` URIs raise during
+    initialization in our training jobs.
+    """
+    if path.startswith("file://"):
+        return path.removeprefix("file://")
+    return path
+
+
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     Run the Levanter training main function on a Ray cluster.
@@ -220,7 +232,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        env["JAX_COMPILATION_CACHE_DIR"] = marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
+            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        )
         logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
 
     config = _enforce_run_id(config)
@@ -282,7 +296,9 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        env["JAX_COMPILATION_CACHE_DIR"] = marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
+            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        )
         logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
 
     config = _enforce_run_id(config)
