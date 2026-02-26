@@ -27,7 +27,7 @@ from typing import Any, Protocol
 
 import cloudpickle
 import fsspec
-from fray.v2 import ActorConfig, ActorHandle, Client, ResourceConfig
+from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import ExponentialBackoff
 
@@ -834,28 +834,36 @@ class ZephyrWorker:
 
     def _poll_loop(self, coordinator: ActorHandle) -> None:
         """Pure polling loop. Exits on SHUTDOWN signal, coordinator death, or shutdown event."""
-        loop_count = 0
         task_count = 0
         backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
 
-        while not self._shutdown_event.is_set():
-            loop_count += 1
-            if loop_count % 100 == 1:
-                logger.debug("[%s] Poll iteration #%d, tasks completed: %d", self._worker_id, loop_count, task_count)
+        future: ActorFuture | None = None
+        future_start = 0.0
+        warned = False
 
-            future = coordinator.pull_task.remote(self._worker_id)
-            t_start = time.monotonic()
-            while not future.done():
-                if self._shutdown_event.wait(timeout=5.0):
-                    return  # shutdown requested
-                elapsed = time.monotonic() - t_start
-                if elapsed > 30:
-                    logger.warning("[%s] Waiting for coordinator pull_task response (%.0fs)", self._worker_id, elapsed)
+        while not self._shutdown_event.is_set():
+            # Create a pull_task future if we don't have one in flight
+            if future is None:
+                future = coordinator.pull_task.remote(self._worker_id)
+                future_start = time.monotonic()
+                warned = False
+
+            # Poll with a short timeout so we stay responsive to shutdown
+            # without killing the worker (and its heartbeat thread) on slow
+            # deserialization.
             try:
-                response = future.result()
+                response = future.result(timeout=0.5)
+            except TimeoutError:
+                elapsed = time.monotonic() - future_start
+                if elapsed > 30 and not warned:
+                    logger.warning("[%s] Waiting for coordinator pull_task response (%.0fs)", self._worker_id, elapsed)
+                    warned = True
+                continue
             except Exception as e:
                 logger.info("[%s] pull_task failed (coordinator may be dead): %s", self._worker_id, e)
                 break
+
+            future = None  # consumed; next iteration will create a new one
 
             # SHUTDOWN signal - exit cleanly
             if response == "SHUTDOWN":
