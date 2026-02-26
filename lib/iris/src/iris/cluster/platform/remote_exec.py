@@ -132,17 +132,19 @@ class GceRemoteExec:
     project_id: str
     zone: str
     vm_name: str
+    ssh_user: str | None = None
 
     @property
     def address(self) -> str:
         return self.vm_name
 
     def _build_cmd(self, command: str) -> list[str]:
+        target = f"{self.ssh_user}@{self.vm_name}" if self.ssh_user else self.vm_name
         return [
             "gcloud",
             "compute",
             "ssh",
-            self.vm_name,
+            target,
             f"--zone={self.zone}",
             f"--project={self.project_id}",
             "--quiet",
