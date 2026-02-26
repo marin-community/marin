@@ -2630,3 +2630,76 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **infra-blocked attempt**. Could not complete required TPU validation/profile evidence due dev TPU availability loss and Ray worker/job-supervisor termination.
 - Next bold hypothesis:
   - Re-attempt Macro Move F split on a stable TPU allocation, then profile; if infra remains unstable, pivot to Macro Move E only after validation path is reliable.
+
+### Iteration 47 - Macro Move H / recurrent shared-RHS matmul batching (regression, reverted)
+
+- Date: 2026-02-26T23:07:09Z
+- Commit: none (failed attempt)
+- Loop session/local index: `1/10`
+- Starting commit: `854cce7c9e9d4c8b8d6e12d3a1784a846a0811fc`
+- Dominant bottleneck carried in (latest successful baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map`: `78.098 ms` (dominant)
+  - top closed-call hotspots:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call`: `41.324 ms`
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call`: `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move I**: fuse segmented forward prepare + recurrent with tape reuse (`+10-20%`, high vmem/tape-contract risk).
+  2. **Macro Move E**: V-tiling with shared-K precompute (`+15-30%`, high decomposition and backward-aggregation risk).
+  3. **Macro Move H**: shared-RHS matmul batching in train-path kernels (`+10-18%`, medium/high TPU Mosaic lowering risk).
+
+- Selected macro-move category: **H) Batch matmuls by stacking left operands that share the same right operand**.
+- Selected hypothesis: reduce train-path dot count by replacing paired `lhs @ rhs` matmuls with one batched helper in recurrent kernels (`inter/v_prime` path), while keeping exact semantics.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `_mxu_matmul_stack_left2_f32` helper and integrated shared-RHS batching in recurrent train kernels.
+  - First implementation using `jnp.concatenate` hit TPU Mosaic lowering failure (`result/input offset mismatch` in `tpu.concatenate`) during profile compile.
+  - Follow-up implementations using `dynamic_update_slice`/pad/stack rewrites hit unsupported Pallas lowering or constant-capture issues; final helper used `broadcasted_iota` mask construction and passed targeted TPU compile/correctness checks.
+  - Full TPU validation + profile completed for this fixed helper variant, but end-to-end throughput regressed materially.
+  - Reverted all speculative kernel edits after measurement so the tree stays at starting-code behavior.
+
+- Correctness checks:
+  - Targeted TPU probe command:
+    - `uv run scripts/ray/dev_tpu.py --cluster us-east5-a --tpu-name calvinxu-gdn execute -e EQX_ON_ERROR=nan -e WANDB_MODE=offline -- "cd lib/levanter && uv sync --extra=tpu --group test && uv pip install torch --index-url https://download.pytorch.org/whl/cpu && EQX_ON_ERROR=nan WANDB_MODE=offline uv run pytest tests/test_gdn_kernels.py::test_chunk_equals_recurrent_for_random_inputs[16-True] tests/test_gdn_kernels.py::test_flash_chunk_backward_chunk_size_invariance_kernel_level[True] -q"`
+    - Result: `2 passed`.
+  - Required TPU validation command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter1_macroH_stackv2 --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter1_macroH_stackv2_130m_ch128_seg16_20steps-e481d6`
+  - W&B profiler artifact:
+    - `run-gdn_loop_iter1_macroH_stackv2_130m_ch128_seg16_20steps-e481d6-profiler:v0`
+  - Downloaded trace:
+    - `.profiles/wandb/gdn_loop_iter1_macroH_stackv2/plugins/profile/2026_02_26_23_03_49/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, vs carry-in baseline trace):
+  - `shard_map`: `78.098 ms -> 42.041 ms` (`-46.17%`)
+  - `fusion`: `45.618 ms -> 35.039 ms` (`-23.19%`)
+  - `all-gather`: `20.158 ms -> 10.104 ms` (`-49.88%`)
+  - new `while` family: `0.000 ms -> 31.665 ms`
+  - Forward closed-call `shard_map/pallas_call`: `41.324 ms -> 20.661 ms` (`-50.00%`)
+  - Backward closed-call `shard_map/pallas_call`: `26.266 ms -> 16.154 ms` (`-38.50%`)
+
+- MFU/throughput delta (vs carry-in baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.787594 -> 5.318780` (`-8.10%`)
+  - `throughput/tokens_per_second`: `187227.57 -> 172061.52` (`-8.10%`)
+  - `throughput/duration`: `0.175017s -> 0.190444s` (`+8.81%`)
+  - vs active champion (`throughput/mfu=5.748507`): `-7.48%`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call`: `41.324 ms -> 20.661 ms` (`-50.00%`).
+    - Backward closed-call `shard_map/pallas_call`: `26.266 ms -> 16.154 ms` (`-38.50%`).
+    - `throughput/mfu -8.10%`, `throughput/tokens_per_second -8.10%`, `throughput/duration +8.81%`.
+  - Governance:
+    - MFU gain `<3%` (regression) with dominant train hotspot family still `shard_map/custom-call` and added `while` overhead; attempt marked **low-impact/regressive** and speculative kernel edits were reverted.
+
+- Assessment: **failed attempt / regression**. Macro-H recurrent batching reduced train closed-call buckets but did not improve end-to-end training throughput and introduced substantial control-flow overhead.
+- Next bold hypothesis:
+  - Escalate to **Macro Move E** (V-tiling with shared-K precompute) or **Macro Move I** (forward prepare+recurrent fusion with tape reuse) to reduce state footprint/launch structure without introducing branch-heavy helper logic in Pallas kernels.
