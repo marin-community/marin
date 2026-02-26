@@ -201,7 +201,7 @@ message ScaleGroupConfig {
 }
 
 // ============================================================================
-// BOOTSTRAP, TIMEOUT, AND SSH CONFIGURATION
+// BOOTSTRAP AND SSH CONFIGURATION
 // ============================================================================
 
 // Bootstrap configuration passed to VmBootstrap
@@ -282,7 +282,6 @@ message ControllerVmConfig {
 
 message AutoscalerConfig {
   iris.time.Duration evaluation_interval = 1;  // Default: 10s
-  reserved 2;                                    // Was: requesting_timeout (unused — platform has its own boot timeouts)
   iris.time.Duration scale_up_delay = 3;       // Default: 60s
   iris.time.Duration scale_down_delay = 4;     // Default: 300s
   iris.time.Duration startup_grace_period = 5; // Default: 30min — time for new slices to boot and register workers
@@ -290,7 +289,6 @@ message AutoscalerConfig {
 }
 
 message DefaultsConfig {
-  reserved 1;  // Was: TimeoutConfig timeouts (unused — platform has its own boot timeouts)
   SshConfig ssh = 2;
   AutoscalerConfig autoscaler = 3;
   BootstrapConfig bootstrap = 4;
