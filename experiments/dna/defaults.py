@@ -8,7 +8,8 @@ Shared constants, configs, and helper functions for DNA experiments.
 from collections.abc import Sequence
 
 from fray.v2 import ResourceConfig
-from levanter.data.text import DNALmDatasetFormat, TextLmDatasetFormat
+from levanter.data.text import DNABatchTokenizer, DNALmDatasetFormat, TextLmDatasetFormat
+from transformers import AutoTokenizer
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.simple_train_config import SimpleTrainConfig
@@ -89,13 +90,12 @@ def dna_effective_seq_len(base_seq_len: int, tokenizer_name: str) -> int:
     """Compute model context size = base DNA sequence length + special tokens (BOS/EOS).
 
     Loads the tokenizer to detect which special tokens are defined, so the model
-    ``max_seq_len`` stays in sync automatically.
+    ``max_seq_len`` stays in sync automatically. Uses ``DNABatchTokenizer`` as the
+    single source of truth for special-token detection.
     """
-    from transformers import AutoTokenizer
-
     tok = AutoTokenizer.from_pretrained(tokenizer_name)
-    n_special = int(tok.bos_token_id is not None) + int(tok.eos_token_id is not None)
-    return base_seq_len + n_special
+    bt = DNABatchTokenizer(tok)
+    return base_seq_len + bt.num_special_tokens
 
 
 def dna_tokenize_std_v1(name: str, dataset: str) -> ExecutorStep:

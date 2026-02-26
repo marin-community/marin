@@ -124,3 +124,36 @@ def test_metadata_with_special_tokens():
 
     assert meta["has_bos"] is True
     assert meta["has_eos"] is True
+
+
+@_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
+def test_bos_only():
+    """When only BOS is defined, only BOS is prepended (no EOS)."""
+    tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
+    # Patch out EOS so only BOS is active
+    tokenizer.eos_token_id = None
+    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.1)
+
+    assert bt.num_special_tokens == 1
+
+    result = bt([{"seq": "ACgt"}])[0]
+    assert result["input_ids"].shape == (5,)  # BOS + 4 chars
+    assert result["input_ids"][0] == tokenizer.bos_token_id
+    np.testing.assert_allclose(result["loss_weight"], [1.0, 1.0, 1.0, 0.1, 0.1])
+
+
+@_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
+def test_eos_only():
+    """When only EOS is defined, only EOS is appended (no BOS)."""
+    tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
+    eos_id = tokenizer.eos_token_id
+    # Patch out BOS so only EOS is active
+    tokenizer.bos_token_id = None
+    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.1)
+
+    assert bt.num_special_tokens == 1
+
+    result = bt([{"seq": "ACgt"}])[0]
+    assert result["input_ids"].shape == (5,)  # 4 chars + EOS
+    assert result["input_ids"][-1] == eos_id
+    np.testing.assert_allclose(result["loss_weight"], [1.0, 1.0, 0.1, 0.1, 1.0])
