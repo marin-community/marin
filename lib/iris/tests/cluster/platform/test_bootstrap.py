@@ -30,19 +30,18 @@ def _bootstrap_config(**overrides: object) -> config_pb2.BootstrapConfig:
 
 
 def test_build_worker_bootstrap_script_includes_controller_address() -> None:
-    script = build_worker_bootstrap_script(_bootstrap_config(), vm_address="10.0.0.2")
+    script = build_worker_bootstrap_script(_bootstrap_config())
 
     assert "--controller-address 10.0.0.10:10000" in script
     assert "--config /etc/iris/config.yaml" not in script
     assert "gcr.io/test/iris-worker:latest" in script
-    assert "IRIS_VM_ADDRESS=10.0.0.2" in script
 
 
 def test_build_worker_bootstrap_script_configures_ar_auth() -> None:
     ar_image = "us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:latest"
     cfg = _bootstrap_config(docker_image=ar_image)
 
-    script = build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
+    script = build_worker_bootstrap_script(cfg)
 
     assert f'if echo "{ar_image}" | grep -q -- "-docker.pkg.dev/"' in script
     assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
@@ -53,7 +52,7 @@ def test_build_worker_bootstrap_script_requires_controller_address() -> None:
     cfg.controller_address = ""
 
     with pytest.raises(ValueError, match="controller_address"):
-        build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
+        build_worker_bootstrap_script(cfg)
 
 
 def test_build_worker_bootstrap_script_includes_env_vars() -> None:
@@ -62,7 +61,7 @@ def test_build_worker_bootstrap_script_includes_env_vars() -> None:
     cfg.env_vars["IRIS_WORKER_ATTRIBUTES"] = '{"region": "us-west4"}'
     cfg.env_vars["IRIS_SCALE_GROUP"] = "west-group"
 
-    script = build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
+    script = build_worker_bootstrap_script(cfg)
 
     assert "IRIS_WORKER_ATTRIBUTES=" in script
     assert "us-west4" in script

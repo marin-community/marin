@@ -455,8 +455,10 @@ class DefaultEnvironmentProvider:
             attributes.get(PREEMPTIBLE_ATTRIBUTE_KEY),
         )
 
-        # VM address from environment (injected by Platform bootstrap)
-        vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
+        # VM address for autoscaler slice/worker matching. The worker's own
+        # IP (already probed above) matches what the platform stores in
+        # SliceState.vm_addresses, so no external injection is needed.
+        vm_address = ip_address
 
         return cluster_pb2.WorkerMetadata(
             hostname=hostname,

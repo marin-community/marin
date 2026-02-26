@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 import tempfile
@@ -851,12 +852,11 @@ class GcpPlatform:
         labels[self._iris_labels.iris_slice_id] = slice_id
 
         # Pre-render the bootstrap script so we can bake it into VM metadata.
-        # The VM's internal IP isn't known yet, so we pass a placeholder; the
-        # worker process discovers its own address via the GCE metadata service.
+        # The worker discovers its own VM address at runtime via socket probe.
         startup_script: str | None = None
         if bootstrap_config:
             bootstrap_config.docker_image = self.resolve_image(bootstrap_config.docker_image, zone=gcp.zone)
-            startup_script = build_worker_bootstrap_script(bootstrap_config, vm_address="")
+            startup_script = build_worker_bootstrap_script(bootstrap_config)
 
         cmd = [
             "gcloud",
@@ -877,16 +877,21 @@ class GcpPlatform:
 
         # Write the startup-script to a temp file and pass via --metadata-from-file
         # to avoid shell-escaping issues with large inline scripts.
-        script_file = None
+        script_file_path: str | None = None
         if startup_script:
-            script_file = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
-            script_file.write(startup_script)
-            script_file.close()
-            cmd.append(f"--metadata-from-file=startup-script={script_file.name}")
+            f = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
+            f.write(startup_script)
+            f.close()
+            script_file_path = f.name
+            cmd.append(f"--metadata-from-file=startup-script={script_file_path}")
 
         logger.info("Creating VM slice: %s (vm=%s, zone=%s, type=%s)", slice_id, vm_name, gcp.zone, machine_type)
         logger.info("gcloud command: %s", cmd)
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        finally:
+            if script_file_path:
+                os.unlink(script_file_path)
         if result.returncode != 0:
             raise _classify_gcloud_error(result.stderr.strip())
 
@@ -968,7 +973,7 @@ class GcpPlatform:
             try:
                 if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
                     raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-                script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
+                script = build_worker_bootstrap_script(bootstrap_config)
                 worker.bootstrap(script)
             except Exception as e:
                 errors.append((worker.worker_id, e))
