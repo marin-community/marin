@@ -25,6 +25,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -79,7 +80,7 @@ def fray_exec(
     ``fn.__name__`` when not provided.
     """
     from fray.v2 import client as fray_client_mod
-    from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+    from fray.v2.types import Entrypoint, JobRequest, create_environment
 
     if name is None:
         name = getattr(fn, "__name__", None) or DEFAULT_JOB_NAME
@@ -89,7 +90,7 @@ def fray_exec(
         JobRequest(
             name=_sanitize_job_name(name),
             entrypoint=Entrypoint.from_callable(fn),
-            resources=resources or ResourceConfig.with_cpu(),
+            resources=resources,
             environment=create_environment(
                 extras=pip_dependency_groups or [],
                 env_vars=env_vars or {},
@@ -144,6 +145,7 @@ class StepRunner:
 
     def __init__(self, client: fray_client.Client | None = None):
         self.client = client or fray_client.current_client()
+        self._local_pool = ThreadPoolExecutor(max_workers=8)
 
     def run(
         self,
@@ -304,11 +306,17 @@ class StepRunner:
         worker_fn.__qualname__ = step_name
         worker_fn.__name__ = step_name
 
-        return fray_exec(
-            worker_fn,
-            name=step_name,
-            resources=step.resources,
-            env_vars=step.env_vars,
-            pip_dependency_groups=step.pip_dependency_groups,
-            client=self.client,
-        )
+        if step.resources is not None:
+            return fray_exec(
+                worker_fn,
+                name=step_name,
+                resources=step.resources,
+                env_vars=step.env_vars,
+                pip_dependency_groups=step.pip_dependency_groups,
+                client=self.client,
+            )
+        else:
+            from fray.v2.local_backend import LocalJobHandle
+
+            future = self._local_pool.submit(worker_fn)
+            return LocalJobHandle(f"local-{step_name}", future)

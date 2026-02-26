@@ -212,7 +212,7 @@ def resolve_executor_step(
         deps=deps or [],
         override_output_path=output_path,
         fn=resolved_fn,
-        resources=step.resources if step.resources is not None else ResourceConfig.with_cpu(),
+        resources=step.resources,
         env_vars=step.env_vars or {},
         pip_dependency_groups=step.pip_dependency_groups or [],
     )
