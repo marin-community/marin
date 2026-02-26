@@ -129,6 +129,18 @@ class: the protocol should describe the interesting behavior of the class, but
 not betray the implementation details. (You may of course _instantiate_ the
 concrete class for testing.)
 
+## E2E Tests
+
+All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
+Tests use three core fixtures:
+
+- `cluster`: Booted local cluster with `IrisClient` and RPC access
+- `page`: Playwright page pointed at the dashboard (request only when needed)
+- `screenshot`: Capture labeled screenshots to `IRIS_SCREENSHOT_DIR`
+
+Chaos injection is auto-reset between tests. Call `enable_chaos()` directly.
+Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
+
 ## Running Tests
 
 ```bash
@@ -146,4 +158,7 @@ uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
 
 # Dashboard tests with screenshots
 IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_dashboard.py -o "addopts="
+
+# When modifying the dashboard
+uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="
 ```
