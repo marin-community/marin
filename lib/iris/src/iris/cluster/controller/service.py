@@ -1165,16 +1165,17 @@ class ControllerServiceImpl:
                 for task in tasks:
                     job = jobs.get(task.job_id)
                     job_name = job.request.name if job and job.request else str(task.job_id)
+                    current_attempt = task.current_attempt
                     entry = cluster_pb2.Controller.WorkerTaskSummary(
                         task_id=task.task_id.to_wire(),
                         job_name=job_name,
                         state=task.state,
                         error=task.error or "",
                     )
-                    if task.started_at:
-                        entry.started_at.CopyFrom(task.started_at.to_proto())
-                    if task.finished_at:
-                        entry.finished_at.CopyFrom(task.finished_at.to_proto())
+                    if current_attempt and current_attempt.started_at:
+                        entry.started_at.CopyFrom(current_attempt.started_at.to_proto())
+                    if current_attempt and current_attempt.finished_at:
+                        entry.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
                     recent_tasks.append(entry)
 
             resp = cluster_pb2.Controller.GetWorkerStatusResponse(
