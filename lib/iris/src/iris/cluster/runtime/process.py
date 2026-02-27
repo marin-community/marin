@@ -75,6 +75,67 @@ atexit.register(_cleanup_all_runtimes)
 # =============================================================================
 
 
+def _read_proc_memory_mb(pid: int) -> int | None:
+    """Read RSS memory usage for a process, in megabytes.
+
+    On Linux, reads /proc/{pid}/statm directly (no external dependencies).
+    On macOS, shells out to `ps` since /proc is not available.
+    Returns None if the process doesn't exist or the read fails.
+    """
+    if sys.platform == "linux":
+        try:
+            with open(f"/proc/{pid}/statm") as f:
+                pages = int(f.read().split()[1])  # resident set size in pages
+            return (pages * 4096) // (1024 * 1024)
+        except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
+            return None
+    else:
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "rss=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                return None
+            rss_kb = int(result.stdout.strip())
+            return rss_kb // 1024
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            return None
+
+
+def _read_proc_cpu_percent(pid: int, prev_total: float, prev_utime: float) -> tuple[int, float, float]:
+    """Read CPU usage percentage for a process since the last call.
+
+    On Linux, computes delta CPU usage from /proc/{pid}/stat and /proc/stat.
+    On macOS, returns 0 since /proc is not available.
+    Returns (cpu_percent, new_total, new_utime).
+    """
+    if sys.platform != "linux":
+        return (0, prev_total, prev_utime)
+
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().split()
+        # utime (field 14) + stime (field 15), 1-indexed => 0-indexed 13, 14
+        proc_time = int(fields[13]) + int(fields[14])
+
+        with open("/proc/stat") as f:
+            cpu_line = f.readline()
+        total_time = sum(int(x) for x in cpu_line.split()[1:])
+
+        dt = total_time - prev_total
+        dp = proc_time - prev_utime
+        if dt <= 0 or prev_total == 0:
+            return (0, total_time, proc_time)
+
+        cpu_pct = int((dp / dt) * 100)
+        return (cpu_pct, total_time, proc_time)
+    except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
+        return (0, prev_total, prev_utime)
+
+
 def set_pdeathsig_preexec():
     """Use prctl(PR_SET_PDEATHSIG, SIGKILL) to kill subprocess if parent dies.
 
@@ -261,6 +322,67 @@ class ProcessContainer:
             self._exit_code = 137  # 128 + SIGKILL
 
 
+def _read_proc_memory_mb(pid: int) -> int | None:
+    """Read RSS memory in MB for a process.
+
+    On Linux reads /proc/{pid}/statm directly. On macOS shells out to ps.
+    Returns None if the process doesn't exist or the read fails.
+    """
+    if sys.platform == "linux":
+        try:
+            with open(f"/proc/{pid}/statm") as f:
+                parts = f.read().split()
+            resident_pages = int(parts[1])
+            return (resident_pages * os.sysconf("SC_PAGE_SIZE")) // (1024 * 1024)
+        except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
+            return None
+    else:
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "rss=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                return None
+            rss_kb = int(result.stdout.strip())
+            return rss_kb // 1024
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            return None
+
+
+def _read_proc_cpu_percent(
+    pid: int,
+    prev_total: float,
+    prev_utime: float,
+) -> tuple[int, float, float]:
+    """Compute delta CPU usage percentage between calls.
+
+    On Linux reads /proc/{pid}/stat and /proc/stat. On other platforms returns 0.
+    Returns (cpu_percent, new_total, new_utime).
+    """
+    if sys.platform != "linux":
+        return (0, prev_total, prev_utime)
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().split()
+        utime = int(fields[13]) + int(fields[14])
+
+        with open("/proc/stat") as f:
+            cpu_line = f.readline()
+        total = sum(int(x) for x in cpu_line.split()[1:])
+
+        delta_total = total - prev_total
+        delta_utime = utime - prev_utime
+        if delta_total <= 0 or prev_total == 0:
+            return (0, total, utime)
+        pct = int((delta_utime / delta_total) * 100)
+        return (pct, total, utime)
+    except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
+        return (0, prev_total, prev_utime)
+
+
 def _cpu_profile_stub(cpu_format: int) -> bytes:
     """Return a minimal stub CPU profile for when py-spy is unavailable."""
     if cpu_format == cluster_pb2.CpuProfile.FLAMEGRAPH:
@@ -318,6 +440,10 @@ class ProcessContainerHandle:
     runtime: ProcessRuntime
     _container: ProcessContainer | None = field(default=None, repr=False)
     _container_id: str | None = field(default=None, repr=False)
+    _prev_cpu_total: float = field(default=0.0, repr=False)
+    _prev_cpu_utime: float = field(default=0.0, repr=False)
+    _prev_cpu_total: float = field(default=0.0, repr=False)
+    _prev_cpu_utime: float = field(default=0.0, repr=False)
 
     @property
     def container_id(self) -> str | None:
@@ -401,8 +527,21 @@ class ProcessContainerHandle:
         return ProcessLogReader(self._container._logs if self._container else [])
 
     def stats(self) -> ContainerStats:
-        """Get resource usage statistics."""
-        return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
+        """Get resource usage statistics from the underlying subprocess."""
+        if not self._container or not self._container._process or self._container._process.poll() is not None:
+            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+
+        pid = self._container._process.pid
+        memory_mb = _read_proc_memory_mb(pid)
+        cpu_pct, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_percent(
+            pid, self._prev_cpu_total, self._prev_cpu_utime
+        )
+        return ContainerStats(
+            memory_mb=memory_mb or 0,
+            cpu_percent=cpu_pct,
+            process_count=1,
+            available=memory_mb is not None,
+        )
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU) or memray (memory), with fallback stubs."""

@@ -101,6 +101,7 @@ When adding new modules or significant features:
 | Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
 | Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
 | Original Design | docs/fray-zero.md | Rationale and design decisions |
+| Task States | docs/task-states.md | Task state machine, transitions, retry semantics, dashboard display |
 | CoreWeave Integration | (below) | Platform, runtime, and networking for CoreWeave bare metal |
 
 ### CoreWeave Integration

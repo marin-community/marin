@@ -613,7 +613,6 @@ class Worker:
             except Exception as e:
                 logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 
-        # Terminal states
         terminal_states = {
             cluster_pb2.TASK_STATE_SUCCEEDED,
             cluster_pb2.TASK_STATE_FAILED,
@@ -621,8 +620,7 @@ class Worker:
             cluster_pb2.TASK_STATE_WORKER_FAILED,
         }
 
-        running_tasks = []
-        completed_tasks = []
+        tasks: list[cluster_pb2.Controller.WorkerTaskStatus] = []
 
         with self._lock:
             # Reconcile expected_tasks against actual state
@@ -633,46 +631,35 @@ class Worker:
                 task = self._tasks.get(key)
 
                 if task is None:
-                    # Task/attempt not found - report as WORKER_FAILED
-                    completed_tasks.append(
-                        cluster_pb2.Controller.CompletedTaskEntry(
+                    tasks.append(
+                        cluster_pb2.Controller.WorkerTaskStatus(
                             task_id=task_id,
+                            attempt_id=expected_attempt_id,
                             state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                             exit_code=0,
                             error="Task not found on worker",
                             finished_at=Timestamp.now().to_proto(),
-                            attempt_id=expected_attempt_id,
-                        )
-                    )
-                elif task.status in terminal_states:
-                    # Task is terminal - report as completed
-                    task_proto = task.to_proto()
-                    completed_tasks.append(
-                        cluster_pb2.Controller.CompletedTaskEntry(
-                            task_id=task_proto.task_id,
-                            state=task_proto.state,
-                            exit_code=task_proto.exit_code,
-                            error=task_proto.error,
-                            finished_at=task_proto.finished_at,
-                            attempt_id=task_proto.current_attempt_id,
-                            log_directory=task.log_directory,
                         )
                     )
                 else:
-                    # Task is running/building - include in running_tasks.
-                    # Report BUILDING if the thread hasn't transitioned out of PENDING yet
-                    # (the thread starts in PENDING before calling _download_bundle).
+                    task_proto = task.to_proto()
                     reported_state = task.status
                     if reported_state == cluster_pb2.TASK_STATE_PENDING:
                         reported_state = cluster_pb2.TASK_STATE_BUILDING
-                    running_tasks.append(
-                        cluster_pb2.Controller.RunningTaskEntry(
-                            task_id=task_id,
-                            attempt_id=task.to_proto().current_attempt_id,
-                            state=reported_state,
-                            log_directory=task.log_directory,
-                        )
+
+                    entry = cluster_pb2.Controller.WorkerTaskStatus(
+                        task_id=task_id,
+                        attempt_id=task_proto.current_attempt_id,
+                        state=reported_state,
+                        exit_code=task_proto.exit_code,
+                        error=task_proto.error or "",
+                        log_directory=task.log_directory,
                     )
+                    if task.status in terminal_states:
+                        entry.finished_at.CopyFrom(task_proto.finished_at)
+                    if task_proto.resource_usage.ByteSize() > 0:
+                        entry.resource_usage.CopyFrom(task_proto.resource_usage)
+                    tasks.append(entry)
 
             # Kill tasks not in expected_tasks - the controller has decided these
             # tasks should no longer run (e.g., job was killed, task was reassigned)
@@ -700,8 +687,7 @@ class Worker:
         resource_snapshot.total_process_count = total_processes
 
         return cluster_pb2.HeartbeatResponse(
-            running_tasks=running_tasks,
-            completed_tasks=completed_tasks,
+            tasks=tasks,
             resource_snapshot=resource_snapshot,
         )
 

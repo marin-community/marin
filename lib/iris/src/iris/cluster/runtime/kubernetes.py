@@ -398,8 +398,18 @@ class KubernetesContainerHandle:
         return KubernetesLogReader(self.kubectl, self._pod_name, "task")
 
     def stats(self) -> ContainerStats:
-        # This can be implemented via metrics.k8s.io when available.
-        return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+        if not self._pod_name:
+            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+        metrics = self.kubectl.top_pod(self._pod_name)
+        if metrics is None:
+            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+        cpu_mc, mem_bytes = metrics
+        return ContainerStats(
+            memory_mb=mem_bytes // (1024 * 1024),
+            cpu_percent=cpu_mc // 10,
+            process_count=1,
+            available=True,
+        )
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU) or memray (memory)."""

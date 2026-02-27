@@ -1345,8 +1345,8 @@ def test_log_directory_persisted_on_first_running_heartbeat(job_request, worker_
     # This simulates the common steady-state heartbeat where the state hasn't changed but
     # log_directory has not yet been recorded by the controller.
     response = cluster_pb2.HeartbeatResponse(
-        running_tasks=[
-            cluster_pb2.Controller.RunningTaskEntry(
+        tasks=[
+            cluster_pb2.Controller.WorkerTaskStatus(
                 task_id=task.task_id.to_wire(),
                 attempt_id=task.current_attempt_id,
                 state=cluster_pb2.TASK_STATE_RUNNING,
@@ -1372,8 +1372,8 @@ def test_log_directory_persisted_on_completed_task(job_request, worker_metadata)
     assert snapshot is not None
 
     response = cluster_pb2.HeartbeatResponse(
-        completed_tasks=[
-            cluster_pb2.Controller.CompletedTaskEntry(
+        tasks=[
+            cluster_pb2.Controller.WorkerTaskStatus(
                 task_id=task.task_id.to_wire(),
                 attempt_id=task.current_attempt_id,
                 state=cluster_pb2.TASK_STATE_SUCCEEDED,
@@ -1878,8 +1878,8 @@ def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
 
     # Create a mock response with completed task
     response = cluster_pb2.HeartbeatResponse(
-        completed_tasks=[
-            cluster_pb2.Controller.CompletedTaskEntry(
+        tasks=[
+            cluster_pb2.Controller.WorkerTaskStatus(
                 task_id=tasks[0].task_id.to_wire(),
                 state=cluster_pb2.TASK_STATE_SUCCEEDED,
                 exit_code=0,
