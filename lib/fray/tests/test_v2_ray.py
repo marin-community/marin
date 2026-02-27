@@ -311,3 +311,33 @@ def test_actor_options_explicit_max_restarts_overrides_preemptible():
     options = _actor_ray_options(ResourceConfig(preemptible=True), ActorConfig(max_restarts=0))
     assert options["max_restarts"] == 0
     assert "resources" not in options
+
+
+# ---------------------------------------------------------------------------
+# Named actor host (_get_named_actor_host)
+# ---------------------------------------------------------------------------
+
+
+def test_named_actor_host_uses_given_name():
+    from fray.v2.ray_backend.backend import _get_named_actor_host
+
+    cls = _get_named_actor_host("my_workers")
+    # ray.remote() returns an ActorClass wrapper; __ray_metadata__.class_name
+    # is what Ray uses for process titles and the dashboard.
+    assert cls.__ray_metadata__.class_name == "my_workers"
+
+
+def test_named_actor_host_caches_by_name():
+    from fray.v2.ray_backend.backend import _get_named_actor_host
+
+    cls1 = _get_named_actor_host("cached_test")
+    cls2 = _get_named_actor_host("cached_test")
+    assert cls1 is cls2
+
+
+def test_named_actor_host_different_names_differ():
+    from fray.v2.ray_backend.backend import _get_named_actor_host
+
+    cls_a = _get_named_actor_host("group_a")
+    cls_b = _get_named_actor_host("group_b")
+    assert cls_a is not cls_b

@@ -365,16 +365,17 @@ class RayClient:
     ) -> ActorGroup:
         """Create N Ray actors named "{name}-0", "{name}-1", ...
 
-        Uses _RayActorHost to wrap actors, enabling them to access their
+        Uses _RayActorHostBase to wrap actors, enabling them to access their
         own handle via current_actor().handle during __init__.
         """
         ray_options = _actor_ray_options(resources, actor_config)
         # Don't specify runtime_env - let actors inherit from parent job
         # This prevents rebuilding packages that are already available
+        host_cls = _get_named_actor_host(name)
         handles: list[RayActorHandle] = []
         for i in range(count):
             actor_name = f"{name}-{i}"
-            actor_ref = _RayActorHost.options(name=actor_name, **ray_options).remote(
+            actor_ref = host_cls.options(name=actor_name, **ray_options).remote(
                 actor_class, actor_name, i, name, args, kwargs
             )
             handles.append(RayActorHandle(actor_ref))
@@ -417,8 +418,7 @@ def _actor_ray_options(resources: ResourceConfig, actor_config: ActorConfig = Ac
     return options
 
 
-@ray.remote(enable_task_events=False)
-class _RayActorHost:
+class _RayActorHostBase:
     """Wrapper that sets up ActorContext before creating the real actor.
 
     This enables actors to access their own handle via current_actor().handle
@@ -426,6 +426,10 @@ class _RayActorHost:
 
     Uses _proxy_call for method dispatch since Ray doesn't support __getattr__
     for dynamic method lookup on actor handles.
+
+    Not decorated with @ray.remote directly — use _get_named_actor_host() to
+    obtain a Ray remote class whose name matches the wrapped actor class,
+    so that `ps` shows e.g. ``ray::my_workers`` instead of ``ray::_RayActorHost``.
     """
 
     def __init__(
@@ -461,10 +465,26 @@ class _RayActorHost:
         return getattr(self._instance, method_name)(*args, **kwargs)
 
 
+_named_actor_host_cache: dict[str, type] = {}
+
+
+def _get_named_actor_host(actor_class_name: str) -> type:
+    """Return a Ray remote class named after the wrapped actor class.
+
+    Dynamically creates a subclass of _RayActorHostBase whose __name__ is
+    ``actor_class_name``, then wraps it with ``ray.remote``.  Results are
+    cached so each distinct name only triggers one ``ray.remote()`` call.
+    """
+    if actor_class_name not in _named_actor_host_cache:
+        cls = type(actor_class_name, (_RayActorHostBase,), {})
+        _named_actor_host_cache[actor_class_name] = ray.remote(enable_task_events=False)(cls)
+    return _named_actor_host_cache[actor_class_name]
+
+
 class RayActorHandle:
     """Handle to a Ray actor. Supports both direct ref and name-based lazy resolution.
 
-    All fray v2 Ray actors are wrapped by _RayActorHost, so method calls go through
+    All fray v2 Ray actors are wrapped by _RayActorHostBase, so method calls go through
     _proxy_call to reach the wrapped instance.
     """
 
@@ -505,7 +525,7 @@ class RayActorHandle:
 
 
 class RayProxyMethod:
-    """Wraps a method call that goes through _RayActorHost._proxy_call."""
+    """Wraps a method call that goes through _RayActorHostBase._proxy_call."""
 
     def __init__(self, ray_handle: ray.actor.ActorHandle, method_name: str):
         self._ray_handle = ray_handle
