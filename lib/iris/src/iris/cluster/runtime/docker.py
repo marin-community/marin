@@ -36,6 +36,7 @@ from iris.cluster.runtime.profile import (
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
+    ContainerPhase,
     ContainerStats,
     ContainerStatus,
     ImageInfo,
@@ -283,7 +284,7 @@ class DockerContainerHandle:
                     build_logs.extend(new_logs)
                     last_log_time = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp()).add_ms(1)
 
-                if not status.running:
+                if status.phase == ContainerPhase.STOPPED:
                     break
                 time.sleep(0.5)
 
@@ -368,7 +369,7 @@ exec {quoted_cmd}
     def status(self) -> ContainerStatus:
         """Check container status (running, exit code, error)."""
         if not self._run_container_id:
-            return ContainerStatus(running=False, error="Container not started")
+            return ContainerStatus(phase=ContainerPhase.STOPPED, error="Container not started")
         return self._docker_inspect(self._run_container_id)
 
     def log_reader(self) -> DockerLogReader:
@@ -589,7 +590,7 @@ exec {quoted_cmd}
 
         if result.returncode != 0:
             return ContainerStatus(
-                running=False,
+                phase=ContainerPhase.STOPPED,
                 error=f"Container not found: id={container_id}",
                 error_kind=ContainerErrorKind.INFRA_NOT_FOUND,
             )
@@ -602,7 +603,7 @@ exec {quoted_cmd}
             oom_killed = state.get("OOMKilled", False)
 
             return ContainerStatus(
-                running=running,
+                phase=ContainerPhase.RUNNING if running else ContainerPhase.STOPPED,
                 exit_code=exit_code if not running else None,
                 error=error_msg,
                 error_kind=ContainerErrorKind.USER_CODE if error_msg else ContainerErrorKind.NONE,
@@ -610,7 +611,7 @@ exec {quoted_cmd}
             )
         except (json.JSONDecodeError, KeyError) as e:
             return ContainerStatus(
-                running=False,
+                phase=ContainerPhase.STOPPED,
                 error=f"Failed to parse inspect output: {e}",
                 error_kind=ContainerErrorKind.RUNTIME_ERROR,
             )
@@ -661,7 +662,7 @@ exec {quoted_cmd}
     def _docker_kill(self, container_id: str, force: bool = False) -> None:
         """Kill container."""
         status = self._docker_inspect(container_id)
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             return
 
         signal = "SIGKILL" if force else "SIGTERM"

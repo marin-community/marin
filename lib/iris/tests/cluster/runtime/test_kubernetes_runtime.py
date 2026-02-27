@@ -14,7 +14,7 @@ import subprocess
 
 
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind
+from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerPhase
 from iris.rpc import cluster_pb2
 
 
@@ -233,11 +233,11 @@ def test_status_retries_transient_pod_not_found(monkeypatch):
     second = handle.status()
     third = handle.status()
 
-    assert first.running is True
+    assert first.phase == ContainerPhase.PENDING
     assert first.error is None
-    assert second.running is True
+    assert second.phase == ContainerPhase.PENDING
     assert second.error is None
-    assert third.running is True
+    assert third.phase == ContainerPhase.RUNNING
 
 
 def test_status_returns_structured_error_after_persistent_pod_not_found(monkeypatch):
@@ -259,9 +259,9 @@ def test_status_returns_structured_error_after_persistent_pod_not_found(monkeypa
     second = handle.status()
     third = handle.status()
 
-    assert first.running is True
-    assert second.running is True
-    assert third.running is False
+    assert first.phase == ContainerPhase.PENDING
+    assert second.phase == ContainerPhase.PENDING
+    assert third.phase == ContainerPhase.STOPPED
     assert third.error_kind == ContainerErrorKind.INFRA_NOT_FOUND
     assert third.error is not None
     assert "Task pod not found after retry window" in third.error

@@ -22,6 +22,7 @@ from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
     ContainerHandle,
+    ContainerPhase,
     ContainerRuntime,
     RuntimeLogReader,
 )
@@ -624,7 +625,7 @@ class TaskAttempt:
 
             # Check container status
             status = handle.status()
-            if not status.running:
+            if status.phase == ContainerPhase.STOPPED:
                 logger.info(
                     "Container exited for task %s (container_id=%s, exit_code=%s, error=%s)",
                     self.task_id,
