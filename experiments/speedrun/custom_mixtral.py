@@ -18,6 +18,7 @@ from jax import Array, shard_map
 
 import haliax as hax
 import haliax.nn as hnn
+import haliax.state_dict as hstate
 from haliax import Axis, NamedArray
 from haliax._src.scan import ScanCheckpointSpec
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
@@ -433,6 +434,25 @@ class MixtralSparseMoeBlock(eqx.Module):
         router_bias = hax.zeros(config.Experts)
 
         return MixtralSparseMoeBlock(config, gate, experts, router_bias)
+
+    def to_state_dict(self, prefix: str | None = None) -> StateDict:
+        """Torch-compatible serialization.
+
+        `router_bias` is a Levanter-only parameter, so it is intentionally omitted from the exported state dict.
+        """
+        state_dict: StateDict = {}
+        state_dict.update(hstate.to_state_dict(self.gate, prefix=hstate.with_prefix(prefix, "gate")))
+        state_dict.update(hstate.to_state_dict(self.experts, prefix=hstate.with_prefix(prefix, "experts")))
+        return state_dict
+
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> "MixtralSparseMoeBlock":
+        """Torch-compatible deserialization.
+
+        `router_bias` is not present in HF checkpoints; keep the initialized value.
+        """
+        gate = hstate.from_state_dict(self.gate, state_dict, prefix=hstate.with_prefix(prefix, "gate"))
+        experts = hstate.from_state_dict(self.experts, state_dict, prefix=hstate.with_prefix(prefix, "experts"))
+        return eqx.tree_at(lambda m: (m.gate, m.experts), self, (gate, experts))
 
     def _route(
         self,
