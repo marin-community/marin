@@ -385,6 +385,7 @@ def make_speedrun_config(
         train_config=SimpleTrainConfig(
             resources=ResourceConfig.with_tpu(tpu_type=tpu_type),
             train_batch_size=global_batch_size,
+            train_seq_len=seq_len,
             num_train_steps=num_train_steps,
             learning_rate=LEARNING_RATE,
             weight_decay=WEIGHT_DECAY,
