@@ -391,6 +391,11 @@ class CoreweavePlatform:
                     "resources": ["configmaps"],
                     "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
                 },
+                {
+                    "apiGroups": ["metrics.k8s.io"],
+                    "resources": ["pods"],
+                    "verbs": ["get", "list"],
+                },
             ],
         }
 
@@ -1443,6 +1448,13 @@ def _build_controller_deployment(
                 "spec": {
                     "serviceAccountName": "iris-controller",
                     "nodeSelector": node_selector,
+                    "tolerations": [
+                        {
+                            "key": "qos.coreweave.cloud/interruptable",
+                            "operator": "Exists",
+                            "effect": "NoExecute",
+                        },
+                    ],
                     "containers": [
                         {
                             "name": "iris-controller",
