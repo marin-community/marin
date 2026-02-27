@@ -6,6 +6,7 @@
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
 import urllib.error
@@ -18,6 +19,7 @@ from typing import Protocol
 from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.marin_fs import marin_temp_bucket
 from iris.rpc import cluster_pb2, config_pb2
+from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -440,3 +442,72 @@ class DefaultEnvironmentProvider:
         if explicit:
             return explicit
         return marin_temp_bucket(ttl_days=30, prefix="iris-logs")
+
+
+class HostMetricsCollector:
+    """Collects host-level resource metrics using /proc and standard library.
+
+    CPU utilization is computed as a delta between consecutive calls, so the
+    first call always reports 0% CPU. Memory and disk are instantaneous snapshots.
+    Gracefully returns partial data on non-Linux systems (macOS, etc.).
+    """
+
+    def __init__(self, disk_path: str = "/"):
+        self._disk_path = disk_path
+        self._prev_cpu_total = 0
+        self._prev_cpu_idle = 0
+
+    def collect(self) -> cluster_pb2.WorkerResourceSnapshot:
+        snapshot = cluster_pb2.WorkerResourceSnapshot()
+        snapshot.timestamp.CopyFrom(Timestamp.now().to_proto())
+
+        self._collect_memory(snapshot)
+        self._collect_disk(snapshot)
+        self._collect_cpu(snapshot)
+
+        return snapshot
+
+    def _collect_memory(self, snapshot: cluster_pb2.WorkerResourceSnapshot) -> None:
+        try:
+            with open("/proc/meminfo") as f:
+                meminfo: dict[str, int] = {}
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        meminfo[parts[0].rstrip(":")] = int(parts[1]) * 1024
+                snapshot.memory_total_bytes = meminfo.get("MemTotal", 0)
+                available = meminfo.get("MemAvailable", 0)
+                snapshot.memory_used_bytes = snapshot.memory_total_bytes - available
+        except (OSError, ValueError):
+            pass
+
+    def _collect_disk(self, snapshot: cluster_pb2.WorkerResourceSnapshot) -> None:
+        try:
+            usage = shutil.disk_usage(self._disk_path)
+            snapshot.disk_total_bytes = usage.total
+            snapshot.disk_used_bytes = usage.used
+        except OSError:
+            pass
+
+    def _collect_cpu(self, snapshot: cluster_pb2.WorkerResourceSnapshot) -> None:
+        """Compute CPU utilization as a delta between consecutive /proc/stat reads."""
+        try:
+            with open("/proc/stat") as f:
+                line = f.readline()
+                parts = line.split()
+                if parts[0] != "cpu":
+                    return
+                values = [int(v) for v in parts[1:8]]
+                total = sum(values)
+                idle = values[3]
+
+                delta_total = total - self._prev_cpu_total
+                delta_idle = idle - self._prev_cpu_idle
+
+                if delta_total > 0 and self._prev_cpu_total > 0:
+                    snapshot.cpu_percent = max(0, min(100, 100 - int(delta_idle * 100 / delta_total)))
+
+                self._prev_cpu_total = total
+                self._prev_cpu_idle = idle
+        except (OSError, ValueError, IndexError):
+            pass

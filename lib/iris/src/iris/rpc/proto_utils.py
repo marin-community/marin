@@ -7,6 +7,7 @@ from iris.rpc import vm_pb2, cluster_pb2, config_pb2
 
 _VM_STATE = vm_pb2.DESCRIPTOR.enum_types_by_name["VmState"]
 _SCALING_ACTION = vm_pb2.DESCRIPTOR.enum_types_by_name["ScalingAction"]
+_JOB_STATE = cluster_pb2.DESCRIPTOR.enum_types_by_name["JobState"]
 _TASK_STATE = cluster_pb2.DESCRIPTOR.enum_types_by_name["TaskState"]
 _ACCELERATOR_TYPE = config_pb2.DESCRIPTOR.enum_types_by_name["AcceleratorType"]
 
@@ -25,6 +26,14 @@ def scaling_action_name(action: int) -> str:
         return _SCALING_ACTION.values_by_number[action].name
     except KeyError:
         return f"UNKNOWN({action})"
+
+
+def job_state_name(state: int) -> str:
+    """Return enum name like 'JOB_STATE_RUNNING'."""
+    try:
+        return _JOB_STATE.values_by_number[state].name
+    except KeyError:
+        return f"UNKNOWN({state})"
 
 
 def task_state_name(state: int) -> str:

@@ -108,6 +108,27 @@ def test_worker_detail_page(cluster, page, screenshot):
     assert_visible(page, "text=Task History")
 
 
+def test_worker_detail_metric_cards(cluster, page, screenshot):
+    """Worker detail page renders MetricCard tiles for key stats."""
+    job = cluster.submit(_quick, "worker-metric-cards")
+    cluster.wait(job, timeout=30)
+
+    task_status = cluster.task_status(job)
+    worker_id = task_status.worker_id
+    assert worker_id
+
+    dashboard_goto(page, f"{cluster.url}/worker/{worker_id}")
+
+    if not _is_noop_page(page):
+        page.wait_for_function(
+            "() => document.querySelector('.metric-card') !== null",
+            timeout=10000,
+        )
+    # MetricCard components should be present (running tasks, CPU/memory, accelerator)
+    assert_visible(page, "text=Running Tasks")
+    screenshot("worker-detail-metric-cards")
+
+
 def test_autoscaler_tab(cluster, page, screenshot):
     """Autoscaler tab shows scale groups."""
     wait_for_dashboard_ready(page)

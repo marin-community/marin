@@ -670,7 +670,7 @@ class Controller:
             if rule := chaos("controller.heartbeat.iteration"):
                 sleep(rule.delay_seconds)
             expected_tasks.append(
-                cluster_pb2.Controller.RunningTaskEntry(
+                cluster_pb2.Controller.WorkerTaskStatus(
                     task_id=entry.task_id.to_wire(),
                     attempt_id=entry.attempt_id,
                 )

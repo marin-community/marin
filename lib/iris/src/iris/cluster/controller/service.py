@@ -41,7 +41,7 @@ from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
-from iris.rpc.proto_utils import task_state_name
+from iris.rpc.proto_utils import job_state_name, task_state_name
 from iris.time_utils import Timer, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -615,6 +615,8 @@ class ControllerServiceImpl:
                 proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
             if current_attempt and current_attempt.finished_at:
                 proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
+            if task.resource_usage:
+                proto_task_status.resource_usage.CopyFrom(task.resource_usage)
             task_statuses.append(proto_task_status)
 
         return cluster_pb2.Controller.ListTasksResponse(tasks=task_statuses)
@@ -1035,6 +1037,31 @@ class ControllerServiceImpl:
                 actions.append(proto_action)
         return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)
 
+    # --- Cluster Summary ---
+
+    def get_cluster_summary(
+        self,
+        request: cluster_pb2.Controller.GetClusterSummaryRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetClusterSummaryResponse:
+        """Lightweight cluster-wide counters for the dashboard header."""
+        jobs = self._state.list_all_jobs()
+        state_counts: dict[str, int] = {}
+        for job in jobs:
+            name = job_state_name(job.state)
+            key = name.removeprefix("JOB_STATE_").lower()
+            state_counts[key] = state_counts.get(key, 0) + 1
+
+        workers = self._state.list_all_workers()
+        healthy = sum(1 for w in workers if w.healthy)
+
+        return cluster_pb2.Controller.GetClusterSummaryResponse(
+            job_state_counts=state_counts,
+            total_jobs=len(jobs),
+            total_workers=len(workers),
+            healthy_workers=healthy,
+        )
+
     # --- Process Logs ---
 
     def get_process_logs(
@@ -1168,24 +1195,28 @@ class ControllerServiceImpl:
                     logger.debug("Failed to fetch worker logs for %s", identifier, exc_info=True)
 
             # Collect recent task history for this worker
-            recent_tasks: list[cluster_pb2.Controller.WorkerTaskSummary] = []
+            recent_tasks: list[cluster_pb2.TaskStatus] = []
             if worker:
                 tasks = self._state.get_tasks_for_worker(worker.worker_id, limit=50)
-                jobs = self._state.get_jobs_for_tasks(tasks)
                 for task in tasks:
-                    job = jobs.get(task.job_id)
-                    job_name = job.request.name if job and job.request else str(task.job_id)
                     current_attempt = task.current_attempt
-                    entry = cluster_pb2.Controller.WorkerTaskSummary(
+                    entry = cluster_pb2.TaskStatus(
                         task_id=task.task_id.to_wire(),
-                        job_name=job_name,
                         state=task.state,
+                        worker_id=str(task.worker_id) if task.worker_id else "",
+                        exit_code=task.exit_code or 0,
                         error=task.error or "",
+                        current_attempt_id=task.current_attempt_id,
+                        log_directory=(
+                            current_attempt.log_directory if current_attempt and current_attempt.log_directory else ""
+                        ),
                     )
                     if current_attempt and current_attempt.started_at:
                         entry.started_at.CopyFrom(current_attempt.started_at.to_proto())
                     if current_attempt and current_attempt.finished_at:
                         entry.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
+                    if task.resource_usage:
+                        entry.resource_usage.CopyFrom(task.resource_usage)
                     recent_tasks.append(entry)
 
             resp = cluster_pb2.Controller.GetWorkerStatusResponse(
@@ -1198,4 +1229,9 @@ class ControllerServiceImpl:
                 resp.vm.CopyFrom(vm_info)
             if worker_health:
                 resp.worker.CopyFrom(worker_health)
+            if worker:
+                if worker.resource_snapshot:
+                    resp.current_resources.CopyFrom(worker.resource_snapshot)
+                for snapshot in worker.resource_history:
+                    resp.resource_history.append(snapshot)
             return resp
