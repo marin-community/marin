@@ -15,7 +15,7 @@ from iris.time_utils import Duration
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.types import ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2
@@ -48,7 +48,7 @@ def create_mock_container_handle():
     handle.container_id = "container123"
     handle.build = Mock(return_value=[])
     handle.run = Mock()
-    handle.status = Mock(return_value=ContainerStatus(running=False, exit_code=0))
+    handle.status = Mock(return_value=ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=0))
     handle.stop = Mock()
     handle.logs = Mock(return_value=[])
     handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=1, available=True))

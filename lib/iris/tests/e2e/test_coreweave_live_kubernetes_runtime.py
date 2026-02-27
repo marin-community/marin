@@ -19,7 +19,7 @@ import pytest
 from iris.cluster.config import load_config
 import fsspec.core
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.runtime.types import ContainerConfig
+from iris.cluster.runtime.types import ContainerConfig, ContainerPhase
 from iris.rpc import cluster_pb2
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
@@ -35,7 +35,7 @@ def _wait_finished(handle, timeout_seconds: float) -> cluster_pb2.TaskState:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         status = handle.status()
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             return cluster_pb2.TASK_STATE_SUCCEEDED if status.exit_code == 0 else cluster_pb2.TASK_STATE_FAILED
         time.sleep(2.0)
     raise TimeoutError(f"pod {handle.container_id} did not finish in {timeout_seconds}s")
@@ -265,7 +265,7 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
         for line in new_lines:
             collected.append(line.data)
         status = handle.status()
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             # One final read to drain remaining
             for line in reader.read():
                 collected.append(line.data)
