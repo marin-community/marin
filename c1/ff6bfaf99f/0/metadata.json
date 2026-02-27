@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "c1ff6bfaf99f",
+  "session_id": "38c95909-8894-44e3-b745-0e4a870a8ad9",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T21:40:08.228498Z",
+  "branch": "rav-reuse-tw-tcp",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/marin/src/marin/execution/remote.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "213fe07e-ba5e-420d-bd67-82418c4bd5b9",
+  "token_usage": {
+    "input_tokens": 1007,
+    "cache_creation_tokens": 24748,
+    "cache_read_tokens": 434165,
+    "output_tokens": 3738,
+    "api_call_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T21:40:08.169236Z",
+    "agent_lines": 2,
+    "human_added": 4264,
+    "human_modified": 10,
+    "human_removed": 0,
+    "total_committed": 4276,
+    "agent_percentage": 0.04677268475210477
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/38c95909-8894-44e3-b745-0e4a870a8ad9.jsonl"
+}
