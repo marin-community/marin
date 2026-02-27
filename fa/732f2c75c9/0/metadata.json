@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "fa732f2c75c9",
+  "session_id": "80373e1d-df82-43b5-b329-48bc6d3fca34",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T18:34:28.174734586Z",
+  "branch": "kevin/agentic-sft",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "experiments/exp2956_sft_swe_smith_qwen3_8b.py",
+    "scripts/convert_checkpoint_to_hf.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e594e05b9e40",
+  "transcript_identifier_at_start": "fc61d40c-ca65-499a-a5fd-89c3e114f75c",
+  "checkpoint_transcript_start": 921,
+  "transcript_lines_at_start": 921,
+  "token_usage": {
+    "input_tokens": 185,
+    "cache_creation_tokens": 333795,
+    "cache_read_tokens": 11599339,
+    "output_tokens": 41141,
+    "api_call_count": 121
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T18:34:24.634443472Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 47,
+    "total_committed": 47,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-home-kevin-marin-agentic-sft/80373e1d-df82-43b5-b329-48bc6d3fca34.jsonl"
+}
