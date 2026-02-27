@@ -123,8 +123,9 @@ DEFAULT_PROFILER_START_STEP = 3
 DEFAULT_PROFILER_NUM_STEPS = 20
 
 MODEL_OLMOE_1B7B = "olmoe_1b7b"
+MODEL_OLMOE_S = "olmoe_s"
 MODEL_MIXTRAL_8X7B = "mixtral_8x7b"
-MODEL_OPTIONS = (MODEL_OLMOE_1B7B, MODEL_MIXTRAL_8X7B)
+MODEL_OPTIONS = (MODEL_OLMOE_1B7B, MODEL_OLMOE_S, MODEL_MIXTRAL_8X7B)
 DEFAULT_MODEL = MODEL_OLMOE_1B7B
 
 OLMOE_1B7B_REFERENCE_CHECKPOINT = "allenai/OLMoE-1B-7B-0125"
@@ -145,6 +146,28 @@ def _build_olmoe_1b7b_config(seq_len: int) -> MixtralConfig:
         gradient_checkpointing=True,
         scan_layers=True,
         use_gmm=True,
+        reference_checkpoint=OLMOE_1B7B_REFERENCE_CHECKPOINT,
+        tokenizer=OLMOE_1B7B_REFERENCE_CHECKPOINT,
+    )
+
+
+def _build_olmoe_s_config(seq_len: int) -> MixtralConfig:
+    """Small OLMoE-style config (~125M active params) for smoke testing (e.g. v4-8)."""
+    return MixtralConfig(
+        seq_len=seq_len,
+        hidden_dim=384,
+        intermediate_dim=768,
+        num_layers=8,
+        num_heads=6,
+        num_kv_heads=3,
+        n_routed_experts=8,
+        num_experts_per_tok=1,
+        layer_norm_epsilon=1e-5,
+        gradient_checkpointing=True,
+        scan_layers=True,
+        use_gmm=True,
+        # v4 TPUs have a small scoped-vmem budget; keep the fused CE kernel's tiling conservative by default.
+        cross_entropy_block_size=512,
         reference_checkpoint=OLMOE_1B7B_REFERENCE_CHECKPOINT,
         tokenizer=OLMOE_1B7B_REFERENCE_CHECKPOINT,
     )
@@ -175,6 +198,8 @@ def _build_mixtral_8x7b_config(seq_len: int) -> MixtralConfig:
 def build_model_config(*, model: str, seq_len: int) -> MixtralConfig:
     if model == MODEL_OLMOE_1B7B:
         return _build_olmoe_1b7b_config(seq_len)
+    if model == MODEL_OLMOE_S:
+        return _build_olmoe_s_config(seq_len)
     if model == MODEL_MIXTRAL_8X7B:
         return _build_mixtral_8x7b_config(seq_len)
     raise ValueError(f"Unknown model preset {model!r}. Options: {MODEL_OPTIONS}.")
