@@ -323,6 +323,10 @@ class ResourceConfig:
     convenience builders like `with_tpu(..., slice_count=4)` can carry the
     replica count alongside the resource spec.
 
+    `tpu_head_resources` is an optional dict of additional Ray custom resources
+    required on the TPU slice "head" node when acquiring a TPU slice. This can
+    be used to pin jobs to a specific TPU worker/slice by attaching a custom
+    resource to that worker and requiring it here.
     """
 
     cpu: float = 1
@@ -332,6 +336,7 @@ class ResourceConfig:
     preemptible: bool = True
     regions: Sequence[str] | None = None
     replicas: int = 1
+    tpu_head_resources: dict[str, float] = field(default_factory=dict)
 
     def chip_count(self) -> int:
         """Total accelerator chips across all replicas."""

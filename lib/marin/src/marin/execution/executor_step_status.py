@@ -18,6 +18,7 @@ import time
 from dataclasses import asdict, dataclass
 
 import fsspec
+from google.api_core.exceptions import NotFound
 from google.cloud import storage
 
 logger = logging.getLogger("ray")
@@ -145,7 +146,13 @@ class StatusFile:
             blob = bucket.get_blob(blob_path)
             if blob is None:
                 return (0, None)
-            data = json.loads(blob.download_as_string())
+            try:
+                raw = blob.download_as_string()
+            except NotFound:
+                # The lock blob can be deleted or replaced between metadata fetch and read (generation races).
+                # Treat it as missing so callers can retry/acquire under normal precondition rules.
+                return (0, None)
+            data = json.loads(raw)
             return (blob.generation, Lease(**data))
         else:
             import fcntl

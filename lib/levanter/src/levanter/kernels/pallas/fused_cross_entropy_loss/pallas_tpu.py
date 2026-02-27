@@ -6,8 +6,10 @@
 # Levanter's API and add optional logsumexp penalty, logit soft-cap, and
 # external loss weighting support.
 
-from functools import lru_cache, partial
 import math
+import os
+import shlex
+from functools import lru_cache, partial
 from typing import Optional
 
 import jax
@@ -28,11 +30,57 @@ class PallasUnsupportedError(NotImplementedError):
 
 NUM_LANES = 128
 
-# TPU VMEM capacity is fixed-size on current generations (e.g. v5p). The fused CE
-# forward kernel materializes an intermediate `xw_tiled` buffer in VMEM with dtype
-# float32 and shape [b_block_size, v_block_size]. If this buffer cannot fit, the
-# kernel will fail with `RESOURCE_EXHAUSTED` during compilation.
-_TPU_VMEM_BYTES = 64 * 1024 * 1024  # 64MiB
+# The fused CE forward kernel materializes a float32 [b_block_size, v_block_size]
+# tile in VMEM. We keep a conservative per-device default, but honor
+# `--xla_tpu_scoped_vmem_limit_kib` from LIBTPU_INIT_ARGS when present.
+_DEFAULT_SCOPED_VMEM_BYTES = 64 * 1024 * 1024  # 64MiB
+_TPU_V4_SCOPED_VMEM_BYTES = 16 * 1024 * 1024  # 16MiB
+
+
+@lru_cache(maxsize=1)
+def _scoped_vmem_limit_from_env() -> int | None:
+    init_args = os.environ.get("LIBTPU_INIT_ARGS")
+    if not init_args:
+        return None
+    try:
+        tokens = shlex.split(init_args)
+    except ValueError:
+        tokens = init_args.split()
+
+    for i, token in enumerate(tokens):
+        value: str | None = None
+        if token.startswith("--xla_tpu_scoped_vmem_limit_kib="):
+            value = token.split("=", 1)[1]
+        elif token == "--xla_tpu_scoped_vmem_limit_kib" and i + 1 < len(tokens):
+            value = tokens[i + 1]
+
+        if value is None:
+            continue
+        try:
+            kib = int(value)
+        except ValueError:
+            continue
+        if kib > 0:
+            return kib * 1024
+    return None
+
+
+def _default_scoped_vmem_limit_bytes() -> int:
+    if jax.default_backend() != "tpu" or not jax.devices():
+        return _DEFAULT_SCOPED_VMEM_BYTES
+    device_kind = jax.devices()[0].device_kind.lower()
+    if "tpu v4" in device_kind:
+        return _TPU_V4_SCOPED_VMEM_BYTES
+    return _DEFAULT_SCOPED_VMEM_BYTES
+
+
+def _effective_scoped_vmem_limit_bytes() -> tuple[int, str]:
+    from_env = _scoped_vmem_limit_from_env()
+    if from_env is not None:
+        return from_env, "LIBTPU_INIT_ARGS(--xla_tpu_scoped_vmem_limit_kib)"
+    if jax.default_backend() == "tpu" and jax.devices() and "tpu v4" in jax.devices()[0].device_kind.lower():
+        return _TPU_V4_SCOPED_VMEM_BYTES, "TPU v4 default scoped VMEM (16MiB)"
+    return _DEFAULT_SCOPED_VMEM_BYTES, "default scoped VMEM (64MiB)"
 
 
 def _fwd_cost_estimate(
@@ -233,11 +281,12 @@ def _validate_inputs(
     v_block_size = int(block_sizes.v_block_size)
     if b_block_size > 0 and v_block_size > 0:
         scratch_bytes = b_block_size * v_block_size * 4  # float32
-        if scratch_bytes > _TPU_VMEM_BYTES:
+        vmem_limit_bytes, vmem_limit_source = _effective_scoped_vmem_limit_bytes()
+        if scratch_bytes > vmem_limit_bytes:
             raise PallasUnsupportedError(
                 "Pallas fused CE requires a float32 VMEM scratch tile of size "
                 f"[{b_block_size}, {v_block_size}] (~{scratch_bytes / (1024 * 1024):.1f}MiB), which exceeds "
-                f"TPU VMEM capacity ({_TPU_VMEM_BYTES / (1024 * 1024):.1f}MiB). "
+                f"the active scoped VMEM limit ({vmem_limit_bytes / (1024 * 1024):.1f}MiB from {vmem_limit_source}). "
                 "Use a smaller v_block_size (e.g. <= 16384 when b_block_size=1024), or select "
                 "`implementation='xla'`."
             )
