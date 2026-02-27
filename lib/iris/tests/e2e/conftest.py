@@ -31,6 +31,7 @@ from iris.cluster.types import (
     Constraint,
     Entrypoint,
     EnvironmentSpec,
+    ReservationEntry,
     ResourceSpec,
     is_job_finished,
 )
@@ -71,6 +72,7 @@ class TestCluster:
         timeout: Duration | None = None,
         coscheduling: CoschedulingConfig | None = None,
         constraints: list[Constraint] | None = None,
+        reservation: list[ReservationEntry] | None = None,
     ) -> Job:
         """Submit a callable as a job. Returns a Job handle."""
         return self.client.submit(
@@ -86,6 +88,7 @@ class TestCluster:
             timeout=timeout,
             coscheduling=coscheduling,
             constraints=constraints,
+            reservation=reservation,
         )
 
     def status(self, job: Job) -> cluster_pb2.JobStatus:

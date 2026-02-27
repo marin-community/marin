@@ -115,8 +115,8 @@ def prepare_slice_config(
     """Build a SliceConfig for platform.create_slice() from a template.
 
     Copies the template and sets the name_prefix and managed/scale-group labels.
-    The template must already have accelerator_type, accelerator_variant, and
-    num_vms set directly.
+    Propagates accelerator_type, accelerator_variant, num_vms, and resource
+    fields from the parent ScaleGroupConfig when the template doesn't set them.
     """
     labels = Labels(label_prefix)
     config = config_pb2.SliceConfig()
@@ -127,6 +127,11 @@ def prepare_slice_config(
 
     if not config.num_vms and parent_config.HasField("num_vms"):
         config.num_vms = parent_config.num_vms
+
+    if not config.accelerator_type and parent_config.accelerator_type:
+        config.accelerator_type = parent_config.accelerator_type
+    if not config.accelerator_variant and parent_config.accelerator_variant:
+        config.accelerator_variant = parent_config.accelerator_variant
 
     if parent_config.HasField("resources"):
         config.gpu_count = parent_config.resources.gpu_count

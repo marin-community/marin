@@ -1629,6 +1629,208 @@ def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints(
 
 
 # =============================================================================
+# Reservation Demand Deduplication Tests
+# =============================================================================
+
+
+def _make_reservation_job_request(
+    *,
+    task_device: cluster_pb2.DeviceConfig,
+    reservation_devices: list[cluster_pb2.DeviceConfig],
+    replicas: int = 1,
+) -> cluster_pb2.Controller.LaunchJobRequest:
+    """Build a LaunchJobRequest with a reservation and task resources."""
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="reservation-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=task_device,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=replicas,
+    )
+    for dev in reservation_devices:
+        req.reservation.entries.append(
+            cluster_pb2.ReservationEntry(
+                resources=cluster_pb2.ResourceSpecProto(
+                    cpu_millicores=1000,
+                    memory_bytes=1024**3,
+                    device=dev,
+                ),
+            )
+        )
+    return req
+
+
+def _h100_device() -> cluster_pb2.DeviceConfig:
+    return cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="H100", count=8))
+
+
+def _a100_device() -> cluster_pb2.DeviceConfig:
+    return cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=8))
+
+
+def test_demand_dedup_reservation_absorbs_matching_tasks():
+    """2 H100 reservation + 2 H100 tasks = 2 total (reservation only, no task demand)."""
+    state = ControllerState()
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=2,
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+
+    assert len(reservation_demand) == 2
+    assert len(task_demand) == 0
+
+
+def test_demand_dedup_excess_tasks_pass_through():
+    """2 H100 reservation + 5 H100 tasks = 2 reservation + 3 task demand."""
+    state = ControllerState()
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=5,
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+
+    assert len(reservation_demand) == 2
+    assert len(task_demand) == 3
+
+
+def test_demand_dedup_different_device_types_not_absorbed():
+    """2 H100 reservation + 2 A100 tasks = 4 total (no dedup across device types)."""
+    state = ControllerState()
+    # Job tasks request A100, but reservation is for H100
+    req = _make_reservation_job_request(
+        task_device=_a100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=2,
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+
+    assert len(reservation_demand) == 2
+    assert len(task_demand) == 2
+
+
+def test_demand_dedup_mixed_reservation_entries():
+    """2 H100 + 1 A100 reservation + 3 H100 + 2 A100 tasks = 5 total."""
+    state = ControllerState()
+
+    # Two jobs: one with H100 tasks, one with A100 tasks
+    h100_req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device(), _a100_device()],
+        replicas=3,
+    )
+    submit_job(state, "h100-job", h100_req)
+
+    a100_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="a100-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_a100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=2,
+    )
+    submit_job(state, "a100-job", a100_req)
+
+    demand = compute_demand_entries(state)
+    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+
+    # 3 reservation entries always emitted
+    assert len(reservation_demand) == 3
+
+    # h100-job: 3 H100 tasks, budget has 2 H100 -> 1 H100 task demand passes through
+    # a100-job: 2 A100 tasks, no reservation -> 2 A100 task demand passes through
+    # Total task demand: 1 + 2 = 3
+    assert len(task_demand) == 3
+    h100_task_demand = [d for d in task_demand if d.device_variant == "H100"]
+    a100_task_demand = [d for d in task_demand if d.device_variant == "A100"]
+    assert len(h100_task_demand) == 1
+    assert len(a100_task_demand) == 2
+
+
+def test_demand_dedup_no_reservation_passes_all_tasks():
+    """Job without reservation emits all task demand entries (no dedup)."""
+    state = ControllerState()
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="regular-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=3,
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 3
+    for d in demand:
+        assert ":reservation:" not in d.task_ids[0]
+
+
+def test_demand_dedup_only_deduplicates_own_jobs_tasks():
+    """Dedup is per-job: job A's reservation doesn't absorb job B's tasks."""
+    state = ControllerState()
+
+    # Job A: 2 H100 reservation, 2 H100 tasks (fully absorbed by its own reservation)
+    job_a_req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=2,
+    )
+    submit_job(state, "job-a", job_a_req)
+
+    # Job B: no reservation, 2 H100 tasks (must all pass through)
+    job_b_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="job-b",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=2,
+    )
+    submit_job(state, "job-b", job_b_req)
+
+    demand = compute_demand_entries(state)
+    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+
+    # Job A's 2 reservation entries
+    assert len(reservation_demand) == 2
+    # Job A's 2 tasks absorbed, Job B's 2 tasks pass through
+    assert len(task_demand) == 2
+    # All task demand should be from job B
+    for d in task_demand:
+        assert "/job-b/" in d.task_ids[0]
+
+
+# =============================================================================
 # Depth-First Scheduling Priority Tests
 # =============================================================================
 

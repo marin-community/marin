@@ -219,10 +219,41 @@ message JobStatus {
 
   // Diagnostic message for pending/failed jobs (e.g., "No workers match constraint: gpu=true")
   string pending_reason = 31;
+
+  // Reservation status (only set when job has a reservation).
+  ReservationStatus reservation = 32;
 }
 
 // JobAttempt message removed: Jobs don't have attempts - tasks do.
 // Job state is derived from task states, and retry semantics are per-task.
+
+// ============================================================================
+// RESERVATION
+// ============================================================================
+
+// A single reservation entry describing one worker's worth of resources.
+// Duplicate entries to reserve multiple workers of the same type.
+message ReservationEntry {
+  // Resource spec for one worker.
+  ResourceSpecProto resources = 1;
+
+  // Constraints for routing (region, zone, preemptible, etc.).
+  repeated Constraint constraints = 2;
+}
+
+// Reservation configuration attached to a job. The autoscaler pre-provisions
+// capacity and the reserving job is held pending until all entries are fulfilled.
+message ReservationConfig {
+  // Resource entries to reserve. Each entry = one worker.
+  repeated ReservationEntry entries = 1;
+}
+
+// Status of a job's reservation (included in JobStatus).
+message ReservationStatus {
+  int32 total_entries = 1;     // len(entries)
+  int32 fulfilled = 2;         // workers alive with reservation tag
+  bool satisfied = 3;          // fulfilled >= total_entries
+}
 
 // ============================================================================
 // RESOURCE SPECIFICATION
@@ -450,6 +481,10 @@ message Controller {
     // name is in a terminal state. If false (default), finished jobs are automatically
     // removed and replaced with the new submission.
     bool fail_if_exists = 22;
+
+    // Resource reservation. When set, the autoscaler pre-provisions capacity
+    // and the reserving job is held pending until the reservation is satisfied.
+    ReservationConfig reservation = 30;
   }
 
   message LaunchJobResponse {
