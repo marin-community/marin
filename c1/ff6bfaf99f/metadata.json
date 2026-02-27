@@ -3,10 +3,14 @@
   "checkpoint_id": "c1ff6bfaf99f",
   "strategy": "manual-commit",
   "branch": "rav-reuse-tw-tcp",
-  "checkpoints_count": 2,
+  "checkpoints_count": 9,
   "files_touched": [
     "infra/marin-cluster-template.yaml",
-    "lib/marin/src/marin/execution/remote.py"
+    "lib/marin/src/marin/execution/executor.py",
+    "lib/marin/src/marin/execution/remote.py",
+    "lib/marin/src/marin/execution/step_runner.py",
+    "lib/marin/src/marin/execution/step_spec.py",
+    "tests/execution/test_step_runner.py"
   ],
   "sessions": [
     {
@@ -22,13 +26,20 @@
       "context": "/c1/ff6bfaf99f/1/context.md",
       "content_hash": "/c1/ff6bfaf99f/1/content_hash.txt",
       "prompt": "/c1/ff6bfaf99f/1/prompt.txt"
+    },
+    {
+      "metadata": "/c1/ff6bfaf99f/2/metadata.json",
+      "transcript": "/c1/ff6bfaf99f/2/full.jsonl",
+      "context": "/c1/ff6bfaf99f/2/context.md",
+      "content_hash": "/c1/ff6bfaf99f/2/content_hash.txt",
+      "prompt": "/c1/ff6bfaf99f/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1015,
-    "cache_creation_tokens": 49075,
-    "cache_read_tokens": 547823,
-    "output_tokens": 4384,
-    "api_call_count": 15
+    "input_tokens": 1292,
+    "cache_creation_tokens": 306563,
+    "cache_read_tokens": 23212625,
+    "output_tokens": 99467,
+    "api_call_count": 234
   }
 }
