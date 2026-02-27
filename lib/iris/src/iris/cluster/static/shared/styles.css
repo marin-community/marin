@@ -898,6 +898,7 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
 .metric-card__value--success { color: var(--color-success); }
 .metric-card__value--warning { color: var(--color-warning); }
 .metric-card__value--danger { color: var(--color-danger); }
+.metric-card__value--purple { color: var(--color-purple); }
 
 .metric-card__label {
   font-size: 11px;
@@ -993,6 +994,16 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* === Task count badge === */
+.task-count-badge {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 /* === Auto-refresh indicator === */
