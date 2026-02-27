@@ -13,7 +13,6 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
-import ray
 from haliax import Axis
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -55,8 +54,8 @@ class GrugTrainerConfig:
     train_batch_pspec: P = field(default_factory=lambda: P(("data",)))
     data_seed: int | None = None
     log_every: int = 1
-    ema_beta: float | None = None
-    z_loss_weight: float = 0.0
+    ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
+    z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
 
 
 @dataclass(frozen=True)
@@ -300,12 +299,8 @@ def _make_train_step(
 
 
 def run_grug(config: GrugRunConfig) -> None:
+    """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
-    if ray.is_initialized():
-        trainer = dataclasses.replace(
-            trainer,
-            ray=dataclasses.replace(trainer.ray, auto_start_cluster=False, start_workers=False),
-        )
     trainer.initialize()
     levanter.tracker.log_configuration(config)
 
@@ -314,19 +309,20 @@ def run_grug(config: GrugRunConfig) -> None:
         raise ValueError("trainer.id was not initialized")
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
+    watch_config = trainer.watch
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
-        watch_config=trainer.watch if trainer.watch.is_enabled else None,
+        watch_config=watch_config if watch_config.is_enabled else None,
     )
-    watch_config = trainer.watch
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
+    # Build data/model state under the trainer mesh so all arrays are sharded consistently.
     with trainer.use_device_mesh():
         mesh = trainer.device_mesh
         batch_schedule = trainer.batch_schedule
@@ -400,6 +396,7 @@ def run_grug(config: GrugRunConfig) -> None:
         log_every = max(1, config.trainer.log_every)
         iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
 
+        # Optional env-driven tensorstore metric logging for debugging long runs.
         tensorstore_metrics_every = tensorstore_metrics_interval_from_env()
         tensorstore_metrics_logger = None
         if tensorstore_metrics_every is not None:
@@ -450,6 +447,7 @@ def run_grug(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
+        # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
                 batch = next(iterator)

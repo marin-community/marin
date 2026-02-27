@@ -31,6 +31,11 @@ from experiments.tootsie.exp1295_32b import nemotron_mix
 
 @dataclass(frozen=True)
 class GrugBaseLaunchConfig:
+    """Last-mile run config for the base grug template.
+
+    Keep this as the main entry point for day-to-day edits (model/data/optimizer/trainer/eval knobs).
+    """
+
     model: GrugModelConfig
     data: LmDataConfig
     output_path: str
@@ -65,6 +70,7 @@ NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
 
 
 def _resolve_run_id(default_run_id: str) -> str:
+    """Resolve run id and append `FERRY_DATE` when launching from ferry workflows."""
     run_id = os.environ.get("GRUG_RUN_ID", default_run_id)
     ferry_date = os.environ.get("FERRY_DATE")
     if ferry_date:
@@ -73,6 +79,7 @@ def _resolve_run_id(default_run_id: str) -> str:
 
 
 def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
+    # Map template launch knobs onto full Levanter TrainerConfig.
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -118,7 +125,9 @@ grug_base_trial = ExecutorStep(
     config=GrugBaseLaunchConfig(
         model=versioned(GRUG_130M_MODEL),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        # this_output_path() resolves to this step's output root (e.g. gs://.../grug/base-trial-<version>).
         output_path=this_output_path(),
+        # versioned(...) marks fields that participate in Executor step versioning/hash.
         run_id=versioned(RESOLVED_RUN_ID),
         steps=versioned(2_000),
         batch_size=versioned(512),
