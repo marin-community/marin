@@ -162,6 +162,29 @@ def _coreweave_upload_env(config) -> object:
             fsspec.config.conf.pop("s3", None)
 
 
+@pytest.mark.timeout(120)
+def test_kubernetes_runtime_lifecycle(k8s_runtime: KubernetesRuntime):
+    """Full KubernetesRuntime lifecycle: create pod, run, succeed, read logs."""
+    run_id = uuid.uuid4().hex[:8]
+    config = ContainerConfig(
+        image="python:3.11-slim",
+        entrypoint=_entrypoint(["bash", "-c", "echo lifecycle-test-ok && sleep 2"]),
+        env={},
+        workdir="/app",
+        task_id=f"lifecycle-{run_id}",
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=100, memory_bytes=64 * 1024**2),
+    )
+
+    handle = k8s_runtime.create_container(config)
+    handle.run()
+
+    state = _wait_finished(handle, timeout_seconds=60)
+    assert state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+    logs = handle.log_reader().read_all()
+    assert any("lifecycle-test-ok" in line.data for line in logs)
+
+
 @pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(1800)
 def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: KubernetesRuntime):

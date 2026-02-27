@@ -161,4 +161,8 @@ IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_dashboard.p
 
 # When modifying the dashboard
 uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="
+
+# K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)
+uv run pytest lib/iris/tests/e2e/test_coreweave_live_kubernetes_runtime.py \
+  -m slow -k kubernetes -v
 ```

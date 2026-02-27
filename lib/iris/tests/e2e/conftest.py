@@ -13,12 +13,16 @@ autouse fixture.
 """
 
 import os
+import shutil
+import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from iris.chaos import reset_chaos
+from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
@@ -420,3 +424,81 @@ def screenshot(page, request, tmp_path):
         return path
 
     return capture
+
+
+# ---------------------------------------------------------------------------
+# Kubernetes fixtures (for tests against real K8s: kind, k3d, minikube, etc.)
+# ---------------------------------------------------------------------------
+
+KIND_CLUSTER_NAME = "iris-test"
+
+
+def _cluster_reachable() -> bool:
+    try:
+        result = subprocess.run(["kubectl", "cluster-info"], capture_output=True, timeout=10)
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+@pytest.fixture(scope="session")
+def k8s_cluster():
+    """Ensure a K8s cluster is available for the test session.
+
+    If a cluster is already reachable, uses it as-is. Otherwise, creates a
+    kind cluster and tears it down at the end of the session.
+    """
+    if shutil.which("kubectl") is None:
+        pytest.skip("kubectl not in PATH (install: brew install kubectl)")
+
+    if _cluster_reachable():
+        yield
+        return
+
+    if shutil.which("kind") is None:
+        pytest.skip("no reachable K8s cluster and kind not in PATH (install: brew install kind)")
+
+    subprocess.run(
+        ["kind", "create", "cluster", "--name", KIND_CLUSTER_NAME],
+        check=True,
+        timeout=120,
+    )
+    try:
+        yield
+    finally:
+        subprocess.run(
+            ["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME],
+            capture_output=True,
+            timeout=60,
+        )
+
+
+@pytest.fixture
+def k8s_runtime(k8s_cluster):
+    """KubernetesRuntime with an ephemeral namespace, torn down after each test."""
+    namespace = f"iris-test-{uuid.uuid4().hex[:8]}"
+    subprocess.run(
+        ["kubectl", "create", "namespace", namespace],
+        check=True,
+        capture_output=True,
+    )
+    # Wait for K8s to provision the default ServiceAccount in the new namespace.
+    # Without this, pod creation fails with "serviceaccount default not found".
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            ["kubectl", "-n", namespace, "get", "serviceaccount", "default"],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            break
+        time.sleep(0.5)
+    runtime = KubernetesRuntime(namespace=namespace)
+    try:
+        yield runtime
+    finally:
+        runtime.cleanup()
+        subprocess.run(
+            ["kubectl", "delete", "namespace", namespace, "--ignore-not-found"],
+            capture_output=True,
+        )
