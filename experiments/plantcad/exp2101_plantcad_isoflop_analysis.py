@@ -14,6 +14,7 @@
 
 # ruff: noqa: RUF001
 # ruff: noqa: RUF002
+# ruff: noqa: RUF003
 
 import argparse
 import json
@@ -27,7 +28,7 @@ import pandas as pd
 from rich.console import Console
 from rich.table import Table
 from scipy.interpolate import griddata
-from scipy.optimize import minimize, nnls
+from scipy.optimize import brentq, minimize, minimize_scalar, nnls
 import wandb
 
 RUN_VERSION = "1.0"
@@ -39,6 +40,8 @@ DEFAULT_ARCH = "qwen"
 
 # When True, use non-embedding params (from params_nonembed tag) instead of total params
 NON_EMBED_PARAMS_ONLY = False
+
+FLOPS_MODEL_PATH = f"experiments/plantcad/results/v{RESULT_VERSION}/plantcad_flops_by_params_approx.json"
 
 console = Console(record=True)
 logger = logging.getLogger(__name__)
@@ -332,8 +335,74 @@ def summarize_runs(df):
 
 
 @dataclass(frozen=True)
+class FlopsModel:
+    """Model for FLOPs per token as a function of parameter count.
+
+    FLOPs = k(N) * N * D, where k(N) = k_inf + c * N^gamma.
+    At large N, k(N) → k_inf ≈ 6 (recovering C = 6ND).
+    At small N (e.g. 3M), k(N) can be ~18.
+    """
+
+    k_inf: float
+    c: float
+    gamma: float
+
+    # When True, k(N) always returns 6.0 (the C=6ND assumption).
+    use_6nd: bool = False
+
+    # log10(N) bounds for root-finding in N_from_compute.
+    # Default range: 1e4 to 1e15 params.
+    log10_N_lo: float = 4.0  # minimum log10(param count) for root search
+    log10_N_hi: float = 15.0  # maximum log10(param count) for root search
+    boundary_tol: float = 0.01  # error if root is within this of a bound
+
+    @classmethod
+    def from_json(cls, path: str | Path, use_6nd: bool = False) -> "FlopsModel":
+        with open(path) as f:
+            data = json.load(f)
+        return cls(k_inf=data["k_inf"], c=data["c"], gamma=data["gamma"], use_6nd=use_6nd)
+
+    def k(self, N: float) -> float:
+        """FLOPs-per-token multiplier: k(N) = k_inf + c * N^gamma (or 6 if use_6nd)."""
+        if self.use_6nd:
+            return 6.0
+        return self.k_inf + self.c * (N**self.gamma)
+
+    def compute(self, N: float, D: float) -> float:
+        """Compute C = k(N) * N * D."""
+        return self.k(N) * N * D
+
+    def D_from_compute(self, C: float, N: float) -> float:
+        """Solve for D given C and N: D = C / (k(N) * N)."""
+        return C / (self.k(N) * N)
+
+    def N_from_compute(self, C: float, D: float) -> float:
+        """Solve k(N)*N*D = C for N via root-finding in log-space."""
+
+        def residual(log10_N):
+            N = 10**log10_N
+            return self.k(N) * N * D - C
+
+        lo, hi = self.log10_N_lo, self.log10_N_hi
+        root, info = brentq(residual, lo, hi, full_output=True)
+        if not info.converged:
+            raise RuntimeError(
+                f"N_from_compute did not converge after {info.iterations} iterations, C={C:.2e}, D={D:.2e}"
+            )
+        if root <= lo + self.boundary_tol or root >= hi - self.boundary_tol:
+            raise RuntimeError(
+                f"N_from_compute hit boundary: log10(N)={root:.4f}, bounds=[{lo}, {hi}], C={C:.2e}, D={D:.2e}"
+            )
+        return 10**root
+
+
+@dataclass(frozen=True)
 class LossSurface:
-    """Configuration for the loss function L(N, D) = E + A/N^α + B/D^β.
+    """The loss function L(N, D) = E + A/N^α + B/D^β.
+
+    This describes the loss surface shape only — it makes no assumptions
+    about the relationship between compute, N, and D. For compute-optimal
+    allocation, use StandardLossOptimizer or AdvancedLossOptimizer.
 
     Attributes:
         alpha: Parameter scaling exponent
@@ -350,101 +419,96 @@ class LossSurface:
     E: float
 
     @property
-    def a(self) -> float:
-        """N* scaling exponent: a = β/(α+β)."""
-        return self.beta / (self.alpha + self.beta)
-
-    @property
-    def b(self) -> float:
-        """D* scaling exponent: b = α/(α+β)."""
-        return self.alpha / (self.alpha + self.beta)
-
-    @property
     def imbalance_ratio(self) -> float:
         """Ratio of alpha to beta (α/β)."""
         return self.alpha / self.beta
 
+    def loss(self, N: float, D: float) -> float:
+        """Compute loss L(N, D) = E + A/N^α + B/D^β."""
+        return self.E + (self.A / (N**self.alpha)) + (self.B / (D**self.beta))
+
+
+@dataclass(frozen=True)
+class StandardLossOptimizer:
+    """Compute-optimal allocation under the C = 6ND approximation.
+
+    Derives N* and D* analytically from the Chinchilla Approach-2 Lagrangian.
+    This is inaccurate at small N where actual FLOPs/token >> 6N (e.g. ~18N at 3M params).
+    Included for comparison against AdvancedLossOptimizer.
+    """
+
+    surface: LossSurface
+
+    @property
+    def a(self) -> float:
+        """N* scaling exponent under C=6ND: a = β/(α+β)."""
+        return self.surface.beta / (self.surface.alpha + self.surface.beta)
+
+    @property
+    def b(self) -> float:
+        """D* scaling exponent under C=6ND: b = α/(α+β)."""
+        return self.surface.alpha / (self.surface.alpha + self.surface.beta)
+
     @property
     def G(self) -> float:
-        """Scaling constant relating optimal N* and D* to compute.
+        """Scaling constant G = (αA/βB)^(1/(α+β)) under C=6ND.
 
-        From the Chinchilla paper (Appendix A), minimizing L(N,D) subject to
-        C = 6ND yields the optimal allocation where:
+        Relates optimal N* and D* to compute:
             N* = G · (C/6)^a
             D* = (1/G) · (C/6)^b
-
-        The constant G is defined as:
-            G = (αA / βB)^(1/(α+β))
-
-        This ensures N* · D* = C/6 holds exactly.
         """
-        return ((self.alpha * self.A) / (self.beta * self.B)) ** (1.0 / (self.alpha + self.beta))
-
-    @property
-    def a_intercept(self) -> float:
-        """Intercept of log₁₀(N*) vs log₁₀(C) power law.
-
-        From N* = G · (C/6)^a:
-            log₁₀(N*) = a·log₁₀(C) + (log₁₀(G) - a·log₁₀(6))
-
-        The intercept is: log₁₀(G) - a·log₁₀(6)
-        """
-        return np.log10(self.G) - (self.a * np.log10(6))
-
-    @property
-    def b_intercept(self) -> float:
-        """Intercept of log₁₀(D*) vs log₁₀(C) power law.
-
-        From D* = (1/G) · (C/6)^b:
-            log₁₀(D*) = b·log₁₀(C) + (-log₁₀(G) - b·log₁₀(6))
-
-        The intercept is: -log₁₀(G) - b·log₁₀(6)
-        """
-        return -np.log10(self.G) - (self.b * np.log10(6))
+        s = self.surface
+        return ((s.alpha * s.A) / (s.beta * s.B)) ** (1.0 / (s.alpha + s.beta))
 
     def N_opt(self, C: float) -> float:
-        """Compute optimal parameter count N* for a given compute budget.
-
-        From the Chinchilla paper, the optimal allocation is:
-            N* = G · (C/6)^(β/(α+β))
-
-        where G = (αA/βB)^(1/(α+β)) and C = 6ND is the compute approximation.
-
-        Args:
-            C: Compute budget in FLOPs
-
-        Returns:
-            Optimal number of parameters N*
-        """
+        """Optimal N* under C=6ND: N* = G · (C/6)^a."""
         return self.G * ((C / 6) ** self.a)
 
     def D_opt(self, C: float) -> float:
-        """Compute optimal token count D* for a given compute budget.
-
-        From the Chinchilla paper, the optimal allocation is:
-            D* = (1/G) · (C/6)^(α/(α+β))
-
-        where G = (αA/βB)^(1/(α+β)) and C = 6ND is the compute approximation.
-
-        Args:
-            C: Compute budget in FLOPs
-
-        Returns:
-            Optimal number of training tokens D*
-        """
+        """Optimal D* under C=6ND: D* = (1/G) · (C/6)^b."""
         return (1 / self.G) * ((C / 6) ** self.b)
 
-    def loss(self, N: float, D: float) -> float:
-        """Compute loss L(N, D) = E + A/N^α + B/D^β.
 
-        Args:
-            N: Number of parameters
-            D: Number of training tokens
+@dataclass(frozen=True)
+class AdvancedLossOptimizer:
+    """Compute-optimal allocation using fitted k(N) FLOPs model.
 
-        Returns:
-            Loss value for the (N, D) pair
-        """
-        return self.E + (self.A / (N**self.alpha)) + (self.B / (D**self.beta))
+    Replaces the C=6ND assumption with C = k(N)·N·D where
+    k(N) = k∞ + c·N^γ, fitted from actual training FLOPs.
+    N* is found by numerical minimization of L(N, C/(k(N)·N)).
+    """
+
+    surface: LossSurface
+    flops_model: FlopsModel
+
+    # log10(N) bounds for the N* optimization search.
+    # Default range: 1e2 to 1e15 params (wider than root-finding since
+    # we're minimizing, not finding a root — optimizer needs room).
+    log10_N_lo: float = 2.0  # minimum log10(param count) for optimization
+    log10_N_hi: float = 15.0  # maximum log10(param count) for optimization
+    boundary_tol: float = 0.01  # error if optimum is within this of a bound
+
+    def N_opt(self, C: float) -> float:
+        """Optimal N* via numerical minimization of L(N, C/(k(N)·N))."""
+        surface, flops_model = self.surface, self.flops_model
+
+        def objective(log10_N):
+            N = 10**log10_N
+            D = flops_model.D_from_compute(C, N)
+            return surface.loss(N, D)
+
+        lo, hi = self.log10_N_lo, self.log10_N_hi
+        result = minimize_scalar(objective, bounds=(lo, hi), method="bounded")
+        if not result.success:
+            raise RuntimeError(f"N_opt failed to converge: {result.message}, C={C:.2e}")
+        if result.x <= lo + self.boundary_tol or result.x >= hi - self.boundary_tol:
+            raise RuntimeError(f"N_opt hit boundary: log10(N*)={result.x:.4f}, bounds=[{lo}, {hi}], C={C:.2e}")
+        return 10**result.x
+
+    def D_opt(self, C: float) -> float:
+        """Optimal D* = C / (k(N*) · N*)."""
+        N_star = self.N_opt(C)
+        return self.flops_model.D_from_compute(C, N_star)
 
 
 def fit_vpnls(N: np.ndarray, D: np.ndarray, L: np.ndarray) -> LossSurface:
@@ -858,32 +922,48 @@ class _DualColorMarker:
         return [p1, p2]
 
 
-def plot_scaling_extrapolation(surface: LossSurface, budgets: np.ndarray, out_dir: Path):
+def plot_scaling_extrapolation(
+    adv: AdvancedLossOptimizer,
+    std: StandardLossOptimizer,
+    budgets: np.ndarray,
+    out_dir: Path,
+):
     """Creates a figure showing N*, D*, and D*/N* vs compute with extrapolation."""
-    opt_N = np.array([surface.N_opt(C) for C in budgets])
-    opt_D = np.array([surface.D_opt(C) for C in budgets])
+    opt_N = np.array([adv.N_opt(C) for C in budgets])
+    opt_D = np.array([adv.D_opt(C) for C in budgets])
 
     # Extrapolate from min observed to 1e22 FLOPs
     C_ext = np.logspace(np.log10(budgets.min()), 22, 200)
-    N_ext = np.array([surface.N_opt(C) for C in C_ext])
-    D_ext = np.array([surface.D_opt(C) for C in C_ext])
+    N_ext = np.array([adv.N_opt(C) for C in C_ext])
+    D_ext = np.array([adv.D_opt(C) for C in C_ext])
     ratio_ext = D_ext / N_ext
+
+    # Fit empirical power laws through the numerical optima
+    log_C = np.log10(budgets)
+    a_emp, a_int = np.polyfit(log_C, np.log10(opt_N), 1)
+    b_emp, b_int = np.polyfit(log_C, np.log10(opt_D), 1)
 
     _, ax1 = plt.subplots(figsize=(10, 4.8))
     ax1.set_xscale("log")
     ax1.set_yscale("log")
 
-    # Plot fits and data
-    a, b = surface.a, surface.b
-    (ln,) = ax1.plot(C_ext, N_ext, color="tab:blue", lw=2, label=f"N* ∝ C^{a:.3f}")
-    (ld,) = ax1.plot(C_ext, D_ext, color="tab:green", lw=2, label=f"D* ∝ C^{b:.3f}")
+    # Plot the numerically-computed N*/D* curves (using k(N) flops model)
+    (ln,) = ax1.plot(C_ext, N_ext, color="tab:blue", lw=2, label=f"N* = {10**a_int:.2e} \u00b7 C^{a_emp:.3f}")
+    (ld,) = ax1.plot(C_ext, D_ext, color="tab:green", lw=2, label=f"D* = {10**b_int:.2e} \u00b7 C^{b_emp:.3f}")
     ax1.scatter(budgets, opt_N, color="tab:blue", s=80, edgecolors="black", zorder=5, marker="o")
     ax1.scatter(budgets, opt_D, color="tab:green", s=80, edgecolors="black", zorder=5, marker="s")
+
+    # Reference: C=6ND theoretical power laws (dashed, lighter)
+    a_th, b_th = std.a, std.b
+    N_6nd = 10 ** (a_th * np.log10(C_ext) + a_int)
+    D_6nd = 10 ** (b_th * np.log10(C_ext) + b_int)
+    (ln6,) = ax1.plot(C_ext, N_6nd, color="tab:blue", lw=1.5, ls=":", alpha=0.4, label=f"N* (C=6ND, a={a_th:.3f})")
+    (ld6,) = ax1.plot(C_ext, D_6nd, color="tab:green", lw=1.5, ls=":", alpha=0.4, label=f"D* (C=6ND, b={b_th:.3f})")
 
     # Extrapolation shading
     ax1.axvspan(budgets.max(), 1e22, alpha=0.1, color="gray")
     ax1.axvline(budgets.max(), color="gray", ls=":", alpha=0.5)
-    ax1.set_xlabel("Compute Budget C (FLOPs)", fontsize=12)
+    ax1.set_xlabel("Training FLOPs (C)", fontsize=12)
     ax1.set_ylabel("Optimal N* (params) / D* (tokens)", fontsize=12)
     ax1.grid(True, which="major", ls="-", alpha=0.2)
 
@@ -892,22 +972,23 @@ def plot_scaling_extrapolation(surface: LossSurface, budgets: np.ndarray, out_di
     ax2.set_yscale("log")
     ax2.set_zorder(ax1.get_zorder() - 1)
     ax1.patch.set_visible(False)
+    ratio_exp = b_emp - a_emp
     (lr,) = ax2.plot(
         C_ext,
         ratio_ext,
         color="gray",
         lw=2,
         ls="--",
-        label=f"D*/N* (α={surface.alpha:.3f}, β={surface.beta:.3f})",
+        label=f"D*/N* \u221d C^{ratio_exp:.3f} (b\u0302\u2212\u00e2 = {b_emp:.3f}\u2212{a_emp:.3f})",
     )
     ax2.set_ylabel("Optimal Ratio D*/N*", fontsize=12)
 
-    ax1.legend(handles=[ln, ld, lr], loc="upper left")
+    ax1.legend(handles=[ln, ld, ln6, ld6, lr], loc="upper left", fontsize=9)
 
     # Reference annotations
     for C_ref in [1e18, 1e20, 1e22]:
-        N_ref = surface.N_opt(C_ref)
-        D_ref = surface.D_opt(C_ref)
+        N_ref = adv.N_opt(C_ref)
+        D_ref = adv.D_opt(C_ref)
         ax1.axvline(C_ref, color="gray", ls=":", alpha=0.3)
         ax1.annotate(
             f"C={C_ref:.0e}\nN*={N_ref:.1e}\nD*={D_ref:.1e}\nD*/N*={D_ref/N_ref:.0f}",
@@ -930,9 +1011,23 @@ def plot_scaling_extrapolation(surface: LossSurface, budgets: np.ndarray, out_di
     return out_png, out_pdf
 
 
-def print_summary(surface: LossSurface, budgets: np.ndarray, out_files: list) -> None:
+def print_summary(
+    adv: AdvancedLossOptimizer,
+    std: StandardLossOptimizer,
+    budgets: np.ndarray,
+    out_files: list,
+) -> None:
     """Print summary of VPNLS fit using rich tables."""
+    surface = adv.surface
+    flops_model = adv.flops_model
     console.print()
+
+    # Compute empirical exponents from numerical optima
+    opt_N = np.array([adv.N_opt(C) for C in budgets])
+    opt_D = np.array([adv.D_opt(C) for C in budgets])
+    log_C = np.log10(budgets)
+    a_emp, _ = np.polyfit(log_C, np.log10(opt_N), 1)
+    b_emp, _ = np.polyfit(log_C, np.log10(opt_D), 1)
 
     # Fitted parameters table
     param_table = Table(title="VPNLS Fitted Parameters")
@@ -944,32 +1039,52 @@ def print_summary(surface: LossSurface, budgets: np.ndarray, out_files: list) ->
     param_table.add_row("α (param exponent)", f"{surface.alpha:.6f}")
     param_table.add_row("β (data exponent)", f"{surface.beta:.6f}")
     param_table.add_section()
-    param_table.add_row("a = β/(α+β)", f"{surface.a:.6f}")
-    param_table.add_row("b = α/(α+β)", f"{surface.b:.6f}")
-    param_table.add_row("G = (αA/βB)^(1/(α+β))", f"{surface.G:.6f}")
+    param_table.add_row("a = β/(α+β) [C=6ND]", f"{std.a:.6f}")
+    param_table.add_row("b = α/(α+β) [C=6ND]", f"{std.b:.6f}")
+    param_table.add_row("G = (αA/βB)^(1/(α+β)) [C=6ND]", f"{std.G:.6f}")
+    param_table.add_row("â (empirical, k(N))", f"{a_emp:.6f}")
+    param_table.add_row("b̂ (empirical, k(N))", f"{b_emp:.6f}")
     param_table.add_row("α/β (imbalance)", f"{surface.imbalance_ratio:.4f}")
+    param_table.add_section()
+    param_table.add_row("k∞", f"{flops_model.k_inf:.6f}")
+    param_table.add_row("c (FLOPs model)", f"{flops_model.c:.4f}")
+    param_table.add_row("γ (FLOPs model)", f"{flops_model.gamma:.6f}")
     console.print(param_table)
     console.print()
 
-    # Optimal allocations table
-    opt_table = Table(title="Optimal Allocations (from surface)")
-    opt_table.add_column("Budget (C)", justify="right", style="cyan")
-    opt_table.add_column("Opt N*", justify="right")
-    opt_table.add_column("Opt D*", justify="right")
-    opt_table.add_column("D*/N*", justify="right", style="yellow")
+    # Optimal allocations table: k(N) model vs C=6ND
+    opt_table = Table(title="Optimal Allocations: k(N) Model vs C=6ND")
+    opt_table.add_column("Training FLOPs (C)", justify="right", style="cyan")
+    opt_table.add_column("N* k(N)", justify="right")
+    opt_table.add_column("N* 6ND", justify="right", style="dim")
+    opt_table.add_column("D* k(N)", justify="right")
+    opt_table.add_column("D* 6ND", justify="right", style="dim")
+    opt_table.add_column("D*/N* k(N)", justify="right", style="yellow")
+    opt_table.add_column("D*/N* 6ND", justify="right", style="dim")
 
     for C in budgets:
-        N_star = surface.N_opt(C)
-        D_star = surface.D_opt(C)
-        ratio = D_star / N_star if N_star > 0 else np.nan
-        opt_table.add_row(f"{C:.1e}", f"{N_star:.2e}", f"{D_star:.2e}", f"{ratio:.1f}")
+        N_kn = adv.N_opt(C)
+        D_kn = adv.D_opt(C)
+        N_6nd = std.N_opt(C)
+        D_6nd = std.D_opt(C)
+        r_kn = D_kn / N_kn if N_kn > 0 else np.nan
+        r_6nd = D_6nd / N_6nd if N_6nd > 0 else np.nan
+        opt_table.add_row(
+            f"{C:.1e}",
+            f"{N_kn:.2e}",
+            f"{N_6nd:.2e}",
+            f"{D_kn:.2e}",
+            f"{D_6nd:.2e}",
+            f"{r_kn:.1f}",
+            f"{r_6nd:.1f}",
+        )
     console.print(opt_table)
     console.print()
 
     console.print("[bold]Scaling Laws:[/bold]")
-    console.print(f"  N* ∝ C^{surface.a:.4f}  (a = β/(α+β))")
-    console.print(f"  D* ∝ C^{surface.b:.4f}  (b = α/(α+β))")
-    console.print(f"  G = {surface.G:.4f}")
+    console.print(f"  C=6ND (theoretical):  N* ∝ C^{std.a:.4f}   D* ∝ C^{std.b:.4f}")
+    console.print(f"  k(N) model (empirical): N* ∝ C^{a_emp:.4f}   D* ∝ C^{b_emp:.4f}")
+    console.print(f"  FLOPs model: k(N) = {flops_model.k_inf:.4f} + {flops_model.c:.1f} · N^{flops_model.gamma:.4f}")
     console.print()
 
     for f in out_files:
@@ -982,7 +1097,7 @@ def print_summary(surface: LossSurface, budgets: np.ndarray, out_files: list) ->
 # ----------------------------------------------------------
 
 
-def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH) -> None:
+def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH, use_6nd: bool = False) -> None:
     """Run isoflop scaling law fitting and visualization on epoch=1 data for the given architecture."""
     df_fit = filter_to_finished_runs(df)
 
@@ -992,13 +1107,29 @@ def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH)
     if df_fit.empty:
         raise ValueError("No valid data found for isoflop fitting")
 
+    # Load FLOPs model
+    flops_model = FlopsModel.from_json(FLOPS_MODEL_PATH, use_6nd=use_6nd)
+    if use_6nd:
+        logger.info("Using C=6ND assumption (k(N) = 6 everywhere)")
+    else:
+        logger.info(
+            f"Loaded FLOPs model: k(N) = {flops_model.k_inf:.4f} + {flops_model.c:.1f} * N^{flops_model.gamma:.4f}"
+        )
+
     # Fit 5-parameter surface via VPNLS
     N_all = df_fit["params"].values
     D_all = df_fit["tokens"].values
     L_all = df_fit["eval_loss"].values
     surface = fit_vpnls(N_all, D_all, L_all)
 
-    budgets = np.sort(df_fit["flops_budget"].unique())
+    # Build optimizers
+    adv = AdvancedLossOptimizer(surface=surface, flops_model=flops_model)
+    std = StandardLossOptimizer(surface=surface)
+
+    # flops_budget from wandb uses lm_flops_per_token (forward-only).
+    # Actual training FLOPs = 3 × flops_budget.
+    budgets_fwd = np.sort(df_fit["flops_budget"].unique())
+    budgets = budgets_fwd * 3
 
     # --- 2x2 isoflop figure ---
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), gridspec_kw={"height_ratios": [1.5, 1]})
@@ -1008,24 +1139,25 @@ def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH)
     cmap_D = plt.cm.Greens(np.linspace(0.4, 1.0, len(budgets)))
 
     # Top row: Loss vs N and Loss vs D per budget, with surface fit lines
-    for idx, budget in enumerate(budgets):
-        group = df_fit[df_fit["flops_budget"] == budget]
+    for idx, (budget_fwd, budget) in enumerate(zip(budgets_fwd, budgets, strict=True)):
+        group = df_fit[df_fit["flops_budget"] == budget_fwd]
+        assert not group.empty, f"No runs found for flops_budget={budget_fwd:.2e}"
         color_n, color_d = cmap_N[idx], cmap_D[idx]
 
         # Scatter data
         ax_N.scatter(group["params"], group["eval_loss"], color=color_n, alpha=0.7, s=20)
         ax_D.scatter(group["tokens"], group["eval_loss"], color=color_d, alpha=0.7, s=20)
 
-        # Surface fit curves: L(N, C/(6N)) for varying N
+        # Surface fit curves: L(N, C/(k(N)*N)) for varying N
         N_range = np.logspace(np.log10(group["params"].min()), np.log10(group["params"].max()), 100)
-        D_from_N = budget / (6 * N_range)
-        L_pred = np.array([surface.loss(n, d) for n, d in zip(N_range, D_from_N)])
+        D_from_N = np.array([flops_model.D_from_compute(budget, N) for N in N_range])
+        L_pred = np.array([surface.loss(n, d) for n, d in zip(N_range, D_from_N, strict=True)])
         ax_N.plot(N_range, L_pred, color=color_n, linestyle="--", alpha=0.5)
 
-        # Surface fit curves: L(C/(6D), D) for varying D
+        # Surface fit curves: L(N_from_C(C,D), D) for varying D
         D_range = np.logspace(np.log10(group["tokens"].min()), np.log10(group["tokens"].max()), 100)
-        N_from_D = budget / (6 * D_range)
-        L_pred_D = np.array([surface.loss(n, d) for n, d in zip(N_from_D, D_range)])
+        N_from_D = np.array([flops_model.N_from_compute(budget, D) for D in D_range])
+        L_pred_D = np.array([surface.loss(n, d) for n, d in zip(N_from_D, D_range, strict=True)])
         ax_D.plot(D_range, L_pred_D, color=color_d, linestyle="--", alpha=0.5)
 
     for ax, xlabel, title in [(ax_N, "Parameters (N)", "Loss vs Parameters"), (ax_D, "Tokens (D)", "Loss vs Tokens")]:
@@ -1035,29 +1167,53 @@ def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH)
         ax.set_title(title)
         ax.grid(True, which="both", ls="-", alpha=0.2, axis="x")
 
-    # Bottom row: N_opt and D_opt vs C (scatter only)
-    opt_N = np.array([surface.N_opt(C) for C in budgets])
-    opt_D = np.array([surface.D_opt(C) for C in budgets])
+    # Bottom row: N_opt and D_opt vs C (scatter + fit lines)
+    opt_N = np.array([adv.N_opt(C) for C in budgets])
+    opt_D = np.array([adv.D_opt(C) for C in budgets])
+
+    # Fit empirical power laws in log-log: log10(Y) = slope * log10(C) + intercept
+    log_C = np.log10(budgets)
+    a_emp, a_int = np.polyfit(log_C, np.log10(opt_N), 1)
+    b_emp, b_int = np.polyfit(log_C, np.log10(opt_D), 1)
+    C_line = np.logspace(log_C.min() - 0.2, log_C.max() + 0.2, 50)
 
     ax_Nopt.scatter(budgets, opt_N, color=cmap_N, marker="s", s=100, edgecolors="black", zorder=5)
+    ax_Nopt.plot(
+        C_line,
+        10 ** (a_emp * np.log10(C_line) + a_int),
+        color="gray",
+        ls="--",
+        lw=1.5,
+        label=f"â={a_emp:.3f} (k(N)),  a={std.a:.3f} (C=6ND)",
+    )
     ax_Nopt.set_xscale("log")
     ax_Nopt.set_yscale("log")
-    ax_Nopt.set_xlabel("Compute Budget (FLOPs)")
+    ax_Nopt.set_xlabel("Training FLOPs")
     ax_Nopt.set_ylabel("Optimal Parameters (N*)")
-    ax_Nopt.set_title(f"N* vs Compute (a={surface.a:.3f})")
+    ax_Nopt.set_title("N* = argmin$_N$ L(N, C/k(N)N)", fontsize=10)
+    ax_Nopt.legend(fontsize=7)
     ax_Nopt.grid(True, which="both", ls="-", alpha=0.2, axis="x")
 
     ax_Dopt.scatter(budgets, opt_D, color=cmap_D, marker="s", s=100, edgecolors="black", zorder=5)
+    ax_Dopt.plot(
+        C_line,
+        10 ** (b_emp * np.log10(C_line) + b_int),
+        color="gray",
+        ls="--",
+        lw=1.5,
+        label=f"b̂={b_emp:.3f} (k(N)),  b={std.b:.3f} (C=6ND)",
+    )
     ax_Dopt.set_xscale("log")
     ax_Dopt.set_yscale("log")
-    ax_Dopt.set_xlabel("Compute Budget (FLOPs)")
+    ax_Dopt.set_xlabel("Training FLOPs")
     ax_Dopt.set_ylabel("Optimal Tokens (D*)")
-    ax_Dopt.set_title(f"D* vs Compute (b={surface.b:.3f})")
+    ax_Dopt.set_title("D* = C / k(N*)N*", fontsize=10)
+    ax_Dopt.legend(fontsize=7)
     ax_Dopt.grid(True, which="both", ls="-", alpha=0.2, axis="x")
 
     # Global legend with dual-color markers
     legend_handles = []
-    for idx, budget in enumerate(budgets):
+    for _idx, budget in enumerate(budgets):
         legend_handles.append(plt.Rectangle((0, 0), 1, 1, color="none", label=f"{budget:.1e}"))
 
     handler_map = {legend_handles[i]: _DualColorMarker(cmap_N[i], cmap_D[i]) for i in range(len(legend_handles))}
@@ -1065,7 +1221,7 @@ def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH)
     leg = fig.legend(
         handles=legend_handles,
         handler_map=handler_map,
-        title="Compute Budget [$C$]\n(FLOPs)",
+        title="Training FLOPs [$C$]",
         loc="center left",
         bbox_to_anchor=(0.86, 0.5),
         borderaxespad=0.5,
@@ -1075,15 +1231,20 @@ def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH)
     )
     leg.get_title().set_multialignment("center")
 
-    # Subtitle with all 5 params
-    subtitle = (
-        f"E={surface.E:.4f}  A={surface.A:.4f}  B={surface.B:.4f}  "
-        f"\u03b1={surface.alpha:.4f}  \u03b2={surface.beta:.4f}  |  "
-        f"a={surface.a:.4f}  b={surface.b:.4f}  G={surface.G:.4f}"
+    # Two-line subtitle: surface params on line 1, flops model + empirical exponents on line 2
+    subtitle_l1 = (
+        rf"$L(N,D) = {surface.E:.4f} + {surface.A:.4f}\,/\,N^{{{surface.alpha:.4f}}}"
+        rf" + {surface.B:.4f}\,/\,D^{{{surface.beta:.4f}}}$"
     )
-    plt.suptitle("IsoFLOP Analysis: VPNLS 5-Parameter Surface Fit", y=0.94, fontsize=16)
-    plt.figtext(0.5, 0.88, subtitle, ha="center", fontsize=10)
-    plt.tight_layout(rect=[0, 0, 0.85, 0.91])
+    subtitle_l2 = (
+        rf"$k(N) = {flops_model.k_inf:.2f} + {flops_model.c:.0f}\cdot N^{{{flops_model.gamma:.3f}}}$"
+        rf"$\quad|\quad\hat{{a}}={a_emp:.4f}\quad\hat{{b}}={b_emp:.4f}$"
+    )
+    xcen = 0.42  # visual center accounting for right-side legend
+    plt.suptitle("IsoFLOP Scaling Analysis (VPNLS + k(N) FLOPs Model)", x=xcen, y=0.96, fontsize=14)
+    plt.figtext(xcen, 0.91, subtitle_l1, ha="center", fontsize=9)
+    plt.figtext(xcen, 0.88, subtitle_l2, ha="center", fontsize=9)
+    plt.tight_layout(rect=[0, 0, 0.85, 0.88])
 
     out_dir = Path(RESULT_PATH)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1094,11 +1255,11 @@ def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH)
     plt.close()
 
     # Create extrapolation figure
-    extrap_png, extrap_pdf = plot_scaling_extrapolation(surface, budgets, out_dir)
+    extrap_png, extrap_pdf = plot_scaling_extrapolation(adv, std, budgets, out_dir)
 
     # Print summary
     out_files = [out_png, out_pdf, extrap_png, extrap_pdf]
-    print_summary(surface, budgets, out_files)
+    print_summary(adv, std, budgets, out_files)
 
 
 # ------------------------------------------------------------
@@ -1119,6 +1280,11 @@ if __name__ == "__main__":
         "--show-wandb-runs",
         action="store_true",
         help="Log detailed info for first 2 W&B runs",
+    )
+    parser.add_argument(
+        "--use-6nd",
+        action="store_true",
+        help="Use C=6ND assumption instead of fitted k(N) FLOPs model",
     )
     args = parser.parse_args()
 
@@ -1145,7 +1311,7 @@ if __name__ == "__main__":
     visualize_loss_by_param_count(df)
     visualize_loss_by_epochs(df)
     visualize_loss_by_param_and_epoch_count(df)
-    run_isoflop_fit_analysis(df)
+    run_isoflop_fit_analysis(df, use_6nd=args.use_6nd)
 
     # Append rich console output to log file
     with open(log_path, "a") as f:
