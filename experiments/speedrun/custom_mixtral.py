@@ -32,6 +32,7 @@ from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddin
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.moe_load_balance import equilibrium_bias_delta_from_topk
 from levanter.models.mistral import MistralConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -145,6 +146,15 @@ class CustomMixtralConfig(MistralConfig):
     alf_lb_use_sign: bool = True
     alf_lb_center_bias: bool = True
 
+    # Quantile-balancing (Optimal Allocation for Equilibrium) bias-only update proxy.
+    #
+    # We reuse `router_bias` and build a stop-gradient bias loss from the quantile update direction:
+    #   b <- b - Quantile(r_ij, q_j)
+    # where residuals/quantiles are computed from adjusted logits and current top-k routing.
+    equilibrium_lb_loss_scale: float = 0.0
+    equilibrium_lb_center_bias: bool = True
+    equilibrium_lb_unit_capacity: float = 1.0
+
     # Use dense (single-expert) routing for the first N transformer layers.
     dense_first_n_layers: int = 0
 
@@ -180,6 +190,8 @@ class CustomMixtralConfig(MistralConfig):
         assert (
             self.num_experts_per_tok <= self.n_routed_experts
         ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
+        if self.alf_lb_loss_scale > 0 and self.equilibrium_lb_loss_scale > 0:
+            raise ValueError("alf_lb_loss_scale and equilibrium_lb_loss_scale are mutually exclusive.")
 
     def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
         return HFCheckpointConverter(
@@ -551,10 +563,15 @@ class MixtralSparseMoeBlock(eqx.Module):
             router_logits = router_logits.astype(jnp.float32)
         router_probs = hnn.softmax(router_logits, axis=Experts)
 
+        alf_scale = float(getattr(self.config, "alf_lb_loss_scale", 0.0))
+        equilibrium_scale = float(getattr(self.config, "equilibrium_lb_loss_scale", 0.0))
         selection_logits = router_logits
-        if getattr(self.config, "alf_lb_loss_scale", 0.0) > 0:
+        if alf_scale > 0 or equilibrium_scale > 0:
             bias = self.router_bias
-            if getattr(self.config, "alf_lb_center_bias", True):
+            center_bias = getattr(self.config, "alf_lb_center_bias", True)
+            if equilibrium_scale > 0:
+                center_bias = getattr(self.config, "equilibrium_lb_center_bias", center_bias)
+            if center_bias:
                 bias = bias - hax.mean(bias, axis=Experts)
             if router_fp32 and bias.array.dtype != jnp.float32:
                 bias = bias.astype(jnp.float32)
@@ -567,17 +584,34 @@ class MixtralSparseMoeBlock(eqx.Module):
             TopExperts,
             topk_then_softmax=getattr(self.config, "router_topk_then_softmax", False),
         )
-        if router_fp32 and topk_weights.array.dtype != x_flat.array.dtype:
-            # Keep routing decisions in fp32, but cast weights back to the model activation dtype to
-            # avoid upcasting the expert weighted-sum (bandwidth/memory).
-            topk_weights = topk_weights.astype(x_flat.array.dtype)
-
         if force_dense:
             idx_arr = jnp.zeros_like(topk_idx.array)
             w_arr = jnp.zeros_like(topk_weights.array)
             w_arr = w_arr.at[:, 0].set(1.0)
             topk_weights = hax.named(w_arr, (Token, TopExperts))
             topk_idx = hax.named(idx_arr, (Token, TopExperts))
+
+        equilibrium_delta = None
+        if equilibrium_scale > 0 and not force_dense:
+            delta_arr, weighted_load_arr, target_load_arr, quantile_prob_arr = equilibrium_bias_delta_from_topk(
+                selection_logits.array,
+                topk_idx.array,
+                topk_weights.array,
+                unit_capacity=float(getattr(self.config, "equilibrium_lb_unit_capacity", 1.0)),
+            )
+            equilibrium_delta = hax.named(jax.lax.stop_gradient(delta_arr), Experts)
+            weighted_load = hax.named(weighted_load_arr, Experts)
+            quantile_prob = hax.named(quantile_prob_arr, Experts)
+            target_load = hax.named(jnp.full((Experts.size,), target_load_arr, dtype=weighted_load_arr.dtype), Experts)
+        else:
+            weighted_load = None
+            quantile_prob = None
+            target_load = None
+
+        if router_fp32 and topk_weights.array.dtype != x_flat.array.dtype:
+            # Keep routing decisions in fp32, but cast weights back to the model activation dtype to
+            # avoid upcasting the expert weighted-sum (bandwidth/memory).
+            topk_weights = topk_weights.astype(x_flat.array.dtype)
 
         topk_idx_flat = hax.flatten_axes(topk_idx, old_axes=[Token, TopExperts], new_axis="token_repeat")
         TokenRepeat = topk_idx_flat.resolve_axis("token_repeat")
@@ -633,7 +667,7 @@ class MixtralSparseMoeBlock(eqx.Module):
         extras = {
             "expert_loads": expert_loads,
         }
-        if self.config.lbl_coef is not None and getattr(self.config, "alf_lb_loss_scale", 0.0) <= 0:
+        if self.config.lbl_coef is not None and alf_scale <= 0 and equilibrium_scale <= 0:
             # Shapes:
             # - expert_loads: [Experts] where Experts.size == n_routed_experts
             # - router_probs: [Token, Experts] where Token is the flattened token axis (T = B*S)
@@ -648,7 +682,6 @@ class MixtralSparseMoeBlock(eqx.Module):
                 axis=Token,
             )
 
-        alf_scale = float(getattr(self.config, "alf_lb_loss_scale", 0.0))
         if alf_scale > 0:
             target = TokenRepeat.size / Experts.size
             delta_arr = group_sizes.array - target
@@ -657,6 +690,15 @@ class MixtralSparseMoeBlock(eqx.Module):
             delta_arr = jax.lax.stop_gradient(delta_arr)
             delta = hax.named(delta_arr, Experts)
             extras["alf_lb_bias_loss"] = alf_scale * hax.sum(self.router_bias * delta, axis=Experts)
+        if equilibrium_scale > 0 and equilibrium_delta is not None:
+            extras["equilibrium_lb_bias_loss"] = equilibrium_scale * hax.sum(
+                self.router_bias * equilibrium_delta,
+                axis=Experts,
+            )
+            # Helpful diagnostics for smoke tests.
+            extras["equilibrium_lb_weighted_load"] = weighted_load
+            extras["equilibrium_lb_target_load"] = target_load
+            extras["equilibrium_lb_quantile_prob"] = quantile_prob
 
         return hax.unflatten_axis(out, axis=Token, new_axes=squash_axes), extras  # [Batch, Pos, Embed]
 
@@ -755,6 +797,8 @@ class MixtralTransformer(eqx.Module):
             extras["router_z_loss"] = hax.sum(extras["router_z_loss"], axis=self.config.Layers)
         if "alf_lb_bias_loss" in extras:
             extras["alf_lb_bias_loss"] = hax.sum(extras["alf_lb_bias_loss"], axis=self.config.Layers)
+        if "equilibrium_lb_bias_loss" in extras:
+            extras["equilibrium_lb_bias_loss"] = hax.sum(extras["equilibrium_lb_bias_loss"], axis=self.config.Layers)
         stats: dict[str, Array] = {}
         if "load_balancing_loss" in extras:
             stats["train/load_balancing_loss"] = jax.lax.stop_gradient(extras["load_balancing_loss"].array)
@@ -762,6 +806,8 @@ class MixtralTransformer(eqx.Module):
             stats["train/router_z_loss"] = jax.lax.stop_gradient(extras["router_z_loss"].array)
         if "alf_lb_bias_loss" in extras:
             stats["train/alf_lb_bias_loss"] = jax.lax.stop_gradient(extras["alf_lb_bias_loss"].array)
+        if "equilibrium_lb_bias_loss" in extras:
+            stats["train/equilibrium_lb_bias_loss"] = jax.lax.stop_gradient(extras["equilibrium_lb_bias_loss"].array)
 
         if self.config.log_moe_metrics:
             expert_loads = extras["expert_loads"]
@@ -776,6 +822,15 @@ class MixtralTransformer(eqx.Module):
                 for j in range(self.config.n_routed_experts):
                     stats[f"moe/layer{i}/expert{j}_load"] = jax.lax.stop_gradient(expert_loads.array[i, j])
             stats["moe/load_violation_max"] = jax.lax.stop_gradient(global_load_violation_max.array)
+            if "equilibrium_lb_weighted_load" in extras and "equilibrium_lb_target_load" in extras:
+                weighted = extras["equilibrium_lb_weighted_load"].array
+                target = extras["equilibrium_lb_target_load"].array
+                rel_violation = jnp.abs((weighted - target) / jnp.maximum(target, 1e-6))
+                stats["moe/equilibrium_rel_load_violation_max"] = jax.lax.stop_gradient(jnp.max(rel_violation))
+            if "equilibrium_lb_quantile_prob" in extras:
+                stats["moe/equilibrium_quantile_prob_mean"] = jax.lax.stop_gradient(
+                    jnp.mean(extras["equilibrium_lb_quantile_prob"].array)
+                )
             dense_first_n_layers = int(getattr(self.config, "dense_first_n_layers", 0) or 0)
             if 0 < dense_first_n_layers < self.config.num_layers:
                 sparse_layers = jnp.arange(self.config.num_layers) >= dense_first_n_layers
@@ -870,6 +925,8 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
             aux_loss += extras["router_z_loss"]
         if "alf_lb_bias_loss" in extras:
             aux_loss += extras["alf_lb_bias_loss"]
+        if "equilibrium_lb_bias_loss" in extras:
+            aux_loss += extras["equilibrium_lb_bias_loss"]
         return x, aux_loss
 
     def get_lm_head(self) -> hax.NamedArray:
