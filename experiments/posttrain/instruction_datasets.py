@@ -37,6 +37,7 @@ Current datasets:
 22. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 23. marin-community/OpenThoughts4-1.2M-Qwen3-32B  # Subsampled from full OT4 dataset annotated with Qwen3-32B
 24. open-thoughts/OpenThoughts-Agent-v1-SFT  # Exported from Harbor traces; see Harbor SFT docs
+25. AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories  # SWE-smith Rust trajectories from gpt-5-mini
 """
 
 import dataclasses
@@ -535,6 +536,176 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ],
         name="nvidia/OpenMathReasoning/genselect",
         splits=["genselect"],
+    ),
+    # Same as "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated",
+    # except 16384 max generation length instead of 7500:
+    "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens",
+        revision="8dc6397",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id"],
+        name="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens",
+        max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
+    ),
+    # Same as "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated",
+    # except 32768 max generation length instead of 7500:
+    "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens",
+        revision="6a05237",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id"],
+        name="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens",
+        max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
+    ),
+    "marin-community/open-thoughts-4-30k-code-qwen3-32b-annotated-32768-tokens": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-30k-code-qwen3-32b-annotated-32768-tokens",
+        revision="5ac6ed4",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id"],
+        name="marin-community/open-thoughts-4-30k-code-qwen3-32b-annotated-32768-tokens",
+        max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
+    ),
+    "marin-community/open-thoughts-4-30k-science-qwen3-32b-annotated-32768-tokens": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-30k-science-qwen3-32b-annotated-32768-tokens",
+        revision="2abcce5",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id"],
+        name="marin-community/open-thoughts-4-30k-science-qwen3-32b-annotated-32768-tokens",
+        max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
+    ),
+    "marin-community/open-thoughts-4-30k-math-qwen3-235b-a22b-annotated": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-235b-a22b-annotated",
+        revision="8c6cd1f",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id", "length"],
+        name="marin-community/open-thoughts-4-30k-math-qwen3-235b-a22b-annotated",
+        max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
+    ),
+    # Filtered subsets for teacher model comparison ablation study (see GitHub issue #2262):
+    # Samples where both Qwen3-32B and Qwen3-235B-A22B produced the same final answer
+    "marin-community/open-thoughts-4-11k-math-qwen3-32b-agreed-answers": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-11k-math-qwen3-32b-agreed-answers",
+        revision="0dcc70a",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="role",
+            user_value="user",
+            assistant_value="assistant",
+            content_key="content",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-11k-math-qwen3-32b-agreed-answers",
+        max_parallelism=32,
+    ),
+    "marin-community/open-thoughts-4-11k-math-qwen3-235b-a22b-agreed-answers": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-11k-math-qwen3-235b-a22b-agreed-answers",
+        revision="7f6e0af",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="role",
+            user_value="user",
+            assistant_value="assistant",
+            content_key="content",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-11k-math-qwen3-235b-a22b-agreed-answers",
+        max_parallelism=32,
+    ),
+    # Samples where Qwen3-32B and Qwen3-235B-A22B produced different final answers
+    "marin-community/open-thoughts-4-6k-math-qwen3-32b-disagreed-answers": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-6k-math-qwen3-32b-disagreed-answers",
+        revision="cfe288b",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="role",
+            user_value="user",
+            assistant_value="assistant",
+            content_key="content",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-6k-math-qwen3-32b-disagreed-answers",
+        max_parallelism=32,
+    ),
+    "marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-disagreed-answers": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-disagreed-answers",
+        revision="63bf373",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="role",
+            user_value="user",
+            assistant_value="assistant",
+            content_key="content",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-disagreed-answers",
+        max_parallelism=32,
+    ),
+    # Samples where neither Qwen3-32B nor Qwen3-235B-A22B produced a boxed answer
+    "marin-community/open-thoughts-4-6k-math-qwen3-32b-neither-has-boxed": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-6k-math-qwen3-32b-neither-has-boxed",
+        revision="db0ca08",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-6k-math-qwen3-32b-neither-has-boxed",
+        max_parallelism=32,
+    ),
+    "marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-neither-has-boxed": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-neither-has-boxed",
+        revision="3fad3b1",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-neither-has-boxed",
+        max_parallelism=32,
+    ),
+    "AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories": InstructionDatasetConfig(
+        hf_dataset_id="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
+        revision="de3bb10",
+        adapter=multi_turn_adapter(),  # messages column is JSON string; adapter handles via json.loads
+        metadata_columns=["instance_id", "resolved", "model", "traj_id"],
+        name="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
+        max_parallelism=32,
     ),
 }
 
