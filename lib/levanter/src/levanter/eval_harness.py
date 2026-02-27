@@ -1655,6 +1655,12 @@ def _iterate_tokenized_requests(
     # Combine contexts and completions for full tokenization
     combined_texts = [context + completion for context, completion in zip(contexts, completions)]
 
+    # If the tokenizer appends EOS, context_enc will have a trailing EOS that
+    # doesn't exist at that position in combined_enc (combined only has EOS at
+    # the very end, after the completion).  Strip it so context_enc_len reflects
+    # the true prompt boundary in the combined sequence.
+    eos_id = tokenizer.eos_token_id
+
     # Batch tokenization for combined and context separately
     for batch_indices in batched(range(len(requests)), batch_size):
         # Extract batch data
@@ -1670,6 +1676,13 @@ def _iterate_tokenized_requests(
             all_enc = combined_encodings["input_ids"][off]
 
             context_enc_len = len(context_enc)
+
+            # Fix prompt/completion boundary when the tokenizer appends EOS.
+            # context_enc may end with EOS but combined_enc has no EOS at that
+            # position — the EOS only appears at the very end of combined_enc.
+            if eos_id is not None and context_enc_len > 0 and context_enc[-1] == eos_id:
+                if context_enc_len > len(all_enc) or all_enc[context_enc_len - 1] != eos_id:
+                    context_enc_len -= 1
 
             if len(all_enc) > max_length:
                 logger.warning(f"Request {i} is too long. Truncating.")
