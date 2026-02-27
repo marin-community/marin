@@ -376,14 +376,21 @@ def _make_single_worker_config() -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
-def _dummy_cpu_task():
-    """Lightweight task for single-worker burst benchmarks.
+def _cpu_burn_task(seconds: float = 1.0):
+    """CPU-bound task that burns cycles in a tight loop.
 
-    Prints a line so that log streaming has actual data to fetch, then exits.
+    Generates enough work to keep the subprocess busy for approximately
+    *seconds*, giving the controller realistic scheduling and log-streaming
+    pressure.
     """
-    print("task running")
-    time.sleep(0.05)
-    return "ok"
+    print(f"burning cpu for {seconds}s")
+    deadline = time.monotonic() + seconds
+    total = 0
+    while time.monotonic() < deadline:
+        for _ in range(10_000):
+            total += 1
+    print(f"done ({total} iterations)")
+    return total
 
 
 def run_single_worker_benchmark(num_jobs: int) -> BenchmarkMetrics:
@@ -424,7 +431,7 @@ def run_single_worker_benchmark(num_jobs: int) -> BenchmarkMetrics:
             jobs: list[Job] = []
             for i in range(num_jobs):
                 job = client.submit(
-                    entrypoint=Entrypoint.from_callable(_dummy_cpu_task),
+                    entrypoint=Entrypoint.from_callable(_cpu_burn_task, 1.0),
                     name=f"burst-{i:04d}",
                     resources=ResourceSpec(cpu=0, memory="64m"),
                     environment=EnvironmentSpec(),
@@ -486,6 +493,54 @@ def cli(ctx: click.Context) -> None:
         ctx.invoke(benchmark)
 
 
+def _run_with_pyspy(
+    subcommand: str,
+    cli_args: list[str],
+    profile_output: Path,
+    speedscope_name: str,
+) -> None:
+    """Re-launch this script under py-spy for CPU profiling.
+
+    Constructs a py-spy command that invokes ``__file__ <subcommand> <cli_args>``
+    and writes the speedscope profile to *profile_output / speedscope_name*.
+    """
+    print(f"\nProfiling enabled: output will be saved to {profile_output}")
+    print("Note: py-spy requires sudo permissions\n")
+
+    profile_output.mkdir(parents=True, exist_ok=True)
+    speedscope_file = profile_output / speedscope_name
+
+    pyspy_cmd = [
+        "sudo",
+        "py-spy",
+        "record",
+        "--format",
+        "speedscope",
+        "--output",
+        str(speedscope_file),
+        "--rate",
+        "100",
+        "--subprocesses",
+        "--gil",
+        "--idle",
+        "--",
+        sys.executable,
+        __file__,
+        subcommand,
+        *cli_args,
+    ]
+
+    print(f"Running: {' '.join(pyspy_cmd)}\n")
+    result = subprocess.run(pyspy_cmd)
+
+    if result.returncode == 0:
+        _print_profile_table(speedscope_file)
+        print(f"Speedscope profile saved to {speedscope_file}")
+        print("To view: https://www.speedscope.app/")
+    else:
+        print(f"\npy-spy failed with return code {result.returncode}")
+
+
 def _print_profile_table(speedscope_path: Path, top_n: int = 30) -> None:
     """Parse a speedscope JSON file and print a text table of top functions by sample count."""
     with open(speedscope_path) as f:
@@ -545,48 +600,14 @@ def benchmark(
 ) -> None:
     """Run controller benchmark."""
     if profile:
-        print(f"\nProfiling enabled: output will be saved to {profile_output}")
-        print("Note: py-spy requires sudo permissions\n")
-
-        profile_output.mkdir(parents=True, exist_ok=True)
-        speedscope_file = profile_output / "controller_benchmark.speedscope"
-
-        pyspy_cmd = [
-            "sudo",
-            "py-spy",
-            "record",
-            "--format",
-            "speedscope",
-            "--output",
-            str(speedscope_file),
-            "--rate",
-            "100",
-            "--subprocesses",
-            "--gil",
-            "--idle",
-            "--",
-            sys.executable,
-            __file__,
+        _run_with_pyspy(
             "benchmark",
-            "--num-jobs",
-            str(num_jobs),
-            "--num-slices",
-            str(num_slices),
-        ]
-
-        print(f"Running: {' '.join(pyspy_cmd)}\n")
-        result = subprocess.run(pyspy_cmd)
-
-        if result.returncode == 0:
-            _print_profile_table(speedscope_file)
-            print(f"Speedscope profile saved to {speedscope_file}")
-            print("To view: https://www.speedscope.app/")
-        else:
-            print(f"\npy-spy failed with return code {result.returncode}")
-
+            ["--num-jobs", str(num_jobs), "--num-slices", str(num_slices)],
+            profile_output,
+            "controller_benchmark.speedscope",
+        )
         return
 
-    # Normal benchmark mode
     run_benchmark(num_jobs=num_jobs, num_slices=num_slices)
 
 
@@ -610,43 +631,12 @@ def single_worker(
     creations, log-stream RPCs, and completions funneled through one worker.
     """
     if profile:
-        print(f"\nProfiling enabled: output will be saved to {profile_output}")
-        print("Note: py-spy requires sudo permissions\n")
-
-        profile_output.mkdir(parents=True, exist_ok=True)
-        speedscope_file = profile_output / "single_worker_benchmark.speedscope"
-
-        pyspy_cmd = [
-            "sudo",
-            "py-spy",
-            "record",
-            "--format",
-            "speedscope",
-            "--output",
-            str(speedscope_file),
-            "--rate",
-            "100",
-            "--subprocesses",
-            "--gil",
-            "--idle",
-            "--",
-            sys.executable,
-            __file__,
+        _run_with_pyspy(
             "single-worker",
-            "--num-jobs",
-            str(num_jobs),
-        ]
-
-        print(f"Running: {' '.join(pyspy_cmd)}\n")
-        result = subprocess.run(pyspy_cmd)
-
-        if result.returncode == 0:
-            _print_profile_table(speedscope_file)
-            print(f"Speedscope profile saved to {speedscope_file}")
-            print("To view: https://www.speedscope.app/")
-        else:
-            print(f"\npy-spy failed with return code {result.returncode}")
-
+            ["--num-jobs", str(num_jobs)],
+            profile_output,
+            "single_worker_benchmark.speedscope",
+        )
         return
 
     run_single_worker_benchmark(num_jobs=num_jobs)
