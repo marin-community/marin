@@ -1,27 +1,26 @@
-# Grug Experiments: Templates, Not Libraries
+# Grug Layout and Usage
 
-This directory is the canonical edit surface for grug variants.
+`experiments/grug/` is template-first. You edit experiment code here directly.
 
-## Layout
+## Directory layout
 
-- `base/model.py`: model config + module implementation
-- `base/train.py`: training loop + eval/checkpoint wiring + metric logging
-- `base/launch.py`: run-level config (data mix, run id, resources, optimizer knobs)
+- `base/model.py`: model config and model implementation (`init` + `__call__` + loss method).
+- `base/train.py`: train loop, optimizer step, callbacks, eval/checkpoint wiring.
+- `base/launch.py`: experiment config and execution entrypoint (`ExecutorStep` + resources).
 
-## Workflow
+## How to use it
 
-1. Copy `experiments/grug/base` to a variant directory (for example `experiments/grug/moe`).
-2. Modify model/training code in that variant directly.
-3. Keep shared infra helpers in library code only when they are not grug-specific.
+1. Copy `experiments/grug/base` to a new variant directory (for example `experiments/grug/moe`).
+2. Make model/training changes in that variant, not in shared trainer libraries.
+3. Set run knobs in `<variant>/launch.py` (run id, data mix, optimizer, TPU type).
+4. Launch from the variant's `launch.py` entrypoint.
 
-## Metric Parity Contract
+## What should stay consistent
 
-Every grug variant should log the same core keys as standard Levanter runs where applicable:
+- Keep core training/eval metrics aligned with classic Levanter (`train/loss`, `throughput/*`, `eval/*`).
+- Prefer shared helpers only for generic infrastructure; keep variant behavior local to the template.
 
-- `train/loss`
-- `throughput/*` performance metrics
-- `eval/*` validation metrics (including EMA when enabled)
-- `mixture/*` dataset-stage metrics
-- watch metrics when watch is enabled
+## Further guidance
 
-This keeps apples-to-apples comparisons across template variants and classic runs.
+- Grug principles: [`/.agents/projects/grugformer.md`](../../.agents/projects/grugformer.md)
+- Change workflow: [`/docs/recipes/change_grug.md`](../../docs/recipes/change_grug.md)

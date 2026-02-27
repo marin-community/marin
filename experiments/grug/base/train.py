@@ -34,13 +34,12 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text import GrugLmExample, LmDataConfig
 from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
-from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
-from levanter.utils.jax_utils import estimate_jit_flops, parameter_count
+from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.base.model import GrugModelConfig, Transformer
@@ -179,11 +178,7 @@ def build_tagged_evaluator(
 def _compute_flops(
     *,
     model_config: GrugModelConfig,
-    params: Transformer,
-    mp: jmp.Policy,
-    z_loss_weight: float,
-    mesh: Mesh,
-) -> tuple[float, float | None, dict[str, float]]:
+) -> tuple[float, dict[str, float]]:
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
@@ -196,53 +191,12 @@ def _compute_flops(
     )
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
-    z_loss = z_loss_weight if z_loss_weight > 0 else None
-    # Use a mesh-compatible dummy batch so explicit data-axis shardings can lower.
-    # We normalize cost_analysis FLOPs back to per-example below.
-    flop_batch_size = max(1, int(mesh.shape.get("data", 1)))
-    token_ids_spec = jax.ShapeDtypeStruct((flop_batch_size, model_config.max_seq_len), jnp.int32)
-    loss_weight_spec = jax.ShapeDtypeStruct((flop_batch_size, model_config.max_seq_len), jnp.float32)
-
-    def _loss_only(model: Transformer, token_ids: jax.Array, loss_weight: jax.Array) -> jax.Array:
-        return model.compute_next_token_loss(
-            token_ids,
-            loss_weight,
-            mask=GrugAttentionMask.causal(),
-            reduction="mean",
-            logsumexp_weight=z_loss,
-        )
-
-    try:
-        forward_loss_flops_jax = estimate_jit_flops(
-            _loss_only,
-            mp.cast_to_compute(params),
-            token_ids_spec,
-            loss_weight_spec,
-        )
-        forward_loss_flops_per_example_jax = (
-            None if forward_loss_flops_jax is None else forward_loss_flops_jax / flop_batch_size
-        )
-    except Exception:
-        logger.exception("Failed to estimate FLOPs with JAX cost_analysis; continuing with analytic estimate only.")
-        forward_loss_flops_per_example_jax = None
-
-    flops_per_example_jax = (
-        None if forward_loss_flops_per_example_jax is None else 3 * forward_loss_flops_per_example_jax
-    )
-
     flops_summary: dict[str, float] = {
         "throughput/flops_per_token_analytic": flops_per_token,
         "throughput/flops_per_example_analytic": flops_per_example,
     }
-    if forward_loss_flops_per_example_jax is not None and flops_per_example_jax is not None:
-        flops_summary["throughput_jax/flops_per_example_forward"] = forward_loss_flops_per_example_jax
-        flops_summary["throughput_jax/flops_per_example_fwd_bwd_est"] = flops_per_example_jax
-        flops_summary["throughput_jax/flops_per_token_forward"] = (
-            forward_loss_flops_per_example_jax / model_config.max_seq_len
-        )
-        flops_summary["throughput_jax/flops_per_token_fwd_bwd_est"] = flops_per_example_jax / model_config.max_seq_len
 
-    return flops_per_example, flops_per_example_jax, flops_summary
+    return flops_per_example, flops_summary
 
 
 def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule):
@@ -426,13 +380,7 @@ def run_grug(config: GrugRunConfig) -> None:
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
-        flops_per_example, flops_per_example_jax, flops_summary = _compute_flops(
-            model_config=config.model,
-            params=state.params,
-            mp=trainer.mp,
-            z_loss_weight=config.trainer.z_loss_weight,
-            mesh=mesh,
-        )
+        flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
 
         eval_cfg = config.eval
@@ -465,15 +413,6 @@ def run_grug(config: GrugRunConfig) -> None:
         )
         state_callbacks.add_hook(
             callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
-            every=log_every,
-        )
-        state_callbacks.add_hook(
-            callbacks.log_performance_stats(
-                config.model.max_seq_len,
-                batch_schedule,
-                flops_per_example_jax,
-                prefix="throughput_jax",
-            ),
             every=log_every,
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)

@@ -24,12 +24,11 @@ from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
-from experiments.grug.base.model import GrugModelConfig, Transformer
+from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import (
     GrugRunConfig,
     GrugTrainerConfig,
     GrugTrainState,
-    _compute_flops,
     _make_train_step,
     run_grug,
 )
@@ -177,37 +176,3 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker():
     ]
     for key in required_keys:
         assert key in summary
-
-
-def test_compute_flops_emits_jax_metrics_with_explicit_mesh():
-    cfg = GrugModelConfig(
-        vocab_size=1024,
-        hidden_dim=64,
-        intermediate_dim=256,
-        num_layers=2,
-        num_heads=4,
-        num_kv_heads=4,
-        max_seq_len=128,
-    )
-    trainer = TrainerConfig(
-        train_batch_size=8,
-        num_train_steps=1,
-        use_explicit_mesh_axes=True,
-        require_accelerator=False,
-    )
-    mesh = trainer.device_mesh
-
-    with trainer.use_device_mesh():
-        params = Transformer.init(cfg, key=jax.random.PRNGKey(0))
-        _, flops_per_example_jax, flops_summary = _compute_flops(
-            model_config=cfg,
-            params=params,
-            mp=jmp.get_policy("f32"),
-            z_loss_weight=0.0,
-            mesh=mesh,
-        )
-
-    assert flops_per_example_jax is not None
-    assert flops_per_example_jax > 0
-    assert "throughput_jax/flops_per_example_fwd_bwd_est" in flops_summary
-    assert flops_summary["throughput_jax/flops_per_example_fwd_bwd_est"] > 0
