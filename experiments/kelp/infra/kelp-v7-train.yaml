@@ -28,9 +28,8 @@
 name: kelp-v7-train
 
 resources:
-  accelerators: {A10:1, A100:1, H100:1, A100:8}
+  accelerators: {T4:1, A10G:1, A10:1, A100:1}
   disk_size: 100
-  cloud: lambda
 
 workdir: .
 
@@ -65,12 +64,14 @@ run: |
   LOG_FILE="${OUTPUT_DIR}/training.log"
   mkdir -p "$OUTPUT_DIR"
 
-  echo "=== Phase 1: Preparing corpus with Stack Edu ===" | tee "$LOG_FILE"
+  echo "=== Phase 1: Preparing corpus ===" | tee "$LOG_FILE"
 
-  uv run python experiments/kelp/prepare_corpus.py \
+  # Stack Edu streaming doesn't include code content, so we use github-code
+  # with a larger target (50k functions) for diversity.
+  .venv/bin/python experiments/kelp/prepare_corpus.py \
       --output "$CORPUS_FILE" \
       --max-length 512 \
-      --stack-edu-max 50000 \
+      --max-github 50000 \
       --seed 42 \
       2>&1 | tee -a "$LOG_FILE"
 
@@ -83,7 +84,7 @@ run: |
     WANDB_FLAGS="--wandb-project kelp --wandb-run-name kelp-v7-prompt-conditioning"
   fi
 
-  uv run python experiments/kelp/train.py \
+  .venv/bin/python experiments/kelp/train.py \
       --preset overnight_cpu \
       --corpus-file "$CORPUS_FILE" \
       --steps 50000 \
