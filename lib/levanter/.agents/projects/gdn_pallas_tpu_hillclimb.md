@@ -2712,3 +2712,87 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / severe regression**. Reducing visible closed-call buckets did not translate to faster step time; the batched-dot rewrite introduced large control-flow/loop overhead in the backward path.
 - Next bold hypothesis:
   - Escalate to **Macro Move I** (prepare+recurrent fusion with explicit tape reuse and no stacked-dot helper) or **Macro Move E** (V-tiling shared-K) to avoid the new `while` overhead regime.
+
+### Iteration 48 - Macro Move I / fused segmented forward tape reuse (`QK`/`KKT`) for backward (regression, reverted)
+
+- Date: 2026-02-27T13:18:00Z
+- Coverage slot: I (1/5)
+- Covered set so far: {I}
+- Commit: none (failed attempt)
+- Loop session/local index: `5/6`
+- Starting commit: `2dc751b14c4f24c2d8c3dd0d0baa38a4c5a74c67`
+
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map`: `78.098 ms` (dominant)
+  - top train-path closed calls:
+    - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call`: `41.324 ms`
+    - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call`: `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move I**: emit `QK`/`KKT` tapes from fused segmented train forward and consume in backward to remove recomputed Ct×Ct matmuls (`+10-20%`, high tape-bandwidth/VMEM risk).
+  2. **Macro Move J**: explicit `(Ct, Seg)` sweep with compact table (`+5-15%`, medium risk; required coverage follow-up).
+  3. **Macro Move E**: V-tiling with shared-K precompute (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **I) Fuse segmented forward prepare + recurrent, reusing heavy intermediates once**.
+- Selected hypothesis:
+  - Reuse heavy fused-forward intermediates by taping chunk-local `QK` and `KKT` once in train forward, then consume them in segmented backward to eliminate duplicated backward matmuls.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`, reverted after profiling):
+  - Extended fused segmented forward kernel outputs to emit `QK`/`KKT` chunk tapes alongside existing `v_pseudo`, `k_cumdecay`, `solve_transform` tapes.
+  - Threaded new tapes through `_chunk_gated_delta_rule_flash_pallas` fwd residuals and backward launch plumbing.
+  - Updated segmented backward kernel to consume taped `QK`/`KKT` and remove corresponding recompute matmuls.
+  - Kept training/tape path on segmented fused kernels (instead of full-sequence pipeline staging) so tape reuse stays local to train chunk kernels.
+  - Profiled regression; speculative kernel edits reverted per governance.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Required TPU validation:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter5_macroI_qk_kkt_tape --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter5_macroI_qk_kkt_tape_130m_ch128_seg16_20st-3274cd`
+  - W&B profiler artifact:
+    - `run-gdn_loop_iter5_macroI_qk_kkt_tape_130m_ch128_seg16_20st-3274cd-profiler:v0`
+  - Trace download:
+    - `uv run wandb artifact get marin-community/marin/run-gdn_loop_iter5_macroI_qk_kkt_tape_130m_ch128_seg16_20st-3274cd-profiler:v0 --root .profiles/wandb`
+  - Candidate trace:
+    - `.profiles/wandb/plugins/profile/2026_02_27_13_03_51/perfetto_trace.json.gz`
+
+- Hotspots before/after (candidate vs baseline, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map`: `78.098 -> 40.555 ms` (`-48.07%`)
+  - `fusion`: `45.618 -> 34.513 ms` (`-24.34%`)
+  - `all-gather`: `20.158 -> 10.334 ms` (`-48.74%`)
+  - `while`: `0.000 -> 31.323 ms` (new dominant overhead)
+  - `conditional`: `7.491 -> 0.010 ms`
+  - Forward closed-call `shard_map/pallas_call`: `41.324 -> 20.648 ms` (`-50.03%`)
+  - Backward closed-call `shard_map/pallas_call`: `26.266 -> 14.757 ms` (`-43.82%`)
+
+- Throughput delta (W&B history-window median, steps `10..18`, 9 points):
+  - `throughput/mfu`: `5.830017 -> 5.333163` (`-8.52%`)
+  - `throughput/tokens_per_second`: `188599.934 -> 172526.795` (`-8.52%`)
+  - `throughput/duration`: `0.173743s -> 0.189930s` (`+9.32%`)
+  - vs active champion (`throughput/mfu=5.748507`): `-7.23%`
+
+- Why this did not unlock a large speedup:
+  - Closed-call train kernels got faster, but end-to-end step time regressed because large `while` overhead appeared on the critical path.
+  - Added forward tape traffic (`QK`/`KKT`) increased data movement/launch-control overhead enough to overwhelm reduced backward recompute.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward `shard_map/pallas_call`: `41.324 -> 20.648 ms` (`-50.03%`).
+    - Backward `shard_map/pallas_call`: `26.266 -> 14.757 ms` (`-43.82%`).
+    - `throughput/mfu -8.52%`, `throughput/tokens_per_second -8.52%`, `throughput/duration +9.32%`.
+  - Governance:
+    - MFU gain `<3%` and dominant hotspot class remained train-path `shard_map/custom-call` with new control-flow overhead; attempt marked **low-impact/regressive** and speculative kernel edits were reverted.
+
+- Assessment: **failed attempt / regression**.
+- Next bold hypothesis:
+  - Move to **Macro Move J** next (required coverage slot) with explicit `Ct in {64,96,128}` × `Seg in {8,16,32}` sweep table and profile-backed selection.
