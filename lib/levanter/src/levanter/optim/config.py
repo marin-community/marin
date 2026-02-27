@@ -263,50 +263,58 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
                 warmup_steps = _convert_frac_or_steps(self.warmup, cycle_steps)
             else:
                 warmup_steps = _convert_frac_or_steps(self.rewarmup, cycle_steps)
+            warmup_steps = min(warmup_steps, cycle_steps)
 
             if warmup_steps != 0:
                 warmup = optax.linear_schedule(previous_end, learning_rate, warmup_steps)
                 schedules.append(warmup)
                 boundaries.append(start + warmup_steps)
 
-            lr_decay_steps = (
+            max_decay_steps = max(cycle_steps - warmup_steps, 0)
+            requested_decay_steps = (
                 _convert_frac_or_steps(self.decay, cycle_steps)
                 if self.decay is not None
-                else cycle_steps - warmup_steps
+                else max_decay_steps
             )
+            lr_decay_steps = min(max(requested_decay_steps, 0), max_decay_steps)
             stable_steps = cycle_steps - warmup_steps - lr_decay_steps
 
-            if stable_steps != 0:
+            if stable_steps > 0:
                 stable = optax.constant_schedule(learning_rate)
                 schedules.append(stable)
                 boundaries.append(start + warmup_steps + stable_steps)
 
-            if isinstance(self.lr_schedule, str):
-                match self.lr_schedule:
-                    case "constant":
-                        schedule = optax.constant_schedule(learning_rate)
-                    case "cosine":
-                        schedule = optax.cosine_decay_schedule(learning_rate, lr_decay_steps, self.min_lr_ratio)
-                    case "linear":
-                        schedule = optax.linear_schedule(learning_rate, min_lr, lr_decay_steps)
-                    case "inv_sqrt":
-                        schedule = _inv_sqrt_decay_schedule(learning_rate, min_lr, warmup_steps, 10000)
-                    case "inv":
-                        schedule = _inv_decay_schedule(learning_rate, min_lr, lr_decay_steps)
-                    case _:
-                        raise ValueError(f"Unknown lr_schedule: {self.lr_schedule}")
-            elif isinstance(self.lr_schedule, LrSchedule):
-                schedule = self.lr_schedule.build(
-                    LrScheduleContext(
-                        warmup_steps=warmup_steps,
-                        decay_steps=lr_decay_steps,
-                        learning_rate=learning_rate,
-                        min_lr_ratio=self.min_lr_ratio,
-                        min_lr=min_lr,
+            if lr_decay_steps > 0:
+                if isinstance(self.lr_schedule, str):
+                    match self.lr_schedule:
+                        case "constant":
+                            schedule = optax.constant_schedule(learning_rate)
+                        case "cosine":
+                            schedule = optax.cosine_decay_schedule(learning_rate, lr_decay_steps, self.min_lr_ratio)
+                        case "linear":
+                            schedule = optax.linear_schedule(learning_rate, min_lr, lr_decay_steps)
+                        case "inv_sqrt":
+                            schedule = _inv_sqrt_decay_schedule(learning_rate, min_lr, warmup_steps, 10000)
+                        case "inv":
+                            schedule = _inv_decay_schedule(learning_rate, min_lr, lr_decay_steps)
+                        case _:
+                            raise ValueError(f"Unknown lr_schedule: {self.lr_schedule}")
+                elif isinstance(self.lr_schedule, LrSchedule):
+                    schedule = self.lr_schedule.build(
+                        LrScheduleContext(
+                            warmup_steps=warmup_steps,
+                            decay_steps=lr_decay_steps,
+                            learning_rate=learning_rate,
+                            min_lr_ratio=self.min_lr_ratio,
+                            min_lr=min_lr,
+                        )
                     )
-                )
+                else:
+                    raise ValueError(
+                        f"lr_schedule must be a string or an instance of LrSchedule, got {self.lr_schedule}"
+                    )
             else:
-                raise ValueError(f"lr_schedule must be a string or an instance of LrSchedule, got {self.lr_schedule}")
+                schedule = optax.constant_schedule(learning_rate)
 
             previous_end = schedule(lr_decay_steps)
 
