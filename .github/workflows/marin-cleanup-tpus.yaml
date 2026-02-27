@@ -2,7 +2,8 @@ name: Marin - Cleanup Preempted TPUs
 
 on:
   schedule:
-    - cron: '0 2 * * *' # Daily at 2 AM UTC
+    - cron: '0 */6 * * *' # Every 6 hours
+
   workflow_dispatch:
 
 jobs:
