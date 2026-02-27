@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "f2cc16ea24ee",
+  "session_id": "42d35aca-644b-4d09-a42b-f4a2ee6314f5",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T23:53:53.356799Z",
+  "branch": "agent/20260227-fix-3118",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/fray/src/fray/v2/ray_backend/backend.py",
+    "lib/fray/tests/test_v2_ray.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "c5b68b35-ce9e-4fa9-a603-9137abf56830",
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 73444,
+    "cache_read_tokens": 2338221,
+    "output_tokens": 14285,
+    "api_call_count": 38
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T23:53:53.074746Z",
+    "agent_lines": 56,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 56,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/42d35aca-644b-4d09-a42b-f4a2ee6314f5.jsonl"
+}
