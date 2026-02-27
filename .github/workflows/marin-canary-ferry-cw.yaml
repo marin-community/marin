@@ -1,8 +1,8 @@
 name: Marin - CoreWeave GPU Canary Ferry
 
 on:
-  schedule:
-    - cron: '0 10 * * *'  # Daily at 10 AM UTC
+  # schedule:
+  #   - cron: '0 10 * * *'  # Daily at 10 AM UTC — disabled until worker overwhelm is fixed (#3062)
   workflow_dispatch:
 
 permissions:
