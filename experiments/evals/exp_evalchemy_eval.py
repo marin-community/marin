@@ -75,9 +75,9 @@ BASE_GENERATION_PARAMS = {
 # Engine Configuration
 # =============================================================================
 # tensor_parallel_size: Number of TPU chips to use for tensor parallelism
-# v5p-8 has 4 chips, so we use tensor_parallel_size=4 to utilize all chips
 # max_num_seqs: Batch size for parallel generation
-RESOURCE = ResourceConfig.with_tpu("v5p-8")
+# RESOURCE = ResourceConfig.with_tpu("v5p-8")  # v5p-8 has 4 chips
+RESOURCE = ResourceConfig.with_tpu("v4-8")  # v4-8 has 4 chips
 BATCH_SIZE = 256
 ENGINE_KWARGS = {
     "tensor_parallel_size": 4,
