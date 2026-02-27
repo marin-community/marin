@@ -15,6 +15,7 @@ import uuid
 
 import pytest
 from iris.cluster.client import get_job_info
+from iris.cluster.client.job_info import resolve_job_user
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -161,7 +162,7 @@ def _job_info_context_fn(expected_job_id):
 def test_job_info_provides_context(cluster):
     """JobInfo provides job_id, worker_id, and ports during execution."""
     job_name = "job-info-ctx"
-    expected_job_id = JobName.root("test-user", job_name).to_wire()
+    expected_job_id = JobName.root(resolve_job_user(), job_name).to_wire()
     job = cluster.submit(_job_info_context_fn, job_name, expected_job_id, ports=["actor"])
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
@@ -188,14 +189,13 @@ def test_job_info_port_allocation(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-def _job_info_task_context_fn(expected_job_name):
+def _job_info_task_context_fn(expected_task_id_wire):
     """Runs inside the worker. Validates task-specific context in JobInfo."""
     info = get_job_info()
     if info is None:
         raise ValueError("JobInfo not available")
-    expected_task_id = JobName.root("test-user", expected_job_name).task(0).to_wire()
-    if info.task_id.to_wire() != expected_task_id:
-        raise ValueError(f"Expected task_id {expected_task_id}, got {info.task_id}")
+    if info.task_id.to_wire() != expected_task_id_wire:
+        raise ValueError(f"Expected task_id {expected_task_id_wire}, got {info.task_id}")
     if info.task_index != 0:
         raise ValueError(f"Expected task_index 0, got {info.task_index}")
     if info.num_tasks != 1:
@@ -206,7 +206,8 @@ def _job_info_task_context_fn(expected_job_name):
 def test_job_info_task_context(cluster):
     """JobInfo provides task-specific context: task_id, task_index, num_tasks."""
     job_name = "task-ctx"
-    job = cluster.submit(_job_info_task_context_fn, job_name, job_name)
+    expected_task_id = JobName.root(resolve_job_user(), job_name).task(0).to_wire()
+    job = cluster.submit(_job_info_task_context_fn, job_name, expected_task_id)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 

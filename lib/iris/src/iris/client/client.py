@@ -737,7 +737,7 @@ class IrisClient:
         """Terminate all jobs matching a prefix.
 
         Args:
-            prefix: Job name prefix to match (e.g., JobName.root("my-experiment"))
+            prefix: Job name prefix to match (e.g., JobName.root("alice", "my-experiment"))
             exclude_finished: If True, skip jobs already in terminal states
 
         Returns:

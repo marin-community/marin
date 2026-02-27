@@ -271,13 +271,13 @@ The namespace is the root component of a job name, shared by all jobs in a hiera
 │   if ctx:                                                               │
 │       job_name = ctx.job_name.child("my-job")   # /parent/my-job        │
 │   else:                                                                 │
-│       job_name = JobName.root("my-job")         # /my-job               │
+│       job_name = JobName.root(user, "my-job")   # /user/my-job           │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Namespace derivation (no parsing needed)                                │
-│   namespace = job_name.namespace   # "my-job" or "parent"               │
+│   namespace = job_name.namespace   # "user/my-job" or "user/parent"     │
 │               ^^^^ direct property access                               │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -323,10 +323,10 @@ The migration follows a **spiral approach**: each stage is a vertical slice that
 
 **Tests**:
 - Parsing: `JobName.from_string("/a/b/c")`
-- Construction: `JobName.root("a").child("b").child("c")`
-- Parent derivation: `JobName.from_string("/a/b/c").parent == JobName.from_string("/a/b")`
-- Namespace: `JobName.from_string("/a/b/c").namespace == "a"`
-- Task creation: `JobName.root("job").task(0) == JobName.from_string("/job/0")`
+- Construction: `JobName.root("alice", "a").child("b").child("c")`
+- Parent derivation: `JobName.from_string("/alice/a/b/c").parent == JobName.from_string("/alice/a/b")`
+- Namespace: `JobName.from_string("/alice/a/b/c").namespace == "alice/a"`
+- Task creation: `JobName.root("alice", "job").task(0) == JobName.from_string("/alice/job/0")`
 - Validation errors: empty names, names without leading slash, whitespace-only components
 
 **No proto changes. No behavior changes.**

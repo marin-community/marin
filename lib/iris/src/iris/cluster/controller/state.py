@@ -18,10 +18,11 @@ state and return results indicating what the caller should do.
 import bisect
 import logging
 from collections import Counter, deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock
+from types import MappingProxyType
 from typing import NamedTuple
 
 from iris.cluster.controller.events import (
@@ -604,7 +605,7 @@ class UserStats:
     task_count: int = 0
     running_task_count: int = 0
     completed_task_count: int = 0
-    job_state_counts: dict[str, int] = field(default_factory=dict)
+    job_state_counts: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
 
 
 # =============================================================================
@@ -1573,7 +1574,7 @@ class ControllerState:
                     task_count=int(bucket["task_count"]),
                     running_task_count=int(bucket["running_task_count"]),
                     completed_task_count=int(bucket["completed_task_count"]),
-                    job_state_counts=dict(bucket["job_state_counts"]),
+                    job_state_counts=MappingProxyType(dict(bucket["job_state_counts"])),
                 )
                 for user, bucket in by_user.items()
             ]

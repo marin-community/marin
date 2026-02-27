@@ -94,8 +94,6 @@ class JobName:
         """Get parent job name, or None if this is a root job."""
         if self.is_root:
             return None
-        if self.is_task:
-            return JobName(self._parts[:-1])
         return JobName(self._parts[:-1])
 
     @property
