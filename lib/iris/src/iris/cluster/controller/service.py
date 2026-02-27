@@ -1198,4 +1198,9 @@ class ControllerServiceImpl:
                 resp.vm.CopyFrom(vm_info)
             if worker_health:
                 resp.worker.CopyFrom(worker_health)
+            if worker:
+                if worker.resource_snapshot:
+                    resp.current_resources.CopyFrom(worker.resource_snapshot)
+                for snapshot in worker.resource_history:
+                    resp.resource_history.append(snapshot)
             return resp

@@ -690,6 +690,10 @@ class ControllerWorker:
     # All task IDs ever assigned to this worker (for fast per-worker history lookup)
     task_history: set[JobName] = field(default_factory=set)
 
+    # Live resource metrics from heartbeats
+    resource_snapshot: cluster_pb2.WorkerResourceSnapshot | None = None
+    resource_history: list[cluster_pb2.WorkerResourceSnapshot] = field(default_factory=list)
+
     def get_committed_resources(self) -> tuple[int, int, int]:
         """Return committed (cpu_millicores, memory_bytes, gpu_count) for this worker."""
         return (self.committed_cpu_millicores, self.committed_mem, self.committed_gpu)
@@ -715,6 +719,15 @@ class ControllerWorker:
             True if the worker has not sent a heartbeat within the timeout period
         """
         return self.last_heartbeat.age_ms() > timeout.to_ms()
+
+    RESOURCE_HISTORY_MAX = 60  # ~5 minutes at 5s heartbeat interval
+
+    def update_resource_snapshot(self, snapshot: cluster_pb2.WorkerResourceSnapshot) -> None:
+        """Store a resource snapshot from a heartbeat, maintaining a bounded history."""
+        self.resource_snapshot = snapshot
+        self.resource_history.append(snapshot)
+        if len(self.resource_history) > self.RESOURCE_HISTORY_MAX:
+            self.resource_history = self.resource_history[-self.RESOURCE_HISTORY_MAX :]
 
     def assign_task(self, task_id: JobName, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Assign a task to this worker, updating committed resources."""
@@ -1815,6 +1828,10 @@ class ControllerState:
             worker.last_heartbeat = Timestamp.now()
             worker.healthy = True
             worker.consecutive_failures = 0
+
+            # Store resource metrics from heartbeat
+            if response.resource_snapshot.ByteSize() > 0:
+                worker.update_resource_snapshot(response.resource_snapshot)
 
             # Process running task state updates (e.g. ASSIGNED -> BUILDING -> RUNNING)
             for entry in response.running_tasks:

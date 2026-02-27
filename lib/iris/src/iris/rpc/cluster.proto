@@ -155,6 +155,22 @@ message ResourceUsage {
   int32 process_count = 6;
 }
 
+// Host-level resource snapshot collected by the worker during each heartbeat.
+message WorkerResourceSnapshot {
+  iris.time.Timestamp timestamp = 1;
+  // Host CPU utilization as percentage (0-100 averaged across cores)
+  int32 cpu_percent = 2;
+  // Host memory
+  int64 memory_used_bytes = 3;
+  int64 memory_total_bytes = 4;
+  // Host disk (primary mount)
+  int64 disk_used_bytes = 5;
+  int64 disk_total_bytes = 6;
+  // Aggregate task stats
+  int32 running_task_count = 7;
+  int32 total_process_count = 8;
+}
+
 message BuildMetrics {
   iris.time.Timestamp build_started = 1;
   iris.time.Timestamp build_finished = 2;
@@ -683,6 +699,7 @@ message Controller {
     iris.time.Timestamp started_at = 4;
     iris.time.Timestamp finished_at = 5;
     string error = 6;
+    ResourceUsage resource_usage = 7;
   }
 
   message GetWorkerStatusResponse {
@@ -701,6 +718,12 @@ message Controller {
 
     // Recent tasks that ran or are running on this worker (newest first)
     repeated WorkerTaskSummary recent_tasks = 6;
+
+    // Current host-level resource snapshot (from latest heartbeat)
+    WorkerResourceSnapshot current_resources = 7;
+
+    // Recent resource history (ring buffer of snapshots from heartbeats)
+    repeated WorkerResourceSnapshot resource_history = 8;
   }
 
 }
@@ -797,6 +820,9 @@ message HeartbeatResponse {
 
   // Tasks from expected_tasks that have finished (with exit code, error, state)
   repeated Controller.CompletedTaskEntry completed_tasks = 2;
+
+  // Current host-level resource snapshot
+  WorkerResourceSnapshot resource_snapshot = 3;
 }
 
 // ============================================================================

@@ -285,32 +285,97 @@ The controller and worker dashboards are client-side SPAs using Preact + HTM.
 ```
 src/iris/cluster/static/
 ├── controller/          # Controller dashboard
-│   ├── app.js           # Main app (tabs, state, data fetching)
+│   ├── app.js           # Main app (tabs, cluster summary, data fetching)
 │   ├── jobs-tab.js      # Jobs table with pagination/sorting/tree view
 │   ├── job-detail.js    # Job detail page with task list
+│   ├── fleet-tab.js     # Fleet tab: worker health table with inline gauges
+│   ├── worker-detail.js # Worker detail page: live resource gauges, task history, logs
 │   ├── workers-tab.js   # Workers table
 │   └── vms-tab.js       # VM management table
-├── shared/              # Shared utilities
+├── shared/              # Shared utilities and components
+│   ├── components.js    # Reusable Preact components (MetricCard, Gauge, etc.)
 │   ├── rpc.js           # Connect RPC client wrapper
-│   ├── utils.js         # Formatting (dates, durations)
-│   └── styles.css       # Consolidated CSS
-├── vendor/              # Third-party ES modules
+│   ├── utils.js         # Formatting (dates, durations, bytes)
+│   └── styles.css       # Consolidated CSS with design tokens
+├── vendor/              # Third-party ES modules (vendored, not npm)
 │   ├── preact.mjs       # UI framework
 │   └── htm.mjs          # HTML template literals
 └── worker/              # Worker dashboard components
+    ├── app.js            # Worker dashboard: task list, aggregate resources
+    └── task-detail.js    # Task detail: resource usage, auto-refresh
 ```
 
 **Key patterns:**
-- All data fetched via Connect RPC (e.g., `ListJobs`, `GetJobStatus`)
-- No REST endpoints - RPC only
-- State management with Preact hooks (`useState`, `useEffect`)
+- All data fetched via Connect RPC (e.g., `ListJobs`, `GetWorkerStatus`)
+- No REST endpoints — RPC only. New dashboard features MUST have a backing RPC.
+- State management with Preact hooks (`useState`, `useEffect`, `useCallback`)
 - HTML templates via `htm.bind(h)` tagged template literals
+- Auto-refresh: active pages poll their RPC endpoint (5s for worker/task detail, 30s for controller overview)
 - Jobs displayed as a hierarchical tree based on name structure
+
+#### Design System
+
+The dashboard uses CSS custom properties (design tokens) defined in `:root` at the
+top of `shared/styles.css`. All new styles should reference these tokens rather
+than hard-coding colors, fonts, or shadows.
+
+| Token family     | Examples                                    | Purpose                         |
+|------------------|---------------------------------------------|---------------------------------|
+| `--color-*`      | `--color-accent`, `--color-danger`          | Semantic colors                 |
+| `--font-*`       | `--font-sans`, `--font-mono`                | Typography stacks               |
+| `--radius-*`     | `--radius-sm`, `--radius-md`                | Border radius scale             |
+| `--shadow-*`     | `--shadow-sm`, `--shadow-md`                | Elevation / depth               |
+
+#### Shared Components (`shared/components.js`)
+
+| Component        | Purpose                                               |
+|------------------|-------------------------------------------------------|
+| `MetricCard`     | Prominent number + label tile (e.g., "3 Running Tasks") |
+| `Gauge`          | Horizontal bar gauge with ok/warning/danger thresholds |
+| `InlineGauge`    | Compact gauge for use inside table cells               |
+| `ResourceSection`| Titled wrapper for a group of Gauge bars               |
+| `InfoRow`        | Simple label/value pair                                |
+| `InfoCard`       | Card container with title                              |
+
+When adding new dashboard components, add them to `shared/components.js` if
+they are reusable across pages. Page-specific components (e.g., `StatusBadge`)
+live in the page's own JS file.
+
+#### Resource Display Conventions
+
+- **Live utilization** from heartbeat snapshots (`WorkerResourceSnapshot`) is shown
+  as Gauge bars with ok/warning/danger color thresholds (70%/90% by default).
+- **Static capacity** from worker metadata (CPU cores, total memory) is shown as
+  MetricCard tiles or Field label/value pairs.
+- When live data is available, prefer gauges over raw numbers. Fall back to static
+  capacity display when no heartbeat snapshots exist yet.
+- Use `formatBytes()` for human-readable byte values. Use `formatRelativeTime()`
+  for timestamps.
+
+#### Navigation Flow
+
+```
+Controller Dashboard (/)
+  ├── Jobs tab (default) → click job row → /job/{jobId}
+  │     └── Job Detail → task list, task logs, resource usage
+  ├── Fleet tab → click worker row → /worker/{id}
+  │     └── Worker Detail → identity, live resources, task history, logs
+  ├── Endpoints tab
+  ├── Autoscaler tab
+  ├── Logs tab
+  └── Transactions tab
+
+Worker Dashboard (:worker_port/)
+  ├── Task list with aggregate resource summary
+  └── Click task → /task/{taskId} → Task Detail (auto-refreshing)
+```
 
 **When modifying the dashboard:**
 1. Run dashboard tests: `uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="`
-2. Ensure any new UI features have corresponding RPC endpoints
+2. New UI features MUST have a corresponding RPC endpoint — no internal API calls
 3. Follow existing component patterns (functional components, hooks)
+4. Preserve CSS class names that E2E tests rely on (`.worker-detail-grid`, `.tab-btn`, `#log-container`, etc.)
+5. Use design tokens from `:root` — do not hard-code colors or fonts
 
 ## Testing
 

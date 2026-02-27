@@ -21,6 +21,7 @@ from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     DefaultEnvironmentProvider,
     EnvironmentProvider,
+    HostMetricsCollector,
     build_worker_metadata,
     probe_hardware,
 )
@@ -153,6 +154,8 @@ class Worker:
         # Preserves all attempts so logs for historical attempts remain accessible.
         self._tasks: dict[tuple[str, int], TaskAttempt] = {}
         self._lock = threading.Lock()
+
+        self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
         self._service = WorkerServiceImpl(self, log_buffer=get_global_buffer())
         self._dashboard = WorkerDashboard(
@@ -684,9 +687,22 @@ class Worker:
             logger.warning("Killing task %s attempt %d (no longer in expected_tasks)", task_id, attempt_id)
             self._kill_task_attempt(task_id, attempt_id)
 
+        # Collect host metrics and aggregate task stats
+        resource_snapshot = self._host_metrics.collect()
+        running_count = 0
+        total_processes = 0
+        with self._lock:
+            for task in self._tasks.values():
+                if task.status == cluster_pb2.TASK_STATE_RUNNING:
+                    running_count += 1
+                    total_processes += task.process_count
+        resource_snapshot.running_task_count = running_count
+        resource_snapshot.total_process_count = total_processes
+
         return cluster_pb2.HeartbeatResponse(
             running_tasks=running_tasks,
             completed_tasks=completed_tasks,
+            resource_snapshot=resource_snapshot,
         )
 
     def _kill_task_attempt(self, task_id: str, attempt_id: int, term_timeout_ms: int = 5000) -> bool:
