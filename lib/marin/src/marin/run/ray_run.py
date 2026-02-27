@@ -320,12 +320,30 @@ def main():
 
     args = parser.parse_args()
 
-    # Combine the remaining arguments to form the full command
-    full_cmd = " ".join(shlex.quote(arg) for arg in args.cmd).strip()
-    if not full_cmd.startswith("--"):
-        logger.error("Command must start with '--'.")
+    cmd = list(args.cmd)
+    if not cmd:
+        logger.error(
+            "No command provided. Usage:\n"
+            "  uv run python -m marin.run.ray_run [args...] -- python your_script.py [script args...]"
+        )
         exit(1)
-    full_cmd = full_cmd[2:]
+    if cmd[0] != "--":
+        logger.error(
+            "Command must be separated from ray_run args with '--'. Usage:\n"
+            "  uv run python -m marin.run.ray_run [args...] -- python your_script.py [script args...]"
+        )
+        exit(1)
+    cmd = cmd[1:]
+    if not cmd:
+        logger.error(
+            "No command provided after '--'. Usage:\n"
+            "  uv run python -m marin.run.ray_run [args...] -- python your_script.py [script args...]"
+        )
+        exit(1)
+    if cmd[0] == "--":
+        logger.error("Command starts with '--' again. Did you pass '-- --'? " "Use a single '--' before the command.")
+        exit(1)
+    full_cmd = " ".join(shlex.quote(arg) for arg in cmd).strip()
 
     # Auto-load env defaults from .marin.yaml if present, then merge -e overrides
     env_vars = {}
