@@ -45,9 +45,11 @@ Current datasets:
 19. nvidia/Nemotron-Post-Training-Dataset-v1
 20. nvidia/Nemotron-Post-Training-Dataset-v2
 21. HuggingFaceH4/no_robots
-22. open-thoughts/OpenThoughts3-1.2M  # Note that this is the *original* OpenThoughts3 dataset; smoltalk2 has a slightly different version
+22. open-thoughts/OpenThoughts3-1.2M
+    # Note that this is the *original* OpenThoughts3 dataset; smoltalk2 has a slightly different version
 23. marin-community/OpenThoughts4-1.2M-Qwen3-32B  # Subsampled from full OT4 dataset annotated with Qwen3-32B
 24. open-thoughts/OpenThoughts-Agent-v1-SFT  # Exported from Harbor traces; see Harbor SFT docs
+25. AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories  # SWE-smith Rust trajectories from gpt-5-mini
 """
 
 import dataclasses
@@ -512,7 +514,8 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated",
         max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
     ),
-    # Same as "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated", except 16384 max generation length instead of 7500:
+    # Same as "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated",
+    # except 16384 max generation length instead of 7500:
     "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens": InstructionDatasetConfig(
         hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens",
         revision="8dc6397",
@@ -527,7 +530,8 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens",
         max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
     ),
-    # Same as "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated", except 32768 max generation length instead of 7500:
+    # Same as "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated",
+    # except 32768 max generation length instead of 7500:
     "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens": InstructionDatasetConfig(
         hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens",
         revision="6a05237",
@@ -670,6 +674,14 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ),
         metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
         name="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-neither-has-boxed",
+        max_parallelism=32,
+    ),
+    "AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories": InstructionDatasetConfig(
+        hf_dataset_id="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
+        revision="de3bb10",
+        adapter=multi_turn_adapter(),  # messages column is JSON string; adapter handles via json.loads
+        metadata_columns=["instance_id", "resolved", "model", "traj_id"],
+        name="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
         max_parallelism=32,
     ),
 }
