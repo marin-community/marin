@@ -54,6 +54,12 @@ if _GDN_TRIANGULAR_SOLVE_PROBE not in {"off", "identity", "first_order"}:
         "GDN_TRIANGULAR_SOLVE_PROBE must be one of: off, identity, first_order. "
         f"Got {_GDN_TRIANGULAR_SOLVE_PROBE!r}."
     )
+_GDN_CHUNK_FLASH_BACKEND = os.environ.get("GDN_CHUNK_FLASH_BACKEND", "pallas").strip().lower()
+if _GDN_CHUNK_FLASH_BACKEND not in {"pallas", "xla"}:
+    raise ValueError(
+        "GDN_CHUNK_FLASH_BACKEND must be one of: pallas, xla. "
+        f"Got {_GDN_CHUNK_FLASH_BACKEND!r}."
+    )
 
 
 def _dbg(tag: str, arr):
@@ -1018,6 +1024,18 @@ _GDN_SEGMENT_SCAN_UNROLL = 8
 
 def _round_up_to(x: int, m: int) -> int:
     return ((x + m - 1) // m) * m
+
+
+def _resolve_chunk_flash_backend(*, use_flash: bool) -> str:
+    """Resolve the train/prefill chunk backend.
+
+    `use_flash=False` always routes to the pure-JAX/XLA path.
+    `use_flash=True` uses `GDN_CHUNK_FLASH_BACKEND` to choose between
+    TPU Pallas (`pallas`) and pure JAX (`xla`).
+    """
+    if not use_flash:
+        return "xla"
+    return _GDN_CHUNK_FLASH_BACKEND
 
 
 def _mxu_matmul_f32(
@@ -3963,17 +3981,19 @@ def chunk_gated_delta_rule(
         b_arr = b_arr * valid
         g_arr = g_arr * valid
 
-    if use_flash:
-        Ct = _round_up_to(int(chunk_size), _GDN_TPU_MULT)
-        pallas_io_dtype = jnp.bfloat16 if Ct >= _MXU_TILE else jnp.float32
-        q_arr = q_arr.astype(pallas_io_dtype, copy=False)
-        k_arr = k_arr.astype(pallas_io_dtype, copy=False)
-        v_arr = v_arr.astype(pallas_io_dtype, copy=False)
+    backend = _resolve_chunk_flash_backend(use_flash=use_flash)
+    Ct = _round_up_to(int(chunk_size), _GDN_TPU_MULT)
+    flash_io_dtype = jnp.bfloat16 if Ct >= _MXU_TILE else jnp.float32
+    q_arr = q_arr.astype(flash_io_dtype, copy=False)
+    k_arr = k_arr.astype(flash_io_dtype, copy=False)
+    v_arr = v_arr.astype(flash_io_dtype, copy=False)
+
+    if backend == "pallas":
         out_arr, S_final = _chunk_gated_delta_rule_flash_pallas(
             q_arr, k_arr, v_arr, g_arr, b_arr, chunk_size, segment_size, initial_state
         )
     else:
-        # fallback: pure JAX forward (and JAX autodiff)
+        # Pure JAX/XLA path: compile train chunk math through standard XLA lowering.
         out_arr, S_final = _chunk_gated_delta_rule_fused_reference(
             q_arr,
             k_arr,
