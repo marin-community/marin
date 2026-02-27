@@ -28,6 +28,12 @@ class PallasUnsupportedError(NotImplementedError):
 
 NUM_LANES = 128
 
+# TPU VMEM capacity is fixed-size on current generations (e.g. v5p). The fused CE
+# forward kernel materializes an intermediate `xw_tiled` buffer in VMEM with dtype
+# float32 and shape [b_block_size, v_block_size]. If this buffer cannot fit, the
+# kernel will fail with `RESOURCE_EXHAUSTED` during compilation.
+_TPU_VMEM_BYTES = 64 * 1024 * 1024  # 64MiB
+
 
 def _fwd_cost_estimate(
     x: jax.Array,
@@ -220,6 +226,20 @@ def _validate_inputs(
             raise PallasUnsupportedError(
                 "TPU label layout requires b_block_size to be a multiple of 1024 when B>=1024; "
                 f"got b_block_size={block_sizes.b_block_size}."
+            )
+
+    # VMEM scratch check: the kernel accumulates logits into a float32 [B,V] tile.
+    b_block_size = int(block_sizes.b_block_size)
+    v_block_size = int(block_sizes.v_block_size)
+    if b_block_size > 0 and v_block_size > 0:
+        scratch_bytes = b_block_size * v_block_size * 4  # float32
+        if scratch_bytes > _TPU_VMEM_BYTES:
+            raise PallasUnsupportedError(
+                "Pallas fused CE requires a float32 VMEM scratch tile of size "
+                f"[{b_block_size}, {v_block_size}] (~{scratch_bytes / (1024 * 1024):.1f}MiB), which exceeds "
+                f"TPU VMEM capacity ({_TPU_VMEM_BYTES / (1024 * 1024):.1f}MiB). "
+                "Use a smaller v_block_size (e.g. <= 16384 when b_block_size=1024), or select "
+                "`implementation='xla'`."
             )
 
 

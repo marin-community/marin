@@ -102,3 +102,60 @@ but with some patience and work you can back those out by looking at the next se
 * `jvp(OP)` means the forward pass. (JVP stands for Jacobian-vector product.)
 * `transpose(jvp(OP))` means the backward pass.
 * `remat` (short for rematerialization) means that the operation is recomputed in the backward pass, i.e. gradient checkpointing.
+
+
+## Mixtral (MoE) throughput on TPU
+
+### High-MFU sharding settings
+
+We have observed a large MFU gap for Mixtral-style MoE models on v5p when using an explicit mesh
+(`AxisType.Explicit`) versus the default Auto/Manual mesh.
+
+Practical guidance:
+
+- Keep `trainer.use_explicit_mesh_axes=false` for standard Levanter/Haliax models (Mixtral/OLMoE/etc.) unless you are
+  calling `jax.sharding.reshard(...)` with named `PartitionSpec`s.
+- Models that initialize weights via `jax.sharding.reshard` (for example, Grugformer) still need
+  `trainer.use_explicit_mesh_axes=true`.
+
+In `experiments/speedrun/mixtral_vs_dense_nemotron_dclm_fineweb_edu_100b.py`, the relevant flags are:
+
+Example command (Mixtral-only, v5p-32, seq=4096, global_bs=384, pdp=8):
+
+```bash
+GROUP="mixtral_vs_dense_40b_v5p32_$(git rev-parse --short HEAD)" && \
+SUFFIX="t$(date +%Y%m%d_%H%M%S)_$$" && \
+TMPDIR=/tmp RAY_TMPDIR=/tmp uv run python -m marin.run.ray_run \
+  --cluster infra/marin-us-central1.yaml --extra tpu --no_wait \
+  --env_vars WANDB_MODE online \
+  --env_vars WANDB_PROJECT mixtral_vs_dense \
+  --env_vars WANDB_GROUP "$GROUP" \
+  -- python -m experiments.speedrun.mixtral_vs_dense_nemotron_dclm_fineweb_edu_100b \
+    --models mixtral_8x7b \
+    --tpu-type v5p-32 \
+    --seq-len 4096 \
+    --global-batch-size 384 \
+    --per-device-parallelism 8 \
+    --token-target 40000000000 \
+    --no-explicit-mesh-axes \
+    --mixtral-use-gmm \
+    --mixtral-cross-entropy-block-size 1024 \
+    --run-suffix "mixtral_base_${SUFFIX}"
+```
+
+
+- `--no-explicit-mesh-axes` (default): high MFU
+- `--explicit-mesh-axes`: can reduce MFU substantially
+- `--legacy-axis-resources`: optional mapping that matches December-era `(replica, data)` sharding for
+  `batch/token/token_repeat`
+
+### Profiling artifacts
+
+Levanter writes jaxpr/HLO dumps under `logs/<run_id>/artifacts/` when `trainer.log_jaxprs` / `trainer.log_xla_hlo` are
+enabled (they default to true):
+
+- `train_step.jaxpr.txt.gz`
+- `train_step.hlo.txt`
+
+Perfetto traces live under `logs/<run_id>/profiler/plugins/profile/.../perfetto_trace.json.gz` and are uploaded to W&B
+as the `jax_profile` artifact.

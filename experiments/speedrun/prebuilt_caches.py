@@ -22,11 +22,11 @@ They are built with experiments.speedrun.build_prebuilt_caches.py.
 
 """
 
-from experiments.marin_models import marin_tokenizer
+from experiments.llama import llama3_tokenizer
 from marin.processing.tokenize.download_pretokenized import download_pretokenized_cache
 
 fineweb_edu_10B_repo_id = "marin-community/fineweb-edu-pretokenized-10B"
-fineweb_edu_subcache_10B = download_pretokenized_cache("fineweb-edu-10B", fineweb_edu_10B_repo_id, marin_tokenizer)
+fineweb_edu_subcache_10B = download_pretokenized_cache("fineweb-edu-10B", fineweb_edu_10B_repo_id, llama3_tokenizer)
 
 fineweb_edu_10M_repo_id = "marin-community/fineweb-edu-pretokenized-10M"
-fineweb_edu_subcache_10M = download_pretokenized_cache("fineweb-edu-10M", fineweb_edu_10M_repo_id, marin_tokenizer)
+fineweb_edu_subcache_10M = download_pretokenized_cache("fineweb-edu-10M", fineweb_edu_10M_repo_id, llama3_tokenizer)

@@ -59,3 +59,10 @@ Copy/paste this block for new experiments:
 - Status: active
 - Purpose: Head-to-head comparison between Hackable Transformer and Grugformer (no sinks).
 
+### grugformer-moe
+- Path: `experiments/speedrun/grugformer_moe/`
+- Introduced: TBD
+- Last known-good: TBD
+- Status: active
+- Purpose: Grugformer MoE entrypoints (Mixtral/OLMoE-style router + expert MLP).
+- Notes: Intended for throughput/MFU work; supports GMM (Megablox) and JAX profiling flags.

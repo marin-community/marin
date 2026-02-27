@@ -16,6 +16,7 @@ from jax import shard_map
 
 import haliax as hax
 import haliax.nn as hnn
+import haliax.state_dict as hstate
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.normalization import LayerNormBase
@@ -28,6 +29,7 @@ from levanter.layers.attention import Attention, AttentionBackend, AttentionConf
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.moe_load_balance import equilibrium_bias_delta_from_topk
 from levanter.models.mistral import MistralConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -83,6 +85,10 @@ class MixtralConfig(MistralConfig):
 
     lbl_coef: Optional[float] = 0.01
     rzl_coef: Optional[float] = 0.001
+    router_fp32: bool = False
+    equilibrium_lb_loss_scale: float = 0.0
+    equilibrium_lb_center_bias: bool = True
+    equilibrium_lb_unit_capacity: float = 1.0
 
     # Attention-related config
     upcast_attn: bool = False
@@ -318,6 +324,7 @@ class MixtralSparseMoeBlock(eqx.Module):
     config: MistralConfig = eqx.field(static=True)
     gate: hnn.Linear  # projection from Embed to Experts
     experts: MixtralMoEMlp
+    router_bias: NamedArray
 
     @staticmethod
     def init(config: MistralConfig, *, key) -> "MixtralSparseMoeBlock":
@@ -332,8 +339,28 @@ class MixtralSparseMoeBlock(eqx.Module):
             key=k_experts,
             use_bias=config.use_bias,
         )
+        router_bias = hax.zeros(config.Experts)
 
-        return MixtralSparseMoeBlock(config, gate, experts)
+        return MixtralSparseMoeBlock(config, gate, experts, router_bias)
+
+    def to_state_dict(self, prefix: str | None = None) -> StateDict:
+        """Torch-compatible serialization.
+
+        `router_bias` is a Levanter-only parameter, so it is intentionally omitted from the exported state dict.
+        """
+        state_dict: StateDict = {}
+        state_dict.update(hstate.to_state_dict(self.gate, prefix=hstate.with_prefix(prefix, "gate")))
+        state_dict.update(hstate.to_state_dict(self.experts, prefix=hstate.with_prefix(prefix, "experts")))
+        return state_dict
+
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> "MixtralSparseMoeBlock":
+        """Torch-compatible deserialization.
+
+        `router_bias` is not present in HF checkpoints; keep the initialized value.
+        """
+        gate = hstate.from_state_dict(self.gate, state_dict, prefix=hstate.with_prefix(prefix, "gate"))
+        experts = hstate.from_state_dict(self.experts, state_dict, prefix=hstate.with_prefix(prefix, "experts"))
+        return eqx.tree_at(lambda m: (m.gate, m.experts), self, (gate, experts))
 
     def _route(self, router_probs: NamedArray, Token: Axis, TopExperts: Axis):
         @partial(
@@ -440,9 +467,25 @@ class MixtralSparseMoeBlock(eqx.Module):
         x_flat = hax.flatten_axes(x, old_axes=squash_axes, new_axis="token")  # [Batch, Pos, Embed] -> [Token, Embed]
         Token = x_flat.resolve_axis("token")
 
-        router_logits = self.gate(x_flat, key=k_gate)
+        router_fp32 = bool(getattr(self.config, "router_fp32", False))
+        x_for_gate = x_flat.astype(jnp.float32) if router_fp32 else x_flat
+        router_logits = self.gate(x_for_gate, key=k_gate)
+        if router_fp32 and router_logits.array.dtype != jnp.float32:
+            router_logits = router_logits.astype(jnp.float32)
+
+        equilibrium_scale = float(getattr(self.config, "equilibrium_lb_loss_scale", 0.0))
+        selection_logits = router_logits
+        if equilibrium_scale > 0:
+            bias = self.router_bias
+            if bool(getattr(self.config, "equilibrium_lb_center_bias", True)):
+                bias = bias - hax.mean(bias, axis=Experts)
+            if router_fp32 and bias.array.dtype != jnp.float32:
+                bias = bias.astype(jnp.float32)
+            selection_logits = selection_logits + bias
+
         router_probs = hnn.softmax(router_logits, axis=Experts)
-        topk_weights, topk_idx = self._route(router_probs, Token, TopExperts)
+        selection_probs = hnn.softmax(selection_logits, axis=Experts) if equilibrium_scale > 0 else router_probs
+        topk_weights, topk_idx = self._route(selection_probs, Token, TopExperts)
 
         topk_idx_flat = hax.flatten_axes(topk_idx, old_axes=[Token, TopExperts], new_axis="token_repeat")
         TokenRepeat = topk_idx_flat.resolve_axis("token_repeat")
@@ -462,7 +505,7 @@ class MixtralSparseMoeBlock(eqx.Module):
         extras = {
             "expert_loads": expert_loads,
         }
-        if self.config.lbl_coef is not None:
+        if self.config.lbl_coef is not None and equilibrium_scale <= 0:
             f = expert_loads * self.config.n_routed_experts / self.config.num_experts_per_tok
             p = hax.mean(router_probs, axis=Token)
             extras["load_balancing_loss"] = self.config.lbl_coef * hax.sum(f * p, axis=Experts)
@@ -470,6 +513,21 @@ class MixtralSparseMoeBlock(eqx.Module):
             extras["router_z_loss"] = self.config.rzl_coef * hax.mean(
                 hnn.logsumexp(router_logits, axis=Experts) ** 2, axis=Token
             )
+        if equilibrium_scale > 0:
+            delta_arr, weighted_load_arr, target_load_arr, quantile_prob_arr = equilibrium_bias_delta_from_topk(
+                selection_logits.array,
+                topk_idx.array,
+                topk_weights.array,
+                unit_capacity=float(getattr(self.config, "equilibrium_lb_unit_capacity", 1.0)),
+            )
+            delta = hax.named(jax.lax.stop_gradient(delta_arr), Experts)
+            extras["equilibrium_lb_bias_loss"] = equilibrium_scale * hax.sum(self.router_bias * delta, axis=Experts)
+            extras["equilibrium_lb_weighted_load"] = hax.named(weighted_load_arr, Experts)
+            extras["equilibrium_lb_target_load"] = hax.named(
+                jnp.full((Experts.size,), target_load_arr, dtype=weighted_load_arr.dtype),
+                Experts,
+            )
+            extras["equilibrium_lb_quantile_prob"] = hax.named(quantile_prob_arr, Experts)
 
         return hax.unflatten_axis(out, axis=Token, new_axes=squash_axes), extras  # [Batch, Pos, Embed]
 
@@ -561,12 +619,21 @@ class MixtralTransformer(eqx.Module):
             for j in range(self.config.n_routed_experts):
                 stats[f"moe/layer{i}/expert{j}_load"] = expert_loads.array[i, j]
 
-        if self.config.lbl_coef is not None:
+        if "load_balancing_loss" in extras:
             extras["load_balancing_loss"] = hax.sum(extras["load_balancing_loss"], axis=self.config.Layers)
             stats["train/load_balancing_loss"] = extras["load_balancing_loss"].array
-        if self.config.rzl_coef is not None:
+        if "router_z_loss" in extras:
             extras["router_z_loss"] = hax.sum(extras["router_z_loss"], axis=self.config.Layers)
             stats["train/router_z_loss"] = extras["router_z_loss"].array
+        if "equilibrium_lb_bias_loss" in extras:
+            extras["equilibrium_lb_bias_loss"] = hax.sum(extras["equilibrium_lb_bias_loss"], axis=self.config.Layers)
+            stats["train/equilibrium_lb_bias_loss"] = extras["equilibrium_lb_bias_loss"].array
+        if "equilibrium_lb_weighted_load" in extras and "equilibrium_lb_target_load" in extras:
+            rel_violation = jnp.abs(
+                (extras["equilibrium_lb_weighted_load"].array - extras["equilibrium_lb_target_load"].array)
+                / jnp.maximum(extras["equilibrium_lb_target_load"].array, 1e-6)
+            )
+            stats["moe/equilibrium_rel_load_violation_max"] = jnp.max(rel_violation)
 
         levanter.tracker.jit_log(stats)
 
@@ -650,10 +717,12 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
         x, extras = self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids)
 
         aux_loss: NamedArray | float = 0
-        if self.config.lbl_coef is not None:
+        if "load_balancing_loss" in extras:
             aux_loss += extras["load_balancing_loss"]
-        if self.config.rzl_coef is not None:
+        if "router_z_loss" in extras:
             aux_loss += extras["router_z_loss"]
+        if "equilibrium_lb_bias_loss" in extras:
+            aux_loss += extras["equilibrium_lb_bias_loss"]
         return x, aux_loss
 
     def get_lm_head(self) -> hax.NamedArray:
