@@ -493,6 +493,8 @@ def k8s_runtime(k8s_cluster):
         if result.returncode == 0:
             break
         time.sleep(0.5)
+    else:
+        pytest.skip(f"default ServiceAccount not ready in namespace {namespace} after 30s")
     runtime = KubernetesRuntime(namespace=namespace)
     try:
         yield runtime
