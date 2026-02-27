@@ -1,0 +1,74 @@
+does harbor support mini-swe-agent v2 (the latest)?
+
+---
+
+yes
+
+---
+
+why would we worry about the trajectory format?
+
+---
+
+Ok then, what would it take to update exp2602_harbor_ot_tb_dev.py to support evaluating on https://huggingface.REDACTED, a random 100 task subset of sweb?
+
+---
+
+Would this version be more suitable? https://huggingface.co/datasets/DCAgent2/swebench-verified-random-100-folders
+
+---
+
+uv run lib/marin/src/marin/run/ray_run.py \
+        --env_vars MARIN_PREFIX gs://marin-us-central1 \
+        --env_vars DAYTONA_API_KEY ${DAYTONA_API_KEY} \
+        --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
+        --env_vars WANDB_ENTITY marin-community \
+        --env_vars WANDB_PROJECT harbor \
+        --env_vars HF_TOKEN ${HF_TOKEN} \
+        --env_vars HARBOR_MODEL_NAME OpenThinker-Agent-v1 \
+        --env_vars HARBOR_MODEL_PATH open-thoughts/OpenThinker-Agent-v1 \
+        --env_vars MARIN_VLLM_MODE native \
+        --cluster us-central1 \
+        --extra harbor,vllm \
+        --no_wait \
+        -- python experiments/exp2602_harbor_ot_tb_dev.py
+
+---
+
+[Request interrupted by user]
+
+---
+
+Can you give me an updated version of the command above to evaluate gs:REDACTED on the sweb 100 subset
+
+---
+
+I think you also need to specify the agent harness right?
+
+---
+
+mini-swe-agent v2
+
+---
+
+Can you look into lib/harbor? I thought src/harbor/agents/installed/install-mini-swe-agent.sh.j2 should already be using the pypi version
+
+---
+
+Revert this change. I thought we merged the latest harbor main a while back right? It should already contain this fix?
+
+---
+
+Can you just pull https://github.REDACTED.sh.j2 and check? It already uses pypi
+
+---
+
+Revert this patch, can you look into why that merge didn't include this change?
+
+---
+
+Could you undo that 'merge' and redo a proper merge that preserves the py311 patches but gets all the most up to date changes from upstream?
+
+---
+
+[Request interrupted by user for tool use]
