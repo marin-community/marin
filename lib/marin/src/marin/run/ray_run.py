@@ -35,6 +35,39 @@ logger = logging.getLogger(__name__)
 REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
 
 
+_NON_SENSITIVE_TOKEN_KEYS = frozenset(
+    {
+        # Common non-secret env vars that happen to contain "TOKEN" or "KEY".
+        "TOKENIZERS_PARALLELISM",
+    }
+)
+
+
+def _is_sensitive_env_key(key: str) -> bool:
+    upper = key.upper()
+    if upper in _NON_SENSITIVE_TOKEN_KEYS:
+        return False
+
+    # Exact match for common secrets.
+    if upper in {
+        "HF_TOKEN",
+        "WANDB_API_KEY",
+        "OPENAI_API_KEY",
+        "GITHUB_TOKEN",
+        "RAY_AUTH_TOKEN",
+        "GCLOUD_ACCESS_TOKEN",
+    }:
+        return True
+
+    # Conservative substring-based redaction. It's better to over-redact than to leak secrets
+    # into terminal logs (which can be copied into chat transcripts).
+    return any(s in upper for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD"))
+
+
+def _redact_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
+    return {k: "<redacted>" if _is_sensitive_env_key(k) and v else v for k, v in env_vars.items()}
+
+
 def _maybe_enable_ray_token_auth(*, require_token: bool) -> None:
     """Enable token auth client-side.
 
@@ -152,12 +185,24 @@ async def submit_and_track_job(
 
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Extras: {extra}")
-    logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")
+    logger.info(f"env_vars: {json.dumps(_redact_env_vars(env_vars), indent=4)}")
 
     runtime_dict = {
         "working_dir": current_dir,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"],
+        "excludes": [
+            ".git",
+            "docs/",
+            "**/*.pack",
+            "lib/levanter/docs",
+            # Local artifacts which can exceed Ray's request body limit during `ray job submit`.
+            "checkpoints/",
+            "logs/",
+            ".tmp_profiles/",
+            "profiles/",
+            "tmp_wandb_manifests/",
+            "wandb/",
+        ],
     }
 
     # add the TPU dependency for cluster jobs.
@@ -167,10 +212,11 @@ async def submit_and_track_job(
 
     runtime_dict = build_runtime_env_for_packages(extra=[*extra_list], env_vars=env_vars) | runtime_dict
 
+    redacted_runtime_dict = runtime_dict | {"env_vars": _redact_env_vars(runtime_dict.get("env_vars", {}))}
     logger.info(
         f"Terminal command: \n"
         f"ray job submit "
-        f"--runtime-env-json '{json.dumps(runtime_dict)}' "
+        f"--runtime-env-json '{json.dumps(redacted_runtime_dict)}' "
         f"--submission-id '{submission_id} "
         f" -- {entrypoint}"
     )

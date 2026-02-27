@@ -72,7 +72,12 @@ def _identity_activation(x):
     return x
 
 
-def _build_olmoe_m_config(seq_len: int, *, cross_entropy_block_size: int) -> MixtralConfig:
+def _build_olmoe_m_config(
+    seq_len: int,
+    *,
+    cross_entropy_block_size: int,
+    cross_entropy_implementation: str | None,
+) -> MixtralConfig:
     # Keep expert granularity fixed: topk/n_experts = 2/16 = 1/8.
     return MixtralConfig(
         seq_len=seq_len,
@@ -87,10 +92,9 @@ def _build_olmoe_m_config(seq_len: int, *, cross_entropy_block_size: int) -> Mix
         gradient_checkpointing=True,
         scan_layers=True,
         use_gmm=True,
-        # Keep the CE vocab block size modest: very large blocks can trigger TPU/XLA allocation-size overflows for
-        # (tokens x vocab_block) intermediates at long seq / large batch settings.
+        # Default keeps the existing high-MFU fused CE behavior; callers can override for stability/debugging.
         cross_entropy_block_size=cross_entropy_block_size,
-        cross_entropy_implementation="xla",
+        cross_entropy_implementation=cross_entropy_implementation,
         flash_attention_block_size=None,
         reference_checkpoint=OLMOE_1B7B_REFERENCE_CHECKPOINT,
         tokenizer=OLMOE_1B7B_REFERENCE_CHECKPOINT,
@@ -145,6 +149,7 @@ def _make_tags(
 
 
 def main() -> None:
+    variant_choices = ("olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab2", "olmoe_m_stab3", "olmoe_m_stab5")
     parser = argparse.ArgumentParser(
         description=(
             "OLMoE-M LR sweep on configurable Nemotron-family datasets "
@@ -152,6 +157,25 @@ def main() -> None:
         )
     )
     parser.add_argument("--tpu-type", default="v5p-16")
+    parser.add_argument(
+        "--tpu-head-resource",
+        action="append",
+        default=[],
+        help=(
+            "Additional Ray custom resource required on the TPU slice head when acquiring a slice. "
+            "Use KEY or KEY=VALUE. Repeatable. Useful for pinning runs to specific labeled TPU workers."
+        ),
+    )
+    parser.add_argument(
+        "--variant-head-resource",
+        action="append",
+        default=[],
+        metavar="VARIANT=RESOURCE",
+        help=(
+            "Pin a specific variant to a TPU worker by requiring RESOURCE on the TPU slice head when acquiring a "
+            "slice. Repeatable. Example: --variant-head-resource olmoe_m=olmoe_base"
+        ),
+    )
     parser.add_argument("--seq-len", type=int, default=4096)
     parser.add_argument("--global-batch-size", type=int, default=256)
     parser.add_argument("--token-target", type=int, default=40_000_000_000)
@@ -160,6 +184,13 @@ def main() -> None:
         type=int,
         default=2048,
         help="Vocab block size for fused CE. Smaller values reduce TPU/XLA allocation pressure.",
+    )
+    parser.add_argument(
+        "--cross-entropy-implementation",
+        type=str,
+        choices=("auto", "pallas_tpu", "xla", "reference"),
+        default="pallas_tpu",
+        help="Cross-entropy backend. Use xla to avoid pallas scoped-vmem pressure.",
     )
 
     parser.add_argument(
@@ -184,8 +215,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--disable-default-validation",
+        dest="disable_default_validation",
         action="store_true",
         help="Disable default Levanter validation losses (Paloma + uncheatable).",
+    )
+    parser.add_argument(
+        "--enable-default-validation",
+        dest="disable_default_validation",
+        action="store_false",
+        help="Enable default Levanter validation losses (Paloma + uncheatable).",
     )
 
     parser.add_argument(
@@ -203,7 +241,8 @@ def main() -> None:
     parser.add_argument(
         "--dataset-tokenizer",
         type=str,
-        default="stanford-crfm/marin-tokenizer",
+        # Nemotron-CC tokenized caches are built with the Llama 3 tokenizer.
+        default="meta-llama/Meta-Llama-3.1-8B",
         help=(
             "Optional tokenizer name/path used for vocab size / special ids. "
             "Must match the tokenizer used to pretokenize the dataset."
@@ -220,7 +259,9 @@ def main() -> None:
     )
     parser.add_argument("--checkpoint-save-minutes", type=int, default=60)
 
-    parser.add_argument("--wandb-project", type=str, default="olmoe_m")
+    # This sweep is Nemotron-family specific; default to the Nemotron project to
+    # avoid accidental logging into the generic OLMoE project.
+    parser.add_argument("--wandb-project", type=str, default="olmoe_m_nemotron")
     parser.add_argument("--wandb-name-suffix", type=str, default=None)
     parser.add_argument("--run-suffix", type=str, default=None)
     parser.add_argument("--extra-tag", action="append", default=[], help="Additional W&B tag (repeatable).")
@@ -229,7 +270,7 @@ def main() -> None:
     parser.add_argument(
         "--variants",
         nargs="+",
-        choices=("olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab2", "olmoe_m_stab3", "olmoe_m_stab5"),
+        choices=variant_choices,
         default=["olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab3", "olmoe_m_stab5"],
         help=("Which variants to run (default: " "olmoe_m olmoe_m_bilinear olmoe_m_stab3 olmoe_m_stab5)."),
     )
@@ -247,7 +288,7 @@ def main() -> None:
             "Set to 1 to use a single TPU slice per submission (sequential LR runs)."
         ),
     )
-    parser.set_defaults(force_run_failed=True)
+    parser.set_defaults(force_run_failed=True, disable_default_validation=True)
     parser.add_argument(
         "--no-force-run-failed",
         dest="force_run_failed",
@@ -262,6 +303,42 @@ def main() -> None:
         raise ValueError("--learning-rates must include at least one value.")
 
     use_default_validation = not args.disable_default_validation
+
+    tpu_head_resources: dict[str, float] = {}
+    for item in args.tpu_head_resource:
+        item = (item or "").strip()
+        if not item:
+            continue
+        if "=" in item:
+            key, value = item.split("=", 1)
+            key = key.strip()
+            if not key:
+                raise ValueError(f"Invalid --tpu-head-resource '{item}': key must be non-empty.")
+            tpu_head_resources[key] = float(value)
+        else:
+            tpu_head_resources[item] = 1.0
+
+    variant_head_resource: dict[str, str] = {}
+    for item in args.variant_head_resource:
+        item = (item or "").strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(
+                f"Invalid --variant-head-resource '{item}': expected VARIANT=RESOURCE "
+                "(for example: --variant-head-resource olmoe_m=olmoe_base)."
+            )
+        variant, resource = item.split("=", 1)
+        variant = variant.strip()
+        resource = resource.strip()
+        if not variant or not resource:
+            raise ValueError(f"Invalid --variant-head-resource '{item}': variant and resource must be non-empty.")
+        if variant not in variant_choices:
+            raise ValueError(
+                f"Invalid --variant-head-resource '{item}': unknown variant '{variant}'. "
+                f"Expected one of: {', '.join(variant_choices)}."
+            )
+        variant_head_resource[variant] = resource
 
     tokens_per_step = args.global_batch_size * args.seq_len
     num_train_steps = max(1, _ceil_div(args.token_target, tokens_per_step))
@@ -282,7 +359,7 @@ def main() -> None:
         adamc_weight_decay=True,
     )
     base_train_config = SimpleTrainConfig(
-        resources=ResourceConfig.with_tpu(tpu_type=args.tpu_type),
+        resources=ResourceConfig.with_tpu(tpu_type=args.tpu_type, tpu_head_resources=tpu_head_resources),
         train_batch_size=args.global_batch_size,
         num_train_steps=num_train_steps,
         learning_rate=float(args.learning_rates[0]),
@@ -300,9 +377,17 @@ def main() -> None:
         tokenized,
         permutation_type=args.permutation_type,
         tokenizer=args.dataset_tokenizer,
+        auto_build_caches=False,
     )
 
-    olmoe_m = _build_olmoe_m_config(args.seq_len, cross_entropy_block_size=args.cross_entropy_block_size)
+    cross_entropy_implementation = (
+        None if args.cross_entropy_implementation == "auto" else args.cross_entropy_implementation
+    )
+    olmoe_m = _build_olmoe_m_config(
+        args.seq_len,
+        cross_entropy_block_size=args.cross_entropy_block_size,
+        cross_entropy_implementation=cross_entropy_implementation,
+    )
     olmoe_m_bilinear = dataclasses.replace(olmoe_m, activation_function=_identity_activation)
     olmoe_m_stab2 = dataclasses.replace(
         olmoe_m,
@@ -342,6 +427,11 @@ def main() -> None:
         train_cfg = dataclasses.replace(base_train_config, learning_rate=lr, optimizer_config=optimizer_cfg)
 
         for variant, model_cfg in variants:
+            variant_resources = dict(tpu_head_resources)
+            variant_resource_key = variant_head_resource.get(variant)
+            if variant_resource_key:
+                variant_resources[variant_resource_key] = 1.0
+
             base_name = f"olmoe_m_40b/{variant}/lr_{lr_tag}/s{args.seq_len}_b{args.global_batch_size}"
 
             suffix = f"_{args.wandb_name_suffix}" if args.wandb_name_suffix else ""
@@ -374,12 +464,16 @@ def main() -> None:
             )
 
             run_suffix = f"_{args.run_suffix}" if args.run_suffix else ""
+            train_cfg_variant = dataclasses.replace(
+                train_cfg,
+                resources=dataclasses.replace(train_cfg.resources, tpu_head_resources=variant_resources),
+            )
             steps.append(
                 default_train(
                     name=f"{base_name}{run_suffix}",
                     tokenized=tokenized,
                     model_config=model_cfg,
-                    train_config=train_cfg,
+                    train_config=train_cfg_variant,
                     tags=tags,
                     use_default_validation=use_default_validation,
                     eval_harness_tasks=(),

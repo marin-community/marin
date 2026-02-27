@@ -173,7 +173,7 @@ def build_runtime_env_for_packages(
     # Add resiliparse custom index
     requirements_txt.append("--extra-index-url https://marin-community.github.io/chatnoir-resiliparse/simple")
 
-    torch_pkgs = []
+    torch_pkgs: list[str] = []
     for pkg in package_spec.package_specs + pip_packages:
         # Defer torch-family installs to the end so that the --extra-index-url only applies to them
         if pkg.startswith(TORCH_GPU_PACKAGE_PREFIXES):
@@ -183,6 +183,17 @@ def build_runtime_env_for_packages(
 
     # Force the correct PyTorch wheel index for the requested accelerator type
     accel_type = accelerator_type_from_extra(extra)
+    if accel_type == AcceleratorType.TPU and torch_pkgs:
+        # Most TPU jobs in Marin/Levanter are JAX-based and do not require PyTorch.
+        #
+        # If a CUDA-enabled torch wheel is (incorrectly) selected during Ray runtime env setup,
+        # it can fail to import on non-GPU nodes (e.g., missing libcudart/libcublas), which
+        # cascades into unrelated failures when libraries like Transformers probe for torch.
+        #
+        # Dropping torch-family dependencies for TPU jobs avoids that entire class of issues
+        # and significantly reduces runtime env setup time.
+        logger.info("Dropping torch-family dependencies for TPU Ray jobs: %s", ", ".join(torch_pkgs))
+        torch_pkgs = []
     if accel_type in {AcceleratorType.CPU, AcceleratorType.TPU, AcceleratorType.NONE}:
         requirements_txt.append("--extra-index-url https://download.pytorch.org/whl/cpu")
     elif accel_type == AcceleratorType.GPU:
