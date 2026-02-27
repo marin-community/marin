@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ruff: noqa: RUF001
+# ruff: noqa: RUF002
+
 import argparse
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -23,11 +27,13 @@ import pandas as pd
 from rich.console import Console
 from rich.table import Table
 from scipy.interpolate import griddata
+from scipy.optimize import minimize, nnls
 import wandb
 
-RUN_VERSION = "2.13"
+RUN_VERSION = "1.0"
 RUN_PREFIX = f"plantcad_isoflop_v{RUN_VERSION}"
-RESULT_PATH = f"experiments/plantcad/results/v{RUN_VERSION}"
+RESULT_VERSION = "1.15"
+RESULT_PATH = f"experiments/plantcad/results/v{RESULT_VERSION}"
 EXPORT_DPI = 300
 DEFAULT_ARCH = "qwen"
 
@@ -60,6 +66,11 @@ def setup_logging(log_path: Path) -> None:
     logger.addHandler(file_handler)
 
 
+# ------------------------------------------------------------
+# Data loading and filtering utilities
+# ------------------------------------------------------------
+
+
 def filter_to_finished_runs(df: pd.DataFrame, allow_crashed: bool = False) -> pd.DataFrame:
     """Filter dataframe to include finished runs and nearly-complete crashed runs.
 
@@ -75,7 +86,7 @@ def filter_to_finished_runs(df: pd.DataFrame, allow_crashed: bool = False) -> pd
         return df[is_finished]
 
 
-EXPLODED_RUNS: dict[str, list[str]] = {}
+EXPLODED_RUNS: dict[str, list[str]] = {"1.0": ["plantcad_isoflop_v1.0-A_qwen-F2.0e+17-P3.2M-T10.7B-E1-0ccefa"]}
 EXPLODED_BUDGETS: dict[str, list[float]] = {
     "1.9": [1.0e16],
     "1.10": [3.3e16],
@@ -111,21 +122,6 @@ def filter_exploded_runs(df: pd.DataFrame) -> pd.DataFrame:
             logger.warning(f"Filtering {len(budget_runs)} runs at exploded budget {budget:.1e}: {budget_runs}")
 
     return df[~run_mask & ~budget_mask]
-
-
-def save_figure(fig, output_path: str) -> None:
-    """Save figure as both PNG and PDF at EXPORT_DPI resolution."""
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Save PNG
-    fig.savefig(output_path, dpi=EXPORT_DPI, bbox_inches="tight")
-    logger.info(f"Saved plot to {output_path}")
-
-    # Save PDF
-    pdf_path = output_path.with_suffix(".pdf")
-    fig.savefig(pdf_path, dpi=EXPORT_DPI, bbox_inches="tight")
-    logger.info(f"Saved plot to {pdf_path}")
 
 
 def log_run_object(run, run_idx):
@@ -328,6 +324,214 @@ def summarize_runs(df):
         f"[bold]{df['total_gflops'].sum() * gflops_to_flops:.3e}[/bold]",
     )
     console.print(flops_table)
+
+
+# ------------------------------------------------------------
+# Scaling law estimation utilities
+# ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LossSurface:
+    """Configuration for the loss function L(N, D) = E + A/N^α + B/D^β.
+
+    Attributes:
+        alpha: Parameter scaling exponent
+        beta: Data scaling exponent
+        A: Parameter scaling coefficient
+        B: Data scaling coefficient
+        E: Irreducible loss (entropy of natural text)
+    """
+
+    alpha: float
+    beta: float
+    A: float
+    B: float
+    E: float
+
+    @property
+    def a(self) -> float:
+        """N* scaling exponent: a = β/(α+β)."""
+        return self.beta / (self.alpha + self.beta)
+
+    @property
+    def b(self) -> float:
+        """D* scaling exponent: b = α/(α+β)."""
+        return self.alpha / (self.alpha + self.beta)
+
+    @property
+    def imbalance_ratio(self) -> float:
+        """Ratio of alpha to beta (α/β)."""
+        return self.alpha / self.beta
+
+    @property
+    def G(self) -> float:
+        """Scaling constant relating optimal N* and D* to compute.
+
+        From the Chinchilla paper (Appendix A), minimizing L(N,D) subject to
+        C = 6ND yields the optimal allocation where:
+            N* = G · (C/6)^a
+            D* = (1/G) · (C/6)^b
+
+        The constant G is defined as:
+            G = (αA / βB)^(1/(α+β))
+
+        This ensures N* · D* = C/6 holds exactly.
+        """
+        return ((self.alpha * self.A) / (self.beta * self.B)) ** (1.0 / (self.alpha + self.beta))
+
+    @property
+    def a_intercept(self) -> float:
+        """Intercept of log₁₀(N*) vs log₁₀(C) power law.
+
+        From N* = G · (C/6)^a:
+            log₁₀(N*) = a·log₁₀(C) + (log₁₀(G) - a·log₁₀(6))
+
+        The intercept is: log₁₀(G) - a·log₁₀(6)
+        """
+        return np.log10(self.G) - (self.a * np.log10(6))
+
+    @property
+    def b_intercept(self) -> float:
+        """Intercept of log₁₀(D*) vs log₁₀(C) power law.
+
+        From D* = (1/G) · (C/6)^b:
+            log₁₀(D*) = b·log₁₀(C) + (-log₁₀(G) - b·log₁₀(6))
+
+        The intercept is: -log₁₀(G) - b·log₁₀(6)
+        """
+        return -np.log10(self.G) - (self.b * np.log10(6))
+
+    def N_opt(self, C: float) -> float:
+        """Compute optimal parameter count N* for a given compute budget.
+
+        From the Chinchilla paper, the optimal allocation is:
+            N* = G · (C/6)^(β/(α+β))
+
+        where G = (αA/βB)^(1/(α+β)) and C = 6ND is the compute approximation.
+
+        Args:
+            C: Compute budget in FLOPs
+
+        Returns:
+            Optimal number of parameters N*
+        """
+        return self.G * ((C / 6) ** self.a)
+
+    def D_opt(self, C: float) -> float:
+        """Compute optimal token count D* for a given compute budget.
+
+        From the Chinchilla paper, the optimal allocation is:
+            D* = (1/G) · (C/6)^(α/(α+β))
+
+        where G = (αA/βB)^(1/(α+β)) and C = 6ND is the compute approximation.
+
+        Args:
+            C: Compute budget in FLOPs
+
+        Returns:
+            Optimal number of training tokens D*
+        """
+        return (1 / self.G) * ((C / 6) ** self.b)
+
+    def loss(self, N: float, D: float) -> float:
+        """Compute loss L(N, D) = E + A/N^α + B/D^β.
+
+        Args:
+            N: Number of parameters
+            D: Number of training tokens
+
+        Returns:
+            Loss value for the (N, D) pair
+        """
+        return self.E + (self.A / (N**self.alpha)) + (self.B / (D**self.beta))
+
+
+def fit_vpnls(N: np.ndarray, D: np.ndarray, L: np.ndarray) -> LossSurface:
+    """Fit L(N,D) = E + A/N^α + B/D^β via variable-projection NNLS.
+
+    Uses a 64x64 grid search over (alpha, beta) to initialize Nelder-Mead optimization.
+    For each (alpha, beta), the linear parameters (E, A, B) are solved via NNLS.
+    """
+    N, D, L = np.asarray(N, dtype=float), np.asarray(D, dtype=float), np.asarray(L, dtype=float)
+    if not (len(N) == len(D) == len(L)):
+        raise ValueError(f"N, D, L must have same length; got {len(N)}, {len(D)}, {len(L)}")
+    if not (np.all(np.isfinite(N)) and np.all(np.isfinite(D)) and np.all(np.isfinite(L))):
+        raise ValueError("N, D, L must all be finite")
+    if not (np.all(N > 0) and np.all(D > 0) and np.all(L > 0)):
+        raise ValueError("N, D, L must all be positive")
+
+    log_N, log_D = np.log(N), np.log(D)
+
+    def _rss_and_params(alpha, beta):
+        """Solve NNLS for (E, A, B) given (alpha, beta), return (rss, E, A, B)."""
+        X = np.column_stack([np.ones(len(L)), np.exp(-alpha * log_N), np.exp(-beta * log_D)])
+        params, rss = nnls(X, L)
+        if rss == 0.0:
+            rss = np.sum((L - X @ params) ** 2)
+        return rss, params[0], params[1], params[2]
+
+    # Grid search over (alpha, beta)
+    grid_size = 64
+    alphas = np.linspace(0.05, 0.95, grid_size)
+    betas = np.linspace(0.05, 0.95, grid_size)
+    best_rss, best_i, best_j = np.inf, 0, 0
+    for i, a in enumerate(alphas):
+        for j, b in enumerate(betas):
+            rss, _, _, _ = _rss_and_params(a, b)
+            if rss < best_rss:
+                best_rss, best_i, best_j = rss, i, j
+
+    if best_i in (0, grid_size - 1) or best_j in (0, grid_size - 1):
+        logger.warning(f"VPNLS grid-search optimum on edge: alpha_idx={best_i}, beta_idx={best_j}")
+
+    # Nelder-Mead refinement
+    def _objective(x):
+        return _rss_and_params(x[0], x[1])[0]
+
+    result = minimize(
+        _objective,
+        x0=[alphas[best_i], betas[best_j]],
+        method="Nelder-Mead",
+        bounds=[(0.01, 2.0), (0.01, 2.0)],
+        options={"xatol": 1e-8, "fatol": 1e-10, "maxiter": 1000, "adaptive": True},
+    )
+
+    if not result.success and "max" not in result.message.lower():
+        logger.warning(f"VPNLS Nelder-Mead: {result.message}")
+
+    alpha_opt, beta_opt = result.x
+    if alpha_opt <= 0.011 or alpha_opt >= 1.99 or beta_opt <= 0.011 or beta_opt >= 1.99:
+        logger.warning(f"VPNLS optimum near bounds: alpha={alpha_opt:.4f}, beta={beta_opt:.4f}")
+
+    _, E, A, B = _rss_and_params(alpha_opt, beta_opt)
+
+    surface = LossSurface(alpha=alpha_opt, beta=beta_opt, A=A, B=B, E=E)
+    if not all(np.isfinite([surface.E, surface.A, surface.B, surface.alpha, surface.beta])):
+        raise RuntimeError(f"VPNLS fit produced non-finite params: {surface}")
+
+    logger.info(f"VPNLS fit: E={E:.4f}, A={A:.4f}, B={B:.4f}, alpha={alpha_opt:.4f}, beta={beta_opt:.4f}")
+    return surface
+
+
+# ------------------------------------------------------------
+# Visualization utilities
+# ------------------------------------------------------------
+
+
+def save_figure(fig, output_path: str) -> None:
+    """Save figure as both PNG and PDF at EXPORT_DPI resolution."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Save PNG
+    fig.savefig(output_path, dpi=EXPORT_DPI, bbox_inches="tight")
+    logger.info(f"Saved plot to {output_path}")
+
+    # Save PDF
+    pdf_path = output_path.with_suffix(".pdf")
+    fig.savefig(pdf_path, dpi=EXPORT_DPI, bbox_inches="tight")
+    logger.info(f"Saved plot to {pdf_path}")
 
 
 def visualize_loss_by_token_count(df, metric="eval_loss", output_path=f"{RESULT_PATH}/plantcad_loss_by_tokens.png"):
@@ -617,201 +821,8 @@ def visualize_loss_by_param_and_epoch_count(
     save_figure(fig, output_path)
 
 
-# ------------------------------------------------------------
-# Isoflop scaling law analysis (from exp2101_plantcad_isoflop_fit.py)
-# ------------------------------------------------------------
-
-
-def fit_quadratic_optimum(x_vals, loss_vals):
-    """
-    Fits L = a*(ln x)^2 + b*(ln x) + c and returns optimal x.
-    Returns (x_opt, fit_coeffs).
-    Raises ValueError if the fit is concave (no minimum).
-    """
-    log_x = np.log(x_vals)
-    coeffs = np.polyfit(log_x, loss_vals, 2)  # [a, b, c]
-    a, b, _ = coeffs
-
-    # if a <= 0:
-    #     raise ValueError(f"Concave fit detected: {coeffs}")
-
-    # Minimum at ln x = -b / (2a)
-    ln_x_opt = -b / (2 * a)
-    x_opt = np.exp(ln_x_opt)
-    return x_opt, coeffs
-
-
-def analyze_budgets(df):
-    """
-    Analyzes each budget group to find optimal N and D using independent quadratic fits.
-    Returns a DataFrame with columns: budget, opt_N, opt_D, coeffs_N, coeffs_D, group_data.
-    """
-    budgets = sorted(df["flops_budget"].unique())
-    results = []
-
-    for budget in budgets:
-        group = df[df["flops_budget"] == budget].sort_values("params")
-        if len(group) < 3:
-            print(f"Skipping budget {budget}: has fewer than 3 points ({len(group)}), cannot fit.")
-            continue
-
-        N = group["params"].values
-        D = group["tokens"].values
-        L = group["eval_loss"].values
-
-        # Fit independent quadratics
-        opt_N, coeffs_N = fit_quadratic_optimum(N, L)
-        opt_D, coeffs_D = fit_quadratic_optimum(D, L)
-
-        results.append(
-            {
-                "budget": budget,
-                "opt_N": opt_N,
-                "opt_D": opt_D,
-                "coeffs_N": coeffs_N,
-                "coeffs_D": coeffs_D,
-                "group_data": group,
-            }
-        )
-
-    return pd.DataFrame(results)
-
-
-def fit_scaling_law(budgets, optimal_vals):
-    """
-    Fits log(optimal_val) = m * log(budget) + c.
-    Returns (m, c, B_smooth, V_smooth) where B_smooth and V_smooth are smoothed
-    budget and predicted value arrays for plotting.
-    """
-    log_B = np.log(budgets)
-    log_V = np.log(optimal_vals)
-
-    m, c = np.polyfit(log_B, log_V, 1)
-
-    # Generate smooth line
-    B_smooth = np.logspace(np.log10(budgets.min()), np.log10(budgets.max()), 100)
-    V_smooth = np.exp(m * np.log(B_smooth) + c)
-
-    return m, c, B_smooth, V_smooth
-
-
-def plot_isoflop_curves(ax_N, ax_D, analysis_results, colors_N, colors_D):
-    """Plots the top row: Loss vs Params/Tokens for each budget."""
-    for idx, row in analysis_results.iterrows():
-        budget = row["budget"]
-
-        # Determine color based on index
-        # Assuming colors_N and colors_D are arrays matching analysis_results length
-        color_n = colors_N[idx]
-        color_d = colors_D[idx]
-
-        group = row["group_data"]
-
-        # Plot Data - N (Blues)
-        ax_N.scatter(group["params"], group["eval_loss"], color=color_n, alpha=0.7, s=20, label=f"{budget:.1e}")
-
-        # Plot Data - D (Greens)
-        ax_D.scatter(group["tokens"], group["eval_loss"], color=color_d, alpha=0.7, s=20, label=f"{budget:.1e}")
-
-        # Plot Fits (only between min and max x-values in the data)
-        N_range = np.logspace(np.log10(group["params"].min()), np.log10(group["params"].max()), 100)
-        D_range = np.logspace(np.log10(group["tokens"].min()), np.log10(group["tokens"].max()), 100)
-
-        L_pred_N = np.polyval(row["coeffs_N"], np.log(N_range))
-        L_pred_D = np.polyval(row["coeffs_D"], np.log(D_range))
-
-        # Lines use the same color scale
-        ax_N.plot(N_range, L_pred_N, color=color_n, linestyle="--", alpha=0.5)
-        ax_D.plot(D_range, L_pred_D, color=color_d, linestyle="--", alpha=0.5)
-
-        # Plot Optima
-        L_min_N = np.polyval(row["coeffs_N"], np.log(row["opt_N"]))
-        ax_N.scatter([row["opt_N"]], [L_min_N], color=color_n, marker="s", s=100, edgecolors="black", zorder=10)
-
-        L_min_D = np.polyval(row["coeffs_D"], np.log(row["opt_D"]))
-        ax_D.scatter([row["opt_D"]], [L_min_D], color=color_d, marker="s", s=100, edgecolors="black", zorder=10)
-
-    # Configure axes
-    for ax, xlabel, title in [(ax_N, "Parameters (N)", "Loss vs Parameters"), (ax_D, "Tokens (D)", "Loss vs Tokens")]:
-        ax.set_xscale("log")
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel("Validation Loss")
-        ax.set_title(title)
-        ax.grid(True, which="both", ls="-", alpha=0.2, axis="x")
-        # Don't show legend here anymore, global legend instead
-
-
-def plot_scaling_laws(ax_N, ax_D, analysis_results, colors_N, colors_D):
-    """Plots the bottom row: Optimal Params/Tokens vs FLOPs."""
-    valid_data = analysis_results.dropna(subset=["opt_N", "opt_D"])
-    valid_indices = valid_data.index
-
-    # Extract colors corresponding to valid data points
-    valid_colors_N = colors_N[valid_indices]
-    valid_colors_D = colors_D[valid_indices]
-
-    budgets = valid_data["budget"].values
-    opt_N = valid_data["opt_N"].values
-    opt_D = valid_data["opt_D"].values
-
-    # Fit Scaling Laws
-    m_N, c_N, B_smooth_N, N_smooth = fit_scaling_law(budgets, opt_N)
-    m_D, c_D, B_smooth_D, D_smooth = fit_scaling_law(budgets, opt_D)
-
-    # Plot Params Scaling
-    ax_N.scatter(budgets, opt_N, color=valid_colors_N, marker="s", s=100, edgecolors="black", zorder=5)
-    ax_N.plot(B_smooth_N, N_smooth, color="gray", linestyle="--", label=f"$N^* \\propto C^{{{m_N:.3f}}}$")
-
-    # Plot Tokens Scaling
-    ax_D.scatter(budgets, opt_D, color=valid_colors_D, marker="s", s=100, edgecolors="black", zorder=5)
-    ax_D.plot(B_smooth_D, D_smooth, color="gray", linestyle="--", label=f"$D^* \\propto C^{{{m_D:.3f}}}$")
-
-    # Configure axes
-    for ax, ylabel, title in [
-        (ax_N, "Optimal Parameters (N*)", "Optimal Parameters vs Compute"),
-        (ax_D, "Optimal Tokens (D*)", "Optimal Tokens vs Compute"),
-    ]:
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.set_xlabel("Compute Budget (FLOPs)")
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.grid(True, which="both", ls="-", alpha=0.2, axis="x")
-        ax.legend()
-        # Set explicit tick positions at budget values only
-        ax.set_xticks(budgets)
-        ax.set_xticklabels([f"{b:.1e}" for b in budgets])
-        ax.minorticks_off()
-
-    # Calculate Ratio Function
-    ratio_coeff = np.exp(c_D - c_N)
-    ratio_exp_diff = m_D - m_N  # Simple difference of exponents
-    # Optimal ratio exponent: R* = (m_N - m_D) / (m_N + m_D)
-    # This is the Chinchilla optimal token/param ratio exponent
-    ratio_exp_opt = (m_N - m_D) / (m_N + m_D)
-
-    ratio_str = (
-        f"Optimal Ratio: $\\frac{{D_{{opt}}}}{{N_{{opt}}}} = "
-        f"{ratio_exp_opt:.4f}$ ($\\frac{{D^*}}{{N^*}} = {ratio_exp_diff:.4f}$)"
-    )
-
-    # Return all computed values for summary display
-    return {
-        "ratio_str": ratio_str,
-        "m_N": m_N,
-        "c_N": c_N,
-        "m_D": m_D,
-        "c_D": c_D,
-        "ratio_coeff": ratio_coeff,
-        "ratio_exp_diff": ratio_exp_diff,
-        "ratio_exp_opt": ratio_exp_opt,
-    }
-
-
-class DualColorMarker:
-    """
-    Custom marker handler for legend that draws two markers side-by-side.
-    """
+class _DualColorMarker:
+    """Custom legend handler that draws two colored rectangles side-by-side."""
 
     def __init__(self, color1, color2):
         self.color1 = color1
@@ -820,26 +831,12 @@ class DualColorMarker:
     def legend_artist(self, legend, orig_handle, fontsize, handlebox):
         x0, y0 = handlebox.xdescent, handlebox.ydescent
         width, height = handlebox.width, handlebox.height
-
-        # Increase marker size (taller and wider)
-        rect_h = height * 1.4  # Significantly larger
-        rect_w = rect_h * 1.2  # Aspect ratio ~ 1.2 (wide)
-
-        # Centered vertically
+        rect_h = height * 1.4
+        rect_w = rect_h * 1.2
         y_pos = y0 + (height - rect_h) / 2
-
-        # Gap between markers
-        marker_gap = 5  # Fixed pixel gap
-
-        # Total width of the dual marker group
+        marker_gap = 5
         total_group_width = rect_w + marker_gap + rect_w
-
-        # Align the dual marker group to the RIGHT side of the handlebox area
-        # This pushes it closer to the text label which starts immediately after handlebox
         start_x = x0 + width - total_group_width
-
-        # Draw two markers side-by-side
-        # Left marker (Params/Blue)
         p1 = plt.Rectangle(
             [start_x, y_pos],
             rect_w,
@@ -848,7 +845,6 @@ class DualColorMarker:
             edgecolor="black",
             transform=handlebox.get_transform(),
         )
-        # Right marker (Tokens/Green)
         p2 = plt.Rectangle(
             [start_x + rect_w + marker_gap, y_pos],
             rect_w,
@@ -857,39 +853,30 @@ class DualColorMarker:
             edgecolor="black",
             transform=handlebox.get_transform(),
         )
-
         handlebox.add_artist(p1)
         handlebox.add_artist(p2)
         return [p1, p2]
 
 
-def plot_scaling_extrapolation(analysis_results, scaling_results, out_dir):
+def plot_scaling_extrapolation(surface: LossSurface, budgets: np.ndarray, out_dir: Path):
     """Creates a figure showing N*, D*, and D*/N* vs compute with extrapolation."""
-    valid_data = analysis_results.dropna(subset=["opt_N", "opt_D"])
-    budgets = valid_data["budget"].values
-    opt_N, opt_D = valid_data["opt_N"].values, valid_data["opt_D"].values
-
-    m_N, c_N = scaling_results["m_N"], scaling_results["c_N"]
-    m_D, c_D = scaling_results["m_D"], scaling_results["c_D"]
-    ratio_exp_diff = scaling_results["ratio_exp_diff"]  # Simple: m_D - m_N
-    ratio_exp_opt = scaling_results["ratio_exp_opt"]  # R*: (m_N - m_D) / (m_N + m_D)
+    opt_N = np.array([surface.N_opt(C) for C in budgets])
+    opt_D = np.array([surface.D_opt(C) for C in budgets])
 
     # Extrapolate from min observed to 1e22 FLOPs
     C_ext = np.logspace(np.log10(budgets.min()), 22, 200)
-    N_ext = np.exp(c_N) * C_ext**m_N
-    D_ext = np.exp(c_D) * C_ext**m_D
-    # Use R* (optimal exponent) for the ratio line
-    # D*/N* = ratio_coeff * C^(-R*) since R* = (m_N - m_D)/(m_N + m_D) and we want D*/N*
-    ratio_coeff = scaling_results["ratio_coeff"]
-    ratio_ext = ratio_coeff * C_ext ** (-ratio_exp_opt)
+    N_ext = np.array([surface.N_opt(C) for C in C_ext])
+    D_ext = np.array([surface.D_opt(C) for C in C_ext])
+    ratio_ext = D_ext / N_ext
 
     _, ax1 = plt.subplots(figsize=(10, 4.8))
     ax1.set_xscale("log")
     ax1.set_yscale("log")
 
     # Plot fits and data
-    (ln,) = ax1.plot(C_ext, N_ext, color="tab:blue", lw=2, label=f"N* ∝ C^{m_N:.3f}")
-    (ld,) = ax1.plot(C_ext, D_ext, color="tab:green", lw=2, label=f"D* ∝ C^{m_D:.3f}")
+    a, b = surface.a, surface.b
+    (ln,) = ax1.plot(C_ext, N_ext, color="tab:blue", lw=2, label=f"N* ∝ C^{a:.3f}")
+    (ld,) = ax1.plot(C_ext, D_ext, color="tab:green", lw=2, label=f"D* ∝ C^{b:.3f}")
     ax1.scatter(budgets, opt_N, color="tab:blue", s=80, edgecolors="black", zorder=5, marker="o")
     ax1.scatter(budgets, opt_D, color="tab:green", s=80, edgecolors="black", zorder=5, marker="s")
 
@@ -900,28 +887,27 @@ def plot_scaling_extrapolation(analysis_results, scaling_results, out_dir):
     ax1.set_ylabel("Optimal N* (params) / D* (tokens)", fontsize=12)
     ax1.grid(True, which="major", ls="-", alpha=0.2)
 
-    # Right axis: Ratio (set behind ax1 so annotations render on top)
+    # Right axis: Ratio
     ax2 = ax1.twinx()
     ax2.set_yscale("log")
     ax2.set_zorder(ax1.get_zorder() - 1)
     ax1.patch.set_visible(False)
-    # Label shows both simple and normalized exponents
     (lr,) = ax2.plot(
         C_ext,
         ratio_ext,
         color="gray",
         lw=2,
         ls="--",
-        label=f"D*/N* (R*={ratio_exp_opt:.3f}, Δm={ratio_exp_diff:.3f})",
+        label=f"D*/N* (α={surface.alpha:.3f}, β={surface.beta:.3f})",
     )
     ax2.set_ylabel("Optimal Ratio D*/N*", fontsize=12)
 
-    # Combined legend
     ax1.legend(handles=[ln, ld, lr], loc="upper left")
 
     # Reference annotations
     for C_ref in [1e18, 1e20, 1e22]:
-        N_ref, D_ref = np.exp(c_N) * C_ref**m_N, np.exp(c_D) * C_ref**m_D
+        N_ref = surface.N_opt(C_ref)
+        D_ref = surface.D_opt(C_ref)
         ax1.axvline(C_ref, color="gray", ls=":", alpha=0.3)
         ax1.annotate(
             f"C={C_ref:.0e}\nN*={N_ref:.1e}\nD*={D_ref:.1e}\nD*/N*={D_ref/N_ref:.0f}",
@@ -936,47 +922,54 @@ def plot_scaling_extrapolation(analysis_results, scaling_results, out_dir):
     plt.title("Scaling Law Extrapolation: Optimal Compute Allocation", fontsize=14)
     plt.tight_layout()
 
-    out_png, out_pdf = out_dir / "plantcad_scaling_extrapolation.png", out_dir / "plantcad_scaling_extrapolation.pdf"
+    out_png = out_dir / "plantcad_scaling_extrapolation.png"
+    out_pdf = out_dir / "plantcad_scaling_extrapolation.pdf"
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
     plt.savefig(out_pdf, dpi=300, bbox_inches="tight")
     plt.close()
     return out_png, out_pdf
 
 
-def print_summary(df, analysis_results, scaling_results, out_files):
-    """Print summary using rich tables."""
+def print_summary(surface: LossSurface, budgets: np.ndarray, out_files: list) -> None:
+    """Print summary of VPNLS fit using rich tables."""
+    console.print()
+
+    # Fitted parameters table
+    param_table = Table(title="VPNLS Fitted Parameters")
+    param_table.add_column("Parameter", style="bold")
+    param_table.add_column("Value", justify="right")
+    param_table.add_row("E (irreducible loss)", f"{surface.E:.6f}")
+    param_table.add_row("A (param coefficient)", f"{surface.A:.6f}")
+    param_table.add_row("B (data coefficient)", f"{surface.B:.6f}")
+    param_table.add_row("α (param exponent)", f"{surface.alpha:.6f}")
+    param_table.add_row("β (data exponent)", f"{surface.beta:.6f}")
+    param_table.add_section()
+    param_table.add_row("a = β/(α+β)", f"{surface.a:.6f}")
+    param_table.add_row("b = α/(α+β)", f"{surface.b:.6f}")
+    param_table.add_row("G = (αA/βB)^(1/(α+β))", f"{surface.G:.6f}")
+    param_table.add_row("α/β (imbalance)", f"{surface.imbalance_ratio:.4f}")
+    console.print(param_table)
     console.print()
 
     # Optimal allocations table
-    opt_table = Table(title="Optimal Allocations")
+    opt_table = Table(title="Optimal Allocations (from surface)")
     opt_table.add_column("Budget (C)", justify="right", style="cyan")
     opt_table.add_column("Opt N*", justify="right")
     opt_table.add_column("Opt D*", justify="right")
     opt_table.add_column("D*/N*", justify="right", style="yellow")
 
-    for _, row in analysis_results.iterrows():
-        ratio = row["opt_D"] / row["opt_N"] if row["opt_N"] > 0 else np.nan
-        opt_table.add_row(
-            f"{row['budget']:.1e}",
-            f"{row['opt_N']:.2e}",
-            f"{row['opt_D']:.2e}",
-            f"{ratio:.1f}",
-        )
+    for C in budgets:
+        N_star = surface.N_opt(C)
+        D_star = surface.D_opt(C)
+        ratio = D_star / N_star if N_star > 0 else np.nan
+        opt_table.add_row(f"{C:.1e}", f"{N_star:.2e}", f"{D_star:.2e}", f"{ratio:.1f}")
     console.print(opt_table)
     console.print()
 
-    # Scaling laws
-    m_N, c_N = scaling_results["m_N"], scaling_results["c_N"]
-    m_D, c_D = scaling_results["m_D"], scaling_results["c_D"]
-    ratio_coeff = scaling_results["ratio_coeff"]
-    ratio_exp_diff = scaling_results["ratio_exp_diff"]
-    ratio_exp_opt = scaling_results["ratio_exp_opt"]
-
     console.print("[bold]Scaling Laws:[/bold]")
-    console.print(f"  N* ∝ C^{m_N:.3f}  [dim](log N* = {m_N:.4f} log C + {c_N:.4f})[/dim]")
-    console.print(f"  D* ∝ C^{m_D:.3f}  [dim](log D* = {m_D:.4f} log C + {c_D:.4f})[/dim]")
-    console.print(f"  D*/N* = {ratio_coeff:.4e} · C^{ratio_exp_diff:.4f}")
-    console.print(f"  R* = (m_N - m_D)/(m_N + m_D) = {ratio_exp_opt:.4f}")
+    console.print(f"  N* ∝ C^{surface.a:.4f}  (a = β/(α+β))")
+    console.print(f"  D* ∝ C^{surface.b:.4f}  (b = α/(α+β))")
+    console.print(f"  G = {surface.G:.4f}")
     console.print()
 
     for f in out_files:
@@ -984,35 +977,90 @@ def print_summary(df, analysis_results, scaling_results, out_files):
     console.print()
 
 
+# ----------------------------------------------------------
+# Control flow
+# ----------------------------------------------------------
+
+
 def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH) -> None:
     """Run isoflop scaling law fitting and visualization on epoch=1 data for the given architecture."""
     df_fit = filter_to_finished_runs(df)
+
     df_fit = df_fit[(df_fit["architecture"] == architecture) & (df_fit["epochs"] == 1)].dropna(
         subset=["eval_loss", "tokens", "params", "flops_budget"]
     )
     if df_fit.empty:
         raise ValueError("No valid data found for isoflop fitting")
-    analysis_results = analyze_budgets(df_fit)
 
-    # Setup Figure: 2x2 Grid
+    # Fit 5-parameter surface via VPNLS
+    N_all = df_fit["params"].values
+    D_all = df_fit["tokens"].values
+    L_all = df_fit["eval_loss"].values
+    surface = fit_vpnls(N_all, D_all, L_all)
+
+    budgets = np.sort(df_fit["flops_budget"].unique())
+
+    # --- 2x2 isoflop figure ---
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), gridspec_kw={"height_ratios": [1.5, 1]})
+    ax_N, ax_D, ax_Nopt, ax_Dopt = axes[0, 0], axes[0, 1], axes[1, 0], axes[1, 1]
 
-    # Colorscales
-    colors_N = plt.cm.Blues(np.linspace(0.4, 1.0, len(analysis_results)))
-    colors_D = plt.cm.Greens(np.linspace(0.4, 1.0, len(analysis_results)))
+    cmap_N = plt.cm.Blues(np.linspace(0.4, 1.0, len(budgets)))
+    cmap_D = plt.cm.Greens(np.linspace(0.4, 1.0, len(budgets)))
 
-    # Top Row
-    plot_isoflop_curves(axes[0, 0], axes[0, 1], analysis_results, colors_N, colors_D)
+    # Top row: Loss vs N and Loss vs D per budget, with surface fit lines
+    for idx, budget in enumerate(budgets):
+        group = df_fit[df_fit["flops_budget"] == budget]
+        color_n, color_d = cmap_N[idx], cmap_D[idx]
 
-    # Bottom Row
-    scaling_results = plot_scaling_laws(axes[1, 0], axes[1, 1], analysis_results, colors_N, colors_D)
+        # Scatter data
+        ax_N.scatter(group["params"], group["eval_loss"], color=color_n, alpha=0.7, s=20)
+        ax_D.scatter(group["tokens"], group["eval_loss"], color=color_d, alpha=0.7, s=20)
 
-    # Global Legend with dual-color markers
+        # Surface fit curves: L(N, C/(6N)) for varying N
+        N_range = np.logspace(np.log10(group["params"].min()), np.log10(group["params"].max()), 100)
+        D_from_N = budget / (6 * N_range)
+        L_pred = np.array([surface.loss(n, d) for n, d in zip(N_range, D_from_N)])
+        ax_N.plot(N_range, L_pred, color=color_n, linestyle="--", alpha=0.5)
+
+        # Surface fit curves: L(C/(6D), D) for varying D
+        D_range = np.logspace(np.log10(group["tokens"].min()), np.log10(group["tokens"].max()), 100)
+        N_from_D = budget / (6 * D_range)
+        L_pred_D = np.array([surface.loss(n, d) for n, d in zip(N_from_D, D_range)])
+        ax_D.plot(D_range, L_pred_D, color=color_d, linestyle="--", alpha=0.5)
+
+    for ax, xlabel, title in [(ax_N, "Parameters (N)", "Loss vs Parameters"), (ax_D, "Tokens (D)", "Loss vs Tokens")]:
+        ax.set_xscale("log")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Validation Loss")
+        ax.set_title(title)
+        ax.grid(True, which="both", ls="-", alpha=0.2, axis="x")
+
+    # Bottom row: N_opt and D_opt vs C (scatter only)
+    opt_N = np.array([surface.N_opt(C) for C in budgets])
+    opt_D = np.array([surface.D_opt(C) for C in budgets])
+
+    ax_Nopt.scatter(budgets, opt_N, color=cmap_N, marker="s", s=100, edgecolors="black", zorder=5)
+    ax_Nopt.set_xscale("log")
+    ax_Nopt.set_yscale("log")
+    ax_Nopt.set_xlabel("Compute Budget (FLOPs)")
+    ax_Nopt.set_ylabel("Optimal Parameters (N*)")
+    ax_Nopt.set_title(f"N* vs Compute (a={surface.a:.3f})")
+    ax_Nopt.grid(True, which="both", ls="-", alpha=0.2, axis="x")
+
+    ax_Dopt.scatter(budgets, opt_D, color=cmap_D, marker="s", s=100, edgecolors="black", zorder=5)
+    ax_Dopt.set_xscale("log")
+    ax_Dopt.set_yscale("log")
+    ax_Dopt.set_xlabel("Compute Budget (FLOPs)")
+    ax_Dopt.set_ylabel("Optimal Tokens (D*)")
+    ax_Dopt.set_title(f"D* vs Compute (b={surface.b:.3f})")
+    ax_Dopt.grid(True, which="both", ls="-", alpha=0.2, axis="x")
+
+    # Global legend with dual-color markers
     legend_handles = []
-    for _, row in analysis_results.iterrows():
-        legend_handles.append(plt.Rectangle((0, 0), 1, 1, color="none", label=f"{row['budget']:.1e}"))
+    for idx, budget in enumerate(budgets):
+        legend_handles.append(plt.Rectangle((0, 0), 1, 1, color="none", label=f"{budget:.1e}"))
 
-    handler_map = {legend_handles[i]: DualColorMarker(colors_N[i], colors_D[i]) for i in range(len(legend_handles))}
+    handler_map = {legend_handles[i]: _DualColorMarker(cmap_N[i], cmap_D[i]) for i in range(len(legend_handles))}
 
     leg = fig.legend(
         handles=legend_handles,
@@ -1027,8 +1075,14 @@ def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH)
     )
     leg.get_title().set_multialignment("center")
 
-    plt.suptitle("IsoFLOP Analysis: Quadratic Optima & Scaling Laws", y=0.94, fontsize=16)
-    plt.figtext(0.5, 0.88, scaling_results["ratio_str"], ha="center", fontsize=14)
+    # Subtitle with all 5 params
+    subtitle = (
+        f"E={surface.E:.4f}  A={surface.A:.4f}  B={surface.B:.4f}  "
+        f"\u03b1={surface.alpha:.4f}  \u03b2={surface.beta:.4f}  |  "
+        f"a={surface.a:.4f}  b={surface.b:.4f}  G={surface.G:.4f}"
+    )
+    plt.suptitle("IsoFLOP Analysis: VPNLS 5-Parameter Surface Fit", y=0.94, fontsize=16)
+    plt.figtext(0.5, 0.88, subtitle, ha="center", fontsize=10)
     plt.tight_layout(rect=[0, 0, 0.85, 0.91])
 
     out_dir = Path(RESULT_PATH)
@@ -1040,11 +1094,11 @@ def run_isoflop_fit_analysis(df: pd.DataFrame, architecture: str = DEFAULT_ARCH)
     plt.close()
 
     # Create extrapolation figure
-    extrap_png, extrap_pdf = plot_scaling_extrapolation(analysis_results, scaling_results, out_dir)
+    extrap_png, extrap_pdf = plot_scaling_extrapolation(surface, budgets, out_dir)
 
     # Print summary
     out_files = [out_png, out_pdf, extrap_png, extrap_pdf]
-    print_summary(df_fit, analysis_results, scaling_results, out_files)
+    print_summary(surface, budgets, out_files)
 
 
 # ------------------------------------------------------------
