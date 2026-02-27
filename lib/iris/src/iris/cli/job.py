@@ -27,7 +27,6 @@ from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
-from iris.cluster.platform.coreweave import CoreweavePlatform
 from iris.cluster.types import (
     Constraint,
     Entrypoint,
@@ -483,9 +482,9 @@ def run(
         )
     except Exception:
         platform = ctx.obj.get("platform")
-        if isinstance(platform, CoreweavePlatform):
+        if platform is not None:
             try:
-                platform.controller_post_mortem()
+                platform.debug_report()
             except Exception:
                 logger.debug("Controller post-mortem failed", exc_info=True)
         raise
