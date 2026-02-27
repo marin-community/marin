@@ -3,7 +3,7 @@
   "checkpoint_id": "c1ff6bfaf99f",
   "strategy": "manual-commit",
   "branch": "rav-reuse-tw-tcp",
-  "checkpoints_count": 9,
+  "checkpoints_count": 21,
   "files_touched": [
     "infra/marin-cluster-template.yaml",
     "lib/marin/src/marin/execution/executor.py",
@@ -33,13 +33,20 @@
       "context": "/c1/ff6bfaf99f/2/context.md",
       "content_hash": "/c1/ff6bfaf99f/2/content_hash.txt",
       "prompt": "/c1/ff6bfaf99f/2/prompt.txt"
+    },
+    {
+      "metadata": "/c1/ff6bfaf99f/3/metadata.json",
+      "transcript": "/c1/ff6bfaf99f/3/full.jsonl",
+      "context": "/c1/ff6bfaf99f/3/context.md",
+      "content_hash": "/c1/ff6bfaf99f/3/content_hash.txt",
+      "prompt": "/c1/ff6bfaf99f/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1292,
-    "cache_creation_tokens": 306563,
-    "cache_read_tokens": 23212625,
-    "output_tokens": 99467,
-    "api_call_count": 234
+    "input_tokens": 1377,
+    "cache_creation_tokens": 342431,
+    "cache_read_tokens": 25721489,
+    "output_tokens": 108585,
+    "api_call_count": 289
   }
 }
