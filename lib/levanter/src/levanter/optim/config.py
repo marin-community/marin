@@ -272,9 +272,7 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
 
             max_decay_steps = max(cycle_steps - warmup_steps, 0)
             requested_decay_steps = (
-                _convert_frac_or_steps(self.decay, cycle_steps)
-                if self.decay is not None
-                else max_decay_steps
+                _convert_frac_or_steps(self.decay, cycle_steps) if self.decay is not None else max_decay_steps
             )
             lr_decay_steps = min(max(requested_decay_steps, 0), max_decay_steps)
             stable_steps = cycle_steps - warmup_steps - lr_decay_steps
