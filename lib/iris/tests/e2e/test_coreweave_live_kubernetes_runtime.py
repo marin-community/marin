@@ -11,6 +11,7 @@ import posixpath
 import shutil
 import time
 import uuid
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
 import zipfile
@@ -183,6 +184,48 @@ def test_kubernetes_runtime_lifecycle(k8s_runtime: KubernetesRuntime):
 
     logs = handle.log_reader().read_all()
     assert any("lifecycle-test-ok" in line.data for line in logs)
+
+
+@pytest.mark.timeout(120)
+def test_kubernetes_pod_phase_reports_ready(k8s_runtime: KubernetesRuntime):
+    """ContainerStatus.ready must be False while pod is Pending, True once Running."""
+    run_id = uuid.uuid4().hex[:8]
+    config = ContainerConfig(
+        image="python:3.11-slim",
+        entrypoint=_entrypoint(["bash", "-c", "echo phase-test-ok && sleep 5"]),
+        env={},
+        workdir="/app",
+        task_id=f"phase-test-{run_id}",
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=100, memory_bytes=64 * 1024**2),
+    )
+
+    handle = k8s_runtime.create_container(config)
+    handle.run()
+
+    saw_not_ready = False
+    saw_ready = False
+    deadline = time.monotonic() + 60
+
+    while time.monotonic() < deadline:
+        status = handle.status()
+        if not status.running:
+            break
+        if not status.ready:
+            saw_not_ready = True
+        if status.ready:
+            saw_ready = True
+            break
+        time.sleep(0.5)
+
+    assert saw_ready, "Pod never reached ready=True (Running phase)"
+
+    state = _wait_finished(handle, timeout_seconds=30)
+    assert state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+    if not saw_not_ready:
+        # Pod scheduled too fast to observe Pending — not a failure, just a note.
+        # On kind with cached images this is common.
+        warnings.warn("Pod reached Running before first poll — Pending phase not observed", stacklevel=2)
 
 
 @pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")

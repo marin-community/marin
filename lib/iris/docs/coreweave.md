@@ -183,7 +183,7 @@ in `CoreweavePlatform`):
 | `compute.coreweave.com` | `nodepools` | get, list, watch, create, update, patch, delete |
 | core (`""`) | `pods`, `pods/exec`, `pods/log` | get, list, watch, create, update, patch, delete |
 | core (`""`) | `nodes` | get, list, watch |
-| core (`""`) | `configmaps` | get |
+| core (`""`) | `configmaps` | get, list, watch, create, update, patch, delete |
 
 ## 6. Configuration Reference
 
