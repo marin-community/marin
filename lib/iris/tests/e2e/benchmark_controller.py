@@ -368,9 +368,9 @@ def _make_single_worker_config() -> config_pb2.IrisClusterConfig:
     sg.num_vms = 1
     sg.min_slices = 1
     sg.max_slices = 1
-    sg.resources.cpu_millicores = 8000
-    sg.resources.memory_bytes = 16 * 1024**3
-    sg.resources.disk_bytes = 50 * 1024**3
+    sg.resources.cpu_millicores = 128 * 1000
+    sg.resources.memory_bytes = 256 * 1024**3
+    sg.resources.disk_bytes = 500 * 1024**3
     sg.slice_template.local.SetInParent()
 
     return make_local_config(config)
@@ -485,12 +485,10 @@ def run_single_worker_benchmark(num_jobs: int) -> BenchmarkMetrics:
             controller_client.close()
 
 
-@click.group(invoke_without_command=True)
-@click.pass_context
-def cli(ctx: click.Context) -> None:
+@click.group()
+def cli() -> None:
     """Benchmark Iris controller performance."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(benchmark)
+    pass
 
 
 def _run_with_pyspy(
@@ -592,7 +590,7 @@ def _print_profile_table(speedscope_path: Path, top_n: int = 30) -> None:
     default=Path("/tmp/profiles"),
     help="Directory for profile output (default: /tmp/profiles/)",
 )
-def benchmark(
+def multi_tpu(
     num_jobs: int,
     num_slices: int,
     profile: bool = False,
@@ -601,7 +599,7 @@ def benchmark(
     """Run controller benchmark."""
     if profile:
         _run_with_pyspy(
-            "benchmark",
+            "multi_tpu",
             ["--num-jobs", str(num_jobs), "--num-slices", str(num_slices)],
             profile_output,
             "controller_benchmark.speedscope",
