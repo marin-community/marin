@@ -389,7 +389,7 @@ class CoreweavePlatform:
                 {
                     "apiGroups": [""],
                     "resources": ["configmaps"],
-                    "verbs": ["get"],
+                    "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
                 },
             ],
         }
