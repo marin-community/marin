@@ -620,7 +620,7 @@ class TaskAttempt:
             # Check container status
             status = handle.status()
 
-            if self.status == cluster_pb2.TASK_STATE_BUILDING and status.ready:
+            if self.status == cluster_pb2.TASK_STATE_BUILDING and status.running and status.ready:
                 building_duration = time.monotonic() - self._building_start_monotonic
                 logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
                 self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
