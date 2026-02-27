@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "007d846d50a9",
+  "strategy": "manual-commit",
+  "branch": "rav-trigger-review-via-comment",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".github/workflows/claude-review.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/00/7d846d50a9/0/metadata.json",
+      "transcript": "/00/7d846d50a9/0/full.jsonl",
+      "context": "/00/7d846d50a9/0/context.md",
+      "content_hash": "/00/7d846d50a9/0/content_hash.txt",
+      "prompt": "/00/7d846d50a9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 7823,
+    "cache_read_tokens": 561220,
+    "output_tokens": 567,
+    "api_call_count": 16
+  }
+}

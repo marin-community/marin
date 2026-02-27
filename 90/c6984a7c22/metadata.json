@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "90c6984a7c22",
+  "strategy": "manual-commit",
+  "branch": "rav-step-poc",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "lib/marin/src/marin/execution/__init__.py",
+    "lib/marin/src/marin/execution/artifact.py",
+    "lib/marin/src/marin/execution/step.py",
+    "lib/marin/src/marin/execution/step_model.py",
+    "lib/marin/src/marin/execution/step_runner.py",
+    "tests/integration_nomagic_test.py",
+    "tests/test_step.py",
+    "tests/test_step_runner.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/90/c6984a7c22/0/metadata.json",
+      "transcript": "/90/c6984a7c22/0/full.jsonl",
+      "context": "/90/c6984a7c22/0/context.md",
+      "content_hash": "/90/c6984a7c22/0/content_hash.txt",
+      "prompt": "/90/c6984a7c22/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 65,
+    "cache_creation_tokens": 117805,
+    "cache_read_tokens": 3403961,
+    "output_tokens": 2152,
+    "api_call_count": 57
+  }
+}

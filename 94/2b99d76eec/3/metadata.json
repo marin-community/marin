@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "942b99d76eec",
+  "session_id": "c80ed779-0cf1-4990-b6c7-2478d5a12546",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T01:57:58.108402Z",
+  "branch": "rav-optional-remote",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "experiments/benchmarks/bench_tokenize_batch_size.py",
+    "experiments/benchmarks/plot_tokenize_bench.py",
+    "experiments/benchmarks/results/bench_tokenize_batch_size_20260224_202548.png",
+    "experiments/benchmarks/results/bench_tokenize_batch_size_20260224_233522.png",
+    "lib/zephyr/src/zephyr/__init__.py",
+    "lib/zephyr/src/zephyr/readers.py",
+    "lib/zephyr/tests/test_readers.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "ed51161d-cbe1-43a6-8c74-0746a2ec95d5",
+  "token_usage": {
+    "input_tokens": 89,
+    "cache_creation_tokens": 163011,
+    "cache_read_tokens": 4295521,
+    "output_tokens": 5947,
+    "api_call_count": 63
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T01:57:57.61762Z",
+    "agent_lines": 0,
+    "human_added": 12451,
+    "human_modified": 457,
+    "human_removed": 0,
+    "total_committed": 12908,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/c80ed779-0cf1-4990-b6c7-2478d5a12546.jsonl"
+}

@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "1d399aa292d6",
+  "session_id": "9217e13b-106f-407a-8e04-ee623e28dbf4",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T02:26:38.736046Z",
+  "branch": "rav-optional-remote",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/marin/src/marin/execution/executor.py",
+    "lib/marin/src/marin/execution/remote.py",
+    "lib/marin/src/marin/execution/step_runner.py",
+    "lib/marin/src/marin/execution/step_spec.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "150ed31e-b333-4ae4-a205-aebedf56be2c",
+  "checkpoint_transcript_start": 479,
+  "transcript_lines_at_start": 479,
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 15123,
+    "cache_read_tokens": 1784149,
+    "output_tokens": 4168,
+    "api_call_count": 16
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T02:26:38.346724Z",
+    "agent_lines": 29,
+    "human_added": 700,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 729,
+    "agent_percentage": 3.9780521262002746
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/9217e13b-106f-407a-8e04-ee623e28dbf4.jsonl"
+}

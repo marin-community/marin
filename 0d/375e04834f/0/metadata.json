@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "0d375e04834f",
+  "session_id": "96e4bc6d-d924-4c03-943d-c35d6463df65",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-18T01:32:42.439132Z",
+  "branch": "rav-step-poc",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "lib/marin/src/marin/execution/step_runner.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "0635bb86-7d92-461f-aa5a-bdb1876c4187",
+  "checkpoint_transcript_start": 620,
+  "transcript_lines_at_start": 620,
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 99554,
+    "cache_read_tokens": 1309455,
+    "output_tokens": 5727,
+    "api_call_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-18T01:32:41.849326Z",
+    "agent_lines": 18,
+    "human_added": 2077,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2095,
+    "agent_percentage": 0.8591885441527447
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/96e4bc6d-d924-4c03-943d-c35d6463df65.jsonl"
+}

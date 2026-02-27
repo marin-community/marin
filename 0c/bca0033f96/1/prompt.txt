@@ -1,0 +1,15 @@
+The @.github/workflows/claude-review.yml can't post PR review comments, in the logs I see:
+
+```
+Parameters:
+
+{
+  "command": "gh pr review 2879 --comment -b \"Review: This PR makes zephyr use region-local marin-tmp scratch buckets (3-day TTL) for chunk storage instead of writing under the main MARIN_PREFIX path. Fixes 2628. Three findings: (1) __post_init__ loses MARIN_PREFIX fallback - before, ZephyrContext fell back to MARIN_PREFIX/tmp/zephyr; now it only tries _get_temp_chunk_prefix() then /tmp/zephyr, which silently breaks programmatic distributed use when metadata is unavailable and MARIN_PREFIX does not match gs://marin-*. (2) Extra eu-west4 alias in zephyr _REGION_TO_TMP_BUCKET that is absent from iris env_probe.py and infra/configure_temp_buckets.py, violating the stated sync invariant on day one. (3) Triple copy of _REGION_TO_TMP_BUCKET acknowledged as SAD per 2768. Tests are correct and cover the three main paths.\"",
+  "description": "Post PR review"
+}
+❌ Error: This command requires approval
+
+Token usage: 44994 input, 1 output
+```
+
+Please research and fix

@@ -1,0 +1,30 @@
+Take a look at https://github.com/marin-community/marin/pull/2494#discussion_r2818790123, give me the implementation plan. Is there a way to reuse code between this util and StepRunner or would that be just over-engineering?
+
+---
+
+ok a couple of things:
+* can we get the artifact_type from the function itself and if not available require `artifact_type` (i.e. raise if not provided)
+
+---
+
+[Request interrupted by user]
+
+---
+
+ok a couple of things:
+* can we get the artifact_type from the function itself and if not available require `artifact_type` (i.e. raise if not provided)
+* can we also have a similar function `distributed_lock` that requires a fun that takes output_path and lock that for distribued safety?
+
+give me plan first
+
+---
+
+why is `distributed_lock` not used in StepRunner?
+
+---
+
+ok, streamline the @tests/test_disk_cache.py tests, remove obvious tests and inline the locked_fn into the disk_cached calls
+
+---
+
+ok, now update the logging to do f-string instead of formatting

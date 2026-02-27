@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "3745e053c711",
+  "strategy": "manual-commit",
+  "branch": "rav-shrink-pool",
+  "checkpoints_count": 14,
+  "files_touched": [
+    "experiments/train_test_overlap/aggregate_total.py",
+    "lib/levanter/src/levanter/store/cache.py",
+    "lib/zephyr/src/zephyr/cli.py",
+    "lib/zephyr/src/zephyr/execution.py",
+    "lib/zephyr/tests/test_execution.py",
+    "tests/processing/classification/deduplication/test_connected_components.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/37/45e053c711/0/metadata.json",
+      "transcript": "/37/45e053c711/0/full.jsonl",
+      "context": "/37/45e053c711/0/context.md",
+      "content_hash": "/37/45e053c711/0/content_hash.txt",
+      "prompt": "/37/45e053c711/0/prompt.txt"
+    },
+    {
+      "metadata": "/37/45e053c711/1/metadata.json",
+      "transcript": "/37/45e053c711/1/full.jsonl",
+      "context": "/37/45e053c711/1/context.md",
+      "content_hash": "/37/45e053c711/1/content_hash.txt",
+      "prompt": "/37/45e053c711/1/prompt.txt"
+    },
+    {
+      "metadata": "/37/45e053c711/2/metadata.json",
+      "transcript": "/37/45e053c711/2/full.jsonl",
+      "context": "/37/45e053c711/2/context.md",
+      "content_hash": "/37/45e053c711/2/content_hash.txt",
+      "prompt": "/37/45e053c711/2/prompt.txt"
+    },
+    {
+      "metadata": "/37/45e053c711/3/metadata.json",
+      "transcript": "/37/45e053c711/3/full.jsonl",
+      "context": "/37/45e053c711/3/context.md",
+      "content_hash": "/37/45e053c711/3/content_hash.txt",
+      "prompt": "/37/45e053c711/3/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 206,
+    "cache_creation_tokens": 355985,
+    "cache_read_tokens": 13879418,
+    "output_tokens": 11725,
+    "api_call_count": 144
+  }
+}

@@ -1,0 +1,17 @@
+f33cf904b78eee8eb85afa18fa544699276bddb1 commit removed window_size_bytes, that's good, I want an optional argument to allow to override the number of shards for tokenization
+
+---
+
+add comment along the lines: `This could be useful if you want more shards the max workers for example to mitigate the cost of retry on a single shard.`
+
+---
+
+do we need the config to exists in both TokenizeConfig and HfTokenizeConfig?
+
+---
+
+should the other flags also be moved to the base class?
+
+---
+
+let's move things like `worker_resources`, `writer_batch_size` and `max_workers`

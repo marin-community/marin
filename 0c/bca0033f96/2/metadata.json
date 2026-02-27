@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "0cbca0033f96",
+  "session_id": "c2b42650-0da6-4bd8-b467-ae9d5443f387",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-18T22:39:25.108076Z",
+  "branch": "rav-fix-claude-review-comments",
+  "checkpoints_count": 9,
+  "files_touched": [
+    "lib/marin/src/marin/execution/__init__.py",
+    "lib/marin/src/marin/execution/artifact.py",
+    "lib/marin/src/marin/execution/disk_cache.py",
+    "lib/marin/src/marin/execution/executor.py",
+    "lib/marin/src/marin/execution/fray_exe.py",
+    "lib/marin/src/marin/execution/fray_exec.py",
+    "lib/marin/src/marin/execution/step_model.py",
+    "lib/marin/src/marin/execution/step_runner.py",
+    "lib/marin/src/marin/execution/step_spec.py",
+    "tests/execution/test_disk_cache.py",
+    "tests/execution/test_step_runner.py",
+    "tests/integration_nomagic_test.py",
+    "tests/test_disk_cache.py",
+    "tests/test_executor.py",
+    "tests/test_executor_utils.py",
+    "tests/test_step_runner.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "ded3b526-ce63-4312-866d-2b8909e36126",
+  "checkpoint_transcript_start": 299,
+  "transcript_lines_at_start": 299,
+  "token_usage": {
+    "input_tokens": 174,
+    "cache_creation_tokens": 201578,
+    "cache_read_tokens": 14334651,
+    "output_tokens": 6514,
+    "api_call_count": 123
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-18T22:39:24.658198Z",
+    "agent_lines": 0,
+    "human_added": 4418,
+    "human_modified": 1991,
+    "human_removed": 0,
+    "total_committed": 4418,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/c2b42650-0da6-4bd8-b467-ae9d5443f387.jsonl"
+}

@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "10f9b93f31c9",
+  "session_id": "54153e0f-ba3b-4ac4-a933-25533fb8984c",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-19T20:02:45.317338Z",
+  "branch": "rav-fixup-zephyr-iris-test",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/zephyr/src/zephyr/cli.py",
+    "lib/zephyr/src/zephyr/execution.py",
+    "lib/zephyr/tests/test_execution.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "ac222c5d-45d3-46bb-9813-44a0b11141c0",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 42636,
+    "cache_read_tokens": 682466,
+    "output_tokens": 531,
+    "api_call_count": 16
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-19T20:02:45.198345Z",
+    "agent_lines": 0,
+    "human_added": 653,
+    "human_modified": 61,
+    "human_removed": 0,
+    "total_committed": 661,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/54153e0f-ba3b-4ac4-a933-25533fb8984c.jsonl"
+}

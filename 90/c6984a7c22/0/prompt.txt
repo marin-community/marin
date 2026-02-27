@@ -1,0 +1,126 @@
+Implement the following plan:
+
+# Plan: Merge StepMeta into StepSpec, delete step.py
+
+## Context
+
+The execution framework has three layers: `StepMeta` (identity/hashing), `StepSpec` (meta + fn + resources), and `Step` (deferred execution). The `Step` API (`step.py`) with its `defer`/`resolve_deferred` machinery is being removed as too magic. `StepMeta` as a separate class adds indirection without value — every `StepSpec` construction requires a nested `meta=StepMeta(...)`. This refactor flattens `StepMeta` into `StepSpec` and deletes the `Step` API entirely.
+
+## Unified StepSpec
+
+```python
+@dataclass(frozen=True)
+class StepSpec:
+    # Identity (from StepMeta, placed before fn)
+    name: str
+    output_path_prefix: str | None = None
+    deps: list[str | StepSpec] = field(default_factory=list)
+    hash_attrs: dict[str, Any] = field(default_factory=dict)
+    override_output_path: str | None = None
+
+    # Execution (fn now optional)
+    fn: Callable[[str], Any] | None = None
+
+    # Resources
+    resources: ResourceConfig = field(default_factory=ResourceConfig.with_cpu)
+    env_vars: dict[str, str] = field(default_factory=dict)
+    pip_dependency_groups: list[str] = field(default_factory=list)
+
+    # Properties: hash_id, name_with_hash, output_path (moved from StepMeta)
+```
+
+`__post_init__` coerces `StepSpec` instances in `deps` to their `output_path` strings (same logic as old StepMeta, minus the StepMeta reference).
+
+## File changes
+
+### 1. `lib/marin/src/marin/execution/step_model.py`
+- **Delete** `StepMeta` class entirely
+- **Merge** all StepMeta fields into `StepSpec` (before `fn`)
+- **Move** `hash_id`, `name_with_hash`, `output_path` properties from StepMeta to StepSpec
+- **Make `fn` optional**: `fn: Callable[[str], Any] | None = None`
+- **Remove** `meta` field and `output_path` property that delegated to `self.meta.output_path`
+- **Update** `__post_init__` to reference `StepSpec` only (not `StepMeta`)
+
+### 2. `lib/marin/src/marin/execution/step.py`
+- **Delete** the entire file
+
+### 3. `lib/marin/src/marin/execution/step_runner.py`
+- Remove `StepMeta` from imports
+- `resolve_executor_step`: construct `StepSpec(name=..., fn=..., deps=..., override_output_path=..., resources=..., ...)` directly — no nested `meta=StepMeta(...)`
+- Replace all `step.meta.X` with `step.X`:
+  - `step.meta.output_path` → `step.output_path` (already exists as property)
+  - `step.meta.deps` → `step.deps`
+  - `step.meta.name_with_hash` → `step.name_with_hash`
+  - `step.meta.hash_attrs` → `step.hash_attrs`
+- `step_meta = step.meta` on line 376 → remove, use `step` directly in the log
+
+### 4. `lib/marin/src/marin/execution/artifact.py`
+- Remove `StepMeta` from import
+- Change `Artifact.load` signatures: `base_path: str | StepSpec | StepMeta` → `base_path: str | StepSpec`
+- Update isinstance check: `isinstance(base_path, (StepSpec, StepMeta))` → `isinstance(base_path, StepSpec)`
+
+### 5. `lib/marin/src/marin/execution/__init__.py`
+- Remove `StepMeta` from the export line
+- `from .step_model import StepSpec` (only StepSpec)
+
+### 6. `lib/marin/src/marin/execution/executor.py`
+- No changes needed (already imports only `StepSpec`)
+
+### 7. `tests/test_step.py`
+- **Delete** the entire file (tests Step, StepCallDeferred, resolve_deferred — all removed)
+
+### 8. `tests/test_step_runner.py`
+- Remove `from marin.execution.step import Step, resolve_deferred`
+- Remove `from marin.execution.step_model import StepSpec, StepMeta` → `from marin.execution.step_model import StepSpec`
+- Change all `StepSpec(fn=..., meta=StepMeta(...))` to flat `StepSpec(name=..., fn=..., ...)`
+- Change `step.meta.deps` → `step.deps`
+- **Delete** all `resolve_deferred` tests (lines 311-387):
+  - `test_resolve_deferred_simple`
+  - `test_resolve_deferred_chain`
+  - `test_resolve_deferred_runs_pipeline`
+  - `test_resolve_deferred_diamond_dag`
+  - `test_resolve_deferred_stable_hash`
+
+### 9. `tests/integration_nomagic_test.py`
+- Remove `StepMeta` from import
+- Change all constructions from:
+  ```python
+  StepSpec(
+      fn=lambda output_path: ...,
+      meta=StepMeta(name="x", output_path_prefix=prefix, hash_attrs={...}, deps=[...]),
+  )
+  ```
+  to:
+  ```python
+  StepSpec(
+      name="x",
+      output_path_prefix=prefix,
+      hash_attrs={...},
+      deps=[...],
+      fn=lambda output_path: ...,
+  )
+  ```
+
+## Verification
+
+1. `./infra/pre-commit.py --all-files --fix` — formatting/linting passes
+2. `.venv/bin/python -m pytest tests/test_step_runner.py -x` — all remaining tests pass
+3. `.venv/bin/python -m pytest tests/integration_nomagic_test.py -x --co` — collection succeeds (full run requires Ray)
+4. Confirm `tests/test_step.py` and `lib/marin/src/marin/execution/step.py` are deleted
+5. `grep -r "StepMeta" lib/marin/src/marin/execution/` returns no results
+6. `grep -r "from marin.execution.step import" tests/` returns no results
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+
+---
+
+run integration test via `uv run tests/integration_nomagic_test.py`
+
+---
+
+in @tests/integration_nomagic_test.py use click instead of draccus
+
+---
+
+ok, there's one more thing I'm worried about. the return types from the StepSpec functions provided by the user. Because if the data gets saved, and then someone changes the output type code (e.g. add new requried attribute), now the code won't parse the pre-existing data. how could I mitigate this while still keeping typed outputs/inputs?

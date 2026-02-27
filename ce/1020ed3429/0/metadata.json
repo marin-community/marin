@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "ce1020ed3429",
+  "session_id": "3aa08a54-1716-41fc-91a1-75e2066265d3",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-25T01:12:07.040811Z",
+  "branch": "rav-use-shared-data-again",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/marin/src/marin/processing/tokenize/tokenize.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "c9cacb19-f3b8-4d79-b0ad-ccad95c7be5c",
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 37522,
+    "cache_read_tokens": 701708,
+    "output_tokens": 1180,
+    "api_call_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-25T01:12:06.922199Z",
+    "agent_lines": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/3aa08a54-1716-41fc-91a1-75e2066265d3.jsonl"
+}

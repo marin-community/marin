@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "af87d81319c9",
+  "strategy": "manual-commit",
+  "branch": "rav-configure-zephyr-worker-wait",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "lib/fray/src/fray/v2/iris_backend.py",
+    "lib/zephyr/src/zephyr/cli.py",
+    "lib/zephyr/src/zephyr/execution.py",
+    "lib/zephyr/tests/conftest.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/af/87d81319c9/0/metadata.json",
+      "transcript": "/af/87d81319c9/0/full.jsonl",
+      "context": "/af/87d81319c9/0/context.md",
+      "content_hash": "/af/87d81319c9/0/content_hash.txt",
+      "prompt": "/af/87d81319c9/0/prompt.txt"
+    },
+    {
+      "metadata": "/af/87d81319c9/1/metadata.json",
+      "transcript": "/af/87d81319c9/1/full.jsonl",
+      "context": "/af/87d81319c9/1/context.md",
+      "content_hash": "/af/87d81319c9/1/content_hash.txt",
+      "prompt": "/af/87d81319c9/1/prompt.txt"
+    },
+    {
+      "metadata": "/af/87d81319c9/2/metadata.json",
+      "transcript": "/af/87d81319c9/2/full.jsonl",
+      "context": "/af/87d81319c9/2/context.md",
+      "content_hash": "/af/87d81319c9/2/content_hash.txt",
+      "prompt": "/af/87d81319c9/2/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 117552,
+    "cache_read_tokens": 2474938,
+    "output_tokens": 3878,
+    "api_call_count": 52
+  }
+}

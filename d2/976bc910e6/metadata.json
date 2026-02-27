@@ -1,0 +1,62 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "d2976bc910e6",
+  "strategy": "manual-commit",
+  "branch": "agent/20260216-remove-executor-steps",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "experiments/dedup/isoflop_analysis.py",
+    "experiments/defaults.py",
+    "experiments/evals/exp1600_uncheatable_evals.py",
+    "experiments/exp808_sft_mixture.py",
+    "experiments/models.py",
+    "experiments/paloma.py",
+    "experiments/posttrain/instruction_datasets.py",
+    "experiments/posttrain/long_context_datasets.py",
+    "experiments/posttrain/preference_datasets.py",
+    "experiments/speedrun/build_prebuilt_caches.py",
+    "experiments/speedrun/olmoe_1b7b_nemotron_40b.py",
+    "experiments/tootsie/exp1984_convert_32b_phases.py",
+    "experiments/tootsie/exp2062_long_context_8b.py",
+    "experiments/train_test_overlap/train_test_total.py",
+    "experiments/tutorials/hello_world.py",
+    "lib/marin/src/marin/download/uncheatable_eval/download.py",
+    "lib/marin/src/marin/evaluation/log_probs.py",
+    "lib/marin/src/marin/evaluation/visualize.py",
+    "lib/marin/src/marin/execution/__init__.py",
+    "lib/marin/src/marin/execution/executor.py",
+    "lib/marin/src/marin/execution/step_model.py",
+    "lib/marin/src/marin/execution/step_runner.py",
+    "lib/marin/src/marin/processing/classification/deduplication/dedup_commons.py",
+    "lib/marin/src/marin/processing/tokenize/__init__.py",
+    "lib/marin/src/marin/processing/tokenize/data_configs.py",
+    "lib/marin/src/marin/processing/tokenize/download_pretokenized.py",
+    "lib/marin/src/marin/rl/rl_experiment_utils.py",
+    "lib/marin/src/marin/rl/scripts/evaluate_environment.py",
+    "lib/marin/src/marin/speedrun/paloma_local_download.py",
+    "lib/marin/src/marin/speedrun/speedrun.py",
+    "lib/marin/src/marin/tokenize/slice_cache.py",
+    "lib/marin/src/marin/transform/conversation/transform_conversation.py",
+    "tests/integration_test.py",
+    "tests/processing/tokenize/test_tokenize.py",
+    "tests/test_executor.py",
+    "tests/test_executor_utils.py",
+    "tests/test_step_runner.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d2/976bc910e6/0/metadata.json",
+      "transcript": "/d2/976bc910e6/0/full.jsonl",
+      "context": "/d2/976bc910e6/0/context.md",
+      "content_hash": "/d2/976bc910e6/0/content_hash.txt",
+      "prompt": "/d2/976bc910e6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 68180,
+    "cache_read_tokens": 1001545,
+    "output_tokens": 510,
+    "api_call_count": 13
+  }
+}

@@ -1,0 +1,96 @@
+In the @lib/marin/src/marin/execution/step_runner.py let's add `.executor_info` that captures the metadata of the step. Here's an example of previous metadata:
+
+```
+{
+  "name": "quickstart-tests/tokenized",
+  "fn_name": "<function tokenize at 0x148c807c0>",
+  "config": {
+    "train_paths": [
+      "/tmp/quickstart-tests/cleaned-ca7e6f"
+    ],
+    "validation_paths": [],
+    "cache_path": "/tmp/quickstart-tests/tokenized-4ce90c",
+    "tokenizer": "gpt2",
+    "tags": [],
+    "sample_count": null,
+    "format": {
+      "text_key": "text"
+    },
+    "window_size_bytes": 10000000000,
+    "allow_test_in_train": false,
+    "zephyr_num_cpus": 1,
+    "zephyr_memory": 1048576
+  },
+  "override_output_path": null,
+  "version": {
+    "name": "quickstart-tests/tokenized",
+    "config": {
+      "train_paths.[0]": "DEP[0]"
+    },
+    "dependencies": [
+      {
+        "name": "quickstart-tests/cleaned",
+        "config": {
+          "input_path": "DEP[0]",
+          "filters.[0].attribute_path": "DEP[1]/data",
+          "filters.[1].attribute_path": "DEP[2]/data"
+        },
+        "dependencies": [
+          {
+            "name": "quickstart-tests/hq-transformed",
+            "config": {
+              "extract_method": "resiliparse"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "quickstart-tests/dedup_exact_paragraph",
+            "config": {
+              "input_paths": "DEP[0]"
+            },
+            "dependencies": [
+              {
+                "name": "quickstart-tests/hq-transformed",
+                "config": {
+                  "extract_method": "resiliparse"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "quickstart-tests/dedup_fuzzy_document",
+            "config": {
+              "input_paths": "DEP[0]"
+            },
+            "dependencies": [
+              {
+                "name": "quickstart-tests/hq-transformed",
+                "config": {
+                  "extract_method": "resiliparse"
+                },
+                "dependencies": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "dependencies": [
+    "/tmp/quickstart-tests/cleaned-ca7e6f"
+  ],
+  "output_path": "/tmp/quickstart-tests/tokenized-4ce90c"
+}
+
+```
+
+We obviously won't include all recusrive dependencies. Give me your plan first.
+
+---
+
+ok, let's update this, instead try to keep the same schema as existing executor_info. for config, just include the hash_attrs. for other things if we can't reproduce skip. give me updated plan.
+
+---
+
+ok
