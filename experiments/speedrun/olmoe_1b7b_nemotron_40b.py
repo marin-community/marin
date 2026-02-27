@@ -16,7 +16,7 @@ from collections.abc import Sequence
 
 from experiments.defaults import default_train
 from experiments.evals.task_configs import convert_to_levanter_task_config
-from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
+from experiments.pretraining_datasets import NEMOTRON_LLAMA3_OVERRIDES, NEMOTRON_WEIGHTS
 from experiments.pretraining_datasets.dclm import (
     DCLM_MIXTURE_WEIGHTS,
     dclm_components_llama3,
@@ -35,7 +35,7 @@ from levanter.eval_harness import EvalHarnessMainConfig, LmEvalHarnessConfig, ru
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main, output_path_of
-from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
@@ -180,10 +180,37 @@ def build_model_config(*, model: str, seq_len: int) -> MixtralConfig:
     raise ValueError(f"Unknown model preset {model!r}. Options: {MODEL_OPTIONS}.")
 
 
-nemotron_cc_steps = tokenize_nemotron(tokenizer=llama3_tokenizer)
-nemotron_cc_mixture = lm_mixture_data_config(
-    components=nemotron_cc_steps,
-    weights=NEMOTRON_WEIGHTS,
+def _resolve_dataset_path(path: str) -> str:
+    if "://" in path:
+        return path
+    prefix = os.environ.get("MARIN_PREFIX")
+    if not prefix:
+        return path
+    return f"{prefix.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _cached_nemotron_components(tokenizer: str) -> dict[str, TokenizeConfig]:
+    components: dict[str, TokenizeConfig] = {}
+    for split, relative_cache_path in NEMOTRON_LLAMA3_OVERRIDES.items():
+        cache_path = _resolve_dataset_path(relative_cache_path)
+        components[f"nemotron_cc/{split}"] = TokenizeConfig(
+            train_paths=[cache_path],
+            validation_paths=[],
+            cache_path=cache_path,
+            tokenizer=tokenizer,
+        )
+    return components
+
+
+nemotron_cc_steps = _cached_nemotron_components(llama3_tokenizer)
+assert nemotron_cc_steps.keys() == NEMOTRON_WEIGHTS.keys()
+nemotron_cc_mixture = dataclasses.replace(
+    lm_mixture_data_config(
+        components=nemotron_cc_steps,
+        weights=NEMOTRON_WEIGHTS,
+        include_raw_paths=False,
+    ),
+    auto_build_caches=False,
 )
 
 
@@ -316,9 +343,12 @@ def make_speedrun_config(
     dataset_name: str,
     seq_len: int,
     tpu_type: str,
+    cross_entropy_block_size: int | None = None,
 ) -> SpeedrunConfig:
     tokenized_dataset = DATASET_OPTIONS[dataset_name]
     model_config = build_model_config(model=model, seq_len=seq_len)
+    if cross_entropy_block_size is not None:
+        model_config = dataclasses.replace(model_config, cross_entropy_block_size=cross_entropy_block_size)
     return SpeedrunConfig(
         author=Author(
             name="Marin Team",
@@ -360,6 +390,15 @@ def _parse_args():
         type=int,
         default=DEFAULT_GLOBAL_BATCH_SIZE,
         help="Override the global batch size (default 64).",
+    )
+    parser.add_argument(
+        "--cross-entropy-block-size",
+        type=int,
+        default=None,
+        help=(
+            "Override CustomMixtralConfig.cross_entropy_block_size (default: model preset default). "
+            "Useful for working around TPU vmem limits in the fused (Pallas) CE kernel."
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -454,6 +493,7 @@ if __name__ == "__main__":
         dataset_name=args.dataset,
         seq_len=args.seq_len,
         tpu_type=args.tpu_type,
+        cross_entropy_block_size=args.cross_entropy_block_size,
     )
     logger.info("Launching MoE Nemotron speedrun.")
     logger.info(

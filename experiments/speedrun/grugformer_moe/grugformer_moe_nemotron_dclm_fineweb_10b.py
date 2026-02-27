@@ -54,6 +54,8 @@ MIN_LR_RATIO = 0.125
 Z_LOSS_WEIGHT = 1e-4
 STEPS_PER_EVAL = 5000
 STEPS_PER_EXPORT = 20_000
+DEFAULT_PROFILER_START_STEP = 5
+DEFAULT_PROFILER_NUM_STEPS = 10
 
 _EVAL_SUITES: dict[str, tuple] = {
     "none": (),
@@ -182,21 +184,59 @@ def _parse_args() -> argparse.Namespace:
             "Cross-entropy backend. 'auto' tries Pallas on TPU v5+ and falls back to XLA when unsupported (e.g. TPU v4)."
         ),
     )
-    parser.set_defaults(explicit_mesh_axes=True)
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Enable JAX profiling and upload `jax_profile` artifacts for Perfetto analysis.",
+    )
+    parser.add_argument(
+        "--profile-start-step",
+        type=int,
+        default=DEFAULT_PROFILER_START_STEP,
+        help="Step to start profiling.",
+    )
+    parser.add_argument(
+        "--profile-num-steps",
+        type=int,
+        default=DEFAULT_PROFILER_NUM_STEPS,
+        help="Number of steps to capture after profiling starts.",
+    )
+    parser.add_argument(
+        "--profile-perfetto-link",
+        action="store_true",
+        help="Generate a Perfetto link when the profiler trace is finalized.",
+    )
+    parser.add_argument(
+        "--log-jaxprs",
+        action="store_true",
+        help="Log the training step jaxpr to W&B artifacts (slow; off by default).",
+    )
+    parser.add_argument(
+        "--log-xla-hlo",
+        action="store_true",
+        help="Log the training step StableHLO text to W&B artifacts (very slow; off by default).",
+    )
+    # Default to non-explicit mesh axes for higher MFU on v5p (matches Levanter's MoE runs).
+    parser.set_defaults(explicit_mesh_axes=False)
     parser.add_argument(
         "--explicit-mesh-axes",
         dest="explicit_mesh_axes",
         action="store_true",
-        help="Use explicit mesh axes in TrainerConfig (default).",
+        help="Use explicit mesh axes in TrainerConfig.",
     )
     parser.add_argument(
         "--no-explicit-mesh-axes",
         dest="explicit_mesh_axes",
         action="store_false",
-        help="Disable explicit mesh axes in TrainerConfig.",
+        help="Disable explicit mesh axes in TrainerConfig (default).",
     )
 
-    parser.set_defaults(legacy_axis_resources=False)
+    # Default to the "legacy" DP sharding used by high-MFU Levanter MoE runs:
+    # token/token_repeat/batch -> (replica, data) and params sharded over embed -> data.
+    #
+    # The newer default MeshConfig maps batch over (replica_dcn, replica, data). If Grugformer hardcodes
+    # (replica, data) in shard_map specs, XLA will insert thousands of tiny reshard collectives.
+    parser.set_defaults(legacy_axis_resources=True)
     parser.set_defaults(use_gmm=True)
     parser.add_argument(
         "--use-gmm",
@@ -227,8 +267,12 @@ def _parse_args() -> argparse.Namespace:
 def _patch_trainer_sharding_ablations(
     train_step: ExecutorStep,
     *,
+    tpu_type: str,
     explicit_mesh_axes: bool,
     legacy_axis_resources: bool,
+    profiler_perfetto_link: bool,
+    log_jaxprs: bool,
+    log_xla_hlo: bool,
 ) -> ExecutorStep:
     config = train_step.config
     inner = config.train_config
@@ -246,7 +290,14 @@ def _patch_trainer_sharding_ablations(
             param_mapping={"embed": "data"},
         )
 
-    trainer = dataclasses.replace(trainer, mesh=mesh, use_explicit_mesh_axes=explicit_mesh_axes)
+    trainer = dataclasses.replace(
+        trainer,
+        mesh=mesh,
+        use_explicit_mesh_axes=explicit_mesh_axes,
+        profiler_perfetto_link=profiler_perfetto_link,
+        log_jaxprs=log_jaxprs,
+        log_xla_hlo=log_xla_hlo,
+    )
     inner = dataclasses.replace(inner, trainer=trainer)
     config = dataclasses.replace(config, train_config=inner)
     return dataclasses.replace(train_step, config=config)
@@ -377,6 +428,9 @@ def main() -> None:
         steps_per_hf_export=-1,
         per_device_parallelism=int(args.per_device_parallelism),
         explicit_mesh_axes=bool(args.explicit_mesh_axes),
+        profiler=bool(args.profile),
+        profiler_start_step=int(args.profile_start_step),
+        profiler_num_steps=int(args.profile_num_steps),
     )
 
     default_suffix = f"grugformer_moe_olmoe1b7b_{tpu_type}_bs{global_batch_size}_{args.dataset}_seq{seq_len}"
@@ -409,8 +463,12 @@ def main() -> None:
     )
     train_step = _patch_trainer_sharding_ablations(
         train_step,
+        tpu_type=tpu_type,
         explicit_mesh_axes=bool(args.explicit_mesh_axes),
         legacy_axis_resources=bool(args.legacy_axis_resources),
+        profiler_perfetto_link=bool(args.profile_perfetto_link),
+        log_jaxprs=bool(args.log_jaxprs),
+        log_xla_hlo=bool(args.log_xla_hlo),
     )
 
     steps: list[ExecutorStep] = [train_step]
