@@ -211,6 +211,11 @@ archive/
 # wandb logs
 wandb
 
+# Offline RL generated artifacts
+experiments/domain_phase_mix/offline_rl/artifacts/
+experiments/domain_phase_mix/offline_rl/policy_bundle/
+experiments/domain_phase_mix/offline_rl/policy_payloads/
+
 # Generated leaderboard data
 marin/speedrun/static/data/runs.json
 

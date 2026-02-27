@@ -288,7 +288,6 @@ class _LmEvalHarnessWorker:
                 weight=loss_weight,
                 logsumexp_weight=0.0,
                 return_argmax=True,
-                implementation="xla",
             )
 
             # We need to compute losses and also whether or not the completion is correct

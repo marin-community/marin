@@ -33,6 +33,14 @@ from fray.v1.cluster.ray.deps import build_runtime_env_for_packages, accelerator
 logger = logging.getLogger(__name__)
 
 REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
+DEFAULT_WORKING_DIR_EXCLUDES = [
+    ".git",
+    "docs/",
+    "**/*.pack",
+    "lib/levanter/docs",
+    "experiments/domain_phase_mix/exploratory",
+    "experiments/domain_phase_mix/offline_rl/artifacts",
+]
 
 
 def _maybe_enable_ray_token_auth(*, require_token: bool) -> None:
@@ -134,6 +142,7 @@ async def submit_and_track_job(
     env_vars: dict,
     no_wait: bool,
     submission_id: str,
+    working_dir_excludes: list[str],
     *,
     entrypoint_num_cpus: float | None = None,
     entrypoint_num_gpus: float | None = None,
@@ -157,7 +166,7 @@ async def submit_and_track_job(
     runtime_dict = {
         "working_dir": current_dir,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"],
+        "excludes": working_dir_excludes,
     }
 
     # add the TPU dependency for cluster jobs.
@@ -270,6 +279,22 @@ def main():
         action="store_true",
         help="Automatically stop the submitted job on exit (including ctrl+c interrupt).",
     )
+    parser.add_argument(
+        "--working-dir-exclude",
+        action="append",
+        default=[],
+        help="Additional glob pattern to exclude from working_dir upload. Can be provided multiple times.",
+    )
+    parser.add_argument(
+        "--include-exploratory",
+        action="store_true",
+        help="Include experiments/domain_phase_mix/exploratory in working_dir upload.",
+    )
+    parser.add_argument(
+        "--include-offline-rl-artifacts",
+        action="store_true",
+        help="Include experiments/domain_phase_mix/offline_rl/artifacts in working_dir upload.",
+    )
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
@@ -366,6 +391,18 @@ def main():
     else:
         submission_id = generate_submission_id(full_cmd)
 
+    working_dir_excludes = list(DEFAULT_WORKING_DIR_EXCLUDES)
+    if args.include_exploratory:
+        working_dir_excludes = [
+            item for item in working_dir_excludes if item != "experiments/domain_phase_mix/exploratory"
+        ]
+    if args.include_offline_rl_artifacts:
+        working_dir_excludes = [
+            item for item in working_dir_excludes if item != "experiments/domain_phase_mix/offline_rl/artifacts"
+        ]
+    if args.working_dir_exclude:
+        working_dir_excludes.extend(args.working_dir_exclude)
+
     async def run_job():
         try:
             await submit_and_track_job(
@@ -374,6 +411,7 @@ def main():
                 env_vars,
                 args.no_wait,
                 submission_id=submission_id,
+                working_dir_excludes=working_dir_excludes,
                 entrypoint_num_cpus=args.entrypoint_num_cpus,
                 entrypoint_num_gpus=args.entrypoint_num_gpus,
                 entrypoint_memory=args.entrypoint_memory,
