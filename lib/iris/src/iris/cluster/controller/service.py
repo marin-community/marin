@@ -126,6 +126,28 @@ class ControllerServiceImpl:
             return {}
         return build_job_pending_hints(status.last_routing_decision)
 
+    def _build_reservation_status(self, job: ControllerJob) -> cluster_pb2.ReservationStatus | None:
+        """Build ReservationStatus for a job if it has a reservation."""
+        if not job.request.HasField("reservation"):
+            return None
+
+        total = len(job.request.reservation.entries)
+        job_id_wire = job.job_id.to_wire()
+
+        # Count workers tagged with reservation-job=<job_id>
+        fulfilled = 0
+        for worker in self._state.list_all_workers():
+            attrs = worker.metadata.attributes
+            if "reservation-job" in attrs:
+                if attrs["reservation-job"].string_value == job_id_wire:
+                    fulfilled += 1
+
+        return cluster_pb2.ReservationStatus(
+            total_entries=total,
+            fulfilled=fulfilled,
+            satisfied=fulfilled >= total,
+        )
+
     def launch_job(
         self,
         request: cluster_pb2.Controller.LaunchJobRequest,
@@ -280,6 +302,9 @@ class ControllerServiceImpl:
             if autoscaler_hint and is_active_scale_up_hint(autoscaler_hint):
                 pending_reason = autoscaler_hint
 
+        # Build reservation status if the job has a reservation
+        reservation_status = self._build_reservation_status(job)
+
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
@@ -292,6 +317,8 @@ class ControllerServiceImpl:
             name=job.request.name if job.request else "",
             pending_reason=pending_reason,
         )
+        if reservation_status is not None:
+            proto_job_status.reservation.CopyFrom(reservation_status)
         if job.request:
             proto_job_status.resources.CopyFrom(job.request.resources)
         if job.started_at:
