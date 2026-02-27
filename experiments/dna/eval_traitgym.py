@@ -27,7 +27,8 @@ from levanter.distributed import RayConfig
 from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 
-from experiments.dna.defaults import DNA_RESOURCES_V1, DNA_TOKENIZER_V1, dna_qwen3_0_6b_256_v1
+from experiments.dna.defaults import DNA_RESOURCES_V1, DNA_TOKENIZER_V1
+from experiments.qwen3 import qwen3_0_6b_hd128
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2, convert_to_levanter_task_config
 from iris.temp_buckets import get_temp_bucket_path
 from marin.execution.executor import ExecutorStep, executor_main
@@ -125,7 +126,7 @@ def run_eval_traitgym(config: EvalTraitGymConfig):
             per_device_eval_parallelism=64,
             ray=RayConfig(auto_start_cluster=False),
         ),
-        model=dna_qwen3_0_6b_256_v1,
+        model=dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=256),
     )
 
     logger.info(f"Evaluating checkpoint: {config.checkpoint_path}")

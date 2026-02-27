@@ -17,10 +17,12 @@ import dataclasses
 
 from experiments.defaults import default_train
 from experiments.dna.defaults import (
+    DNA_TOKENIZER_V1,
     SHORT_RUN_CONFIG_V1,
-    dna_llama_50m_256_v1,
+    dna_effective_seq_len,
     dna_tokenize_rw_v1,
 )
+from experiments.llama import llama_50m
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2
 from marin.execution.executor import executor_main
 
@@ -52,10 +54,14 @@ train_config = dataclasses.replace(
 # Training step with TraitGym Mendelian eval
 # =============================================================================
 
+SEQ_LEN = 256
+effective_seq_len = dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1)
+dna_llama_50m = dataclasses.replace(llama_50m, max_seq_len=effective_seq_len)
+
 train_step = default_train(
     name="exp65-traitgym-eval-smoke-test",
     tokenized=tokenized,
-    model_config=dna_llama_50m_256_v1,
+    model_config=dna_llama_50m,
     train_config=train_config,
     tags=["dna", "exp65", "traitgym", "smoke_test"],
     eval_harness_tasks=[TRAITGYM_MENDELIAN_V2],
