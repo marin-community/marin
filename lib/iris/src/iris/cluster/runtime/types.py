@@ -92,6 +92,7 @@ class ContainerStatus:
     """Container state from runtime inspection."""
 
     running: bool
+    ready: bool = True
     exit_code: int | None = None
     error: str | None = None
     error_kind: ContainerErrorKind = ContainerErrorKind.NONE

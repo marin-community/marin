@@ -350,7 +350,7 @@ class KubernetesContainerHandle:
                     self._pod_not_found_count,
                     _POD_NOT_FOUND_RETRY_COUNT,
                 )
-                return ContainerStatus(running=True)
+                return ContainerStatus(running=True, ready=False)
 
             attempt = self.config.attempt_id if self.config.attempt_id is not None else -1
             return ContainerStatus(
@@ -369,8 +369,10 @@ class KubernetesContainerHandle:
         self._pod_not_found_deadline = None
 
         phase = pod.get("status", {}).get("phase", "")
-        if phase in ("Pending", "Running"):
-            return ContainerStatus(running=True)
+        if phase == "Pending":
+            return ContainerStatus(running=True, ready=False)
+        if phase == "Running":
+            return ContainerStatus(running=True, ready=True)
 
         statuses = pod.get("status", {}).get("containerStatuses", [])
         terminated = {}

@@ -235,9 +235,47 @@ def test_status_retries_transient_pod_not_found(monkeypatch):
 
     assert first.running is True
     assert first.error is None
+    assert first.ready is False  # transient not-found → not ready
     assert second.running is True
     assert second.error is None
+    assert second.ready is False
     assert third.running is True
+    assert third.ready is True  # Running phase → ready
+
+
+def test_status_reflects_pod_phase_progression(monkeypatch):
+    """status() tracks pod phase: Pending → not ready, Running → ready."""
+    manifests = _capture_manifest(monkeypatch)
+
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(_make_config())
+    handle.run()
+    assert manifests
+
+    responses = [
+        {"status": {"phase": "Pending"}},
+        {"status": {"phase": "Pending"}},
+        {"status": {"phase": "Running"}},
+    ]
+
+    def fake_get_json(resource: str, name: str):
+        del name
+        assert resource == "pod"
+        return responses.pop(0)
+
+    monkeypatch.setattr(handle.kubectl, "get_json", fake_get_json)
+
+    first = handle.status()
+    assert first.running is True
+    assert first.ready is False
+
+    second = handle.status()
+    assert second.running is True
+    assert second.ready is False
+
+    third = handle.status()
+    assert third.running is True
+    assert third.ready is True
 
 
 def test_status_returns_structured_error_after_persistent_pod_not_found(monkeypatch):

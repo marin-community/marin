@@ -432,6 +432,7 @@ class TaskAttempt:
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
+        self._building_start_monotonic = time.monotonic()
         self._report_state()  # Report BUILDING state to controller
 
         download_start = time.monotonic()
@@ -561,14 +562,8 @@ class TaskAttempt:
             logger.info("Build phase completed for task %s", self.task_id)
 
     def _run_container(self) -> None:
-        """Start the main command during RUNNING state.
-
-        Non-blocking - returns immediately after starting.
-        """
+        """Start the container. Task stays in BUILDING until _monitor() confirms readiness."""
         assert self._container_handle is not None
-
-        self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
-        self._report_state()
 
         self._container_handle.run()
         logger.info(
@@ -624,6 +619,13 @@ class TaskAttempt:
 
             # Check container status
             status = handle.status()
+
+            if self.status == cluster_pb2.TASK_STATE_BUILDING and status.ready:
+                building_duration = time.monotonic() - self._building_start_monotonic
+                logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
+                self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
+                self._report_state()
+
             if not status.running:
                 logger.info(
                     "Container exited for task %s (container_id=%s, exit_code=%s, error=%s)",
