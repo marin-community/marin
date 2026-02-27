@@ -29,7 +29,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-packages --extra=tpu --no-default-groups
+        run: uv sync --all-packages --no-default-groups
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
