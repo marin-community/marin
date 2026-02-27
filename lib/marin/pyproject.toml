@@ -163,6 +163,8 @@ evalchemy = [
     "antlr4-python3-runtime==4.11",
     "bespokelabs-curator",  # Required by evalchemy's curator_lm module
     "sqlalchemy",  # Required by evalchemy's database models
+    # Requirements to run code evals (HumanEvalPlus, MBPP+, etc.)
+    "fire",
 ]
 
 vllm =[
