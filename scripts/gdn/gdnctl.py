@@ -57,6 +57,7 @@ SESSION_DIRECTIVE_PRESET_FILES = {
     "fla-style-decomposition": REPO_ROOT / "scripts/gdn/session_directives/fla-style-decomposition.md",
     "expdiff-outer-product": REPO_ROOT / "scripts/gdn/session_directives/expdiff-outer-product.md",
     "matmul-batching": REPO_ROOT / "scripts/gdn/session_directives/matmul-batching.md",
+    "macro-coverage-pivot": REPO_ROOT / "scripts/gdn/session_directives/macro-coverage-pivot.md",
 }
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")
