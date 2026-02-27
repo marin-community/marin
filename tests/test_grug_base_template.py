@@ -13,6 +13,9 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
+import pytest
+from jax._src import config as jax_config
+from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -21,10 +24,11 @@ from levanter.data.text import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig, RayConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.grug.sharding import Pbatch
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
-from experiments.grug.base.model import GrugModelConfig
+from experiments.grug.base.model import GrugModelConfig, Transformer
 from experiments.grug.base.train import (
     GrugRunConfig,
     GrugTrainerConfig,
@@ -32,6 +36,24 @@ from experiments.grug.base.train import (
     _make_train_step,
     run_grug,
 )
+
+
+def _make_abstract_mesh(*, data: int, model: int) -> AbstractMesh:
+    return AbstractMesh(
+        axis_sizes=(data, model),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+
+
+class _reset_abstract_mesh:
+    def __enter__(self):
+        self._prev = jax_config.abstract_mesh_context_manager.swap_local(jax_config.config_ext.unset)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        jax_config.abstract_mesh_context_manager.set_local(self._prev)
+        return False
 
 
 class DummyModel(eqx.Module):
@@ -176,3 +198,35 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker():
     ]
     for key in required_keys:
         assert key in summary
+
+
+@pytest.mark.parametrize(("data", "model"), [(4, 1), (2, 2)])
+def test_grug_base_loss_lowers_on_abstract_4_device_mesh(data: int, model: int):
+    seq = 256 if jax.default_backend() == "tpu" else 16
+    cfg = GrugModelConfig(
+        vocab_size=256,
+        hidden_dim=128,
+        intermediate_dim=256,
+        num_layers=1,
+        num_heads=8,
+        num_kv_heads=8,
+        max_seq_len=seq,
+    )
+
+    mesh = _make_abstract_mesh(data=data, model=model)
+    # Some test setups leave an abstract mesh context active; reset before setting a new size.
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        key = jax.ShapeDtypeStruct(shape=(2,), dtype=jnp.uint32, sharding=NamedSharding(mesh, P()))
+        params = jax.eval_shape(lambda k: Transformer.init(cfg, key=k), key)
+
+        def loss_fn(p):
+            token_ids = jnp.zeros((8, seq), dtype=jnp.int32)
+            token_ids = jax.sharding.reshard(token_ids, Pbatch)
+            loss_weight = jnp.ones((8, seq), dtype=jnp.float32)
+            loss_weight = jax.sharding.reshard(loss_weight, Pbatch)
+            return p.compute_next_token_loss(token_ids, loss_weight, mask=GrugAttentionMask.causal(), reduction="mean")
+
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = jax.jit(loss_fn).trace(params).lower(lowering_platforms=(platform,))
+
+    assert lowered is not None
