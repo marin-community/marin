@@ -684,6 +684,22 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
         max_parallelism=32,
     ),
+    "AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories": InstructionDatasetConfig(
+        hf_dataset_id="AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories",
+        revision="dfd98db",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["instance_id", "resolved", "model", "traj_id"],
+        name="AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories",
+        max_parallelism=32,
+    ),
+    "AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories": InstructionDatasetConfig(
+        hf_dataset_id="AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories",
+        revision="0b2f075",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["instance_id", "resolved", "model", "traj_id"],
+        name="AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories",
+        max_parallelism=32,
+    ),
 }
 
 for split_name in SMOLTALK2_SPLITS:
