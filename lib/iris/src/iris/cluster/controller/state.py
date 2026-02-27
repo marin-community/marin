@@ -942,12 +942,12 @@ class ControllerState:
 
             self._transactions.append(txn)
 
-            # Log transaction for debugging; demote all heartbeat events to DEBUG
+            # Log transaction summary at INFO (heartbeats at DEBUG), action details always at DEBUG
             if txn.actions:
-                log = logger.debug if isinstance(event, WorkerHeartbeatEvent) else logger.info
-                log(f"Event {type(event).__name__}: {len(txn.actions)} actions")
+                summary_log = logger.debug if isinstance(event, WorkerHeartbeatEvent) else logger.info
+                summary_log(f"Event {type(event).__name__}: {len(txn.actions)} actions")
                 for action in txn.actions:
-                    log(f"  - {action.action} {action.entity_id} {action.details}")
+                    logger.debug(f"  - {action.action} {action.entity_id} {action.details}")
 
             return txn
 
@@ -1285,7 +1285,7 @@ class ControllerState:
                 is_finished,
             )
         else:
-            logger.info(
+            logger.debug(
                 "Task %s state changed: %s -> %s attempt=%d "
                 "failure_count=%d/%d preemption_count=%d/%d result=%s is_finished=%s",
                 event.task_id,
