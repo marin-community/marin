@@ -1,0 +1,2 @@
+# Copyright 2026 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
