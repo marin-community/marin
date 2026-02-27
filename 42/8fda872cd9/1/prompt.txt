@@ -1,0 +1,418 @@
+Generalize @experiments/exp2956_sft_swe_smith_qwen3_8b.py to other teacher trajectories on HF, like AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories and AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories, so the user can switch between teacher models including gpt-5-mini, minimax-m2.5, and gemini-3-flash
+
+---
+
+RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \                                                                                                        
+    --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
+    --env_vars WANDB_ENTITY marin-community \                                                                                                                            
+    --env_vars WANDB_PROJECT harbor \                             
+    --env_vars TPU_CI true \                                                                                                                                             
+    --env_vars HF_TOKEN ${HF_TOKEN} \                                                                                                                                    
+    --cluster us-central1 \
+    -- python experiments/exp2956_sft_swe_smith_qwen3_8b.py --force_run_failed true
+
+---
+
+[Request interrupted by user]
+
+---
+
+Where will the SFT model weights be stored for say a run with minimax m2.5 teacher?
+
+---
+
+Great, update the command below to run two experiments concurrently on us-central1, one with minimax-m2.5 as the teacher, another with gemini-3-flash as the teacher. Monitor for progress of both. Let me know if they fail:
+
+---
+
+[Request interrupted by user]
+
+---
+
+RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \                                                                                                        
+    --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
+    --env_vars WANDB_ENTITY marin-community \                                                                                                                            
+    --env_vars WANDB_PROJECT harbor \                             
+    --env_vars TPU_CI true \                                                                                                                                             
+    --env_vars HF_TOKEN ${HF_TOKEN} \                                                                                                                                    
+    --cluster us-central1 \
+    -- python experiments/exp2956_sft_swe_smith_qwen3_8b.py --force_run_failed trueNow go
+
+---
+
+status?
+
+---
+
+Show me the wandb experiment links
+
+---
+
+<task-notification>
+<task-id>bbfvdh03v</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1010/-home-kevin-marin-agentic-sft/tasks/bbfvdh03v.output</output-file>
+<status>completed</status>
+<summary>Background command "Launch minimax-m2.5 SFT experiment on Ray" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /tmp/claude-1010/-home-kevin-marin-agentic-sft/tasks/bbfvdh03v.output
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Initial Request**: User asked to generalize `experiments/exp2956_sft_swe_smith_qwen3_8b.py` to support multiple teacher trajectory datasets on HuggingFace (gpt-5-mini, minimax-m2.5, gemini-3-flash).
+
+2. **Exploration Phase**: I launched an Explore agent to understand the codebase structure, including:
+   - The experiment file patterns
+   - `INSTRUCTION_DATASET_NAME_TO_CONFIG` registry in `instruction_datasets.py`
+   - How `get_instruction_dataset` works
+   - The `InstructionDatasetConfig` dataclass
+   - Only gpt-5-mini was registered; minimax and gemini were not
+
+3. **Data Collection**: I fetched HF API info for all three datasets:
+   - gpt-5-mini: 3,953 samples, revision `de3bb10` (existing)
+   - minimax-m2.5: 5,251 samples, revision `dfd98db`
+   - gemini-3-flash: 1,449 samples, revision `0b2f075`
+
+4. **Code Changes**:
+   - Registered two new datasets in `instruction_datasets.py`
+   - Rewrote `exp2956_sft_swe_smith_qwen3_8b.py` to be parameterized with `TeacherConfig`, `TEACHER_CONFIGS`, `build_swe_smith_sft()` factory function, and CLI `--teacher` flag
+
+5. **Verification**: Syntax checks passed for both files. Import test failed due to missing CUDA (expected on dev machine).
+
+6. **User asked about checkpoint storage path**: I researched and explained the full path structure for minimax-m2.5 weights.
+
+7. **User asked to run two experiments concurrently**: Before running, I noticed the `__main__` block had a problem - `executor_main` uses `@draccus.wrap()` which parses from `sys.argv`, so `--teacher` would conflict. I fixed this by stripping `--teacher` from `sys.argv` before calling `executor_main`.
+
+8. **Launched both experiments**: Both submitted successfully to Ray cluster on us-central1.
+
+9. **Monitoring**: Both went through transform → tokenize → train pipeline successfully. Both reached TPU training phase.
+
+10. **User asked for W&B links**: Found them in the output logs.
+
+11. **minimax-m2.5 FAILED**: Node died (preempted/hardware failure) at ~19:13 UTC. The gemini-3-flash job also shows a similar node death but the gemini job is still listed as "running" - it may be retrying or also failed.
+
+Let me check what the latest state is:
+- minimax-m2.5 (bbfvdh03v): COMPLETED with exit code 0 but the training FAILED due to node death
+- gemini-3-flash (bi2vfgkv4): Still running but shows similar node death errors
+
+Both jobs failed due to TPU node preemption/death on the Ray cluster. Neither has been resubmitted yet.
+
+Summary:
+1. Primary Request and Intent:
+   - **Generalize experiment file**: User asked to generalize `experiments/exp2956_sft_swe_smith_qwen3_8b.py` to support multiple teacher trajectory datasets on HuggingFace: `AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories`, `AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories`, and `AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories`.
+   - **Run experiments**: User asked to run two SFT experiments concurrently on `us-central1` Ray cluster — one with minimax-m2.5 teacher, another with gemini-3-flash teacher — and monitor for progress/failures.
+   - **Show W&B links**: User asked for the Weights & Biases experiment links.
+   - **Status checks**: User asked for status updates on the running experiments.
+
+2. Key Technical Concepts:
+   - **Marin SFT pipeline**: 3-step executor pipeline: `transform_hf_dataset` → `tokenize` → `run_levanter_train_lm`
+   - **Instruction dataset registry**: `INSTRUCTION_DATASET_NAME_TO_CONFIG` in `instruction_datasets.py` using `InstructionDatasetConfig` dataclass with `multi_turn_adapter()`
+   - **SimpleSFTConfig**: Training config with per-device parallelism, batch size, learning rate, etc.
+   - **ExecutorStep / executor_main**: `@draccus.wrap()` decorated entry point that parses CLI args from `sys.argv`
+   - **Ray job submission**: Using `ray_run.py` to submit jobs to Ray cluster via SSH tunnel
+   - **TPU v5p-32**: 16 chips, batch size 16 matches chip count
+   - **ResourceConfig**: `ResourceConfig.with_tpu("v5p-32")` for TPU resource allocation
+   - **Checkpoint paths**: `gs://{MARIN_PREFIX}/checkpoints/{exp_name}-{6char_hash}/hf/step-{N}`
+   - **Version hashing**: 6-char MD5 hash of versioned config for deterministic output paths
+
+3. Files and Code Sections:
+   - **`experiments/posttrain/instruction_datasets.py`**
+     - Registry of HF instruction datasets. Added two new entries for minimax-m2.5 and gemini-3-flash.
+     - Edit at line 687 (after the existing gpt-5-mini entry, before the closing `}`):
+     ```python
+     "AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories": InstructionDatasetConfig(
+         hf_dataset_id="AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories",
+         revision="dfd98db",
+         adapter=multi_turn_adapter(),
+         metadata_columns=["instance_id", "resolved", "model", "traj_id"],
+         name="AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories",
+         max_parallelism=32,
+     ),
+     "AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories": InstructionDatasetConfig(
+         hf_dataset_id="AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories",
+         revision="0b2f075",
+         adapter=multi_turn_adapter(),
+         metadata_columns=["instance_id", "resolved", "model", "traj_id"],
+         name="AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories",
+         max_parallelism=32,
+     ),
+     ```
+
+   - **`experiments/exp2956_sft_swe_smith_qwen3_8b.py`**
+     - Main experiment file, fully rewritten to support parameterized teacher models. Key components:
+     - `TeacherConfig` dataclass with `hf_dataset_id` and `num_samples`
+     - `TEACHER_CONFIGS` dict mapping teacher names to configs:
+       - `"gpt-5-mini"`: 3953 samples
+       - `"minimax-m2.5"`: 5251 samples
+       - `"gemini-3-flash"`: 1449 samples
+     - `build_swe_smith_sft(teacher)` factory function returning `(sft_step, checkpoint_step)` tuple
+     - Module-level exports for all three experiments:
+       - `exp2956_sft_swe_smith_qwen3_8b` / `exp2956_checkpoint` (gpt-5-mini)
+       - `exp2956_sft_swe_smith_minimax_qwen3_8b` / `exp2956_minimax_checkpoint`
+       - `exp2956_sft_swe_smith_gemini_qwen3_8b` / `exp2956_gemini_checkpoint`
+     - CLI `--teacher` arg with `sys.argv` stripping before `executor_main`
+     - Full file content:
+     ```python
+     # Copyright 2025 The Marin Authors
+     # [license header...]
+
+     """
+     Fine-tunes Qwen/Qwen3-8B on SWE-smith agentic trajectories (Rust/ripgrep tasks).
+     Supports multiple teacher models:
+       - gpt-5-mini, minimax-m2.5, gemini-3-flash
+     Usage:
+         python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher gpt-5-mini
+     """
+
+     import argparse
+     import dataclasses
+     import math
+     from dataclasses import dataclass
+
+     from levanter.data.text import ChatLmDatasetFormat
+     from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
+
+     from experiments.defaults import default_sft, default_tokenize
+     from experiments.posttrain.instruction_datasets import (
+         INSTRUCTION_DATASET_NAME_TO_CONFIG,
+         get_instruction_dataset,
+     )
+     from experiments.qwen3 import qwen3_8b, qwen3_8b_tokenizer
+     from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
+     from experiments.simple_sft_config import SimpleSFTConfig, compute_per_device_parallelism
+     from fray.cluster import ResourceConfig
+     from marin.execution.executor import ExecutorStep, executor_main
+     from marin.processing.tokenize import TokenizerStep, lm_mixture_data_config
+
+     @dataclass(frozen=True)
+     class TeacherConfig:
+         hf_dataset_id: str
+         num_samples: int
+
+     TEACHER_CONFIGS: dict[str, TeacherConfig] = {
+         "gpt-5-mini": TeacherConfig(
+             hf_dataset_id="AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories",
+             num_samples=3953,
+         ),
+         "minimax-m2.5": TeacherConfig(
+             hf_dataset_id="AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories",
+             num_samples=5251,
+         ),
+         "gemini-3-flash": TeacherConfig(
+             hf_dataset_id="AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories",
+             num_samples=1449,
+         ),
+     }
+
+     TARGET_EPOCHS = 7
+     TRAIN_BATCH_SIZE = 16
+     MICROBATCH_SIZE = 16
+     RESOURCES = ResourceConfig.with_tpu("v5p-32")
+     RESOURCE_SUFFIX = RESOURCES.device.variant.replace("-", "") if RESOURCES.device.kind == "tpu" else "gpu"
+
+     qwen3_8b_32768_seq_len = dataclasses.replace(
+         qwen3_8b,
+         max_seq_len=32768,
+         rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
+         cross_entropy_block_size=32000,
+     )
+
+     def _create_tokenization_step(dataset_identifier: str, short_name: str) -> TokenizerStep:
+         dataset_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_identifier]
+         dataset = get_instruction_dataset(dataset_identifier, splits=dataset_config.splits)
+         return default_tokenize(
+             name=f"{short_name.split('/')[-1]}_qwen3_8b_tokenizer",
+             dataset=dataset / "**/*.jsonl.gz",
+             tokenizer=qwen3_8b_tokenizer,
+             format=ChatLmDatasetFormat(chat_template=QWEN_3_CHAT_TEMPLATE),
+         )
+
+     def build_swe_smith_sft(teacher: str) -> tuple[ExecutorStep, ExecutorStep]:
+         config = TEACHER_CONFIGS[teacher]
+         datasets = {config.hf_dataset_id: config.hf_dataset_id}
+         weights = {config.hf_dataset_id: float(config.num_samples)}
+         tokenized_datasets = {
+             name: _create_tokenization_step(dataset_id, name) for name, dataset_id in datasets.items()
+         }
+         total_examples = config.num_samples
+         num_train_steps = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
+         sft_config = SimpleSFTConfig(
+             resources=RESOURCES, tokenizer=qwen3_8b_tokenizer,
+             model_name_or_path="Qwen/Qwen3-8B",
+             train_batch_size=TRAIN_BATCH_SIZE,
+             per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
+             per_device_eval_parallelism=8,
+             num_train_steps=num_train_steps,
+             learning_rate=4e-5, max_seq_len=32768, seed=42,
+             steps_per_checkpoint=(total_examples // TRAIN_BATCH_SIZE) // 4,
+             lr_schedule="cosine", warmup=0.1, decay=0.9, weight_decay=0.0,
+             max_grad_norm=1e-4, beta1=0.9, beta2=0.98, epsilon=1e-8,
+             pad_tokenizer_to_match_model=True,
+         )
+         mixture_config = lm_mixture_data_config(
+             tokenized_datasets, weights,
+             permutation_type="feistel", shuffle=total_examples,
+             missing_weights_are_validation=True, mixture_block_size=12288,
+         )
+         teacher_slug = teacher.replace("-", "_").replace(".", "_")
+         sft_step = default_sft(
+             name=f"exp2956_sft_swe_smith_{teacher_slug}_qwen3_8b_32768tokens_{RESOURCE_SUFFIX}",
+             tokenized=mixture_config, model_config=qwen3_8b_32768_seq_len,
+             sft_config=sft_config,
+             tags=["qwen", "swe-smith", "sft", teacher, RESOURCE_SUFFIX],
+         )
+         checkpoint = sft_step.cd(f"hf/step-{num_train_steps - 1}").nonblocking()
+         return sft_step, checkpoint
+
+     # Module-level exports
+     exp2956_sft_swe_smith_qwen3_8b, exp2956_checkpoint = build_swe_smith_sft("gpt-5-mini")
+     exp2956_sft_swe_smith_minimax_qwen3_8b, exp2956_minimax_checkpoint = build_swe_smith_sft("minimax-m2.5")
+     exp2956_sft_swe_smith_gemini_qwen3_8b, exp2956_gemini_checkpoint = build_swe_smith_sft("gemini-3-flash")
+
+     if __name__ == "__main__":
+         import sys
+         parser = argparse.ArgumentParser(description="SFT on SWE-smith trajectories")
+         parser.add_argument("--teacher", choices=list(TEACHER_CONFIGS.keys()), default="gpt-5-mini")
+         args, remaining = parser.parse_known_args()
+         sys.argv = [sys.argv[0]] + remaining  # Strip --teacher for draccus
+         sft_step, _ = build_swe_smith_sft(args.teacher)
+         executor_main(steps=[sft_step])
+     ```
+
+4. Errors and Fixes:
+   - **`executor_main` / draccus conflict with `--teacher` arg**: `executor_main` uses `@draccus.wrap()` which parses from `sys.argv`. The `--teacher` flag would cause draccus to fail. Fixed by using `parse_known_args()` and then replacing `sys.argv` with `[sys.argv[0]] + remaining` before calling `executor_main`.
+   - **CUDA import failure on dev machine**: When trying to verify imports, `levanter` → `torch` failed due to missing CUDA libraries. This is expected (project runs on TPU). Verified syntax correctness via `ast.parse()` instead.
+   - **minimax-m2.5 training FAILED**: TPU node `10.128.0.48` died during training (preempted or hardware failure). Error: "Task failed because the node it was running on is dead or unavailable." The job exited with code 0 (the Ray job submission succeeded, but the training step within it failed).
+   - **gemini-3-flash training likely FAILED**: Similar node death errors visible in logs (`10.128.0.244` died). The gemini job shows "Task run_levanter_train_lm failed. There are 0 retries remaining" but the background process was still running at time of summary request.
+
+5. Problem Solving:
+   - Successfully generalized the experiment file from hardcoded single-teacher to parameterized multi-teacher design
+   - Successfully registered new HF datasets with correct revisions and sample counts
+   - Successfully submitted both experiments concurrently to Ray cluster
+   - Both experiments completed transform and tokenize steps successfully
+   - Both experiments failed at the training step due to TPU node preemption — a transient infrastructure issue requiring resubmission with `--force_run_failed true`
+
+6. All User Messages:
+   - "Generalize @experiments/exp2956_sft_swe_smith_qwen3_8b.py to other teacher trajectories on HF, like AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories and AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories, so the user can switch between teacher models including gpt-5-mini, minimax-m2.5, and gemini-3-flash"
+   - "Where will the SFT model weights be stored for say a run with minimax m2.5 teacher?"
+   - "Great, update the command below to run two experiments concurrently on us-central1, one with minimax-m2.5 as the teacher, another with gemini-3-flash as the teacher. Monitor for progress of both. Let me know if they fail: [ray_run.py command] Now go"
+   - "status?"
+   - "Show me the wandb experiment links"
+
+7. Pending Tasks:
+   - Both SFT training jobs failed due to TPU node preemption. They need to be resubmitted with `--force_run_failed true`. The data prep steps (transform + tokenize) already succeeded and will be skipped on retry.
+   - The gemini-3-flash background process (task `bi2vfgkv4`) may still be running but its training step has failed.
+
+8. Current Work:
+   The user asked "Show me the wandb experiment links" and I provided them:
+   - minimax-m2.5: `https://wandb.REDACTED`
+   - gemini-3-flash: `https://wandb.REDACTED`
+   
+   Then the minimax-m2.5 background task (`bbfvdh03v`) completed. I checked its output and found it failed due to TPU node death. I also checked the gemini-3-flash job and found similar node death errors. I was about to report both failures to the user when the summary was requested.
+
+9. Optional Next Step:
+   Report to the user that both training jobs failed due to TPU node preemption (transient infrastructure issue, not a code bug). Ask if they want to resubmit both experiments — the transform and tokenize steps already succeeded so resubmission will skip straight to training. The resubmission command is the same as before with `--force_run_failed true`.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kevin/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+<task-notification>
+<task-id>bi2vfgkv4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1010/-home-kevin-marin-agentic-sft/tasks/bi2vfgkv4.output</output-file>
+<status>completed</status>
+<summary>Background command "Launch gemini-3-flash SFT experiment on Ray" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /tmp/claude-1010/-home-kevin-marin-agentic-sft/tasks/bi2vfgkv4.output
+
+---
+
+stats?
+
+---
+
+how to set up ray auth token?
+
+---
+
+Monitor those two runs until both finish. Resubmit if fail.
+
+---
+
+status?
+
+---
+
+how many tasks are running on central1, what about east5-a?
+
+---
+
+how many TPUs are available on each cluster?
+
+---
+
+Ok, stop the 2 tasks on us-central1 and resubmit to us-east5-a
+
+---
+
+status?
+
+---
+
+Did you remember to pass HF_TOKEN?
+
+---
+
+status?
+
+---
+
+show me the tail 20 lines of the log of the minimax-m2.5 job
+
+---
+
+[Request interrupted by user]
+
+---
+
+Can you simplify update this command to support the new --teacher arg: RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \                                                                                                        
+    --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
+    --env_vars WANDB_ENTITY marin-community \                                                                                                                            
+    --env_vars WANDB_PROJECT harbor \                             
+    --env_vars TPU_CI true \                                                                                                                                             
+    --env_vars HF_TOKEN ${HF_TOKEN} \                                                                                                                                    
+    --cluster us-central1 \
+    -- python experiments/exp2956_sft_swe_smith_qwen3_8b.py --force_run_failed true  Show me the two commands with --teacher
+
+---
+
+# minimax-m2.5
+  RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
+      --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
+      --env_vars WANDB_ENTITY marin-community \
+      --env_vars WANDB_PROJECT marin \
+      --env_vars TPU_CI true \
+      --env_vars HF_TOKEN ${HF_TOKEN} \
+      --cluster us-east5-a \
+      -- python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher minimax-m2.5 --force_run_failed true
+
+  # gemini-3-flash
+  RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
+      --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
+      --env_vars WANDB_ENTITY marin-community \
+      --env_vars WANDB_PROJECT marin \
+      --env_vars TPU_CI true \
+      --env_vars HF_TOKEN ${HF_TOKEN} \
+      --cluster us-east5-a \
+      -- python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher gemini-3-flash --force_run_failed true    Run with those 2 commands. Store them to memory.
+
+---
+
+Commit relevant changes and push
