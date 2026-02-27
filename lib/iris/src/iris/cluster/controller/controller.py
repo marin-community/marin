@@ -597,11 +597,13 @@ class Controller:
 
         # Phase 3: consume all responses; per-worker RPC timeout determines failures.
         fail_count = 0
+        failed_workers: list[str] = []
         for _ in snapshots:
             snapshot, response, error = result_queue.get()
             if error is not None:
                 fail_count += 1
-                logger.warning("Heartbeat error for %s: %s", snapshot.worker_id, error)
+                failed_workers.append(snapshot.worker_id)
+                logger.debug("Heartbeat error for %s: %s", snapshot.worker_id, error)
                 self._handle_heartbeat_failure(snapshot, error)
                 continue
             if response is not None:
@@ -612,14 +614,12 @@ class Controller:
 
         elapsed = round_timer.elapsed_ms()
         level = logging.WARNING if elapsed > _SLOW_HEARTBEAT_MS else logging.DEBUG
-        logger.log(
-            level,
-            "Heartbeat round: %d workers, %d failed, %dms (snapshot: %dms)",
-            len(snapshots),
-            fail_count,
-            elapsed,
-            snapshot_ms,
-        )
+        fmt = "Heartbeat round: %d workers, %d failed, %dms (snapshot: %dms)"
+        args: list[object] = [len(snapshots), fail_count, elapsed, snapshot_ms]
+        if failed_workers:
+            fmt += " failed=[%s]"
+            args.append(", ".join(failed_workers))
+        logger.log(level, fmt, *args)
 
         self._heartbeat_iteration += 1
         if self._heartbeat_iteration % _HEALTH_SUMMARY_INTERVAL == 0:
