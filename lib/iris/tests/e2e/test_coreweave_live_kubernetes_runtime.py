@@ -8,7 +8,6 @@ from __future__ import annotations
 import io
 import os
 import posixpath
-import shutil
 import time
 import uuid
 from contextlib import contextmanager
@@ -185,7 +184,6 @@ def test_kubernetes_runtime_lifecycle(k8s_runtime: KubernetesRuntime):
     assert any("lifecycle-test-ok" in line.data for line in logs)
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(1800)
 def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: KubernetesRuntime):
     """CPU pod should extract bundle and complete successfully via KubernetesRuntime."""
@@ -248,7 +246,6 @@ def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: Kubernetes
                 pass
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(1800)
 def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRuntime):
     """Incremental log reads via byte-offset cursor must not produce duplicate lines.
@@ -309,7 +306,6 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
     assert numbered == expected
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(3600)
 def test_coreweave_kubernetes_runtime_gpu_job_live(coreweave_runtime: KubernetesRuntime):
     """GPU pod should request GPU and prove device access via nvidia-smi."""
@@ -350,7 +346,6 @@ def test_coreweave_kubernetes_runtime_gpu_job_live(coreweave_runtime: Kubernetes
     assert gpu_state == cluster_pb2.TASK_STATE_SUCCEEDED, f"gpu pod failed logs={gpu_logs}"
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(600)
 def test_tensorstore_s3_roundtrip():
     """Verify tensorstore can write and read zarr3 data via S3-compatible storage.
