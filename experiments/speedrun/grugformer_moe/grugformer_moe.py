@@ -9,8 +9,8 @@ and does not modify the canonical `levanter.grug` core.
 
 Design goals:
 - "Grug simple": explicit tensor shapes, minimal abstractions.
-- "Vanilla custom_mixtral logic": top-k routing + sort/permute dispatch + GMM (Megablox) or ragged_dot_general expert MLP,
-  with load-balancing loss and router z-loss.
+- "Vanilla custom_mixtral logic": top-k routing + sort/permute dispatch + GMM (Megablox) or
+  ragged_dot_general expert MLP, with load-balancing loss and router z-loss.
 - Replicated experts (no expert-parallel all-to-all).
 """
 
@@ -31,14 +31,15 @@ from einops import rearrange
 from fray.cluster import ResourceConfig
 from haliax import Axis, NamedArray
 from haliax.nn.linear import gmm_sharded
-from haliax.partitioning import _get_mesh
+from haliax.partitioning import ResourceAxis, _get_mesh
+from jax.lax import with_sharding_constraint
 from jax.experimental.shard_map import shard_map
-from jax.sharding import NamedSharding, PartitionSpec as P, reshard
+from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
-from levanter.grug.sharding import Pbatch_moe, Pvocab, unshard
+from levanter.grug.sharding import Pbatch_moe
 from levanter.layers.attention import AttentionMask as LevanterAttentionMask
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -77,13 +78,45 @@ def _maybe_log_nonfinite(x: jax.Array, *, name: str) -> jax.Array:
 
     return jax.lax.cond(is_finite, lambda _: x, _print, operand=None)
 
+
 # Ruff/Pyflakes treats string literals in annotations as forward refs and checks that bare
 # identifiers (e.g. "D") are defined. These are jaxtyping dimension labels, not runtime symbols.
 D = TypeVar("D")
 
 
 def _pbatch() -> P:
+    """PartitionSpec for leading token/batch axes under the active Levanter mesh mapping.
+
+    Grugformer MoE uses `shard_map` with explicit in/out specs. If these specs disagree with the
+    trainer's `MeshConfig` compute mapping (e.g. when `batch/token` include `replica_dcn`), XLA
+    inserts many tiny reshard/permute collectives that tank MFU.
+
+    Use the current Haliax axis mapping when available so the specs always match the trainer config.
+    """
+    mapping = hax.partitioning.current_thread_local_mapping()
+    if mapping is not None:
+        for logical in ("token_repeat", "token", "batch"):
+            physical = mapping.get(logical)
+            if physical is None:
+                continue
+            if isinstance(physical, list):
+                physical = tuple(physical)
+            return P(physical)
+
     return Pbatch_moe()
+
+
+def _pbatch_for_get() -> None:
+    """`.get(out_sharding=...)` portability guard.
+
+    On some TPU meshes (including v4 layouts used in shared central2), logical
+    axes like `data` are Auto/Manual under the hood, and JAX rejects them in
+    indexed `.get(out_sharding=...)`.
+
+    Let JAX choose output sharding for indexed embedding gather and constrain
+    downstream compute via explicit `out_sharding`/`shard_map` sites instead.
+    """
+    return None
 
 
 #### Conventions
@@ -195,9 +228,13 @@ def init_parameters(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> GrugMoePar
     key, embed_key, out_key = jax.random.split(key, 3)
     layer_keys = jax.random.split(key, cfg.num_layers)
 
-    token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
-    output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
-    final_norm = reshard(jnp.ones((cfg.hidden_dim,), dtype=jnp.float32), P(None))
+    token_embed = with_sharding_constraint(
+        _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), P(None, ResourceAxis.DATA)
+    )
+    output_proj = with_sharding_constraint(
+        _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), P(ResourceAxis.DATA, None)
+    )
+    final_norm = with_sharding_constraint(jnp.ones((cfg.hidden_dim,), dtype=jnp.float32), P(None))
 
     blocks: list[GrugMoeBlockParams] = []
     # extract shape sizes for brevity and consistency
@@ -219,37 +256,44 @@ def init_parameters(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> GrugMoePar
         ) = jax.random.split(layer_keys[i], 8)
 
         attn = GrugAttentionParams(
-            w_q=reshard(_init_weight(k_q, (hidden_dim, num_heads * head_dim), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(
+            w_q=with_sharding_constraint(
+                _init_weight(k_q, (hidden_dim, num_heads * head_dim), cfg.initializer_std), P("data", "model")
+            ),
+            w_k=with_sharding_constraint(
                 _init_weight(k_k, (hidden_dim, num_kv_heads * head_dim), cfg.initializer_std), P("data", "model")
             ),
-            w_v=reshard(
+            w_v=with_sharding_constraint(
                 _init_weight(k_v, (hidden_dim, num_kv_heads * head_dim), cfg.initializer_std), P("data", "model")
             ),
-            w_o=reshard(_init_weight(k_o, (num_heads * head_dim, hidden_dim), cfg.initializer_std), P("model", "data")),
+            w_o=with_sharding_constraint(
+                _init_weight(k_o, (num_heads * head_dim, hidden_dim), cfg.initializer_std), P("model", "data")
+            ),
         )
 
         # Router maps D -> E. Keep the expert axis replicated (no expert-parallel sharding).
-        router_w = reshard(_init_weight(k_router, (hidden_dim, num_experts), cfg.initializer_std), P("data", None))
+        router_w = with_sharding_constraint(
+            _init_weight(k_router, (hidden_dim, num_experts), cfg.initializer_std), P("data", None)
+        )
 
-        # Expert weights are replicated over the data axis and sharded over the model axis (TP).
-        # This keeps the GMM pathway simple and avoids ragged-dot auto-sharding pathologies.
-        w1 = reshard(
+        # Expert weights keep the expert axis replicated (no expert-parallel all-to-all), but shard
+        # the dense dims over (data, model) to match Levanter's ZeRO-ish param sharding. This avoids
+        # TPU init OOMs for OLMoE-scale models (7B total params) where optimizer state dominates memory.
+        w1 = with_sharding_constraint(
             _init_weight(k_w1, (num_experts, hidden_dim, intermediate_dim), cfg.initializer_std),
-            P(None, None, "model"),
+            P(None, ResourceAxis.DATA, ResourceAxis.MODEL),
         )
-        w3 = reshard(
+        w3 = with_sharding_constraint(
             _init_weight(k_w3, (num_experts, hidden_dim, intermediate_dim), cfg.initializer_std),
-            P(None, None, "model"),
+            P(None, ResourceAxis.DATA, ResourceAxis.MODEL),
         )
-        w2 = reshard(
+        w2 = with_sharding_constraint(
             _init_weight(k_w2, (num_experts, intermediate_dim, hidden_dim), cfg.initializer_std),
-            P(None, "model", None),
+            P(None, ResourceAxis.MODEL, ResourceAxis.DATA),
         )
 
         # keep rms replicated
-        rms_attn = jnp.ones((hidden_dim,), dtype=jnp.float32)
-        rms_mlp = jnp.ones((hidden_dim,), dtype=jnp.float32)
+        rms_attn = with_sharding_constraint(jnp.ones((hidden_dim,), dtype=jnp.float32), P(None))
+        rms_mlp = with_sharding_constraint(jnp.ones((hidden_dim,), dtype=jnp.float32), P(None))
 
         blocks.append(
             GrugMoeBlockParams(
@@ -272,7 +316,6 @@ def init_parameters(cfg: GrugMoeModelConfig, *, key: PRNGKeyArray) -> GrugMoePar
 
 
 def rms_norm(x: Float[Array, "... D"], weight: Float[Array, "D"], eps: float) -> Float[Array, "... D"]:
-    weight = unshard(weight)
     # Levanter runs with mixed precision (bf16 compute, fp32 params) + strict dtype promotion.
     # Do RMSNorm math in fp32, then cast back to the input dtype.
     out_dtype = x.dtype
@@ -357,18 +400,21 @@ def _gmm_moe_linear(
     """
     mesh = _get_mesh()
     if mesh is not None and not getattr(mesh, "empty", False):
+        # When `ar=True` the contracting dimension is sharded over the `model` axis and `gmm_sharded`
+        # will `psum` partial results. shard_map must see *local* shards on that contracting dimension,
+        # otherwise the Megablox GMM custom_vjp backward rule will observe mismatched primal/grad shapes.
+        x_spec = _pbatch() if not ar else P(_pbatch()[0], ResourceAxis.MODEL)
         out_specs = P(_pbatch()[0], out_axis)
         gmm_fn = shard_map(
             lambda lhs, rhs, gs: gmm_sharded(lhs, rhs, gs, ar=ar),
             mesh=mesh,
-            in_specs=(_pbatch(), w_spec, P(None)),
+            in_specs=(x_spec, w_spec, P(None)),
             out_specs=out_specs,
             check_rep=False,
         )
         return gmm_fn(x, w, group_sizes)
 
     return gmm_sharded(x, w, group_sizes, ar=ar)
-
 
 
 def _route(
@@ -602,6 +648,7 @@ def _transformer_hidden(
     seq_len = token_ids.shape[1]
     if _DEBUG_FINITE and jax.process_index() == 0:
         bad = jnp.any((token_ids < 0) | (token_ids >= cfg.vocab_size))
+
         def _print_tok(_: None) -> jax.Array:
             jax.debug.print(
                 "BAD TOKENS: min={minv} max={maxv} vocab={vocab}",
@@ -610,12 +657,17 @@ def _transformer_hidden(
                 vocab=cfg.vocab_size,
             )
             return token_ids
+
         token_ids = jax.lax.cond(bad, _print_tok, lambda _: token_ids, operand=None)
 
     if mask is None:
         mask = AttentionMask.causal()
 
-    hidden = params.token_embed.at[token_ids].get(out_sharding=_pbatch())  # [B, S, D]
+    token_embed_out_sharding = _pbatch_for_get()
+    if token_embed_out_sharding is None:
+        hidden = params.token_embed.at[token_ids].get()  # [B, S, D]
+    else:
+        hidden = params.token_embed.at[token_ids].get(out_sharding=token_embed_out_sharding)  # [B, S, D]
     hidden = _maybe_log_nonfinite(hidden, name="hidden/embed")
 
     aux_total = jnp.array(0.0, dtype=jnp.float32)
@@ -629,7 +681,7 @@ def _transformer_hidden(
         attn_out = attention(q, k, v, mask)
         attn_out = _maybe_log_nonfinite(attn_out, name="attn_out")
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o, out_sharding=_pbatch())
+        attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o)
 
         hidden = hidden + attn_out
         mlp_in = rms_norm(hidden, block.rms_mlp, cfg.layer_norm_eps)
@@ -871,7 +923,8 @@ class GrugformerMoeConfig(LmConfig[GrugMoeWrapper]):
         return GrugMoeWrapper.init(Vocab, cfg, key=key)
 
     def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
-        # Rough FLOP estimate: attention + (MoE MLP per-token uses K experts).
+        # Match Levanter's Mixtral/OLMoE FLOP accounting: MoE MLP scales with K experts/token and
+        # includes the router projection when num_experts > 1.
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
@@ -881,6 +934,9 @@ class GrugformerMoeConfig(LmConfig[GrugMoeWrapper]):
             seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
+            num_experts=self.n_routed_experts,
+            num_shared_experts=0,
+            num_experts_per_tok=self.num_experts_per_tok,
         )
 
     def total_trainable_params(self, vocab_size: int) -> int:
@@ -919,7 +975,7 @@ def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]
         weight_decay=0.1,
         steps_per_eval=500,
         steps_per_hf_export=-1,
-        explicit_mesh_axes=True,
+        explicit_mesh_axes=False,
     )
 
     run_name = f"grugformer_moe_{size}"
