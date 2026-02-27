@@ -14,9 +14,19 @@ import click
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
+from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
+
+
+def default_bundle_prefix() -> str:
+    """Return a region-local temp bucket path for bundle storage.
+
+    Uses the same marin_temp_bucket API that log_prefix uses, with a 7-day TTL
+    since bundles are ephemeral and regenerated on each job submission.
+    """
+    return marin_temp_bucket(ttl_days=7, prefix="iris/bundles")
 
 
 @click.group()
@@ -107,6 +117,10 @@ def serve(
     heartbeat_failure_threshold = (
         cluster_config.controller.heartbeat_failure_threshold if cluster_config else HEARTBEAT_FAILURE_THRESHOLD
     )
+
+    if bundle_prefix is None:
+        bundle_prefix = default_bundle_prefix()
+        logger.info("Using auto-detected bundle_prefix: %s", bundle_prefix)
 
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
