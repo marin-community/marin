@@ -1270,6 +1270,36 @@ class CoreweavePlatform:
     # a couple of attempts in case the first crash was transient.
     _CRASH_LOOP_MIN_RESTARTS = 2
 
+    def debug_report(self) -> None:
+        """Log controller pod termination reason and previous container logs."""
+        pods = self._kubectl.list_json("pods", labels={"app": "iris-controller"})
+        if not pods:
+            logger.warning("Post-mortem: no controller pods found")
+            return
+
+        for pod in pods:
+            name = pod.get("metadata", {}).get("name", "unknown")
+            phase = pod.get("status", {}).get("phase", "Unknown")
+
+            for cs in pod.get("status", {}).get("containerStatuses", []):
+                restarts = cs.get("restartCount", 0)
+                terminated = cs.get("lastState", {}).get("terminated", {})
+                if terminated:
+                    logger.warning(
+                        "Post-mortem %s: phase=%s reason=%s exitCode=%s restarts=%d",
+                        name,
+                        phase,
+                        terminated.get("reason"),
+                        terminated.get("exitCode"),
+                        restarts,
+                    )
+                else:
+                    logger.warning("Post-mortem %s: phase=%s restarts=%d", name, phase, restarts)
+
+            prev_logs = self._kubectl.logs(name, tail=50, previous=True)
+            if prev_logs:
+                logger.warning("Post-mortem %s previous logs:\n%s", name, prev_logs)
+
     def _check_controller_pods_health(self) -> None:
         """Check controller Pods for fatal conditions and fail fast.
 

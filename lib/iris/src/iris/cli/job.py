@@ -459,26 +459,35 @@ def run(
 
     env_vars_dict = load_env_vars(env_vars)
 
-    exit_code = run_iris_job(
-        command=command,
-        env_vars=env_vars_dict,
-        controller_url=controller_url,
-        tpu=tpu,
-        gpu=gpu,
-        cpu=cpu,
-        memory=memory,
-        disk=disk,
-        wait=not no_wait,
-        job_name=job_name,
-        replicas=replicas,
-        max_retries=max_retries,
-        timeout=timeout,
-        extras=list(extra),
-        include_children_logs=include_children_logs,
-        terminate_on_exit=terminate_on_exit,
-        regions=region or None,
-        zone=zone,
-    )
+    try:
+        exit_code = run_iris_job(
+            command=command,
+            env_vars=env_vars_dict,
+            controller_url=controller_url,
+            tpu=tpu,
+            gpu=gpu,
+            cpu=cpu,
+            memory=memory,
+            disk=disk,
+            wait=not no_wait,
+            job_name=job_name,
+            replicas=replicas,
+            max_retries=max_retries,
+            timeout=timeout,
+            extras=list(extra),
+            include_children_logs=include_children_logs,
+            terminate_on_exit=terminate_on_exit,
+            regions=region or None,
+            zone=zone,
+        )
+    except Exception:
+        platform = ctx.obj.get("platform")
+        if platform is not None:
+            try:
+                platform.debug_report()
+            except Exception:
+                logger.debug("Controller post-mortem failed", exc_info=True)
+        raise
     sys.exit(exit_code)
 
 
