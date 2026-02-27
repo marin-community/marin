@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from iris.cluster.runtime.types import ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
@@ -127,9 +127,9 @@ def test_monitor_defers_running_until_container_ready(tmp_path, pending_polls):
     polls and RUNNING appears only after the first ready=True poll.
     """
     status_seq = (
-        [ContainerStatus(running=True, ready=False)] * pending_polls
-        + [ContainerStatus(running=True, ready=True)]
-        + [ContainerStatus(running=False, exit_code=0)]
+        [ContainerStatus(phase=ContainerPhase.PENDING)] * pending_polls
+        + [ContainerStatus(phase=ContainerPhase.RUNNING)]
+        + [ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=0)]
     )
 
     task_ref = [None]

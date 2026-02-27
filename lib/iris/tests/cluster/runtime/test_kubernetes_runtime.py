@@ -14,7 +14,7 @@ import subprocess
 
 
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind
+from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerPhase
 from iris.rpc import cluster_pb2
 
 
@@ -233,18 +233,15 @@ def test_status_retries_transient_pod_not_found(monkeypatch):
     second = handle.status()
     third = handle.status()
 
-    assert first.running is True
+    assert first.phase == ContainerPhase.PENDING
     assert first.error is None
-    assert first.ready is False  # transient not-found → not ready
-    assert second.running is True
+    assert second.phase == ContainerPhase.PENDING
     assert second.error is None
-    assert second.ready is False
-    assert third.running is True
-    assert third.ready is True  # Running phase → ready
+    assert third.phase == ContainerPhase.RUNNING
 
 
 def test_status_reflects_pod_phase_progression(monkeypatch):
-    """status() tracks pod phase: Pending → not ready, Running → ready."""
+    """status() tracks pod phase: Pending → PENDING, Running → RUNNING."""
     manifests = _capture_manifest(monkeypatch)
 
     runtime = KubernetesRuntime(namespace="iris")
@@ -266,16 +263,13 @@ def test_status_reflects_pod_phase_progression(monkeypatch):
     monkeypatch.setattr(handle.kubectl, "get_json", fake_get_json)
 
     first = handle.status()
-    assert first.running is True
-    assert first.ready is False
+    assert first.phase == ContainerPhase.PENDING
 
     second = handle.status()
-    assert second.running is True
-    assert second.ready is False
+    assert second.phase == ContainerPhase.PENDING
 
     third = handle.status()
-    assert third.running is True
-    assert third.ready is True
+    assert third.phase == ContainerPhase.RUNNING
 
 
 def test_status_returns_structured_error_after_persistent_pod_not_found(monkeypatch):
@@ -297,9 +291,9 @@ def test_status_returns_structured_error_after_persistent_pod_not_found(monkeypa
     second = handle.status()
     third = handle.status()
 
-    assert first.running is True
-    assert second.running is True
-    assert third.running is False
+    assert first.phase == ContainerPhase.PENDING
+    assert second.phase == ContainerPhase.PENDING
+    assert third.phase == ContainerPhase.STOPPED
     assert third.error_kind == ContainerErrorKind.INFRA_NOT_FOUND
     assert third.error is not None
     assert "Task pod not found after retry window" in third.error

@@ -35,6 +35,19 @@ class ContainerErrorKind(StrEnum):
     RUNTIME_ERROR = "runtime_error"
 
 
+class ContainerPhase(StrEnum):
+    """Lifecycle phase of a container from the runtime's perspective.
+
+    PENDING: container created but not yet executing (K8s pod scheduling, image pull).
+    RUNNING: container is executing the main command.
+    STOPPED: container has exited (check exit_code/error for details).
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    STOPPED = "stopped"
+
+
 @dataclass
 class ContainerConfig:
     """Configuration for running a container."""
@@ -91,8 +104,7 @@ class ContainerStats:
 class ContainerStatus:
     """Container state from runtime inspection."""
 
-    running: bool
-    ready: bool = True
+    phase: ContainerPhase
     exit_code: int | None = None
     error: str | None = None
     error_kind: ContainerErrorKind = ContainerErrorKind.NONE

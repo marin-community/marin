@@ -11,7 +11,7 @@ from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
 from iris.cluster.runtime.process import ProcessContainerHandle
-from iris.cluster.runtime.types import ContainerStatus
+from iris.cluster.runtime.types import ContainerPhase, ContainerStatus
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
@@ -70,12 +70,11 @@ def test_building_backpressure_with_slow_starting_containers(single_worker_clust
     def patched_status(self) -> ContainerStatus:
         result = original_status(self)
         run_time = run_times.get(id(self))
-        if run_time is not None and result.running:
+        if run_time is not None and result.phase == ContainerPhase.RUNNING:
             elapsed = time.monotonic() - run_time
             if elapsed < READY_DELAY:
                 result = ContainerStatus(
-                    running=result.running,
-                    ready=False,
+                    phase=ContainerPhase.PENDING,
                     exit_code=result.exit_code,
                     error=result.error,
                     error_kind=result.error_kind,

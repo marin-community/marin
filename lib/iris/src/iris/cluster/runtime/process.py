@@ -42,7 +42,7 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus, RuntimeLogReader
+from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, ContainerStats, ContainerStatus, RuntimeLogReader
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
 from iris.rpc import cluster_pb2
@@ -515,9 +515,9 @@ class ProcessContainerHandle:
     def status(self) -> ContainerStatus:
         """Check container status (running, exit code, error)."""
         if not self._container:
-            return ContainerStatus(running=False, error="Container not started")
+            return ContainerStatus(phase=ContainerPhase.STOPPED, error="Container not started")
         return ContainerStatus(
-            running=self._container._running,
+            phase=ContainerPhase.RUNNING if self._container._running else ContainerPhase.STOPPED,
             exit_code=self._container._exit_code,
             error=self._container._error,
         )

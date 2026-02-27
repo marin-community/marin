@@ -20,7 +20,7 @@ import pytest
 from iris.cluster.config import load_config
 import fsspec.core
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.runtime.types import ContainerConfig
+from iris.cluster.runtime.types import ContainerConfig, ContainerPhase
 from iris.rpc import cluster_pb2
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
@@ -36,7 +36,7 @@ def _wait_finished(handle, timeout_seconds: float) -> cluster_pb2.TaskState:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         status = handle.status()
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             return cluster_pb2.TASK_STATE_SUCCEEDED if status.exit_code == 0 else cluster_pb2.TASK_STATE_FAILED
         time.sleep(2.0)
     raise TimeoutError(f"pod {handle.container_id} did not finish in {timeout_seconds}s")
@@ -188,7 +188,7 @@ def test_kubernetes_runtime_lifecycle(k8s_runtime: KubernetesRuntime):
 
 @pytest.mark.timeout(120)
 def test_kubernetes_pod_phase_reports_ready(k8s_runtime: KubernetesRuntime):
-    """ContainerStatus.ready must be False while pod is Pending, True once Running."""
+    """ContainerStatus.phase must be PENDING while pod is scheduling, RUNNING once started."""
     run_id = uuid.uuid4().hex[:8]
     config = ContainerConfig(
         image="python:3.11-slim",
@@ -202,27 +202,27 @@ def test_kubernetes_pod_phase_reports_ready(k8s_runtime: KubernetesRuntime):
     handle = k8s_runtime.create_container(config)
     handle.run()
 
-    saw_not_ready = False
-    saw_ready = False
+    saw_pending = False
+    saw_running = False
     deadline = time.monotonic() + 60
 
     while time.monotonic() < deadline:
         status = handle.status()
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             break
-        if not status.ready:
-            saw_not_ready = True
-        if status.ready:
-            saw_ready = True
+        if status.phase == ContainerPhase.PENDING:
+            saw_pending = True
+        if status.phase == ContainerPhase.RUNNING:
+            saw_running = True
             break
         time.sleep(0.5)
 
-    assert saw_ready, "Pod never reached ready=True (Running phase)"
+    assert saw_running, "Pod never reached RUNNING phase"
 
     state = _wait_finished(handle, timeout_seconds=30)
     assert state == cluster_pb2.TASK_STATE_SUCCEEDED
 
-    if not saw_not_ready:
+    if not saw_pending:
         # Pod scheduled too fast to observe Pending — not a failure, just a note.
         # On kind with cached images this is common.
         warnings.warn("Pod reached Running before first poll — Pending phase not observed", stacklevel=2)
@@ -331,7 +331,7 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
         for line in new_lines:
             collected.append(line.data)
         status = handle.status()
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             # One final read to drain remaining
             for line in reader.read():
                 collected.append(line.data)
