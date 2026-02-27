@@ -60,6 +60,14 @@ Failed-attempt handling:
   - keep only clearly justified scaffolding that is necessary for the next planned attempt and commit it with explicit rationale.
 - Never leave `Commit: (pending)` or `Commit: this commit` in a newly-added log entry; use the exact commit SHA.
 
+Retry budget (anti-spin):
+- For any identical failing TPU test/profile command (same command + same dominant failure signature), retry at most **once**.
+- If the same failure repeats after one retry, treat it as deterministic for this iteration:
+  - revert speculative code changes,
+  - log the iteration as failed/infra-blocked with exact failure details,
+  - move to the next iteration.
+- Do not loop indefinitely on presumed flakiness.
+
 Constraints:
 - TPU-only optimization target.
 - No backward-compatibility shims/fallback hacks.

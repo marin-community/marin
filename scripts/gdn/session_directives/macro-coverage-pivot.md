@@ -19,6 +19,10 @@ Repeat-avoidance rules:
 - If a macro move is infra-blocked twice in a row, switch to a different macro move in the next iteration.
 - If a macro move regresses twice in a row (<3% gain or negative MFU), defer it until all other macro moves above have one validated attempt.
 
+Retry guard:
+- If TPU validation/profile fails with the same signature twice in one iteration, stop retrying in that iteration.
+- Record the iteration as failed/infra-blocked, revert speculative kernel edits, and continue to the next iteration.
+
 Writeup requirement:
 - At top of each iteration writeup, include:
   - `Coverage slot: <macro> (<n>/<5>)`
