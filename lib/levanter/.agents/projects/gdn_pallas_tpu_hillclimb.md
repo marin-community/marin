@@ -2691,6 +2691,13 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - `throughput/tokens_per_second`: `187227.57 -> 30375.02` (`-83.78%`)
   - `throughput/duration`: `0.175017s -> 1.078781s` (`+516.39%`)
   - vs active champion (`throughput/mfu=5.748507`): `-83.67%`.
+- Post-hoc scoring correction (2026-02-27):
+  - The `0.938955` value above is the **final-step** (`step=19`) outlier from W&B summary.
+  - W&B step history shows stable-region performance (steps `10..18`) far above that tail outlier:
+    - Candidate run median: `throughput/mfu=5.185450`, `duration=0.195340s`, `tokens/s=167748.32`.
+    - Baseline run median: `throughput/mfu=5.830017`, `duration=0.173743s`, `tokens/s=188599.93`.
+    - Robust-window MFU delta: `-11.06%` (still a regression, but not `-83.78%`).
+  - Action: `gdnctl` performance governance now defaults to robust history-window scoring (`median`, steps `10..18`) instead of final-summary-only scoring.
 
 - Acceptance gate checklist:
   - Correctness:

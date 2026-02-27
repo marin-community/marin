@@ -20,12 +20,14 @@ import argparse
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 import json
+import math
 import os
 import queue
 import re
 import signal
 import shlex
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -350,19 +352,15 @@ def _extract_metric_from_text(text: str, metric_key: str) -> float | None:
         return None
 
 
-def _fetch_wandb_summary_for_run_url(
-    run_url: str,
-    *,
-    metric_keys: Sequence[str],
-) -> tuple[dict[str, float], str | None]:
+def _resolve_wandb_run_for_url(run_url: str) -> tuple[object | None, str | None]:
     match = WANDB_RUN_URL_RE.search(run_url)
     if match is None:
-        return {}, f"could not parse wandb run url: {run_url}"
+        return None, f"could not parse wandb run url: {run_url}"
 
     try:
         import wandb
     except ImportError:
-        return {}, "wandb package is not installed"
+        return None, "wandb package is not installed"
 
     entity = match.group("entity")
     project = match.group("project")
@@ -380,7 +378,7 @@ def _fetch_wandb_summary_for_run_url(
                 per_page=120,
             )
         except Exception:
-            return {}, f"wandb api fetch failed for {run_path}: {exc!r}"
+            return None, f"wandb api fetch failed for {run_path}: {exc!r}"
 
         resolved_run = None
         for candidate in runs:
@@ -391,8 +389,20 @@ def _fetch_wandb_summary_for_run_url(
                 resolved_run = candidate
                 break
         if resolved_run is None:
-            return {}, f"wandb api fetch failed for {run_path}: {exc!r}"
+            return None, f"wandb api fetch failed for {run_path}: {exc!r}"
         run = resolved_run
+
+    return run, None
+
+
+def _fetch_wandb_summary_for_run_url(
+    run_url: str,
+    *,
+    metric_keys: Sequence[str],
+) -> tuple[dict[str, float], str | None]:
+    run, warning = _resolve_wandb_run_for_url(run_url)
+    if run is None:
+        return {}, warning
 
     summary = dict(getattr(run, "summary", {}))
     metrics: dict[str, float] = {}
@@ -401,6 +411,65 @@ def _fetch_wandb_summary_for_run_url(
         if numeric is not None:
             metrics[key] = numeric
     return metrics, None
+
+
+def _fetch_wandb_history_window_for_run_url(
+    run_url: str,
+    *,
+    metric_keys: Sequence[str],
+    step_start: int,
+    step_end: int,
+    aggregation: str,
+    min_points: int,
+) -> tuple[dict[str, float], dict[str, int], str | None]:
+    run, warning = _resolve_wandb_run_for_url(run_url)
+    if run is None:
+        return {}, {}, warning
+
+    history_keys = list(dict.fromkeys(["_step", *metric_keys]))
+    try:
+        history_rows = list(run.history(keys=history_keys, pandas=False))
+    except Exception as exc:  # pragma: no cover - external API behavior
+        return {}, {}, f"wandb history fetch failed for {run_url}: {exc!r}"
+
+    aggregated: dict[str, float] = {}
+    point_counts: dict[str, int] = {}
+    insufficient: list[str] = []
+
+    for key in metric_keys:
+        values: list[float] = []
+        for row in history_rows:
+            if not isinstance(row, dict):
+                continue
+            step = _coerce_float(row.get("_step"))
+            if step is None:
+                continue
+            if step < step_start or step > step_end:
+                continue
+            value = _coerce_float(row.get(key))
+            if value is None or not math.isfinite(value):
+                continue
+            values.append(value)
+
+        point_counts[key] = len(values)
+        if len(values) < min_points:
+            insufficient.append(f"{key}({len(values)}<{min_points})")
+            continue
+        if aggregation == "mean":
+            aggregated[key] = sum(values) / len(values)
+        else:
+            aggregated[key] = statistics.median(values)
+
+    if insufficient:
+        warning = (
+            "wandb history window had insufficient samples for: "
+            + ", ".join(insufficient)
+            + f" in steps [{step_start}, {step_end}]"
+        )
+    else:
+        warning = None
+
+    return aggregated, point_counts, warning
 
 
 def _discover_wandb_run_for_prefix(
@@ -446,25 +515,59 @@ def _collect_profile_metrics(
     output_text: str,
     profile_prefix: str,
 ) -> dict[str, object]:
-    metric_keys = [args.perf_metric, "throughput/mfu", "throughput/tokens_per_second"]
+    metric_keys = [args.perf_metric, "throughput/mfu", "throughput/tokens_per_second", "throughput/duration"]
     metric_keys = [key for key in dict.fromkeys(metric_keys) if key]
 
     run_url = _extract_last_wandb_run_url(output_text)
     warnings: list[str] = []
     metrics: dict[str, float] = {}
+    metric_source = "cli-output"
+    metric_points: dict[str, int] = {}
 
     for key in metric_keys:
         parsed = _extract_metric_from_text(output_text, key)
         if parsed is not None:
             metrics[key] = parsed
 
-    summary_warning: str | None = None
-    if run_url is not None and args.validation_profile_wandb_mode == "online":
+    def _ingest_wandb_metrics(url: str) -> str | None:
+        nonlocal metric_source, metric_points
         summary_metrics, summary_warning = _fetch_wandb_summary_for_run_url(
-            run_url,
+            url,
             metric_keys=metric_keys,
         )
-        metrics.update(summary_metrics)
+        if summary_metrics:
+            metrics.update(summary_metrics)
+            metric_source = "wandb-summary"
+
+        if args.perf_aggregation == "history-window":
+            history_metrics, point_counts, history_warning = _fetch_wandb_history_window_for_run_url(
+                url,
+                metric_keys=metric_keys,
+                step_start=args.perf_history_step_start,
+                step_end=args.perf_history_step_end,
+                aggregation=args.perf_history_aggregation,
+                min_points=args.perf_history_min_points,
+            )
+            metric_points = point_counts
+            if history_metrics:
+                metrics.update(history_metrics)
+                metric_source = (
+                    f"wandb-history-{args.perf_history_aggregation}"
+                    f"[{args.perf_history_step_start}:{args.perf_history_step_end}]"
+                )
+            elif summary_metrics:
+                warnings.append(
+                    "wandb history-window aggregation unavailable; "
+                    "falling back to summary metrics for performance scoring."
+                )
+            if history_warning is not None:
+                warnings.append(history_warning)
+
+        return summary_warning
+
+    summary_warning: str | None = None
+    if run_url is not None and args.validation_profile_wandb_mode == "online":
+        summary_warning = _ingest_wandb_metrics(run_url)
 
     needs_discovery = args.validation_profile_wandb_mode == "online" and (
         run_url is None or args.perf_metric not in metrics or summary_warning is not None
@@ -477,11 +580,7 @@ def _collect_profile_metrics(
         )
         if discovered_url is not None and discovered_url != run_url:
             run_url = discovered_url
-            summary_metrics, summary_warning = _fetch_wandb_summary_for_run_url(
-                run_url,
-                metric_keys=metric_keys,
-            )
-            metrics.update(summary_metrics)
+            summary_warning = _ingest_wandb_metrics(run_url)
         elif discover_warning is not None:
             warnings.append(discover_warning)
 
@@ -492,6 +591,8 @@ def _collect_profile_metrics(
         "profile_prefix": profile_prefix,
         "run_url": run_url,
         "metrics": metrics,
+        "metric_source": metric_source,
+        "metric_points": metric_points,
         "warnings": warnings,
     }
 
@@ -566,6 +667,10 @@ def _apply_performance_policy(
     metrics = metrics_obj if isinstance(metrics_obj, dict) else {}
     metric_value = _coerce_float(metrics.get(args.perf_metric))
     run_url = validation_info.get("run_url")
+    metric_source_obj = validation_info.get("metric_source")
+    metric_source = str(metric_source_obj) if isinstance(metric_source_obj, str) else "unknown"
+    metric_points_obj = validation_info.get("metric_points")
+    metric_points = metric_points_obj if isinstance(metric_points_obj, dict) else {}
     warnings_obj = validation_info.get("warnings")
     warnings = warnings_obj if isinstance(warnings_obj, list) else []
 
@@ -600,6 +705,8 @@ def _apply_performance_policy(
         "commit": commit_sha,
         "metric": args.perf_metric,
         "metric_value": metric_value,
+        "metric_source": metric_source,
+        "metric_points": metric_points,
         "metrics": metrics,
         "run_url": run_url,
         "timestamp_unix": time.time(),
@@ -614,7 +721,11 @@ def _apply_performance_policy(
         state["history"] = history
         state["champion"] = candidate_record
         _save_perf_state(perf_state_path, state)
-        print("[gdnctl] performance baseline initialized: " f"{args.perf_metric}={metric_value:.6g} @ {commit_sha[:12]}")
+        print(
+            "[gdnctl] performance baseline initialized: "
+            f"{args.perf_metric}={metric_value:.6g} @ {commit_sha[:12]} "
+            f"(source={metric_source})"
+        )
         return True, False, 0
 
     champion_value = _coerce_float(champion.get("metric_value"))
@@ -637,7 +748,8 @@ def _apply_performance_policy(
         state["champion"] = candidate_record
         _save_perf_state(perf_state_path, state)
         print(
-            "[gdnctl] performance champion promoted: " f"{champion_value:.6g} -> {metric_value:.6g} ({delta_pct:+.2f}%)"
+            "[gdnctl] performance champion promoted: "
+            f"{champion_value:.6g} -> {metric_value:.6g} ({delta_pct:+.2f}%, source={metric_source})"
         )
         return True, False, 0
 
@@ -649,7 +761,7 @@ def _apply_performance_policy(
 
         print(
             "[gdnctl] performance regression detected vs champion: "
-            f"{champion_value:.6g} -> {metric_value:.6g} ({delta_pct:+.2f}%)",
+            f"{champion_value:.6g} -> {metric_value:.6g} ({delta_pct:+.2f}%, source={metric_source})",
             file=sys.stderr,
         )
 
@@ -678,7 +790,7 @@ def _apply_performance_policy(
     _save_perf_state(perf_state_path, state)
     print(
         "[gdnctl] performance within hold band vs champion: "
-        f"{champion_value:.6g} -> {metric_value:.6g} ({delta_pct:+.2f}%)"
+        f"{champion_value:.6g} -> {metric_value:.6g} ({delta_pct:+.2f}%, source={metric_source})"
     )
     return True, False, 0
 
@@ -1143,6 +1255,17 @@ def _validation_gate_session_directive(args: argparse.Namespace) -> str:
 
 
 def _performance_policy_session_directive(args: argparse.Namespace, *, perf_state_path: Path) -> str:
+    window_line = ""
+    if args.perf_aggregation == "history-window":
+        window_line = (
+            "\n"
+            f"- Metric aggregation: `history-window` ({args.perf_history_aggregation}, "
+            f"steps {args.perf_history_step_start}-{args.perf_history_step_end}, "
+            f"min points {args.perf_history_min_points})."
+        )
+    else:
+        window_line = "\n- Metric aggregation: `summary` (final summary value)."
+
     return (
         "Performance governance is active for this codex-loop run.\n\n"
         f"- Primary metric: `{args.perf_metric}`\n"
@@ -1150,6 +1273,7 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         f"- Regression threshold: {args.perf_max_regression_pct:.3f}% below champion.\n"
         f"- Regression policy: `{args.perf_regression_policy}`\n"
         f"- State file: `{perf_state_path}`"
+        f"{window_line}"
     )
 
 
@@ -2243,6 +2367,12 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
     if args.perf_max_regression_pct < 0:
         raise SystemExit("[gdnctl] --perf-max-regression-pct must be >= 0.")
+    if args.perf_history_step_start < 0:
+        raise SystemExit("[gdnctl] --perf-history-step-start must be >= 0.")
+    if args.perf_history_step_end < args.perf_history_step_start:
+        raise SystemExit("[gdnctl] --perf-history-step-end must be >= --perf-history-step-start.")
+    if args.perf_history_min_points <= 0:
+        raise SystemExit("[gdnctl] --perf-history-min-points must be > 0.")
 
     if args.sync_main_policy != "off":
         if not args.sync_main_remote.strip():
@@ -2838,6 +2968,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--perf-metric",
         default="throughput/mfu",
         help="Primary metric used for champion comparison.",
+    )
+    codex_loop.add_argument(
+        "--perf-aggregation",
+        choices=["history-window", "summary"],
+        default="history-window",
+        help=(
+            "How performance metrics are aggregated from W&B: "
+            "`history-window` uses a robust step window, `summary` uses final run summary values."
+        ),
+    )
+    codex_loop.add_argument(
+        "--perf-history-aggregation",
+        choices=["median", "mean"],
+        default="median",
+        help="Aggregator used for --perf-aggregation=history-window.",
+    )
+    codex_loop.add_argument(
+        "--perf-history-step-start",
+        type=int,
+        default=10,
+        help="Inclusive start step for history-window aggregation.",
+    )
+    codex_loop.add_argument(
+        "--perf-history-step-end",
+        type=int,
+        default=18,
+        help="Inclusive end step for history-window aggregation.",
+    )
+    codex_loop.add_argument(
+        "--perf-history-min-points",
+        type=int,
+        default=5,
+        help="Minimum number of points required per metric in history-window aggregation.",
     )
     codex_loop.add_argument(
         "--perf-min-improvement-pct",
