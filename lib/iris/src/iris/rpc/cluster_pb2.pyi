@@ -789,7 +789,7 @@ class Controller(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
     class GetClusterSummaryResponse(_message.Message):
-        __slots__ = ("job_state_counts", "total_jobs", "total_workers", "healthy_workers")
+        __slots__ = ("job_state_counts", "total_jobs", "total_workers", "healthy_workers", "total_users")
         class JobStateCountsEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -801,11 +801,49 @@ class Controller(_message.Message):
         TOTAL_JOBS_FIELD_NUMBER: _ClassVar[int]
         TOTAL_WORKERS_FIELD_NUMBER: _ClassVar[int]
         HEALTHY_WORKERS_FIELD_NUMBER: _ClassVar[int]
+        TOTAL_USERS_FIELD_NUMBER: _ClassVar[int]
         job_state_counts: _containers.ScalarMap[str, int]
         total_jobs: int
         total_workers: int
         healthy_workers: int
-        def __init__(self, job_state_counts: _Optional[_Mapping[str, int]] = ..., total_jobs: _Optional[int] = ..., total_workers: _Optional[int] = ..., healthy_workers: _Optional[int] = ...) -> None: ...
+        total_users: int
+        def __init__(self, job_state_counts: _Optional[_Mapping[str, int]] = ..., total_jobs: _Optional[int] = ..., total_workers: _Optional[int] = ..., healthy_workers: _Optional[int] = ..., total_users: _Optional[int] = ...) -> None: ...
+    class UserSummary(_message.Message):
+        __slots__ = ("user", "total_jobs", "active_jobs", "running_jobs", "pending_jobs", "total_tasks", "running_tasks", "completed_tasks", "job_state_counts")
+        class JobStateCountsEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        USER_FIELD_NUMBER: _ClassVar[int]
+        TOTAL_JOBS_FIELD_NUMBER: _ClassVar[int]
+        ACTIVE_JOBS_FIELD_NUMBER: _ClassVar[int]
+        RUNNING_JOBS_FIELD_NUMBER: _ClassVar[int]
+        PENDING_JOBS_FIELD_NUMBER: _ClassVar[int]
+        TOTAL_TASKS_FIELD_NUMBER: _ClassVar[int]
+        RUNNING_TASKS_FIELD_NUMBER: _ClassVar[int]
+        COMPLETED_TASKS_FIELD_NUMBER: _ClassVar[int]
+        JOB_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
+        user: str
+        total_jobs: int
+        active_jobs: int
+        running_jobs: int
+        pending_jobs: int
+        total_tasks: int
+        running_tasks: int
+        completed_tasks: int
+        job_state_counts: _containers.ScalarMap[str, int]
+        def __init__(self, user: _Optional[str] = ..., total_jobs: _Optional[int] = ..., active_jobs: _Optional[int] = ..., running_jobs: _Optional[int] = ..., pending_jobs: _Optional[int] = ..., total_tasks: _Optional[int] = ..., running_tasks: _Optional[int] = ..., completed_tasks: _Optional[int] = ..., job_state_counts: _Optional[_Mapping[str, int]] = ...) -> None: ...
+    class ListUsersRequest(_message.Message):
+        __slots__ = ()
+        def __init__(self) -> None: ...
+    class ListUsersResponse(_message.Message):
+        __slots__ = ("users",)
+        USERS_FIELD_NUMBER: _ClassVar[int]
+        users: _containers.RepeatedCompositeFieldContainer[Controller.UserSummary]
+        def __init__(self, users: _Optional[_Iterable[_Union[Controller.UserSummary, _Mapping]]] = ...) -> None: ...
     class GetTaskLogsRequest(_message.Message):
         __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "regex", "attempt_id")
         ID_FIELD_NUMBER: _ClassVar[int]

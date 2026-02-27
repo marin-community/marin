@@ -8,6 +8,7 @@ For the full IrisContext with client/registry/resolver, use iris.client.
 
 import json
 import os
+import getpass
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
@@ -51,6 +52,10 @@ class JobInfo:
     @property
     def job_id(self) -> JobName:
         return self.task_id.parent or self.task_id
+
+    @property
+    def user(self) -> str:
+        return self.task_id.user
 
     @property
     def task_index(self) -> int:
@@ -106,8 +111,19 @@ def get_job_info() -> JobInfo | None:
     return None
 
 
-def set_job_info(info: JobInfo) -> None:
+def set_job_info(info: JobInfo | None) -> None:
     _job_info.set(info)
+
+
+def resolve_job_user(explicit_user: str | None = None) -> str:
+    """Resolve the submitting user for a new top-level job."""
+    resolved = explicit_user
+    if resolved is None:
+        info = get_job_info()
+        resolved = info.user if info is not None else getpass.getuser()
+    if not resolved or not resolved.strip():
+        raise ValueError("Job user must not be empty")
+    return resolved
 
 
 def _parse_ports_from_env(env: dict[str, str] | None = None) -> dict[str, int]:

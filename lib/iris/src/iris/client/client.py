@@ -35,6 +35,7 @@ from iris.cluster.client import (
     LocalClusterClient,
     RemoteClusterClient,
     get_job_info,
+    resolve_job_user,
 )
 from iris.cluster.types import (
     Constraint,
@@ -582,6 +583,7 @@ class IrisClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
+        user: str | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -598,6 +600,7 @@ class IrisClient:
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
             timeout: Per-task timeout (None = no timeout)
+            user: Optional explicit user override for top-level jobs
 
         Returns:
             Job handle for the submitted job
@@ -619,7 +622,7 @@ class IrisClient:
         if parent_job_id:
             job_id = parent_job_id.child(name)
         else:
-            job_id = JobName.root(name)
+            job_id = JobName.root(resolve_job_user(user), name)
 
         # If running inside a job, inherit env vars, extras, and pip_packages from parent.
         # Child-specified values take precedence over inherited ones.

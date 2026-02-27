@@ -70,7 +70,7 @@ def test_demo_notebook_name_normalizes_to_absolute_job_id(demo_client: IrisClien
     # to absolute job IDs before reaching the controller.
     status = job.wait(timeout=30.0, raise_on_failure=False)
     assert status is not None
-    assert job.job_id.to_wire() == "/notebook-hello"
+    assert job.job_id.to_wire().endswith("/notebook-hello")
 
 
 def test_demo_notebook_job_tasks_returns_tasks(demo_client: IrisClient) -> None:

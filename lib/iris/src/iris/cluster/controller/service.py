@@ -1060,6 +1060,35 @@ class ControllerServiceImpl:
             total_jobs=len(jobs),
             total_workers=len(workers),
             healthy_workers=healthy,
+            total_users=len(self._state.list_user_stats()),
+        )
+
+    def list_users(
+        self,
+        request: cluster_pb2.Controller.ListUsersRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.ListUsersResponse:
+        """Return live per-user aggregate counts for the dashboard."""
+        del request, ctx
+        users = sorted(
+            self._state.list_user_stats(),
+            key=lambda entry: (-entry.active_job_count, -entry.running_task_count, entry.user),
+        )
+        return cluster_pb2.Controller.ListUsersResponse(
+            users=[
+                cluster_pb2.Controller.UserSummary(
+                    user=entry.user,
+                    total_jobs=entry.job_count,
+                    active_jobs=entry.active_job_count,
+                    running_jobs=entry.running_job_count,
+                    pending_jobs=entry.pending_job_count,
+                    total_tasks=entry.task_count,
+                    running_tasks=entry.running_task_count,
+                    completed_tasks=entry.completed_task_count,
+                    job_state_counts=entry.job_state_counts,
+                )
+                for entry in users
+            ]
         )
 
     # --- Process Logs ---

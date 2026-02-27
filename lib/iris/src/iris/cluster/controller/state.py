@@ -44,6 +44,7 @@ from iris.cluster.types import (
     get_device_variant,
     get_gpu_count,
     get_tpu_count,
+    is_job_finished,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
@@ -589,6 +590,21 @@ class ControllerJob:
         if self.is_coscheduled:
             return self.request.coscheduling.group_by
         return None
+
+
+@dataclass(frozen=True)
+class UserStats:
+    """Aggregate counts for a single user."""
+
+    user: str
+    job_count: int = 0
+    active_job_count: int = 0
+    running_job_count: int = 0
+    pending_job_count: int = 0
+    task_count: int = 0
+    running_task_count: int = 0
+    completed_task_count: int = 0
+    job_state_counts: dict[str, int] = field(default_factory=dict)
 
 
 # =============================================================================
@@ -1494,6 +1510,73 @@ class ControllerState:
     def list_all_jobs(self) -> list[ControllerJob]:
         with self._lock:
             return list(self._jobs.values())
+
+    def list_user_stats(self) -> list[UserStats]:
+        """Return aggregated live counts grouped by user."""
+        with self._lock:
+            by_user = {}
+            for job in self._jobs.values():
+                task_ids = self._tasks_by_job.get(job.job_id, [])
+                task_count = len(task_ids)
+                running_task_count = 0
+                completed_task_count = 0
+                for task_id in task_ids:
+                    task = self._tasks.get(task_id)
+                    if task is None:
+                        continue
+                    if task.state == cluster_pb2.TASK_STATE_RUNNING:
+                        running_task_count += 1
+                    if task.state in (
+                        cluster_pb2.TASK_STATE_SUCCEEDED,
+                        cluster_pb2.TASK_STATE_KILLED,
+                        cluster_pb2.TASK_STATE_FAILED,
+                        cluster_pb2.TASK_STATE_UNSCHEDULABLE,
+                        cluster_pb2.TASK_STATE_WORKER_FAILED,
+                    ):
+                        completed_task_count += 1
+
+                bucket = by_user.setdefault(
+                    job.job_id.user,
+                    {
+                        "job_count": 0,
+                        "active_job_count": 0,
+                        "running_job_count": 0,
+                        "pending_job_count": 0,
+                        "task_count": 0,
+                        "running_task_count": 0,
+                        "completed_task_count": 0,
+                        "job_state_counts": {},
+                    },
+                )
+                counts = bucket["job_state_counts"]
+                assert isinstance(counts, dict)
+                state_name = cluster_pb2.JobState.Name(job.state).removeprefix("JOB_STATE_").lower()
+                counts[state_name] = counts.get(state_name, 0) + 1
+                bucket["job_count"] += 1
+                if not is_job_finished(job.state):
+                    bucket["active_job_count"] += 1
+                if job.state == cluster_pb2.JOB_STATE_RUNNING:
+                    bucket["running_job_count"] += 1
+                if job.state == cluster_pb2.JOB_STATE_PENDING:
+                    bucket["pending_job_count"] += 1
+                bucket["task_count"] += task_count
+                bucket["running_task_count"] += running_task_count
+                bucket["completed_task_count"] += completed_task_count
+
+            return [
+                UserStats(
+                    user=user,
+                    job_count=int(bucket["job_count"]),
+                    active_job_count=int(bucket["active_job_count"]),
+                    running_job_count=int(bucket["running_job_count"]),
+                    pending_job_count=int(bucket["pending_job_count"]),
+                    task_count=int(bucket["task_count"]),
+                    running_task_count=int(bucket["running_task_count"]),
+                    completed_task_count=int(bucket["completed_task_count"]),
+                    job_state_counts=dict(bucket["job_state_counts"]),
+                )
+                for user, bucket in by_user.items()
+            ]
 
     def get_children(self, job_id: JobName) -> list[ControllerJob]:
         with self._lock:

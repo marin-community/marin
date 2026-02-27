@@ -649,6 +649,25 @@ message Controller {
     int32 total_jobs = 2;
     int32 total_workers = 3;
     int32 healthy_workers = 4;
+    int32 total_users = 5;
+  }
+
+  message UserSummary {
+    string user = 1;
+    int32 total_jobs = 2;
+    int32 active_jobs = 3;
+    int32 running_jobs = 4;
+    int32 pending_jobs = 5;
+    int32 total_tasks = 6;
+    int32 running_tasks = 7;
+    int32 completed_tasks = 8;
+    map<string, int32> job_state_counts = 9;
+  }
+
+  message ListUsersRequest {}
+
+  message ListUsersResponse {
+    repeated UserSummary users = 1;
   }
 
   // --- Task/Job Logs (batch fetching) ---
@@ -849,6 +868,7 @@ service ControllerService {
 
   // Cluster summary (aggregated counts)
   rpc GetClusterSummary(Controller.GetClusterSummaryRequest) returns (Controller.GetClusterSummaryResponse);
+  rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
   // Task logs (proxied to worker)
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);

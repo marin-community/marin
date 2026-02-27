@@ -3,7 +3,7 @@
 ## Problem Statement
 
 Iris communicates parent/child relationships between jobs via the job name: child jobs start
-with their parent name (e.g., `parent-job/child-task`). The current implementation has several issues:
+with their parent name (e.g., `/alice/parent-job/child-task`). The current implementation has several issues:
 
 1. **Redundant encoding**: `parent_job_id` is stored as a separate proto field, but it's also encoded in the job name itself
 2. **Manual string manipulation**: Job IDs are constructed via f-strings and parsed via `.rsplit("/", 1)` throughout the codebase
@@ -14,7 +14,7 @@ with their parent name (e.g., `parent-job/child-task`). The current implementati
 
 This design introduces a **new canonical wire format**:
 - **Previous format**: `root/child/task-0` (no leading slash, `task-{index}` suffix)
-- **Canonical format**: `/root/child/0` (leading slash, numeric task suffix)
+- **Canonical format**: `/user/root/child/0` (leading slash, explicit user, numeric task suffix)
 
 This is an intentional breaking change. All clients and controllers must be updated together. There is no backward compatibility period.
 
@@ -25,7 +25,8 @@ This is an intentional breaking change. All clients and controllers must be upda
 ```python
 # lib/iris/src/iris/cluster/types.py
 JobName = dataclass(...)  # Canonical representation
-JobName is the single canonical identifier for both jobs and tasks.
+JobName is the single canonical identifier for both jobs and tasks. The first
+path segment is the submitting user.
 ```
 
 All internal code uses `JobName` APIs; only RPC/env boundaries use strings.
@@ -196,33 +197,33 @@ class JobName:
 
 ```python
 # Root job
-job = JobName.root("my-job")
-assert str(job) == "/my-job"
-assert job.namespace == "my-job"
+job = JobName.root("alice", "my-job")
+assert str(job) == "/alice/my-job"
+assert job.namespace == "alice/my-job"
 assert job.parent is None
 
 # Child job
 child = job.child("subtask")
-assert str(child) == "/my-job/subtask"
-assert child.namespace == "my-job"
+assert str(child) == "/alice/my-job/subtask"
+assert child.namespace == "alice/my-job"
 assert child.parent == job
 
 # Task
 task = job.task(0)
-assert str(task) == "/my-job/0"
+assert str(task) == "/alice/my-job/0"
 assert task.parent == job
 
 # Parsing
-parsed = JobName.from_string("/my-job/subtask/0")
-assert parsed.namespace == "my-job"
-assert parsed.parent == JobName.from_string("/my-job/subtask")
+parsed = JobName.from_string("/alice/my-job/subtask/0")
+assert parsed.namespace == "alice/my-job"
+assert parsed.parent == JobName.from_string("/alice/my-job/subtask")
 
 # Task detection
-task = JobName.from_string("/my-job/0")
+task = JobName.from_string("/alice/my-job/0")
 assert task.is_task == True
 assert task.task_index == 0
 
-job = JobName.from_string("/my-job/child")
+job = JobName.from_string("/alice/my-job/child")
 assert job.is_task == False
 assert job.task_index is None
 ```
