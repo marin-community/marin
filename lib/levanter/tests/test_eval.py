@@ -1,6 +1,8 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import logging
 from types import SimpleNamespace
 
 import haliax as hax
@@ -10,11 +12,12 @@ import numpy as np
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
-import levanter.eval as eval_mod
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
-from levanter.eval import LossFnOutput, TaggedEvaluator, cb_tagged_evaluate
+from levanter.eval import EvalResult, LossFnOutput, TaggedEvaluator, cb_tagged_evaluate
 from levanter.models.lm_model import LmExample
+from levanter.tracker import current_tracker
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.utils.tree_utils import inference_mode
 
 from .test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
@@ -168,29 +171,44 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
     assert "grug" in result.tag_micro_losses
 
 
-def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(monkeypatch):
-    captured: list[tuple[dict[str, float], int]] = []
+def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
+    class _FakeEvaluator:
+        tokenizer = None
+        dataset = SimpleNamespace(tag_to_index={"base": 0})
 
-    def fake_eval_model(_evaluator, _model, prefix: str = ""):
-        return {f"{prefix}/loss": 1.0}
+        def evaluate(self, _model):
+            return EvalResult(
+                micro_avg_loss=1.0,
+                macro_avg_loss=1.0,
+                tag_macro_losses={},
+                tag_micro_losses={},
+                total_eval_loading_time=0.0,
+            )
 
-    def fake_log(metrics, *, step, commit=None):
-        del commit
-        captured.append((dict(metrics), step))
+    logger_name = "test.cb_tagged_evaluate"
+    tracker = JsonLoggerConfig(logger_name=logger_name).init(run_id=None)
+    caplog.set_level(logging.INFO, logger=logger_name)
 
-    monkeypatch.setattr(eval_mod, "eval_model", fake_eval_model)
-    monkeypatch.setattr("levanter.tracker.log", fake_log)
+    callback = cb_tagged_evaluate(_FakeEvaluator(), prefix="eval", eval_current=True, eval_ema=True)
 
-    callback = cb_tagged_evaluate(object(), prefix="eval", eval_current=True, eval_ema=True)
+    with current_tracker(tracker):
+        step0 = SimpleNamespace(step=0, model=object(), eval_model=object())
+        callback(step0)
+        callback(step0, force=True)
+        step1 = SimpleNamespace(step=1, model=object(), eval_model=object())
+        callback(step1)
 
-    step0 = SimpleNamespace(step=0, model=object(), eval_model=object())
-    callback(step0)
-    callback(step0, force=True)
-    step1 = SimpleNamespace(step=1, model=object(), eval_model=object())
-    callback(step1)
+    log_events = []
+    for record in caplog.records:
+        if record.name != logger_name:
+            continue
+        payload = json.loads(record.message)
+        if payload.get("event") == "log":
+            log_events.append(payload)
 
-    assert len(captured) == 4
-    assert captured[0] == ({"eval/loss": 1.0}, 0)
-    assert captured[1] == ({"eval/ema/loss": 1.0}, 0)
-    assert captured[2] == ({"eval/loss": 1.0}, 1)
-    assert captured[3] == ({"eval/ema/loss": 1.0}, 1)
+    assert len(log_events) == 4
+    assert [event["step"] for event in log_events] == [0, 0, 1, 1]
+    assert "eval/loss" in log_events[0]["metrics"]
+    assert "eval/ema/loss" in log_events[1]["metrics"]
+    assert "eval/loss" in log_events[2]["metrics"]
+    assert "eval/ema/loss" in log_events[3]["metrics"]

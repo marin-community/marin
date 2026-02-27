@@ -21,7 +21,7 @@ from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
 from jax.experimental.multihost_utils import host_local_array_to_global_array
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
 
 from levanter.utils.mesh import create_mesh_from_axis_specs
@@ -88,34 +88,30 @@ def shape_dtype_struct_tree(tree: T) -> T:
     return jax.tree.map(_to_shape_dtype_struct, tree)
 
 
-def flops_from_cost_analysis(cost: object) -> Optional[float]:
-    """Extract FLOPs from JAX cost_analysis output."""
-    if isinstance(cost, dict):
-        flops = cost.get("flops")
-        return None if flops is None else float(flops)
-
-    if isinstance(cost, list):
-        total = 0.0
-        found = False
-        for entry in cost:
-            if not isinstance(entry, dict):
-                continue
-            flops = entry.get("flops")
-            if flops is None:
-                continue
-            total += float(flops)
-            found = True
-        return total if found else None
-
-    return None
+def _flatten_axis_resource(axis_resource: Any) -> tuple[str, ...]:
+    if axis_resource is None:
+        return ()
+    if isinstance(axis_resource, str):
+        return (axis_resource,)
+    if isinstance(axis_resource, tuple | list):
+        names: list[str] = []
+        for axis in axis_resource:
+            names.extend(_flatten_axis_resource(axis))
+        return tuple(names)
+    return ()
 
 
-def estimate_jit_flops(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Optional[float]:
-    """Estimate FLOPs for a jitted callable using abstract ShapeDtypeStruct inputs."""
-    shaped_args = shape_dtype_struct_tree(args)
-    shaped_kwargs = shape_dtype_struct_tree(kwargs)
-    lowered = jax.jit(fn).lower(*shaped_args, **shaped_kwargs)
-    return flops_from_cost_analysis(lowered.cost_analysis())
+def axis_resource_is_explicit(mesh: Mesh, axis_resource: Any) -> bool:
+    """Return True iff all axis names in ``axis_resource`` map to explicit mesh axes."""
+    axis_types = dict(zip(mesh.axis_names, mesh.axis_types, strict=True))
+    axis_names = _flatten_axis_resource(axis_resource)
+    if len(axis_names) == 0:
+        return False
+    for axis_name in axis_names:
+        axis_type = axis_types.get(axis_name)
+        if axis_type is None or axis_type != AxisType.Explicit:
+            return False
+    return True
 
 
 def parameter_count(model: PyTree):

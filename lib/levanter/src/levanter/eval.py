@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
-from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
 
@@ -29,6 +29,7 @@ from levanter.data import AsyncDataset, DataLoader
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
+from levanter.utils.jax_utils import axis_resource_is_explicit
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.stat_utils import RunningMean
 from levanter.utils.tree_utils import inference_mode
@@ -415,37 +416,12 @@ class TaggedEvaluator(Generic[Ex, M]):
         self.per_pos_out_sharding = None
         if device_mesh is not None and axis_mapping is not None:
             batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
-            if batch_axis_resource is not None and self._axis_resource_is_explicit(device_mesh, batch_axis_resource):
+            if batch_axis_resource is not None and axis_resource_is_explicit(device_mesh, batch_axis_resource):
                 self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
 
         self.bytes_per_token = self._calculate_bytes_per_token_type(tokenizer)
         self.hierarchy = self._construct_tag_hierarchy()
         self.accum_for_batch = self._make_accum_for_batch()
-
-    @staticmethod
-    def _flatten_axis_resource(axis_resource) -> tuple[str, ...]:
-        if axis_resource is None:
-            return ()
-        if isinstance(axis_resource, str):
-            return (axis_resource,)
-        if isinstance(axis_resource, tuple):
-            names: list[str] = []
-            for axis in axis_resource:
-                names.extend(TaggedEvaluator._flatten_axis_resource(axis))
-            return tuple(names)
-        return ()
-
-    @staticmethod
-    def _axis_resource_is_explicit(mesh: Mesh, axis_resource) -> bool:
-        axis_types = dict(zip(mesh.axis_names, mesh.axis_types, strict=True))
-        axis_names = TaggedEvaluator._flatten_axis_resource(axis_resource)
-        if len(axis_names) == 0:
-            return False
-        for axis_name in axis_names:
-            axis_type = axis_types.get(axis_name)
-            if axis_type is None or axis_type != AxisType.Explicit:
-                return False
-        return True
 
     def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
         bytes_per_token = self.bytes_per_token
@@ -465,12 +441,8 @@ class TaggedEvaluator(Generic[Ex, M]):
                     f"Expected batched eval tensors with rank 2, got losses={losses.ndim}, "
                     f"weights={weights.ndim}, token_ids={token_ids.ndim}, tags={tags.ndim}"
                 )
-            if per_tag_out_sharding is None:
-                this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags)
-                this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags)
-            else:
-                this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags, out_sharding=per_tag_out_sharding)
-                this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags, out_sharding=per_tag_out_sharding)
+            this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags, out_sharding=per_tag_out_sharding)
+            this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags, out_sharding=per_tag_out_sharding)
 
             mean = state.token_avg_loss.add(this_loss / jnp.maximum(this_weights, 1.0), this_weights)
             state = dataclasses.replace(state, token_avg_loss=mean)
@@ -482,17 +454,11 @@ class TaggedEvaluator(Generic[Ex, M]):
                 state = dataclasses.replace(state, loss_per_tag=mean_per_tag)
 
             if bytes_per_token is not None:
-                if per_pos_out_sharding is None:
-                    bytes_per_pos = bytes_per_token[token_ids]
-                else:
-                    bytes_per_pos = bytes_per_token.at[token_ids].get(out_sharding=per_pos_out_sharding)
+                bytes_per_pos = bytes_per_token.at[token_ids].get(out_sharding=per_pos_out_sharding)
                 this_bytes = jnp.sum(bytes_per_pos * weights)
-                if per_tag_out_sharding is None:
-                    bytes_per_tag = jnp.einsum("bt,bt,bk->k", bytes_per_pos, weights, tags)
-                else:
-                    bytes_per_tag = jnp.einsum(
-                        "bt,bt,bk->k", bytes_per_pos, weights, tags, out_sharding=per_tag_out_sharding
-                    )
+                bytes_per_tag = jnp.einsum(
+                    "bt,bt,bk->k", bytes_per_pos, weights, tags, out_sharding=per_tag_out_sharding
+                )
 
                 bpb = this_loss / jnp.maximum(this_bytes, 1.0) * log2e
                 bpb_per_tag = this_loss_per_tag / jnp.maximum(bytes_per_tag, 1.0) * log2e

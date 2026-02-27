@@ -187,7 +187,7 @@ def _compute_flops(
         num_heads=model_config.num_heads,
         seq_len=model_config.max_seq_len,
         vocab_size=model_config.vocab_size,
-        glu=True,
+        glu=False,
     )
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 

@@ -28,7 +28,7 @@ IMPLEMENTATIONS: dict[str, ArrayImpl] = {
     "reference": linear_softmax_cross_entropy_loss_reference,
     "xla": linear_softmax_cross_entropy_loss_xla,
 }
-_DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("pallas_tpu", "xla")
+_DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _PALLAS_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 try:
