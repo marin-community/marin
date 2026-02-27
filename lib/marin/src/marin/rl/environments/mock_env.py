@@ -140,14 +140,12 @@ def compute_soft_reward(correct_answer: str, actual_response: str) -> float:
     if not actual_response:
         return 0
 
-    # remove commas from numbers
     correct_answer = correct_answer.replace(",", "").lower()
 
     tokens = actual_response.split()
     correct_score = 0
     for token in tokens:
         token = token.replace(",", "").lower()
-
         if token == correct_answer:
             correct_score = 1
             break
@@ -172,55 +170,33 @@ class MoarCatsTask:
         return examples
 
     def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
-        # how many cats
         num_cats = actual_response.lower().count("cat")
         love_cats = actual_response.lower().count("love cats")
-
         return (num_cats + (10 * love_cats)) / np.sqrt(1 + len(actual_response))
 
 
 class SequentialDigitsTask:
-    """Train model to produce digits in sequential order.
-
-    Rewards responses that contain increasing digit sequences.
-    Examples:
-      - "12345" = high reward
-      - "0123456789" = very high reward
-      - "5231" = low/negative reward
-      - "catcat" = very negative reward
-    """
+    """Train model to produce digits in sequential order."""
 
     def __init__(self, difficulty: str = "medium"):
         pass
 
     def generate_examples(self, n_examples: int, rng: np.random.Generator, tokenizer=None) -> list[dict[str, str]]:
-        """Generate examples that ask for sequential digits."""
         examples = []
-
         for _ in range(n_examples):
             start_idx = rng.integers(0, 5)
             end_idx = start_idx + rng.integers(start_idx, 9)
             prompt = f"{start_idx} to {end_idx}:"
             answer = "".join(str(i) for i in range(start_idx, end_idx))
             examples.append({"prompt": prompt, "answer": answer})
-
         return examples
 
     def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: PreTrainedTokenizer) -> float:
-        """Compute reward based on sequential digit quality.
-
-        Reward structure:
-          - Heavily reward increasing sequential digits
-          - Penalize non-digits
-          - Penalize decreasing or out-of-order digits
-          - Bonus for longer sequences
-        """
         if not actual_response:
             return 0
 
         actual_tokens = tokenizer.encode(actual_response, add_special_tokens=False)
 
-        # score is a function of how many digits & how sequential they are
         digit_count = 0
         order_count = 0
         last_digit = -1
@@ -236,7 +212,6 @@ class SequentialDigitsTask:
         return digit_count / len(actual_tokens) + order_count / len(actual_tokens)
 
 
-# Task mappings
 TASKS = {
     "cats": MoarCatsTask,
     "addition": AdditionTask,
@@ -252,15 +227,12 @@ class MockEnv(MarinEnv):
     def __init__(self, task_type: str, seed=None, difficulty: str = "medium", **kwargs):
         self.task_type = task_type
 
-        # Get the task class for this task type
         task_class = TASKS.get(task_type)
         if not task_class:
             raise ValueError(f"Unknown task type: {task_type}")
 
-        # Instantiate the task with difficulty
         self.task = task_class(difficulty=difficulty)
 
-        # Generate examples using the task
         rng = np.random.default_rng(seed)
         self.train_examples = self.task.generate_examples(NUM_TRAIN_EXAMPLES, rng)
         self.eval_examples = self.task.generate_examples(NUM_EVAL_EXAMPLES, rng)
@@ -284,14 +256,11 @@ class MockEnv(MarinEnv):
         stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
-        """Sample examples, generate responses, and create rollouts."""
-        # Select dataset
         if mode == "train":
             available_examples = self.train_examples
         else:
             available_examples = self.eval_examples
 
-        # Sample examples
         n_to_sample = min(n_examples, len(available_examples))
         seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
         logger.info("Selecting %d examples with seed %d", n_to_sample, seed)
@@ -312,18 +281,19 @@ class MockEnv(MarinEnv):
             stop=stop,
         )
 
-        # Evaluate and create rollouts
         rollout_groups = []
-
         for prompt, completion in zip(prompts, completions, strict=True):
             group = []
-
             for choice in completion.choices:
                 true_answer = sampled_examples[prompt]
                 reward = self.task.compute_reward(true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer)
 
                 rollout = inference_ctx.create_rollout_from_choice(
-                    prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
+                    prompt,
+                    choice,
+                    env_name=f"mock_env:{self.task_type}",
+                    env_example_id=hash(prompt),
+                    reward=reward,
                 )
 
                 group.append(rollout)
@@ -332,7 +302,6 @@ class MockEnv(MarinEnv):
         return rollout_groups, {}
 
     def training_data(self) -> Iterator[MockEnvExample]:
-        """Stream training data."""
         for example in self.train_examples:
             yield MockEnvExample(
                 raw_prompt=example["prompt"],
@@ -343,7 +312,6 @@ class MockEnv(MarinEnv):
             )
 
     def eval_data(self) -> Iterator[MockEnvExample]:
-        """Stream evaluation data."""
         for example in self.eval_examples:
             yield MockEnvExample(
                 raw_prompt=example["prompt"],
@@ -354,5 +322,4 @@ class MockEnv(MarinEnv):
             )
 
     def get_eval_examples(self, n_examples: int) -> list[dict[str, Any]]:
-        """Get evaluation examples."""
         return self.eval_examples[:n_examples]
