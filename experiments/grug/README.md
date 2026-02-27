@@ -15,6 +15,7 @@
 - `versioned(...)` marks config values that should affect executor step version/hash.
 - `this_output_path()` resolves to the current step's output root.
 - `run_grug(...)` in `base/train.py` is the runtime entry point used by the `ExecutorStep`.
+- `P` in train/model code is the usual JAX alias for `PartitionSpec`; see the JAX explicit sharding tutorial: [Explicit Sharding (JAX)](https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html).
 
 ## How to use it
 
@@ -62,7 +63,6 @@ uv run lib/marin/src/marin/run/ray_run.py \
 - `WANDB_API_KEY`: required for W&B logging in the default launch config.
 - `GRUG_RUN_ID`: overrides the default run id.
 - `FERRY_DATE`: appended to run id for ferry-style launches.
-- `LEVANTER_LOG_TENSORSTORE_METRICS_EVERY`: optional cadence (steps) for tensorstore metrics logging.
 
 ## Where outputs show up
 
@@ -99,7 +99,6 @@ uv run lib/marin/src/marin/run/ray_run.py \
 - `eval/macro_loss`: macro average loss across tags when multiple tags exist.
 - `eval/<tag>/loss`, `eval/<tag>/micro_loss`, `eval/<tag>/macro_loss`: per-tag loss views.
 - `eval/bpb`, `eval/macro_bpb`, `eval/<tag>/bpb`, `eval/<tag>/macro_bpb`: bits-per-byte metrics when tokenizer/BPB logging is enabled.
-- `data/tensorstore/*`: optional TensorStore cache/IO counters when `LEVANTER_LOG_TENSORSTORE_METRICS_EVERY` is set.
 - `grad/*`, `params/*`, `updates/*`, `opt_state/*`: optional watch metrics (norms/histograms) when watch is enabled.
 
 ## What should stay consistent

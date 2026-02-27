@@ -22,10 +22,6 @@ from jaxtyping import PRNGKeyArray
 import levanter.callbacks as callbacks
 import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
-from levanter.callbacks.tensorstore_callbacks import (
-    build_tensorstore_metrics_logger,
-    tensorstore_metrics_interval_from_env,
-)
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import load_checkpoint
 from levanter.data import AsyncDataset, DataLoader
@@ -114,6 +110,7 @@ def build_train_loader(
     mesh: Mesh,
     batch_pspec: P = P(("data",)),
 ) -> DataLoader[GrugLmExample]:
+    # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     axis_resource = batch_pspec[0]
     return DataLoader(
         dataset,
@@ -396,12 +393,6 @@ def run_grug(config: GrugRunConfig) -> None:
         log_every = max(1, config.trainer.log_every)
         iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
 
-        # Optional env-driven tensorstore metric logging for debugging long runs.
-        tensorstore_metrics_every = tensorstore_metrics_interval_from_env()
-        tensorstore_metrics_logger = None
-        if tensorstore_metrics_every is not None:
-            tensorstore_metrics_logger = build_tensorstore_metrics_logger(tensorstore_metrics_every)
-
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
@@ -425,11 +416,6 @@ def run_grug(config: GrugRunConfig) -> None:
                 every=1,
             )
         state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
-        if tensorstore_metrics_logger is not None and tensorstore_metrics_every is not None:
-            state_callbacks.add_hook(
-                lambda info: tensorstore_metrics_logger(info.step),
-                every=tensorstore_metrics_every,
-            )
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None

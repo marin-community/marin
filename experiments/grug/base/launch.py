@@ -18,6 +18,7 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDataConfig
 from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
@@ -43,10 +44,8 @@ class GrugBaseLaunchConfig:
     steps: int
     batch_size: int
     seed: int
-    mp: str
-    wandb_project: str
-    wandb_tags: tuple[str, ...]
-    wandb_group: str | None
+    mp: str  # jmp policy string, e.g. "params=float32,compute=bfloat16,output=bfloat16".
+    tracker: TrackerConfig
     optimizer: OptimizerConfig
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -78,6 +77,12 @@ def _resolve_run_id(default_run_id: str) -> str:
     return run_id
 
 
+def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
+    if isinstance(tracker, WandbConfig):
+        return dataclasses.replace(tracker, name=run_id)
+    return tracker
+
+
 def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
     # Map template launch knobs onto full Levanter TrainerConfig.
     trainer = TrainerConfig(
@@ -87,12 +92,7 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
         num_train_steps=config.steps,
         profiler=ProfilerConfig(enabled=False, start_step=5, num_steps=100, perfetto_link=False),
         mp=jmp.get_policy(config.mp),
-        tracker=WandbConfig(
-            project=config.wandb_project,
-            name=config.run_id,
-            tags=list(config.wandb_tags),
-            group=config.wandb_group,
-        ),
+        tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
@@ -127,15 +127,18 @@ grug_base_trial = ExecutorStep(
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
         # this_output_path() resolves to this step's output root (e.g. gs://.../grug/base-trial-<version>).
         output_path=this_output_path(),
-        # versioned(...) marks fields that participate in Executor step versioning/hash.
-        run_id=versioned(RESOLVED_RUN_ID),
+        # Keep run id out of versioning so changing job metadata doesn't create a new output path.
+        run_id=RESOLVED_RUN_ID,
         steps=versioned(2_000),
         batch_size=versioned(512),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-        wandb_project=versioned("marin"),
-        wandb_tags=versioned(("grug", "template")),
-        wandb_group=versioned("grug-base-trial"),
+        tracker=WandbConfig(
+            project="marin",
+            tags=["grug", "template"],
+            group="grug-base-trial",
+            name=None,  # filled from run_id in _resolve_tracker
+        ),
         optimizer=versioned(
             AdamConfig(
                 learning_rate=3e-3,
