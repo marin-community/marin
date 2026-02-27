@@ -21,9 +21,6 @@ defaults:
     port: 10001
     controller_address: "${IRIS_CONTROLLER_ADDRESS}"
 
-storage:
-  bundle_prefix: gs://marin-us-central2/tmp/iris/bundles
-
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:
