@@ -29,6 +29,7 @@ from iris.cluster.platform.coreweave import (
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
     CoreweavePlatform,
+    _build_controller_deployment,
 )
 from iris.cluster.platform.factory import create_platform
 from iris.rpc import config_pb2
@@ -1721,6 +1722,47 @@ def test_reload_skips_missing_scale_group(fake_kubectl: FakeKubectl):
     worker_pods = [k for k in fake_kubectl._pods if k.startswith("iris-worker-")]
     assert len(worker_pods) == 0
     platform.shutdown()
+
+
+def test_controller_deployment_has_interruptable_toleration():
+    """Controller Deployment tolerates the CW interruptable taint so it can schedule on CPU nodes."""
+    manifest = _build_controller_deployment(
+        namespace="iris",
+        image="ghcr.io/marin-community/iris-controller:latest",
+        port=10000,
+        bundle_prefix="gs://test-bucket/bundles",
+        node_selector={"iris.marin.community/scale-group": "cpu-erapids"},
+        s3_env_vars=[],
+    )
+    tolerations = manifest["spec"]["template"]["spec"].get("tolerations", [])
+    assert any(
+        t.get("key") == "qos.coreweave.cloud/interruptable" and t.get("effect") == "NoExecute" for t in tolerations
+    ), f"Expected interruptable toleration, got {tolerations}"
+
+
+def test_ensure_rbac_includes_metrics_api(fake_kubectl: FakeKubectl):
+    """ClusterRole grants get/list on pods in the metrics.k8s.io API group."""
+    platform = _make_platform()
+
+    # Capture all manifests passed to apply_json
+    applied: list[dict] = []
+    original_apply = fake_kubectl._handle_apply
+
+    def capturing_apply(input_data: str, namespace: str):
+        applied.append(json.loads(input_data))
+        return original_apply(input_data, namespace)
+
+    fake_kubectl._handle_apply = capturing_apply
+    platform.ensure_rbac()
+
+    cluster_roles = [m for m in applied if m.get("kind") == "ClusterRole"]
+    assert len(cluster_roles) == 1, f"Expected 1 ClusterRole, got {len(cluster_roles)}"
+    rules = cluster_roles[0]["rules"]
+    metrics_rules = [r for r in rules if "metrics.k8s.io" in r.get("apiGroups", [])]
+    assert len(metrics_rules) == 1, f"Expected metrics.k8s.io rule, got {metrics_rules}"
+    assert "pods" in metrics_rules[0]["resources"]
+    assert "get" in metrics_rules[0]["verbs"]
+    assert "list" in metrics_rules[0]["verbs"]
 
 
 # ============================================================================
