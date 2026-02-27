@@ -1,112 +1,81 @@
-# Recipe: Changing Grug (Experiment → Canonical)
+# Recipe: Changing Grug (Template-First)
 
-Grug is meant to be “grug-simple” and easy to hack, but we still want a single, trustworthy “best guess” implementation in `levanter.grug`.
+Grug is intentionally template-first: the canonical edit surface lives in `experiments/grug/base/`, not in a shared `levanter.grug` trainer stack.
 
 This recipe describes the workflow for:
 
-1) trying changes safely in a speedrun experiment, and
-2) upstreaming successful ideas into the canonical core (and cleaning up old experiments).
+1. trying a change in an experiment copy, and
+2. upstreaming it into the base template when it proves out.
 
-## Source Of Truth vs Experiments
+## Source Of Truth
 
-- **Source of truth:** `lib/levanter/src/levanter/grug/`
-  - This is the “best guess” model. It should stay small, readable, and testable.
-- **Evolving experiment:** `experiments/speedrun/nano_arch_ablations/00_baseline/main.py`
-  - This is the *living* entrypoint that is expected to evolve as we learn.
-- **One-off experiments:** under `experiments/speedrun/…`
-  - These are snapshots / specialized edit surfaces (e.g. attention sinks).
+- **Canonical template:** `experiments/grug/base/`
+  - `model.py`
+  - `train.py`
+  - `launch.py`
+- **Variants:** `experiments/grug/<variant>/`
+  - copy from `base` and modify locally (for example MoE).
+- **One-off speedruns:** `experiments/speedrun/...`
+  - useful for exploration, not canonical.
 
-We try not to let one-off scripts become the canonical implementation.
+## Workflow
 
-## When You Want To Try Something
+### 1) Pick one change bucket
 
-### 1) Decide what you’re changing
+Keep each pass scoped to one bucket:
 
-Most changes fall into one bucket:
+- attention/masking
+- block wiring/norm ordering
+- MLP/activation
+- loss kernel behavior
+- optimizer/training loop behavior
 
-- **Attention** (masking semantics, kernels, sinks/aux, layout/sharding)
-- **Block** (residual wiring, normalization order, pre/post-norm)
-- **MLP** (activation, GLU variants, gating, dimension choices)
-- **Loss** (large-vocab CE, z-loss, label smoothing, logit soft-cap)
-- **Optimizer** (Adam, Muon, etc.)
+### 2) Experiment in a copy
 
-Try to change **one bucket at a time**. Optimizer isn't really (currently) addressed by Grug, but we'll get there.
+- Copy `experiments/grug/base` to a new variant directory.
+- Keep edits local and explicit (copy/paste over abstraction).
+- Avoid introducing reusable framework surface unless there's clear repeated use.
 
-### 2) Create an experiment entrypoint
+### 3) Record the experiment
 
-Start from:
+Update `docs/reports/grug-archive.md` with:
 
-- `experiments/speedrun/nano_arch_ablations/00_baseline/main.py`
+- path
+- commit SHA (when known)
+- purpose
+- status (`active`, `superseded`, `deleted`)
 
-Recommended workflow:
+### 4) Upstream to base if it wins
 
-1. Copy the file to a new experiment (or branch the baseline if the change is small):
-   - Example: `experiments/speedrun/<idea>/main.py`
-2. Keep the edit surface explicit:
-   - If you’re changing attention, keep the change in one local `attention()` or `attn_fn` block.
-   - If you’re changing the MLP, keep it local to an `mlp()` helper.
-3. Avoid introducing new abstractions (this is a speedrun file; copy/paste is fine).
+Port the successful change back into:
 
-### 3) Register the experiment in the archive
+- `experiments/grug/base/model.py`
+- `experiments/grug/base/train.py`
+- `experiments/grug/base/launch.py`
 
-Add an entry to:
+Keep it grug-style:
 
-- `docs/reports/grug-archive.md`
+- plain JAX arrays and explicit sharding
+- Equinox modules with `init` + `__call__`
+- minimal config knobs
+- keep legibility first; if a block gets hard to read, introduce a small local helper instead of adding framework indirection
 
-Record:
-- the experiment path,
-- the commit SHA (once known),
-- what you changed and why,
-- the intended “status” (`active`, `superseded`, `deleted`).
+### 5) Delete stale paths
 
-## When You Want To Adopt Something As Canonical
+After upstreaming:
 
-### 1) Port to `levanter.grug`
+- delete superseded experiment code,
+- keep only the archive trail in `docs/reports/grug-archive.md`.
 
-Move the change into one of the core files:
+### 6) Validate
 
-- `lib/levanter/src/levanter/grug/attention.py`
-- `lib/levanter/src/levanter/grug/model.py`
-- `lib/levanter/src/levanter/grug/loss.py`
+Run the relevant checks:
 
-Keep the “grug” style:
-- Equinox modules for model components (`Transformer`, `Block`, `MLP`, `RMSNorm`, attention),
-- explicit module pattern per component: `@staticmethod init(...)` + `__call__(...)`,
-- model API on module methods (`Transformer.init`, `Transformer.__call__`, `Transformer.logits`, `Transformer.next_token_loss`),
-- explicit sharding when needed (and loud failures otherwise).
-
-### 2) Update/extend tests
-
-Add or adjust tests to lock the intended surface:
-
-- `lib/levanter/tests/grug/test_grugformer_core.py`
-- `lib/levanter/tests/grug/test_grugformer_model_loss.py`
-- `lib/levanter/tests/grug/test_grugformer_compilation.py`
-
-The goal is:
-- shapes don’t regress,
-- `jit` still works,
-- sharding doesn’t explode,
-- mask semantics remain correct.
-
-### 3) Clean up old experiments
-
-After merging a canonical improvement:
-
-- If an experiment is now redundant and not referenced, **delete it** and mark it `deleted` in `docs/reports/grug-archive.md`.
-- If an experiment represents a meaningful historical run, keep it but mark it `superseded`, and point to the canonical change (or the new experiment).
-  Do this only if it's not going to be a maintenance burden.
-
-Prefer “archive entry + deletion” over keeping lots of old code in-tree.
-
-### 4) Run repo checks
-
-Before sending the PR:
-
-```sh
+```bash
 uv run python infra/pre-commit.py --all-files
+uv run pytest tests/test_grug_base_template.py
 ```
 
-## Notes / Inspiration
+Add any additional focused tests needed for behavior changes.
 
-This workflow is inspired by projects like `modded-nanogpt`: keep a small, readable core, iterate quickly via “hackable” entrypoints, and regularly upstream what works.
+This workflow is inspired by modded-nanogpt: iterate quickly in copy-paste experiments, then upstream only what stays simple and useful.
