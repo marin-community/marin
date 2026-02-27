@@ -15,8 +15,16 @@ from experiments.evals.evalchemy_task_configs import (
     AIME24,
     AIME25,
     AMC23,
+    CODEELO,
+    CODEFORCES,
+    GPQA_DIAMOND,
     HMMT,
+    HUMANEVAL_PLUS,
+    HUMANITYS_LAST_EXAM,
+    JEEBENCH,
+    LIVECODEBENCH,
     MATH500,
+    MBPP_PLUS,
 )
 from fray.cluster import ResourceConfig
 
@@ -50,10 +58,27 @@ SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
 # Each entry: (list of tasks, list of seeds).
 # Tasks in the same group share the same set of seeds.
 # Compile steps are automatically created for groups with >1 seed.
-TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
+
+MATH_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
     ([AIME24, AIME25, AMC23, HMMT], SEEDS[:5]),  # 5 seeds
     ([MATH500], SEEDS[:1]),  # 1 seed
 ]
+
+SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
+    ([GPQA_DIAMOND], SEEDS[:3]),  # 3 seeds
+    ([JEEBENCH, HUMANITYS_LAST_EXAM], SEEDS[:1]),  # 1 seed
+]
+
+CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
+    ([HUMANEVAL_PLUS], SEEDS[:3]),  # 3 seeds
+    ([MBPP_PLUS, CODEELO, CODEFORCES, LIVECODEBENCH], SEEDS[:1]),  # 1 seed
+]
+
+SUITE_TO_TASK_SEED_GROUPS: dict[str, list[tuple[list, list[int]]]] = {
+    "math": MATH_TASK_SEED_GROUPS,
+    "science": SCIENCE_TASK_SEED_GROUPS,
+    "code": CODE_TASK_SEED_GROUPS,
+}
 
 # =============================================================================
 # Generation Parameters
@@ -102,6 +127,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Evalchemy reasoning benchmarks")
     parser.add_argument("--experiment", type=str, default=None, help="Base eval run name for output paths and wandb")
     parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint path (GCS path or HF model name)")
+    parser.add_argument(
+        "--suite",
+        type=str,
+        default="math",
+        choices=["math", "science", "code", "all"],
+        help="Eval suite to run (default: math)",
+    )
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + remaining
 
@@ -110,9 +142,18 @@ if __name__ == "__main__":
     else:
         parser.error("--checkpoint must be provided.")
 
+    if args.suite == "all":
+        suites = ["math", "science", "code"]
+    else:
+        suites = [args.suite]
+
+    task_seed_groups = []
+    for suite in suites:
+        task_seed_groups.extend(SUITE_TO_TASK_SEED_GROUPS[suite])
+
     run_evalchemy_experiment(
         checkpoints=checkpoints,
-        task_seed_groups=TASK_SEED_GROUPS,
+        task_seed_groups=task_seed_groups,
         base_generation_params=BASE_GENERATION_PARAMS,
         resource_config=RESOURCE,
         engine_kwargs=ENGINE_KWARGS,
