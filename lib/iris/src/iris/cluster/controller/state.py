@@ -59,6 +59,9 @@ DEFAULT_MAX_RETRIES_PREEMPTION = 100
 HEARTBEAT_FAILURE_THRESHOLD = 10
 """Consecutive heartbeat failures before marking worker as failed."""
 
+RESOURCE_HISTORY_MAX = 60
+"""~5 minutes at 5s heartbeat interval."""
+
 
 # =============================================================================
 # Device Helper Functions
@@ -246,6 +249,9 @@ class ControllerTask:
 
     # Submission timestamp (distinct from attempt start times)
     submitted_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+
+    # Latest resource usage reported by the worker (RAM, CPU, disk)
+    resource_usage: cluster_pb2.ResourceUsage | None = None
 
     # --- Read-only properties that derive from attempts ---
 
@@ -690,6 +696,12 @@ class ControllerWorker:
     # All task IDs ever assigned to this worker (for fast per-worker history lookup)
     task_history: set[JobName] = field(default_factory=set)
 
+    # Live resource metrics from heartbeats
+    resource_snapshot: cluster_pb2.WorkerResourceSnapshot | None = None
+    resource_history: deque[cluster_pb2.WorkerResourceSnapshot] = field(
+        default_factory=lambda: deque(maxlen=RESOURCE_HISTORY_MAX)
+    )
+
     def get_committed_resources(self) -> tuple[int, int, int]:
         """Return committed (cpu_millicores, memory_bytes, gpu_count) for this worker."""
         return (self.committed_cpu_millicores, self.committed_mem, self.committed_gpu)
@@ -715,6 +727,11 @@ class ControllerWorker:
             True if the worker has not sent a heartbeat within the timeout period
         """
         return self.last_heartbeat.age_ms() > timeout.to_ms()
+
+    def update_resource_snapshot(self, snapshot: cluster_pb2.WorkerResourceSnapshot) -> None:
+        """Store a resource snapshot from a heartbeat, maintaining a bounded history."""
+        self.resource_snapshot = snapshot
+        self.resource_history.append(snapshot)
 
     def assign_task(self, task_id: JobName, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Assign a task to this worker, updating committed resources."""
@@ -1816,34 +1833,33 @@ class ControllerState:
             worker.healthy = True
             worker.consecutive_failures = 0
 
-            # Process running task state updates (e.g. ASSIGNED -> BUILDING -> RUNNING)
-            for entry in response.running_tasks:
+            # Store resource metrics from heartbeat
+            if response.resource_snapshot.ByteSize() > 0:
+                worker.update_resource_snapshot(response.resource_snapshot)
+
+            for entry in response.tasks:
                 if entry.state == cluster_pb2.TASK_STATE_UNSPECIFIED:
                     continue
                 task_id = JobName.from_wire(entry.task_id)
                 task = self._tasks.get(task_id)
-                if task and not task.is_finished():
-                    # Always persist log_directory as soon as the worker reports it,
-                    # regardless of whether the state changed. This ensures we capture
-                    # it even if the worker crashes before the next heartbeat cycle.
-                    if entry.log_directory and entry.attempt_id < len(task.attempts):
-                        if not task.attempts[entry.attempt_id].log_directory:
-                            task.attempts[entry.attempt_id].log_directory = entry.log_directory
-                    if task.state != entry.state:
-                        # Ignore PENDING reported by the worker: the task thread starts in
-                        # PENDING before transitioning to BUILDING, so the first heartbeat
-                        # after assignment can carry a stale PENDING.  Accepting it would
-                        # regress an ASSIGNED task back to PENDING and silently drop it
-                        # from the building-count backpressure window.
-                        if entry.state == cluster_pb2.TASK_STATE_PENDING:
-                            continue
-                        self._process_task_state_change(task_id, entry.state, entry.attempt_id)
+                if not task or task.is_finished():
+                    continue
 
-            # Process completed tasks
-            for entry in response.completed_tasks:
-                task_id = JobName.from_wire(entry.task_id)
-                task = self._tasks.get(task_id)
-                if task and not task.is_finished():
+                # Store resource usage snapshot
+                if entry.resource_usage.ByteSize() > 0:
+                    task.resource_usage = entry.resource_usage
+
+                # Always persist log_directory as soon as the worker reports it,
+                # regardless of whether the state changed. This ensures we capture
+                # it even if the worker crashes before the next heartbeat cycle.
+                if entry.log_directory and entry.attempt_id < len(task.attempts):
+                    if not task.attempts[entry.attempt_id].log_directory:
+                        task.attempts[entry.attempt_id].log_directory = entry.log_directory
+
+                if task.state == entry.state:
+                    continue
+
+                if entry.state in TERMINAL_TASK_STATES:
                     self._process_task_state_change(
                         task_id,
                         entry.state,
@@ -1851,9 +1867,15 @@ class ControllerState:
                         error=entry.error or None,
                         exit_code=entry.exit_code,
                     )
-                    # Store log_directory from worker
-                    if task and entry.attempt_id < len(task.attempts) and entry.log_directory:
-                        task.attempts[entry.attempt_id].log_directory = entry.log_directory
+                else:
+                    # Ignore PENDING reported by the worker: the task thread starts in
+                    # PENDING before transitioning to BUILDING, so the first heartbeat
+                    # after assignment can carry a stale PENDING.  Accepting it would
+                    # regress an ASSIGNED task back to PENDING and silently drop it
+                    # from the building-count backpressure window.
+                    if entry.state == cluster_pb2.TASK_STATE_PENDING:
+                        continue
+                    self._process_task_state_change(task_id, entry.state, entry.attempt_id)
 
     def _process_task_state_change(
         self,
