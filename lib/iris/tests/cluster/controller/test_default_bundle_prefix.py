@@ -3,8 +3,6 @@
 
 """Tests for default bundle prefix resolution via marin_temp_bucket."""
 
-import os
-
 from iris.cluster.controller.main import default_bundle_prefix
 
 
