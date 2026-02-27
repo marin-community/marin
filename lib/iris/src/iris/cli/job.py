@@ -27,6 +27,7 @@ from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
+from iris.cluster.platform.coreweave import CoreweavePlatform
 from iris.cluster.types import (
     Constraint,
     Entrypoint,
@@ -459,26 +460,35 @@ def run(
 
     env_vars_dict = load_env_vars(env_vars)
 
-    exit_code = run_iris_job(
-        command=command,
-        env_vars=env_vars_dict,
-        controller_url=controller_url,
-        tpu=tpu,
-        gpu=gpu,
-        cpu=cpu,
-        memory=memory,
-        disk=disk,
-        wait=not no_wait,
-        job_name=job_name,
-        replicas=replicas,
-        max_retries=max_retries,
-        timeout=timeout,
-        extras=list(extra),
-        include_children_logs=include_children_logs,
-        terminate_on_exit=terminate_on_exit,
-        regions=region or None,
-        zone=zone,
-    )
+    try:
+        exit_code = run_iris_job(
+            command=command,
+            env_vars=env_vars_dict,
+            controller_url=controller_url,
+            tpu=tpu,
+            gpu=gpu,
+            cpu=cpu,
+            memory=memory,
+            disk=disk,
+            wait=not no_wait,
+            job_name=job_name,
+            replicas=replicas,
+            max_retries=max_retries,
+            timeout=timeout,
+            extras=list(extra),
+            include_children_logs=include_children_logs,
+            terminate_on_exit=terminate_on_exit,
+            regions=region or None,
+            zone=zone,
+        )
+    except Exception:
+        platform = ctx.obj.get("platform")
+        if isinstance(platform, CoreweavePlatform):
+            try:
+                platform.controller_post_mortem()
+            except Exception:
+                logger.debug("Controller post-mortem failed", exc_info=True)
+        raise
     sys.exit(exit_code)
 
 
