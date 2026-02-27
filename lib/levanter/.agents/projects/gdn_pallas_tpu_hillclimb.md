@@ -2712,3 +2712,76 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / severe regression**. Reducing visible closed-call buckets did not translate to faster step time; the batched-dot rewrite introduced large control-flow/loop overhead in the backward path.
 - Next bold hypothesis:
   - Escalate to **Macro Move I** (prepare+recurrent fusion with explicit tape reuse and no stacked-dot helper) or **Macro Move E** (V-tiling shared-K) to avoid the new `while` overhead regime.
+
+### Iteration 48 - Macro Move I / full-sequence fused prepare+recurrent train forward (regression, reverted)
+
+- Coverage slot: I (1/5)
+- Covered set so far: {I}
+- Date: 2026-02-27T13:35:37Z
+- Commit: none (failed attempt)
+- Starting commit: `ac94e24a28cdb9137dd21c837beb7a3f6e75542c`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/pallas_call` remained the key target in tf-op aggregation:
+    - forward: `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/*/shard_map/pallas_call` = `414.635 ms`
+    - backward: `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/*/shard_map/pallas_call` = `210.140 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move I**: full-sequence fused train forward (`prepare + recurrent + tape`) in one Pallas call to remove cross-kernel tape traffic (`+10-20%`, high control-flow/lowering risk).
+  2. **Macro Move J**: `Ct/Seg` sweep (`Ct={64,96,128}`, `Seg={8,16,32}`) after structural changes (`+5-15%`, medium risk; requires compact benchmark table).
+  3. **Macro Move E**: V-tiling shared-K precompute in recurrent/backward to shrink per-program state (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **I) Fuse segmented/full-sequence forward prepare + recurrent with reusable heavy intermediates**.
+- Selected hypothesis: for the full-sequence train path (`return_prepare_tape=True`), replace split full-sequence calls (`prepare` then `recurrent`) with one fused pipelined Pallas kernel that computes chunk-local solve outputs and recurrent apply in one launch while writing the same backward tape contract (`v_pseudo`, `k_cumdecay`, `solve_transform`, chunk starts).
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added full-sequence fused forward pipeline kernel/wrapper (`_gdn_chunk_fullseq_fwd_fused_*`) with one `pallas_call` over `N_chunks` and VMEM state scratch.
+  - Routed `_chunk_gated_delta_rule_flash_pallas_impl(..., return_prepare_tape=True)` full-sequence train path to the fused kernel.
+  - Kept no-tape/inference full-sequence path on split kernels.
+  - Local smoke tests and TPU correctness passed.
+  - Profiled run regressed materially; speculative kernel edits were reverted to starting-commit behavior.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Required TPU validation:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `87 passed, 2 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter6_macroI_fullseq_fused --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter6_macroI_fullseq_fused_130m_ch128_seg16_20-cafee4`
+  - W&B profiler artifact:
+    - `run-gdn_loop_iter6_macroI_fullseq_fused_130m_ch128_seg16_20-cafee4-profiler:v0`
+  - Downloaded trace:
+    - `.profiles/wandb/plugins/profile/2026_02_27_13_31_04/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, vs baseline trace above):
+  - Top op buckets shifted from baseline fusion/conditional mix to large `while` buckets:
+    - baseline top op: `conditional.2 = 59.909 ms`
+    - new top ops: `while.56 = 188.931 ms`, `while.55 = 64.083 ms`
+  - Forward `shard_map/pallas_call` tf-op aggregate: `414.635 ms -> 207.082 ms` (`-50.06%`).
+  - Backward `shard_map/pallas_call` tf-op aggregate: `210.140 ms -> 105.036 ms` (`-50.02%`).
+  - Despite reduced shard-map buckets, new while/control-flow overhead dominated end-to-end time.
+
+- MFU/throughput delta (history-window median, steps `10..18`, vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.830017 -> 5.382854` (`-7.67%`).
+  - `throughput/tokens_per_second`: `188599.93 -> 174134.30` (`-7.67%`).
+  - `throughput/duration`: `0.173743s -> 0.188177s` (`+8.31%`).
+  - final-step reference (step `19`): `throughput/mfu=5.406845`, `tokens/s=174910.40`, `duration=0.187342s`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward `shard_map/pallas_call` tf-op aggregate: `414.635 ms -> 207.082 ms` (`-50.06%`).
+    - Backward `shard_map/pallas_call` tf-op aggregate: `210.140 ms -> 105.036 ms` (`-50.02%`).
+    - `throughput/mfu -7.67%`, `throughput/tokens_per_second -7.67%`, `throughput/duration +8.31%`.
+  - Governance:
+    - MFU gain `<3%` (regression). Attempt marked **low-impact/regressive** and speculative kernel edits were reverted.
+
+- Assessment: **failed attempt / regression**. The macro-I fused full-sequence forward path cut train `shard_map/pallas_call` buckets roughly in half, but introduced substantial `while` overhead that regressed end-to-end throughput.
+- Next bold hypothesis:
+  - Move to **Macro Move J** with required `Ct/Seg` sweep (`Ct={64,96,128}`, `Seg={8,16,32}`) and a compact benchmark table to identify a better operating point after this fusion evidence.
