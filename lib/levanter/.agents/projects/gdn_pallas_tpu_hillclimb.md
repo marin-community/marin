@@ -2856,3 +2856,76 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / regression**. The Macro-I full-sequence fused train forward path reduced closed-call shard-map wall time by ~50% but introduced enough `while` overhead to regress end-to-end throughput.
 - Next bold hypothesis:
   - Move to **Macro Move J** next (required coverage progression): run the explicit `Ct in {64,96,128}` × `Seg in {8,16,32}` sweep with a compact benchmark table and use the best point as the launchpad for the next structural macro move.
+
+### Iteration 50 - Macro Move I / segmented fused train-path reroute (infra-blocked, reverted)
+
+- Coverage slot: I (1/5, attempted but not validated)
+- Covered set so far: {}
+- Date: 2026-02-28T05:51:51Z
+- Commit: none (failed attempt)
+- Starting commit: `0033a77327b651d88ab8a40e0505bd317d7cfff1`
+- Dominant bottleneck carried in (from Iteration 49 carry-in baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/pallas_call` remained dominant:
+    - forward closed-call: `41.324 ms`
+    - backward closed-call: `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move I**: training-only reroute to segmented fused forward (`return_prepare_tape=True`) with segment-bounded launches to reuse prep intermediates in-kernel without full-sequence fused loop path (`+10-18%`, medium/high implementation + lowering risk).
+  2. **Macro Move J**: explicit `Ct/Seg` sweep (`Ct={64,96,128}`, `Seg={8,16,32}`) with compact table (`+5-12%`, medium risk; lower structural upside this iteration).
+  3. **Macro Move E**: V-tiling with shared-K precompute in recurrent/bwd kernels (`+15-30%`, high decomposition and correctness risk).
+
+- Selected macro-move category: **I) Fuse segmented forward prepare + recurrent with reusable heavy intermediates**.
+- Selected hypothesis: for training path only, route `_chunk_gated_delta_rule_flash_pallas_impl(..., return_prepare_tape=True)` away from split full-sequence prepare/recurrent kernels to the segmented fused forward path so chunk-local solve outputs are reused once in the same kernel at segment granularity (avoiding prior single-mega-segment control-flow regressions).
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Implemented the Macro-I training-path reroute described above.
+  - Added a small TPU layout companion change replacing a hot `(Ct, 1)` backward matvec with direct `dot_general` matvec.
+  - Reverted all speculative kernel edits after TPU validation remained infra-blocked.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Required TPU validation (`tests=both`) attempts:
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both --no-wait`
+      - job: `ray-run-calvinxu-levanter-20260228-052222`
+      - `ray-wait --timeout 180`: `status=PENDING` timeout.
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both --no-wait`
+      - job: `ray-run-calvinxu-levanter-20260228-052621`
+      - `ray-wait --timeout 180`: `status=PENDING` timeout.
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5 --tpu auto --tests both --no-wait`
+      - job: `ray-run-calvinxu-levanter-20260228-053015`
+      - `ray-wait --timeout 180`: `status=PENDING` timeout.
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central2 --tpu auto --tests both --no-wait`
+      - job: `ray-run-calvinxu-levanter-20260228-053429`
+      - `ray-wait --timeout 180`: `status=PENDING` timeout.
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east1 --tpu auto --tests both --no-wait`
+      - job: `ray-run-calvinxu-levanter-20260228-053823`
+      - `ray-wait --timeout 180`: `status=PENDING` timeout.
+  - Dev TPU fallback:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name calvinxu-gdn --tests both --no-sync`
+      - failed immediately: `ssh: Could not resolve hostname dev-tpu-calvinxu-gdn`.
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-allocate --cluster us-central1 --tpu-name calvinxu-gdn --tpu-type v5p-8`
+      - allocator did not produce a usable dev TPU host; repeated Raylet errors: `worker_pool.cc:1865: Delete runtime env failed`.
+
+- Profile run:
+  - **Not run** (required TPU validation could not be completed).
+
+- Hotspots observed:
+  - No new validated profile trace; carry-in dominant hotspot remains train-path `shard_map/pallas_call` at the callsites above.
+
+- MFU/throughput delta:
+  - N/A (infra-blocked; no validated TPU profile run).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: **blocked by infra** (all commands + job IDs above).
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: **not measured**.
+    - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`: **not measured**.
+  - Governance:
+    - Speculative kernel edits reverted; no champion/perf-state update.
+
+- Assessment: **infra-blocked attempt**. Could not obtain required TPU validation/profile evidence due persistent Ray `PENDING` queue contention across multiple clusters and unavailable dev-TPU SSH target.
+- Next bold hypothesis:
+  - Re-attempt the same Macro-I training segmented-fusion variant once TPU validation path is healthy; if infra instability persists, resolve cluster capacity/allocator health first before new kernel edits.
