@@ -6,7 +6,7 @@ Tokenize text eval benchmarks (HellaSwag, WinoGrande, ARC, MMLU) into Levanter c
 
 Loads each benchmark from HuggingFace, formats as MCQ text (question + options + answer),
 tokenizes, and writes a Levanter-compatible cache with input_ids and loss_weights.
-Loss is computed on all tokens (standard LM loss).
+Loss is computed only on the answer tokens (question/options have weight 0).
 
 Output cache directory structure:
 
@@ -61,8 +61,8 @@ ALL_TEXT_BENCHMARKS = [
 # --- Formatting functions ---
 
 
-def _format_hellaswag(example: dict) -> str | None:
-    """Format a HellaSwag example as MCQ text.
+def _format_hellaswag(example: dict) -> tuple[str, str] | None:
+    """Format a HellaSwag example, returning (prompt, answer) separately.
 
     HellaSwag has: ctx (context), endings (list of 4 endings), label (correct index).
     """
@@ -77,18 +77,20 @@ def _format_hellaswag(example: dict) -> str | None:
     label_idx = int(label) if isinstance(label, (str, int)) else 0
 
     labels = ["A", "B", "C", "D"]
-    lines = [ctx]
+    prompt_lines = [ctx]
     for i, ending in enumerate(endings):
         if i < len(labels):
-            lines.append(f"{labels[i]}. {ending}")
+            prompt_lines.append(f"{labels[i]}. {ending}")
+
     correct_label = labels[label_idx] if label_idx < len(labels) else labels[0]
     correct_text = endings[label_idx] if label_idx < len(endings) else endings[0]
-    lines.append(f"Answer: {correct_label}. {correct_text}")
-    return "\n".join(lines)
+    answer = f"Answer: {correct_label}. {correct_text}"
+
+    return "\n".join(prompt_lines) + "\n", answer
 
 
-def _format_winogrande(example: dict) -> str | None:
-    """Format a WinoGrande example as MCQ text.
+def _format_winogrande(example: dict) -> tuple[str, str] | None:
+    """Format a WinoGrande example, returning (prompt, answer) separately.
 
     WinoGrande has: sentence (with _ blank), option1, option2, answer (1 or 2).
     """
@@ -100,16 +102,17 @@ def _format_winogrande(example: dict) -> str | None:
     if not sentence or not option1 or not option2:
         return None
 
-    lines = [sentence, f"1. {option1}", f"2. {option2}"]
+    prompt_lines = [sentence, f"1. {option1}", f"2. {option2}"]
     if str(answer) == "1":
-        lines.append(f"Answer: 1. {option1}")
+        answer_text = f"Answer: 1. {option1}"
     else:
-        lines.append(f"Answer: 2. {option2}")
-    return "\n".join(lines)
+        answer_text = f"Answer: 2. {option2}"
+
+    return "\n".join(prompt_lines) + "\n", answer_text
 
 
-def _format_arc(example: dict) -> str | None:
-    """Format an ARC (Easy or Challenge) example as MCQ text.
+def _format_arc(example: dict) -> tuple[str, str] | None:
+    """Format an ARC (Easy or Challenge) example, returning (prompt, answer) separately.
 
     ARC has: question, choices (dict with text and label lists), answerKey.
     """
@@ -123,18 +126,19 @@ def _format_arc(example: dict) -> str | None:
     choice_texts = choices.get("text", [])
     choice_labels = choices.get("label", [])
 
-    lines = [question]
+    prompt_lines = [question]
     correct_text = ""
     for label, text in zip(choice_labels, choice_texts):
-        lines.append(f"{label}. {text}")
+        prompt_lines.append(f"{label}. {text}")
         if label == answer_key:
             correct_text = text
-    lines.append(f"Answer: {answer_key}. {correct_text}")
-    return "\n".join(lines)
+
+    answer = f"Answer: {answer_key}. {correct_text}"
+    return "\n".join(prompt_lines) + "\n", answer
 
 
-def _format_mmlu(example: dict) -> str | None:
-    """Format an MMLU example as MCQ text.
+def _format_mmlu(example: dict) -> tuple[str, str] | None:
+    """Format an MMLU example, returning (prompt, answer) separately.
 
     MMLU has: question, choices (list of 4), answer (0-3 index).
     """
@@ -148,14 +152,16 @@ def _format_mmlu(example: dict) -> str | None:
     labels = ["A", "B", "C", "D"]
     answer_idx = int(answer) if answer is not None else 0
 
-    lines = [question]
+    prompt_lines = [question]
     for i, choice in enumerate(choices):
         if i < len(labels):
-            lines.append(f"{labels[i]}. {choice}")
+            prompt_lines.append(f"{labels[i]}. {choice}")
+
     correct_label = labels[answer_idx] if answer_idx < len(labels) else labels[0]
     correct_text = choices[answer_idx] if answer_idx < len(choices) else choices[0]
-    lines.append(f"Answer: {correct_label}. {correct_text}")
-    return "\n".join(lines)
+    answer_text = f"Answer: {correct_label}. {correct_text}"
+
+    return "\n".join(prompt_lines) + "\n", answer_text
 
 
 FORMATTERS = {
@@ -195,7 +201,11 @@ def process_text_benchmark(
     benchmark: str,
     tokenizer: transformers.PreTrainedTokenizer,
 ) -> Iterator[dict[str, np.ndarray]]:
-    """Load and tokenize a text benchmark, yielding Levanter cache records."""
+    """Load and tokenize a text benchmark, yielding Levanter cache records.
+
+    Loss is computed only on the answer tokens (+ eos), matching how VQA eval
+    benchmarks compute loss only on the response.
+    """
     dataset = _load_benchmark_dataset(benchmark)
     formatter = FORMATTERS[benchmark]
 
@@ -203,16 +213,21 @@ def process_text_benchmark(
     skipped = 0
 
     for i, example in enumerate(dataset):
-        text = formatter(example)
-        if text is None:
+        result = formatter(example)
+        if result is None:
             skipped += 1
             continue
 
-        token_ids = tokenizer.encode(text, add_special_tokens=False)
-        token_ids.append(ENDOFTEXT_ID)
+        prompt_text, answer_text = result
 
-        input_ids = np.array(token_ids, dtype=np.int32)
-        loss_weights = np.ones(len(token_ids), dtype=np.float32)
+        prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+        answer_ids = tokenizer.encode(answer_text, add_special_tokens=False)
+
+        all_ids = prompt_ids + answer_ids + [ENDOFTEXT_ID]
+
+        input_ids = np.array(all_ids, dtype=np.int32)
+        loss_weights = np.zeros(len(all_ids), dtype=np.float32)
+        loss_weights[len(prompt_ids):] = 1.0  # answer + eos
 
         yield {"input_ids": input_ids, "loss_weights": loss_weights}
 
