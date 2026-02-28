@@ -1,8 +1,7 @@
-# Copyright 2025 The Levanter Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-
 from dataclasses import dataclass
 
 import equinox as eqx
@@ -11,28 +10,13 @@ import jax.numpy as jnp
 from einops import rearrange
 from haliax.jax_utils import named_call
 from jax import random
-from jax.sharding import PartitionSpec as P, reshard
+from jax.sharding import PartitionSpec as P
+from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-from .attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
-from .loss import fused_linear_softmax_cross_entropy_loss
-from .sharding import Pbatch, Pvocab, unshard
-
-
-#### Conventions
-
-# Mesh meanings:
-# - "data": data parallel sharding axis. We also shard parameters over this axis.
-# - "model": model parallel sharding axis. TP
-
-# Dim names:
-# - B = batch
-# - D = embedding / hidden dim
-# - S = sequence length
-# - N = num heads
-# - M = num kv heads
-# - H = head dim
-# - I = intermediate dim
+from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
+from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
+from levanter.grug.sharding import Pbatch, Pvocab, unshard
 
 
 @dataclass(frozen=True)
@@ -81,12 +65,12 @@ class CausalSelfAttention(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
-        D, N, M, H = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        d_model, n_heads, n_kv_heads, head_dim = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (D, N * H), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (D, M * H), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (D, M * H), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (N * H, D), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d_model, n_heads * head_dim), cfg.initializer_std), P("data", "model")),
+            w_k=reshard(_init_weight(k_k, (d_model, n_kv_heads * head_dim), cfg.initializer_std), P("data", "model")),
+            w_v=reshard(_init_weight(k_v, (d_model, n_kv_heads * head_dim), cfg.initializer_std), P("data", "model")),
+            w_o=reshard(_init_weight(k_o, (n_heads * head_dim, d_model), cfg.initializer_std), P("model", "data")),
             cfg=cfg,
         )
 
@@ -111,10 +95,10 @@ class MLP(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MLP":
         k_up, k_down = random.split(key, 2)
-        D, I = cfg.hidden_dim, cfg.intermediate_dim
+        d_model, d_ff = cfg.hidden_dim, cfg.intermediate_dim
         return MLP(
-            mlp_up=reshard(_init_weight(k_up, (D, I), cfg.initializer_std), P("data", "model")),
-            mlp_down=reshard(_init_weight(k_down, (I, D), cfg.initializer_std), P("model", "data")),
+            mlp_up=reshard(_init_weight(k_up, (d_model, d_ff), cfg.initializer_std), P("data", "model")),
+            mlp_down=reshard(_init_weight(k_down, (d_ff, d_model), cfg.initializer_std), P("model", "data")),
         )
 
     @named_call
@@ -210,7 +194,7 @@ class Transformer(eqx.Module):
         hidden = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=Pbatch)
 
-    def next_token_loss(
+    def compute_next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
         loss_weight: Float[Array, "B S"],
@@ -241,10 +225,10 @@ def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float
 
 
 __all__ = [
-    "CausalSelfAttention",
     "MLP",
-    "RMSNorm",
     "Block",
-    "Transformer",
+    "CausalSelfAttention",
     "GrugModelConfig",
+    "RMSNorm",
+    "Transformer",
 ]
