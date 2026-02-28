@@ -282,7 +282,7 @@ def test_infer_block_sizes_has_v4_mid_h_large_vocab_profile():
         dtype=jnp.bfloat16,
         device_kind="TPU v4",
     )
-    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=256)
+    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=256)
 
 
 def test_infer_block_sizes_keeps_gb10_bucket_for_gb10_devices():
