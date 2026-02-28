@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phase Weighting Visualizer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --bg: #f3f4f6;
+            --panel-bg: #ffffff;
+            --text-main: #1f2937;
+            --text-muted: #6b7280;
+            --border: #e5e7eb;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .dashboard {
+            display: flex;
+            gap: 20px;
+            width: 100%;
+            max-width: 1200px;
+            flex-wrap: wrap;
+        }
+
+        .panel {
+            background-color: var(--panel-bg);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .controls-panel {
+            flex: 1;
+            min-width: 320px;
+        }
+
+        .chart-panel {
+            flex: 2;
+            min-width: 500px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        h2, h3 { margin-top: 0; margin-bottom: 16px; }
+        
+        .control-group { margin-bottom: 20px; }
+        .control-group label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+            accent-color: var(--primary);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 8px;
+            text-align: center;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .tab.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .presets {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 24px;
+        }
+
+        .preset-btn {
+            padding: 8px;
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .preset-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 24px 0;
+        }
+
+        .badge {
+            background: var(--bg);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: normal;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .chart-container {
+            position: relative;
+            flex-grow: 1;
+            width: 100%;
+            min-height: 400px;
+        }
+
+        .desc-text {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            margin-bottom: 20px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="dashboard">
+        <div class="panel controls-panel">
+            <h2>Parameters</h2>
+
+            <div class="control-group">
+                <label>Number of Phases (N) <span class="badge" id="val_N">10</span></label>
+                <input type="range" id="input_N" min="2" max="15" step="1" value="10">
+            </div>
+
+            <hr>
+            <h3>Presets (Global)</h3>
+            <div class="presets">
+                <button class="preset-btn" onclick="applyPreset('wsd')">WSD Plateau</button>
+                <button class="preset-btn" onclick="applyPreset('cosine')">Cosine Decay</button>
+                <button class="preset-btn" onclick="applyPreset('ushape')">U-Shape</button>
+                <button class="preset-btn" onclick="applyPreset('uniform')">Uniform</button>
+            </div>
+
+            <div class="tabs">
+                <div class="tab active" id="tab_beta" onclick="setMode('beta')">Beta-Softmax</div>
+                <div class="tab" id="tab_quad" onclick="setMode('quadratic')">Quad-Softmax</div>
+            </div>
+
+            <div id="controls_beta">
+                <div class="control-group">
+                    <label>Alpha (α) <span class="badge" id="val_alpha">5.0</span></label>
+                    <input type="range" id="input_alpha" min="0.1" max="6.0" step="0.1" value="5.0">
+                </div>
+                <div class="control-group">
+                    <label>Beta (β) <span class="badge" id="val_beta">2.0</span></label>
+                    <input type="range" id="input_beta" min="0.1" max="6.0" step="0.1" value="2.0">
+                </div>
+            </div>
+
+            <div id="controls_quad" style="display: none;">
+                <div class="control-group">
+                    <label>Beta 1 (Linear) <span class="badge" id="val_beta1">4.0</span></label>
+                    <input type="range" id="input_beta1" min="-8.0" max="8.0" step="0.1" value="4.0">
+                </div>
+                <div class="control-group">
+                    <label>Beta 2 (Squared) <span class="badge" id="val_beta2">-4.0</span></label>
+                    <input type="range" id="input_beta2" min="-8.0" max="8.0" step="0.1" value="-4.0">
+                </div>
+            </div>
+        </div>
+
+        <div class="panel chart-panel">
+            <h2>Phase Importance (π)</h2>
+            <div class="desc-text" id="shape_desc">Loading shape description...</div>
+            <div class="chart-container">
+                <canvas id="weightChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- State ---
+        let mode = 'beta';
+        let chartInstance = null;
+
+        // --- DOM Elements ---
+        const els = {
+            N: document.getElementById('input_N'),
+            alpha: document.getElementById('input_alpha'),
+            beta: document.getElementById('input_beta'),
+            beta1: document.getElementById('input_beta1'),
+            beta2: document.getElementById('input_beta2'),
+            desc: document.getElementById('shape_desc')
+        };
+
+        // --- Math Functions ---
+        function calculateWeights() {
+            const N = parseInt(els.N.value);
+            const alpha = parseFloat(els.alpha.value);
+            const beta = parseFloat(els.beta.value);
+            const beta1 = parseFloat(els.beta1.value);
+            const beta2 = parseFloat(els.beta2.value);
+
+            let z = [];
+            for (let k = 0; k < N; k++) {
+                let t_k = k / (N - 1);
+                
+                if (mode === 'beta') {
+                    let t_clamp = Math.max(0.001, Math.min(0.999, t_k));
+                    let z_k = (alpha - 1) * Math.log(t_clamp) + (beta - 1) * Math.log(1 - t_clamp);
+                    z.push(z_k);
+                } else {
+                    let z_k = beta1 * t_k + beta2 * (t_k * t_k);
+                    z.push(z_k);
+                }
+            }
+
+            // Softmax for numerical stability
+            const max_z = Math.max(...z);
+            const exps = z.map(val => Math.exp(val - max_z));
+            const sum_exps = exps.reduce((a, b) => a + b, 0);
+            const pi = exps.map(val => val / sum_exps);
+
+            return { pi, N, alpha, beta, beta1, beta2 };
+        }
+
+        function updateDescription(state) {
+            let text = "";
+            if (mode === 'beta') {
+                if (state.alpha === 1 && state.beta === 1) text = "Uniform distribution. All phases weighted equally.";
+                else if (state.alpha < 1 && state.beta < 1) text = "U-Shape. Extreme primacy and recency bias; middle phases ignored.";
+                else if (state.alpha > state.beta && state.beta >= 1) text = "Right-skewed Plateau (WSD). High learning rate maintained, dropping at the end.";
+                else if (state.beta > state.alpha) text = "Left-skewed Decay (Cosine). Early phases dominate, trailing off smoothly.";
+                else text = "Symmetric Bell Curve. Mid-phases dominate.";
+            } else {
+                if (state.beta1 === 0 && state.beta2 === 0) text = "Uniform distribution. All phases weighted equally.";
+                else if (state.beta2 < -1) text = "Convex Hump / Plateau. Good for capturing stable mid-training phases.";
+                else if (state.beta2 > 1) text = "Concave U-Shape. Emphasizes boundaries over the middle.";
+                else if (state.beta1 > 0) text = "Monotonic Growth. Recency bias.";
+                else text = "Monotonic Decay. Primacy bias (Cosine-like).";
+            }
+            els.desc.innerText = `[${mode === 'beta' ? 'Beta' : 'Quadratic'} Mode] ` + text;
+        }
+
+        // --- Interaction Logic ---
+        function setMode(newMode) {
+            mode = newMode;
+            document.getElementById('tab_beta').classList.toggle('active', mode === 'beta');
+            document.getElementById('tab_quad').classList.toggle('active', mode === 'quadratic');
+            document.getElementById('controls_beta').style.display = mode === 'beta' ? 'block' : 'none';
+            document.getElementById('controls_quad').style.display = mode === 'quadratic' ? 'block' : 'none';
+            updateAll();
+        }
+
+        function applyPreset(presetType) {
+            if (presetType === 'wsd') {
+                els.alpha.value = 5.0; els.beta.value = 2.0;
+                els.beta1.value = 4.0; els.beta2.value = -4.0;
+            } else if (presetType === 'cosine') {
+                els.alpha.value = 1.0; els.beta.value = 3.0;
+                els.beta1.value = -4.0; els.beta2.value = 0.0;
+            } else if (presetType === 'ushape') {
+                els.alpha.value = 0.5; els.beta.value = 0.5;
+                els.beta1.value = -4.0; els.beta2.value = 4.0;
+            } else if (presetType === 'uniform') {
+                els.alpha.value = 1.0; els.beta.value = 1.0;
+                els.beta1.value = 0.0; els.beta2.value = 0.0;
+            }
+            updateAll();
+        }
+
+        function updateAll() {
+            // Update badge text
+            Object.keys(els).forEach(key => {
+                if (key !== 'desc') document.getElementById(`val_${key}`).innerText = els[key].value;
+            });
+
+            const state = calculateWeights();
+            updateDescription(state);
+
+            // Update Chart
+            const labels = Array.from({length: state.N}, (_, i) => `Phase ${i}`);
+            chartInstance.data.labels = labels;
+            chartInstance.data.datasets[0].data = state.pi;
+            chartInstance.update();
+        }
+
+        // --- Initialize ---
+        function init() {
+            // Attach event listeners to all sliders
+            Object.keys(els).forEach(key => {
+                if (key !== 'desc') els[key].addEventListener('input', updateAll);
+            });
+
+            // Initialize Chart.js
+            const ctx = document.getElementById('weightChart').getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Weight (π_k)',
+                        data: [],
+                        backgroundColor: '#4f46e5',
+                        borderRadius: 4,
+                        borderWidth: 1,
+                        borderColor: '#3730a3'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 200 },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 1.0,
+                            title: { display: true, text: 'Softmax Probability' }
+                        },
+                        x: {
+                            grid: { display: false }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+
+            // Set initial state
+            updateAll();
+        }
+
+        // Run on load
+        window.onload = init;
+    </script>
+</body>
+</html>

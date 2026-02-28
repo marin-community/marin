@@ -18,6 +18,7 @@ from collections.abc import Iterator, Sequence
 
 import draccus
 import fsspec
+import humanfriendly
 import transformers
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
@@ -36,7 +37,12 @@ from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
+from marin.utils import (
+    fsspec_exists,
+    fsspec_glob,
+    fsspec_isdir,
+    fsspec_size,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +111,14 @@ class TokenizeConfig(TokenizeConfigBase):
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
     'test' or 'validation' in the file names, but are not actually test or validation sets.
     """
+    # TODO (rav): remove this once there's better way to capture this in datakit
+    zephyr_num_cpus: int = 2
+    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
+    zephyr_max_parallelism: int = 256
+    """Maximum number of concurrent Zephyr tasks per tokenization step.
+
+    Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor.
+    """
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -160,6 +174,15 @@ class HfTokenizeConfig(TokenizeConfigBase):
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
+
+    # TODO (rav): remove this once there's better way to capture this in datakit
+    zephyr_num_cpus: int = 2
+    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
+    zephyr_max_parallelism: int = 256
+    """Maximum number of concurrent Zephyr tasks per tokenization step.
+
+    Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor.
+    """
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True

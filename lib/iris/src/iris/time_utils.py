@@ -419,8 +419,10 @@ class ExponentialBackoff:
         self._max_attempt = int(math.log(self._maximum / self._initial) / math.log(self._factor)) + 1
 
     def next_interval(self) -> float:
-        effective_attempt = min(self._attempt, self._max_attempt)
-        interval = self._initial * (self._factor**effective_attempt)
+        try:
+            interval = self._initial * (self._factor**self._attempt)
+        except OverflowError:
+            interval = self._maximum
         interval = min(interval, self._maximum)
 
         if self._jitter > 0:

@@ -231,6 +231,9 @@ class _LmEvalHarnessWorker:
         generation_kwargs=None,
         sample_logging_config: SampleLoggingConfig | None = None,
         profiler_config: ProfilerConfig | None = None,
+        inference_max_seqs: int = 64,
+        inference_max_seqs_in_prefill: int = 16,
+        inference_hbm_utilization: float = 0.5,
     ):
         self.tokenizer = tokenizer
         self.max_packed_segments = max_packed_segments
@@ -243,6 +246,10 @@ class _LmEvalHarnessWorker:
         self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
         self.sample_logging_config = sample_logging_config or SampleLoggingConfig()
         self.profiler_config = profiler_config or ProfilerConfig()
+        # Inference engine configuration
+        self.inference_max_seqs = inference_max_seqs
+        self.inference_max_seqs_in_prefill = inference_max_seqs_in_prefill
+        self.inference_hbm_utilization = inference_hbm_utilization
 
         self._dummy_batch = _make_dummy_batch(EvalBatch, EvalPos)
 
@@ -281,7 +288,6 @@ class _LmEvalHarnessWorker:
                 weight=loss_weight,
                 logsumexp_weight=0.0,
                 return_argmax=True,
-                implementation="xla",
             )
 
             # We need to compute losses and also whether or not the completion is correct
@@ -835,16 +841,16 @@ class LevanterHarnessLM(TemplateLM):
                 max_stop_seqs = max(max_stop_seqs, num_stop_seqs)
                 max_stop_tokens = max(max_stop_tokens, num_stop_tokens)
 
-        # [ChiHeem,2025-10-06] TODO: Pass this from marin to allow users to
-        # optimize the inference based on hardware and model.
+        # Use configurable inference parameters to avoid OOM on large models
         engine_cfg = InferenceEngineConfig(
             max_stop_seqs=max_stop_seqs,
             max_stop_tokens=max_stop_tokens,
             max_seq_len=max_length,
-            max_seqs=256,
+            max_seqs=self.leader.inference_max_seqs,
+            max_seqs_in_prefill=self.leader.inference_max_seqs_in_prefill,
             page_size=8,
             compute_dtype=jnp.bfloat16,
-            hbm_utilization=0.5,
+            hbm_utilization=self.leader.inference_hbm_utilization,
         )
         engine = InferenceEngine.from_model_with_config(
             model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg
@@ -1065,6 +1071,37 @@ class LmEvalHarnessConfig:
     These can be overridden on a per-request basis by the evaluation harness.
     """
 
+    eval_datasets_cache_path: str | None = None
+    """
+    Optional GCS path to pre-cached evaluation datasets.
+
+    When set, datasets will be synced from this GCS path to the local HuggingFace
+    datasets cache before loading tasks. This avoids HuggingFace API rate limiting
+    when multiple concurrent jobs all try to download the same evaluation datasets.
+
+    Use marin.evaluation.eval_dataset_cache.create_cache_eval_datasets_step() to
+    pre-cache datasets before training.
+    """
+
+    # Inference engine configuration for generation tasks
+    inference_max_seqs: int = 16
+    """
+    Maximum concurrent sequences for generation. Lower values use less memory but
+    may be slower. Default reduced from 256 to 16 to avoid OOM on large models.
+    """
+
+    inference_max_seqs_in_prefill: int = 4
+    """
+    Maximum number of sequences to batch together during prefill. Controls memory
+    usage during the initial prompt processing phase.
+    """
+
+    inference_hbm_utilization: float = 0.3
+    """
+    Fraction of HBM to use for KV cache. Lower values leave more room for the model
+    and batch data. Range: 0.0 to 1.0.
+    """
+
     @property
     def max_gen_toks(self) -> int:
         """Backward compatibility property for max_gen_toks."""
@@ -1079,6 +1116,32 @@ class LmEvalHarnessConfig:
         """
         return [task.to_dict() if isinstance(task, TaskConfig) else task for task in self.task_spec]
 
+    def _sync_datasets_from_gcs(self) -> bool:
+        """
+        Sync evaluation datasets from GCS to local HuggingFace cache.
+
+        This method is called before loading tasks to ensure datasets are available
+        locally, avoiding HuggingFace API rate limiting.
+
+        Returns:
+            True if sync was successful or not configured, False if sync failed.
+        """
+        if not self.eval_datasets_cache_path:
+            return True
+
+        try:
+            from marin.evaluation.eval_dataset_cache import load_eval_datasets_from_gcs
+
+            return load_eval_datasets_from_gcs(
+                gcs_path=self.eval_datasets_cache_path,
+                log=logger,
+            )
+        except ImportError:
+            logger.warning(
+                "marin.evaluation.eval_dataset_cache not available. " "Skipping eval datasets sync from GCS."
+            )
+            return False
+
     def to_task_dict(self) -> dict:
         """
         Convert the task spec to a dictionary that the LM Eval Harness expects.
@@ -1090,6 +1153,9 @@ class LmEvalHarnessConfig:
         Uses retry logic with exponential backoff to handle HuggingFace rate limits when
         downloading evaluation datasets.
         """
+        # Sync datasets from GCS cache if configured
+        self._sync_datasets_from_gcs()
+
         logger.info("Loading tasks...")
         import lm_eval.tasks as tasks
 
@@ -1318,6 +1384,9 @@ def _actually_run_eval_harness(
         generation_kwargs=config.generation_kwargs,
         sample_logging_config=config.sample_logging,
         profiler_config=profiler_config,
+        inference_max_seqs=config.inference_max_seqs,
+        inference_max_seqs_in_prefill=config.inference_max_seqs_in_prefill,
+        inference_hbm_utilization=config.inference_hbm_utilization,
     )
 
     if jax.process_index() == 0:
