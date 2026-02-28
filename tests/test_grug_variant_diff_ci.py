@@ -3,7 +3,9 @@
 
 from pathlib import Path
 
-from scripts.grug_variant_diff_ci import directory_distance, find_closest_variant
+import pytest
+
+from scripts.grug_variant_diff_ci import directory_distance, find_closest_variant, list_variants_at_ref
 
 
 def _write(path: Path, content: str) -> None:
@@ -39,3 +41,18 @@ def test_find_closest_variant_picks_smallest_line_delta(tmp_path: Path):
 
     assert match.closest_variant == "base"
     assert match.distance_score == 0
+
+
+def test_list_variants_at_ref_raises_on_git_error(monkeypatch: pytest.MonkeyPatch):
+    class _Result:
+        returncode = 1
+        stdout = ""
+        stderr = "fatal: bad revision"
+
+    def _fake_run(*args, **kwargs):
+        return _Result()
+
+    monkeypatch.setattr("scripts.grug_variant_diff_ci.subprocess.run", _fake_run)
+
+    with pytest.raises(RuntimeError, match="bad revision"):
+        list_variants_at_ref(ref="does-not-exist")

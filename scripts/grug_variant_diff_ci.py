@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from scripts.grug_dir_diff import (
     build_directory_diff_report,
     collect_files,
     line_change_counts,
+    parse_extensions,
     read_text_lines,
 )
 
@@ -32,7 +34,12 @@ class VariantMatch:
     distance_score: int
 
 
-def list_variants_at_ref(*, ref: str, grug_root: Path = GRUG_ROOT) -> set[str]:
+def list_variants_at_ref(
+    *,
+    ref: str,
+    grug_root: Path = GRUG_ROOT,
+    strict: bool = True,
+) -> set[str]:
     """Return direct subdirectory names under ``grug_root`` for a git ref."""
     tree_spec = f"{ref}:{grug_root.as_posix()}"
 
@@ -43,6 +50,9 @@ def list_variants_at_ref(*, ref: str, grug_root: Path = GRUG_ROOT) -> set[str]:
         text=True,
     )
     if completed.returncode != 0:
+        if strict:
+            error = completed.stderr.strip() or f"git ls-tree failed for {tree_spec}"
+            raise RuntimeError(error)
         return set()
 
     variants: set[str] = set()
@@ -62,6 +72,41 @@ def list_variants_at_ref(*, ref: str, grug_root: Path = GRUG_ROOT) -> set[str]:
         variants.add(name)
 
     return variants
+
+
+def materialize_grug_tree_at_ref(*, ref: str, destination_root: Path, grug_root: Path = GRUG_ROOT) -> Path:
+    """Export ``grug_root`` from ``ref`` into ``destination_root`` and return the extracted path."""
+    destination_root.mkdir(parents=True, exist_ok=True)
+    archive_process = subprocess.Popen(
+        ["git", "archive", "--format=tar", ref, grug_root.as_posix()],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if archive_process.stdout is None:
+        raise RuntimeError("git archive did not produce stdout")
+
+    untar_process = subprocess.run(
+        ["tar", "-x", "-C", str(destination_root)],
+        stdin=archive_process.stdout,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    archive_process.stdout.close()
+    archive_stderr = archive_process.stderr.read().decode("utf-8", errors="replace")
+    archive_returncode = archive_process.wait()
+
+    if archive_returncode != 0:
+        error = archive_stderr.strip() or f"git archive failed for ref={ref}"
+        raise RuntimeError(error)
+    if untar_process.returncode != 0:
+        error = untar_process.stderr.strip() or "tar extraction failed"
+        raise RuntimeError(error)
+
+    extracted = destination_root / grug_root
+    if not extracted.is_dir():
+        raise RuntimeError(f"Expected extracted directory at {extracted}")
+    return extracted
 
 
 def _line_cache_get(path: Path, cache: dict[Path, list[str]]) -> list[str]:
@@ -150,49 +195,55 @@ def build_manifest(
     head_variants = list_variants_at_ref(ref=head_sha)
     added_variants = sorted(head_variants - base_variants)
 
-    candidate_names = sorted(base_variants | {"base"})
-    candidate_dirs = {name: GRUG_ROOT / name for name in candidate_names if (GRUG_ROOT / name).is_dir()}
-
     reports: list[dict[str, object]] = []
-
-    for variant_name in added_variants:
-        variant_dir = GRUG_ROOT / variant_name
-        if not variant_dir.is_dir():
-            continue
-
-        closest = find_closest_variant(
-            variant_dir=variant_dir,
-            candidate_dirs=candidate_dirs,
-            extensions=extensions,
+    with tempfile.TemporaryDirectory(prefix="grug-base-snapshot-") as tmpdir:
+        snapshot_root = Path(tmpdir)
+        base_grug_root = materialize_grug_tree_at_ref(
+            ref=base_sha,
+            destination_root=snapshot_root,
+            grug_root=GRUG_ROOT,
         )
+        candidate_names = sorted(base_variants | {"base"})
+        candidate_dirs = {name: base_grug_root / name for name in candidate_names if (base_grug_root / name).is_dir()}
 
-        report_dir = output_dir / variant_name
-        index_path, entries = build_directory_diff_report(
-            left_dir=GRUG_ROOT / closest.closest_variant,
-            right_dir=variant_dir,
-            output_dir=report_dir,
-            extensions=extensions,
-            include_all_files=False,
-            show_unchanged=False,
-            context_lines=context_lines,
-        )
+        for variant_name in added_variants:
+            variant_dir = GRUG_ROOT / variant_name
+            if not variant_dir.is_dir():
+                continue
 
-        status_counts = {
-            "changed": sum(1 for entry in entries if entry.status == "changed"),
-            "added": sum(1 for entry in entries if entry.status == "added"),
-            "removed": sum(1 for entry in entries if entry.status == "removed"),
-            "unchanged": sum(1 for entry in entries if entry.status == "unchanged"),
-        }
+            closest = find_closest_variant(
+                variant_dir=variant_dir,
+                candidate_dirs=candidate_dirs,
+                extensions=extensions,
+            )
 
-        reports.append(
-            {
-                "variant": variant_name,
-                "closest_variant": closest.closest_variant,
-                "distance_score": closest.distance_score,
-                "report_relpath": index_path.relative_to(output_dir).as_posix(),
-                "status_counts": status_counts,
+            report_dir = output_dir / variant_name
+            index_path, entries = build_directory_diff_report(
+                left_dir=candidate_dirs[closest.closest_variant],
+                right_dir=variant_dir,
+                output_dir=report_dir,
+                extensions=extensions,
+                include_all_files=False,
+                show_unchanged=False,
+                context_lines=context_lines,
+            )
+
+            status_counts = {
+                "changed": sum(1 for entry in entries if entry.status == "changed"),
+                "added": sum(1 for entry in entries if entry.status == "added"),
+                "removed": sum(1 for entry in entries if entry.status == "removed"),
+                "unchanged": sum(1 for entry in entries if entry.status == "unchanged"),
             }
-        )
+
+            reports.append(
+                {
+                    "variant": variant_name,
+                    "closest_variant": closest.closest_variant,
+                    "distance_score": closest.distance_score,
+                    "report_relpath": index_path.relative_to(output_dir).as_posix(),
+                    "status_counts": status_counts,
+                }
+            )
 
     return {
         "base_sha": base_sha,
@@ -201,24 +252,6 @@ def build_manifest(
         "report_count": len(reports),
         "reports": reports,
     }
-
-
-def parse_extensions(raw_extensions: str) -> tuple[str, ...]:
-    """Normalize comma-separated extensions into lowercase dot-prefixed values."""
-    normalized: list[str] = []
-    for token in raw_extensions.split(","):
-        extension = token.strip().lower()
-        if not extension:
-            continue
-        if not extension.startswith("."):
-            extension = f".{extension}"
-        if extension not in normalized:
-            normalized.append(extension)
-
-    if not normalized:
-        raise ValueError("At least one extension is required")
-
-    return tuple(normalized)
 
 
 def parse_args() -> argparse.Namespace:
