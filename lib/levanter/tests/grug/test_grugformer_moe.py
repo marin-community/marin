@@ -2,28 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
+import pytest
 
 import jax
 import jax.numpy as jnp
+from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
-from jax._src import config as jax_config
-
-from levanter.grug.attention import AttentionMask
-from levanter.grug.grug_moe import GrugMoeModelConfig, Transformer, moe_mlp
+from levanter.grug.grug_moe import moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
-
-
-def _make_moe_mesh() -> Mesh:
-    devices = jax.devices()
-    if not devices:
-        raise RuntimeError("No JAX devices available")
-    mesh_devices = np.array(devices).reshape(len(devices), 1, 1)
-    return Mesh(
-        mesh_devices,
-        axis_names=("data", "expert", "model"),
-        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
-    )
 
 
 def _make_dense_mesh() -> Mesh:
@@ -35,6 +22,18 @@ def _make_dense_mesh() -> Mesh:
         mesh_devices,
         axis_names=("data", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+
+
+def _make_ep_mesh_or_none() -> Mesh | None:
+    devices = jax.devices()
+    if len(devices) < 2 or len(devices) % 2 != 0:
+        return None
+    mesh_devices = np.array(devices).reshape(len(devices) // 2, 2, 1)
+    return Mesh(
+        mesh_devices,
+        axis_names=("data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
     )
 
 
@@ -56,182 +55,184 @@ class _reset_abstract_mesh:
         return False
 
 
-def test_moe_forward_shapes_and_jit_compile_with_ep_mesh():
-    seq = 128 if jax.default_backend() == "tpu" else 8
-    batch = len(jax.devices()) * 2
-    cfg = GrugMoeModelConfig(
-        vocab_size=101,
-        hidden_dim=32,
-        intermediate_dim=64,
-        shared_expert_intermediate_dim=32,
-        num_experts=4,
-        num_experts_per_token=2,
-        num_layers=1,
-        num_heads=4,
-        num_kv_heads=4,
-        max_seq_len=seq,
-    )
+def _make_inputs(
+    *,
+    key: jax.Array,
+    tokens: int,
+    hidden_dim: int,
+    intermediate_dim: int,
+    num_experts: int,
+    topk: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    k_x, k_sel, k_logits, k_w13, k_w2 = jax.random.split(key, 5)
+    x = jax.random.normal(k_x, (tokens, hidden_dim), dtype=jnp.float32)
+    selected_experts = jax.random.randint(k_sel, (tokens, topk), 0, num_experts, dtype=jnp.int32)
+    combine_logits = jax.random.normal(k_logits, (tokens, topk), dtype=jnp.float32)
+    combine_weights = jax.nn.softmax(combine_logits, axis=-1)
+    w_up_gate = jax.random.normal(k_w13, (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32)
+    w_down = jax.random.normal(k_w2, (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32)
+    return x, selected_experts, combine_weights, w_up_gate, w_down
 
-    mesh = _make_moe_mesh()
+
+def test_moe_mlp_runs_without_ep_axis():
+    mesh = _make_dense_mesh()
+    tokens = max(8, len(jax.devices()) * 8)
+    hidden_dim = 32
+    intermediate_dim = 64
+    num_experts = 4
+    topk = 2
+
     with jax.set_mesh(mesh):
-        model = Transformer.init(cfg, key=jax.random.key(0))
-        tokens = jax.random.randint(jax.random.key(1), (batch, seq), 0, cfg.vocab_size)
+        x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+            key=jax.random.key(0),
+            tokens=tokens,
+            hidden_dim=hidden_dim,
+            intermediate_dim=intermediate_dim,
+            num_experts=num_experts,
+            topk=topk,
+        )
 
-        logits = model.logits(tokens, mask=AttentionMask.causal())
-        assert logits.shape == (batch, seq, cfg.vocab_size)
+        out = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation=ActivationFunctionEnum.silu,
+            mesh=None,
+        )
+        assert out.shape == (tokens, hidden_dim)
+        assert jnp.isfinite(out).all()
 
-        jit_forward = jax.jit(lambda m, t: m.logits(t, mask=AttentionMask.causal()))
-        logits_jit = jit_forward(model, tokens)
-        assert logits_jit.shape == logits.shape
+        jit_fn = jax.jit(
+            lambda x, sel, cw, up_gate, down: moe_mlp(
+                x, sel, cw, up_gate, down, activation=ActivationFunctionEnum.silu, mesh=None
+            )
+        )
+        out_jit = jit_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        np.testing.assert_allclose(np.asarray(out), np.asarray(out_jit), rtol=1e-5, atol=1e-5)
 
 
 def test_moe_ring_ep_path_lowers_on_abstract_mesh():
-    cfg = GrugMoeModelConfig(
-        vocab_size=128,
-        hidden_dim=64,
-        intermediate_dim=128,
-        shared_expert_intermediate_dim=64,
-        num_experts=4,
-        num_experts_per_token=2,
-        num_layers=1,
-        num_heads=4,
-        num_kv_heads=4,
-        max_seq_len=128,
-    )
-
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
-    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        key = jax.ShapeDtypeStruct(shape=(2,), dtype=jnp.uint32, sharding=NamedSharding(mesh, P()))
-        model = jax.eval_shape(lambda k: Transformer.init(cfg, key=k), key)
 
-        batch = 8
-        seq = 128
-        tokens = jax.ShapeDtypeStruct(
-            shape=(batch, seq),
+    tokens = 16
+    hidden_dim = 32
+    intermediate_dim = 64
+    num_experts = 4
+    topk = 2
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        x = jax.ShapeDtypeStruct(
+            shape=(tokens, hidden_dim),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P(("data", "expert"), None)),
+        )
+        selected_experts = jax.ShapeDtypeStruct(
+            shape=(tokens, topk),
             dtype=jnp.int32,
             sharding=NamedSharding(mesh, P(("data", "expert"), None)),
         )
+        combine_weights = jax.ShapeDtypeStruct(
+            shape=(tokens, topk),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P(("data", "expert"), None)),
+        )
+        w_up_gate = jax.ShapeDtypeStruct(
+            shape=(num_experts, hidden_dim, 2 * intermediate_dim),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+        w_down = jax.ShapeDtypeStruct(
+            shape=(num_experts, intermediate_dim, hidden_dim),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
 
-        def f(m, token_ids):
-            return m.logits(token_ids, mask=AttentionMask.causal())
+        def f(x, sel, cw, up_gate, down):
+            return moe_mlp(
+                x,
+                sel,
+                cw,
+                up_gate,
+                down,
+                activation=ActivationFunctionEnum.silu,
+                mesh=mesh,
+            )
 
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
-        lowered = jax.jit(f).trace(model, tokens).lower(lowering_platforms=(platform,))
+        lowered = (
+            jax.jit(f)
+            .trace(x, selected_experts, combine_weights, w_up_gate, w_down)
+            .lower(lowering_platforms=(platform,))
+        )
         assert lowered is not None
 
 
-def test_moe_forward_runs_without_ep_axis():
-    seq = 128 if jax.default_backend() == "tpu" else 8
-    batch = len(jax.devices()) * 2
-    cfg = GrugMoeModelConfig(
-        vocab_size=97,
-        hidden_dim=32,
-        intermediate_dim=64,
-        shared_expert_intermediate_dim=32,
-        num_experts=4,
-        num_experts_per_token=2,
-        num_layers=1,
-        num_heads=4,
-        num_kv_heads=4,
-        max_seq_len=seq,
-    )
+def test_moe_mlp_runs_with_ep_axis_when_available():
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires an even number of >=2 devices")
 
-    mesh = _make_dense_mesh()
+    tokens = len(jax.devices()) * 8
+    hidden_dim = 32
+    intermediate_dim = 64
+    num_experts = 4
+    topk = 2
+
     with jax.set_mesh(mesh):
-        model = Transformer.init(cfg, key=jax.random.key(2))
-        tokens = jax.random.randint(jax.random.key(3), (batch, seq), 0, cfg.vocab_size)
-        logits = model.logits(tokens, mask=AttentionMask.causal())
-        assert logits.shape == (batch, seq, cfg.vocab_size)
+        x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+            key=jax.random.key(1),
+            tokens=tokens,
+            hidden_dim=hidden_dim,
+            intermediate_dim=intermediate_dim,
+            num_experts=num_experts,
+            topk=topk,
+        )
+
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x = jax.sharding.reshard(x, batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+        w_down = jax.sharding.reshard(w_down, expert_sharding)
+
+        out = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation=ActivationFunctionEnum.silu,
+            mesh=None,
+        )
+        assert out.shape == (tokens, hidden_dim)
+        assert jnp.isfinite(out).all()
 
 
-def test_moe_loss_fn_runs():
-    seq = 128 if jax.default_backend() == "tpu" else 8
-    batch = len(jax.devices())
-    cfg = GrugMoeModelConfig(
-        vocab_size=89,
-        hidden_dim=32,
-        intermediate_dim=64,
-        shared_expert_intermediate_dim=32,
-        num_experts=4,
-        num_experts_per_token=2,
-        num_layers=1,
-        num_heads=4,
-        num_kv_heads=4,
-        max_seq_len=seq,
+def test_functional_moe_mlp_accepts_enum_and_callable_activation():
+    tokens = 16
+    hidden_dim = 16
+    intermediate_dim = 24
+    num_experts = 8
+    topk = 2
+
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(2),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
     )
-
-    mesh = _make_moe_mesh()
-    with jax.set_mesh(mesh):
-        model = Transformer.init(cfg, key=jax.random.key(4))
-        tokens = jax.random.randint(jax.random.key(5), (batch, seq), 0, cfg.vocab_size)
-        weights = jnp.ones((batch, seq), dtype=jnp.float32).at[:, -1].set(0)
-
-        loss = model.next_token_loss(tokens, weights, mask=AttentionMask.causal(), reduction="mean")
-        assert jnp.isfinite(loss)
-        assert loss.shape == ()
-
-
-def test_moe_without_shared_expert_uses_none_weights():
-    seq = 128 if jax.default_backend() == "tpu" else 8
-    batch = len(jax.devices())
-    cfg = GrugMoeModelConfig(
-        vocab_size=73,
-        hidden_dim=32,
-        intermediate_dim=64,
-        shared_expert_intermediate_dim=0,
-        num_experts=4,
-        num_experts_per_token=2,
-        num_layers=1,
-        num_heads=4,
-        num_kv_heads=4,
-        max_seq_len=seq,
-    )
-
-    mesh = _make_dense_mesh()
-    with jax.set_mesh(mesh):
-        model = Transformer.init(cfg, key=jax.random.key(6))
-        assert model.blocks[0].mlp.shared_w13 is None
-        assert model.blocks[0].mlp.shared_w2 is None
-
-        tokens = jax.random.randint(jax.random.key(7), (batch, seq), 0, cfg.vocab_size)
-        logits = model.logits(tokens, mask=AttentionMask.causal())
-        assert logits.shape == (batch, seq, cfg.vocab_size)
-
-
-def test_functional_moe_mlp_accepts_literal_and_callable_activation():
-    cfg = GrugMoeModelConfig(
-        vocab_size=67,
-        hidden_dim=16,
-        intermediate_dim=24,
-        shared_expert_intermediate_dim=0,
-        num_experts=8,
-        num_experts_per_token=2,
-        num_layers=1,
-        num_heads=4,
-        num_kv_heads=4,
-        max_seq_len=8,
-    )
-    batch = 4
-    seq = 4
-    x = jax.random.normal(jax.random.key(13), (batch * seq, cfg.hidden_dim), dtype=jnp.float32)
-    w13 = jax.random.normal(
-        jax.random.key(15), (cfg.num_experts, cfg.hidden_dim, 2 * cfg.intermediate_dim), dtype=jnp.float32
-    )
-    w2 = jax.random.normal(
-        jax.random.key(16), (cfg.num_experts, cfg.intermediate_dim, cfg.hidden_dim), dtype=jnp.float32
-    )
-    selected_experts = jax.random.randint(
-        jax.random.key(17), (batch * seq, cfg.num_experts_per_token), 0, cfg.num_experts, dtype=jnp.int32
-    )
-    combine_logits = jax.random.normal(jax.random.key(18), (batch * seq, cfg.num_experts_per_token), dtype=jnp.float32)
-    combine_weights = jax.nn.softmax(combine_logits, axis=-1)
 
     y_enum = moe_mlp(
         x,
         selected_experts,
         combine_weights,
-        w13,
-        w2,
+        w_up_gate,
+        w_down,
         activation=ActivationFunctionEnum.silu,
         mesh=None,
     )
@@ -239,9 +240,29 @@ def test_functional_moe_mlp_accepts_literal_and_callable_activation():
         x,
         selected_experts,
         combine_weights,
-        w13,
-        w2,
+        w_up_gate,
+        w_down,
         activation=lambda t: jax.nn.silu(t),
         mesh=None,
     )
     np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
+
+
+def test_moe_mlp_validates_shapes():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(3),
+        tokens=16,
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_experts=4,
+        topk=2,
+    )
+
+    with pytest.raises(ValueError, match="identical \\[T, K\\] shapes"):
+        moe_mlp(x, selected_experts, combine_weights[:, :1], w_up_gate, w_down, mesh=None)
+
+    with pytest.raises(ValueError, match="must match x token dim"):
+        moe_mlp(x[:-1], selected_experts, combine_weights, w_up_gate, w_down, mesh=None)
+
+    with pytest.raises(ValueError, match="must match w_up_gate expert dimension"):
+        moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down[:-1], mesh=None)

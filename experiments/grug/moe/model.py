@@ -1,6 +1,13 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""MoE grug variant model.
+
+This variant intentionally mirrors `experiments/grug/base/model.py` and applies
+MoE-specific changes inline. Keeping the file largely self-contained follows the
+grug copy-first workflow in `docs/recipes/change_grug.md`.
+"""
+
 import dataclasses
 
 from dataclasses import dataclass
@@ -191,6 +198,9 @@ class MoEMLP(eqx.Module):
         shared_w_up_gate = None
         shared_w_down = None
         if j > 0:
+            # Keep shared expert weights replicated in this compact variant.
+            # This avoids introducing additional sharding/layout complexity
+            # while we iterate on routed-expert behavior.
             shared_w_up_gate = reshard(_init_weight(k_shared_up_gate, (d, 2 * j), cfg.initializer_std), P(None, None))
             shared_w_down = reshard(_init_weight(k_shared_down, (j, d), cfg.initializer_std), P(None, None))
 

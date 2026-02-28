@@ -194,7 +194,7 @@ class Transformer(eqx.Module):
         hidden = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=Pbatch)
 
-    def compute_next_token_loss(
+    def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
         loss_weight: Float[Array, "B S"],

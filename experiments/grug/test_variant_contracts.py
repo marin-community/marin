@@ -64,14 +64,6 @@ class _reset_abstract_mesh:
         return False
 
 
-def _infer_loss_fn_name(params) -> str:
-    if hasattr(params, "compute_next_token_loss"):
-        return "compute_next_token_loss"
-    if hasattr(params, "next_token_loss"):
-        return "next_token_loss"
-    raise AssertionError("Transformer variant must define either compute_next_token_loss or next_token_loss")
-
-
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_file("model.py"),
@@ -96,20 +88,14 @@ def test_grug_variant_loss_lowers_on_abstract_mesh(variant: str):
             return transformer_cls.init(cfg, key=k)
 
         params = jax.eval_shape(init_model, key)
-        loss_fn_name = _infer_loss_fn_name(params)
+        if not hasattr(params, "next_token_loss"):
+            raise AssertionError(f"{module_name}.Transformer must define next_token_loss")
 
         def loss_fn(p):
             token_ids = jnp.zeros((8, seq), dtype=jnp.int32)
             token_ids = jax.sharding.reshard(token_ids, token_pspec)
             loss_weight = jnp.ones((8, seq), dtype=jnp.float32)
             loss_weight = jax.sharding.reshard(loss_weight, token_pspec)
-            if loss_fn_name == "compute_next_token_loss":
-                return p.compute_next_token_loss(
-                    token_ids,
-                    loss_weight,
-                    mask=GrugAttentionMask.causal(),
-                    reduction="mean",
-                )
             return p.next_token_loss(
                 token_ids,
                 loss_weight,
@@ -126,7 +112,7 @@ def test_grug_variant_loss_lowers_on_abstract_mesh(variant: str):
 class DummyModel(eqx.Module):
     w: jax.Array
 
-    def compute_next_token_loss(
+    def next_token_loss(
         self,
         token_ids: jax.Array,
         loss_weight: jax.Array,
@@ -137,23 +123,6 @@ class DummyModel(eqx.Module):
     ) -> jax.Array:
         del token_ids, loss_weight, mask, reduction, logsumexp_weight
         return jnp.mean(jnp.square(self.w))
-
-    def next_token_loss(
-        self,
-        token_ids: jax.Array,
-        loss_weight: jax.Array,
-        *,
-        mask=None,
-        reduction: str = "mean",
-        logsumexp_weight: float | None = None,
-    ) -> jax.Array:
-        return self.compute_next_token_loss(
-            token_ids,
-            loss_weight,
-            mask=mask,
-            reduction=reduction,
-            logsumexp_weight=logsumexp_weight,
-        )
 
 
 def _build_state(train_state_cls, params: DummyModel, optimizer: optax.GradientTransformation):
