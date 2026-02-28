@@ -13,7 +13,7 @@ import yaml
 from fray.v2.types import get_tpu_topology
 
 # Cluster configuration constants and templates
-LATEST = "20260129"  # The latest docker tag used for the clusters
+LATEST = "b85633e"  # The latest docker tag used for the clusters
 LATEST_VLLM = "20251209"
 DOCKER_TAG_TESTING = "latest"
 DEFAULT_IMAGE_NAME = "marin_cluster"
