@@ -180,7 +180,8 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
 
 
-def test_fused_cross_entropy_pallas_requires_tpu():
+@pytest.mark.parametrize("implementation", ["pallas_tpu", "linear_ce_tpu"])
+def test_fused_cross_entropy_pallas_requires_tpu(implementation: str):
     if jax.default_backend() == "tpu":
         pytest.skip("requires non-TPU backend")
 
@@ -194,7 +195,7 @@ def test_fused_cross_entropy_pallas_requires_tpu():
             y,
             w,
             reduction=None,
-            implementation="pallas_tpu",
+            implementation=implementation,
         )
 
 
@@ -868,3 +869,45 @@ def test_fused_cross_entropy_pallas_fori_split_fullh_backward_matches_xla(monkey
     # This mode uses a benchmark-only forward schedule but should preserve CE gradients.
     assert jnp.allclose(gx_pallas, gx_xla, atol=1e-4, rtol=1e-4)
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
+
+
+def test_fused_cross_entropy_linear_ce_tpu_backward_matches_xla():
+    if jax.default_backend() != "tpu":
+        pytest.skip("requires TPU backend")
+
+    hidden, vocab, batch = 256, 2048, 512
+    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    key = jax.random.PRNGKey(37)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+    x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
+
+    def loss_linear_ce(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation="linear_ce_tpu",
+        )
+
+    def loss_xla(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation="xla",
+        )
+
+    gx_linear_ce, gw_linear_ce = jax.grad(loss_linear_ce, argnums=(0, 1))(x, w)
+    gx_xla, gw_xla = jax.grad(loss_xla, argnums=(0, 1))(x, w)
+
+    assert jnp.allclose(gx_linear_ce, gx_xla, atol=1e-4, rtol=1e-4)
+    assert jnp.allclose(gw_linear_ce, gw_xla, atol=1e-4, rtol=1e-4)

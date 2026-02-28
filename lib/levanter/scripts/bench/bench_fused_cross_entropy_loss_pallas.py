@@ -36,6 +36,7 @@ _FWD_INLINE_LABEL_TAKE_ENV = "LEVANTER_PALLAS_TPU_FWD_INLINE_LABEL_TAKE_BENCH"
 _FWD_LSE_FORI_LOOP_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_FORI_LOOP_BENCH"
 _FWD_LSE_FORI_V_MULT_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_FORI_V_MULT_BENCH"
 _FWD_LSE_STORE_PATH_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_STORE_PATH_BENCH"
+_BWD_USE_XLA_STREAMING_ENV = "LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +56,7 @@ class BenchVariant:
     fwd_lse_fori_loop: bool = False
     fwd_lse_fori_v_mult: int = 4
     fwd_lse_store_path: bool = False
+    bwd_use_xla_streaming: bool = False
 
 
 def _estimate_v5p_roofline(
@@ -156,6 +158,7 @@ def _variant_env(variant: BenchVariant):
         _FWD_LSE_FORI_LOOP_ENV: os.environ.get(_FWD_LSE_FORI_LOOP_ENV),
         _FWD_LSE_FORI_V_MULT_ENV: os.environ.get(_FWD_LSE_FORI_V_MULT_ENV),
         _FWD_LSE_STORE_PATH_ENV: os.environ.get(_FWD_LSE_STORE_PATH_ENV),
+        _BWD_USE_XLA_STREAMING_ENV: os.environ.get(_BWD_USE_XLA_STREAMING_ENV),
     }
     updates = {
         _DISABLE_MEGACORE_ENV: "1" if variant.disable_megacore else None,
@@ -171,6 +174,7 @@ def _variant_env(variant: BenchVariant):
         _FWD_LSE_FORI_LOOP_ENV: "1" if variant.fwd_lse_fori_loop else None,
         _FWD_LSE_FORI_V_MULT_ENV: str(variant.fwd_lse_fori_v_mult) if variant.fwd_lse_fori_loop else None,
         _FWD_LSE_STORE_PATH_ENV: "1" if variant.fwd_lse_store_path else None,
+        _BWD_USE_XLA_STREAMING_ENV: "1" if variant.bwd_use_xla_streaming else None,
     }
 
     try:
@@ -380,6 +384,23 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
                         fwd_lse_store_path=True,
                     )
                 )
+            if (
+                args.compare_fwd_full_h_dot
+                and args.compare_fwd_split_label_dot
+                and args.compare_fwd_lse_fori_loop
+                and args.compare_bwd_use_xla_streaming
+            ):
+                variants.append(
+                    BenchVariant(
+                        name="pallas_fwd_full_h_dot_split_label_dot_lse_fori_loop_bwd_xla_streaming",
+                        implementation="pallas_tpu",
+                        fwd_full_h_dot=True,
+                        fwd_split_label_dot=True,
+                        fwd_lse_fori_loop=True,
+                        fwd_lse_fori_v_mult=args.fwd_lse_fori_v_mult,
+                        bwd_use_xla_streaming=True,
+                    )
+                )
         else:
             variants.append(BenchVariant(name=args.implementation, implementation=args.implementation))
 
@@ -404,6 +425,7 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
             fwd_lse_fori_loop=args.fwd_lse_fori_loop if args.implementation == "pallas_tpu" else False,
             fwd_lse_fori_v_mult=args.fwd_lse_fori_v_mult if args.implementation == "pallas_tpu" else 4,
             fwd_lse_store_path=args.fwd_lse_store_path if args.implementation == "pallas_tpu" else False,
+            bwd_use_xla_streaming=args.bwd_use_xla_streaming if args.implementation == "pallas_tpu" else False,
         )
     ]
 
@@ -574,6 +596,7 @@ def main() -> None:
     parser.add_argument("--fwd-lse-fori-loop", action="store_true")
     parser.add_argument("--fwd-lse-fori-v-mult", type=int, default=4)
     parser.add_argument("--fwd-lse-store-path", action="store_true")
+    parser.add_argument("--bwd-use-xla-streaming", action="store_true")
     parser.add_argument("--variant-sweep", action="store_true")
     parser.add_argument("--compare-xla", action="store_true")
     parser.add_argument("--compare-no-label-logits", action="store_true")
@@ -587,6 +610,7 @@ def main() -> None:
     parser.add_argument("--compare-fwd-inline-label-take", action="store_true")
     parser.add_argument("--compare-fwd-lse-fori-loop", action="store_true")
     parser.add_argument("--compare-fwd-lse-store-path", action="store_true")
+    parser.add_argument("--compare-bwd-use-xla-streaming", action="store_true")
     parser.add_argument("--forward-only", action="store_true")
     args = parser.parse_args()
 
@@ -602,14 +626,6 @@ def main() -> None:
         raise ValueError("--fwd-dot-accum-bf16 is benchmark-only and requires --forward-only.")
     if args.compare_fwd_dot_accum_bf16 and not args.forward_only:
         raise ValueError("--compare-fwd-dot-accum-bf16 requires --forward-only.")
-    if args.fwd_full_h_dot and not args.forward_only:
-        raise ValueError("--fwd-full-h-dot is benchmark-only and requires --forward-only.")
-    if args.compare_fwd_full_h_dot and not args.forward_only:
-        raise ValueError("--compare-fwd-full-h-dot requires --forward-only.")
-    if args.fwd_split_label_dot and not args.forward_only:
-        raise ValueError("--fwd-split-label-dot is benchmark-only and requires --forward-only.")
-    if args.compare_fwd_split_label_dot and not args.forward_only:
-        raise ValueError("--compare-fwd-split-label-dot requires --forward-only.")
     if args.fwd_split_label_bf16_mul and not args.forward_only:
         raise ValueError("--fwd-split-label-bf16-mul is benchmark-only and requires --forward-only.")
     if args.compare_fwd_split_label_bf16_mul and not args.forward_only:
@@ -638,10 +654,6 @@ def main() -> None:
         raise ValueError("--compare-fwd-inline-label-take requires --forward-only.")
     if args.fwd_inline_label_take and args.fwd_split_label_dot:
         raise ValueError("--fwd-inline-label-take is incompatible with --fwd-split-label-dot.")
-    if args.fwd_lse_fori_loop and not args.forward_only:
-        raise ValueError("--fwd-lse-fori-loop is benchmark-only and requires --forward-only.")
-    if args.compare_fwd_lse_fori_loop and not args.forward_only:
-        raise ValueError("--compare-fwd-lse-fori-loop requires --forward-only.")
     if args.compare_fwd_lse_fori_loop and not args.compare_fwd_full_h_dot:
         raise ValueError("--compare-fwd-lse-fori-loop requires --compare-fwd-full-h-dot.")
     if args.compare_fwd_lse_fori_loop and not args.compare_fwd_split_label_dot:
@@ -652,10 +664,10 @@ def main() -> None:
         raise ValueError("--fwd-lse-fori-loop currently requires --fwd-full-h-dot.")
     if args.fwd_lse_fori_loop and not args.fwd_split_label_dot:
         raise ValueError("--fwd-lse-fori-loop currently requires --fwd-split-label-dot.")
-    if args.fwd_lse_store_path and not args.forward_only:
-        raise ValueError("--fwd-lse-store-path is benchmark-only and requires --forward-only.")
-    if args.compare_fwd_lse_store_path and not args.forward_only:
-        raise ValueError("--compare-fwd-lse-store-path requires --forward-only.")
+    if args.bwd_use_xla_streaming and args.forward_only:
+        raise ValueError("--bwd-use-xla-streaming requires non-forward-only benchmark mode.")
+    if args.compare_bwd_use_xla_streaming and args.forward_only:
+        raise ValueError("--compare-bwd-use-xla-streaming requires non-forward-only benchmark mode.")
 
     print("devices:", jax.devices())
 
@@ -735,6 +747,7 @@ def main() -> None:
             "fwd_lse_fori_loop": int(variant.fwd_lse_fori_loop),
             "fwd_lse_fori_v_mult": int(variant.fwd_lse_fori_v_mult),
             "fwd_lse_store_path": int(variant.fwd_lse_store_path),
+            "bwd_use_xla_streaming": int(variant.bwd_use_xla_streaming),
             "b_block_size": int(block_sizes.b_block_size) if block_sizes is not None else -1,
             "h_block_size": int(block_sizes.h_block_size) if block_sizes is not None else -1,
             "v_block_size": int(block_sizes.v_block_size) if block_sizes is not None else -1,
@@ -802,6 +815,7 @@ def main() -> None:
         print("fwd_lse_fori_loop", int(variant.fwd_lse_fori_loop))
         print("fwd_lse_fori_v_mult", int(variant.fwd_lse_fori_v_mult))
         print("fwd_lse_store_path", int(variant.fwd_lse_store_path))
+        print("bwd_use_xla_streaming", int(variant.bwd_use_xla_streaming))
         print("b_block_size", result["b_block_size"])
         print("h_block_size", result["h_block_size"])
         print("v_block_size", result["v_block_size"])

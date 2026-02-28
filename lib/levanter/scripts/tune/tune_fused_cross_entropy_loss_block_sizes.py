@@ -63,7 +63,7 @@ def _parse_args() -> argparse.Namespace:
         "--implementation",
         type=str,
         default="pallas_tpu",
-        choices=("pallas_tpu", "xla", "reference"),
+        choices=("pallas_tpu", "linear_ce_tpu", "xla", "reference"),
         help="Kernel backend implementation to benchmark.",
     )
     parser.add_argument("--input-dtype", type=str, default="bfloat16", help="Input dtype for x and w.")
@@ -490,14 +490,6 @@ def main() -> None:
         raise ValueError("--fwd-dot-accum-bf16 is benchmark-only and requires --forward-only.")
     if args.compare_fwd_dot_accum_bf16 and not args.forward_only:
         raise ValueError("--compare-fwd-dot-accum-bf16 requires --forward-only.")
-    if args.fwd_full_h_dot and not args.forward_only:
-        raise ValueError("--fwd-full-h-dot is benchmark-only and requires --forward-only.")
-    if args.compare_fwd_full_h_dot and not args.forward_only:
-        raise ValueError("--compare-fwd-full-h-dot requires --forward-only.")
-    if args.fwd_split_label_dot and not args.forward_only:
-        raise ValueError("--fwd-split-label-dot is benchmark-only and requires --forward-only.")
-    if args.compare_fwd_split_label_dot and not args.forward_only:
-        raise ValueError("--compare-fwd-split-label-dot requires --forward-only.")
     if args.fwd_split_label_bf16_mul and not args.forward_only:
         raise ValueError("--fwd-split-label-bf16-mul is benchmark-only and requires --forward-only.")
     if args.compare_fwd_split_label_bf16_mul and not args.forward_only:
@@ -522,18 +514,10 @@ def main() -> None:
         raise ValueError("--fwd-inline-label-take is benchmark-only and requires --forward-only.")
     if args.compare_fwd_inline_label_take and not args.forward_only:
         raise ValueError("--compare-fwd-inline-label-take requires --forward-only.")
-    if args.fwd_lse_fori_loop and not args.forward_only:
-        raise ValueError("--fwd-lse-fori-loop is benchmark-only and requires --forward-only.")
-    if args.compare_fwd_lse_fori_loop and not args.forward_only:
-        raise ValueError("--compare-fwd-lse-fori-loop requires --forward-only.")
     if args.compare_fwd_lse_fori_loop and not args.compare_fwd_full_h_dot:
         raise ValueError("--compare-fwd-lse-fori-loop requires --compare-fwd-full-h-dot.")
     if args.compare_fwd_lse_fori_loop and not args.compare_fwd_split_label_dot:
         raise ValueError("--compare-fwd-lse-fori-loop requires --compare-fwd-split-label-dot.")
-    if args.fwd_lse_store_path and not args.forward_only:
-        raise ValueError("--fwd-lse-store-path is benchmark-only and requires --forward-only.")
-    if args.compare_fwd_lse_store_path and not args.forward_only:
-        raise ValueError("--compare-fwd-lse-store-path requires --forward-only.")
     if args.fwd_inline_label_scalar and args.fwd_split_label_dot:
         raise ValueError("--fwd-inline-label-scalar is incompatible with --fwd-split-label-dot.")
     if args.fwd_inline_label_take and args.fwd_split_label_dot:
@@ -626,7 +610,9 @@ def main() -> None:
             # Env vars affect compile-time kernel behavior, so force retrace.
             jax.clear_caches()
 
-        variant_configs = pallas_configs if variant.implementation == "pallas_tpu" else [("none", None)]
+        variant_configs = (
+            pallas_configs if variant.implementation in ("pallas_tpu", "linear_ce_tpu") else [("none", None)]
+        )
         with _variant_env(variant):
             for label, cfg in variant_configs:
                 print("variant", variant.name, variant.implementation, label, cfg)

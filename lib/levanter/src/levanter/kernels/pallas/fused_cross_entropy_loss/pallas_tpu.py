@@ -6,6 +6,7 @@
 # Levanter's API and add optional logsumexp penalty, logit soft-cap, and
 # external loss weighting support.
 
+from contextlib import contextmanager
 from functools import lru_cache, partial
 import math
 import os
@@ -19,9 +20,10 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
-from .tuned_block_sizes import requires_tpu_label_layout_1024
+from .tuned_block_sizes import infer_xla_v_block_size, requires_tpu_label_layout_1024
 from ..cost_estimate_utils import with_io_bytes_accessed
 from .reference import linear_softmax_cross_entropy_loss_reference
+from .xla import _linear_softmax_cross_entropy_loss_streaming_bwd
 
 
 class PallasUnsupportedError(NotImplementedError):
@@ -44,6 +46,7 @@ _FWD_LSE_NO_REPEAT_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_NO_REPEAT_BENCH"
 _FWD_LSE_FORI_LOOP_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_FORI_LOOP_BENCH"
 _FWD_LSE_FORI_V_MULT_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_FORI_V_MULT_BENCH"
 _FWD_LSE_STORE_PATH_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_STORE_PATH_BENCH"
+_BWD_USE_XLA_STREAMING_ENV = "LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH"
 
 
 def _fwd_cost_estimate(
@@ -343,6 +346,29 @@ def _fwd_lse_fori_v_mult_bench() -> int:
 def _use_fwd_lse_store_path_bench() -> bool:
     """Returns True when benchmark-only forward forces the one-pass LSE store path."""
     return os.environ.get(_FWD_LSE_STORE_PATH_ENV, "") == "1"
+
+
+def _use_bwd_xla_streaming_bench() -> bool:
+    """Returns True when benchmark-only backward uses XLA streaming backward."""
+    return os.environ.get(_BWD_USE_XLA_STREAMING_ENV, "") == "1"
+
+
+@contextmanager
+def _temporary_env(overrides: dict[str, str | None]):
+    previous = {key: os.environ.get(key) for key in overrides}
+    try:
+        for key, value in overrides.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _infer_core_grid(b_dim: int, block_sizes: BlockSizes) -> tuple[int, int]:
@@ -1664,6 +1690,7 @@ def _make_custom_vjp(
     dot_preferred_element_type: Optional[jnp.dtype],
     use_full_h_dot: bool,
     use_split_label_dot: bool,
+    use_bwd_xla_streaming: bool,
 ):
     block_sizes = BlockSizes(
         b_block_size=b_block_size,
@@ -1711,18 +1738,33 @@ def _make_custom_vjp(
         dout_loss = _zeros_like_if_needed(dout_loss, lse)
         dout_lse = _zeros_like_if_needed(dout_lse, lse)
 
-        x_grad, w_grad = linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
-            dout_loss,
-            dout_lse,
-            lse,
-            x,
-            labels,
-            w,
-            block_sizes=block_sizes,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        )
+        if use_bwd_xla_streaming:
+            xla_block_size = infer_xla_v_block_size(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
+            x_grad, w_grad = _linear_softmax_cross_entropy_loss_streaming_bwd(
+                x,
+                labels,
+                w,
+                lse,
+                dout_loss,
+                dout_lse,
+                block_size=xla_block_size,
+                dtype=dtype,
+                logit_soft_cap=logit_soft_cap,
+                precision=precision,
+            )
+        else:
+            x_grad, w_grad = linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
+                dout_loss,
+                dout_lse,
+                lse,
+                x,
+                labels,
+                w,
+                block_sizes=block_sizes,
+                dtype=dtype,
+                logit_soft_cap=logit_soft_cap,
+                precision=precision,
+            )
         labels_grad = jnp.zeros_like(labels)
         return x_grad, labels_grad, w_grad
 
@@ -1751,6 +1793,7 @@ def linear_softmax_cross_entropy_loss_pallas(
         xw_dtype = jnp.dtype(jnp.bfloat16)
     use_full_h_dot = _use_fwd_full_h_dot_bench()
     use_split_label_dot = _use_fwd_split_label_dot_bench() or _use_fwd_lse_store_path_bench()
+    use_bwd_xla_streaming = _use_bwd_xla_streaming_bench()
     dot_preferred_element_type: Optional[jnp.dtype] = jnp.float32
     if _use_fwd_dot_accum_bf16_bench():
         dot_preferred_element_type = None
@@ -1766,11 +1809,56 @@ def linear_softmax_cross_entropy_loss_pallas(
         dot_preferred_element_type,
         use_full_h_dot,
         use_split_label_dot,
+        use_bwd_xla_streaming,
     )
     return fn(x, labels, w)
 
 
+def linear_softmax_cross_entropy_loss_linear_ce_tpu(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    block_sizes: BlockSizes,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+    """Optimized TPU v4 linear CE path: pallas forward + XLA streaming backward."""
+    overrides = {
+        _FWD_FULL_H_DOT_ENV: "1",
+        _FWD_SPLIT_LABEL_DOT_ENV: "1",
+        _FWD_LSE_FORI_LOOP_ENV: "1",
+        _FWD_LSE_FORI_V_MULT_ENV: "4",
+        _BWD_USE_XLA_STREAMING_ENV: "1",
+        # Force-disable incompatible benchmark-only modes.
+        _SKIP_LABEL_LOGITS_ENV: None,
+        _FWD_XW_BF16_ENV: None,
+        _FWD_DOT_ACCUM_BF16_ENV: None,
+        _FWD_SPLIT_LABEL_BF16_MUL_ENV: None,
+        _FWD_SPLIT_LABEL_PALLAS_ENV: None,
+        _FWD_INLINE_LABEL_SCALAR_ENV: None,
+        _FWD_INLINE_LABEL_TAKE_ENV: None,
+        _FWD_LSE_SCALAR_ENV: None,
+        _FWD_LSE_NO_REPEAT_ENV: None,
+        _FWD_LSE_STORE_PATH_ENV: None,
+    }
+    with _temporary_env(overrides):
+        return linear_softmax_cross_entropy_loss_pallas(
+            x,
+            labels,
+            w,
+            block_sizes=block_sizes,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            return_argmax=return_argmax,
+        )
+
+
 __all__ = [
     "PallasUnsupportedError",
+    "linear_softmax_cross_entropy_loss_linear_ce_tpu",
     "linear_softmax_cross_entropy_loss_pallas",
 ]
