@@ -100,10 +100,7 @@ jobs:
               body += '🤖 No newly added `experiments/grug/<variant>/` directory was detected in this PR.';
             } else {
               body += '🤖 Grug variant diff report\n\n';
-
-              if (pagesPublished) {
-                body += `Rendered index: [Open report root](${pagesUrl}/)\n\n`;
-              } else {
+              if (!pagesPublished) {
                 body += 'Rendered GitHub Pages links were not published for this run.\n\n';
               }
 
