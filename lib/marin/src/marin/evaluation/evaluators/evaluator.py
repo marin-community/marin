@@ -1,6 +1,7 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -130,7 +131,15 @@ def launch_evaluate_with_ray(
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
         evaluator.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
+    # Capture env_vars in the closure so they're available on the TPU worker.
+    # Fray's runtime_env propagation through SliceActor -> TPUHostActor -> .options()
+    # does not reliably deliver env_vars to the final task process.
+    captured_env_vars = dict(env_vars) if env_vars else {}
+
     def _run() -> None:
+        os.environ["MARIN_DEVICE_TYPE"] = resource_config.device.kind
+        for k, v in captured_env_vars.items():
+            os.environ.setdefault(k, v)
         with remove_tpu_lockfile_on_exit():
             launch(model, evals, output_path, max_eval_instances, wandb_tags)
 
