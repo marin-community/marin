@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run --script
-# Copyright 2025 The Marin Authors
+# Copyright 2026 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
@@ -24,6 +24,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -78,6 +79,7 @@ class CheckResult:
 
 # Collects all failure output to print at the end.
 _check_results: list[CheckResult] = []
+ALLOW_LEGACY_LICENSE_HEADERS = False
 
 
 def run_cmd(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
@@ -152,6 +154,16 @@ def _record(name: str, exit_code: int, output: str = "") -> int:
     return exit_code
 
 
+def _template_with_previous_year(license_template: str) -> str | None:
+    match = re.search(r"(\bCopyright\s+)(\d{4})(\b)", license_template)
+    if not match:
+        return None
+
+    current_year = int(match.group(2))
+    previous_year = str(current_year - 1)
+    return f"{license_template[:match.start(2)]}{previous_year}{license_template[match.end(2):]}"
+
+
 def check_ruff(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
@@ -212,6 +224,11 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
 
     license_lines = [f"# {line}" if line else "#" for line in license_template.split("\n")]
     expected_header = "\n".join(license_lines) + "\n"
+    legacy_template = _template_with_previous_year(license_template)
+    legacy_expected_header = None
+    if legacy_template is not None:
+        legacy_lines = [f"# {line}" if line else "#" for line in legacy_template.split("\n")]
+        legacy_expected_header = "\n".join(legacy_lines) + "\n"
 
     files_without_header = []
     buf = io.StringIO()
@@ -237,17 +254,32 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
                 break
 
         comment_block = "\n".join(comment_lines)
-        if license_template not in comment_block:
+        has_current_header = license_template in comment_block
+        has_legacy_header = legacy_template is not None and legacy_template in comment_block
+        is_header_valid = has_current_header or (ALLOW_LEGACY_LICENSE_HEADERS and has_legacy_header)
+        if not is_header_valid:
             files_without_header.append(file_path)
 
             if fix:
                 has_shebang = content.startswith("#!")
+                shebang_line = ""
                 if has_shebang:
                     shebang_line = lines[0]
                     rest_content = "\n".join(lines[1:])
-                    new_content = f"{shebang_line}\n{expected_header}\n{rest_content}"
                 else:
-                    new_content = f"{expected_header}\n{content}"
+                    rest_content = content
+
+                if legacy_expected_header is not None and rest_content.startswith(legacy_expected_header):
+                    new_rest_content = expected_header + rest_content[len(legacy_expected_header) :]
+                elif not rest_content.startswith(expected_header):
+                    new_rest_content = f"{expected_header}\n{rest_content}" if rest_content else expected_header
+                else:
+                    new_rest_content = rest_content
+
+                if has_shebang:
+                    new_content = f"{shebang_line}\n{new_rest_content}"
+                else:
+                    new_content = new_rest_content
 
                 with open(file_path, "w") as f:
                     f.write(new_content)
@@ -599,6 +631,11 @@ PRECOMMIT_CONFIGS = [
 @click.option("--all-files", is_flag=True, help="Run checks on all files, not just staged")
 @click.argument("files", nargs=-1)
 def main(fix: bool, all_files: bool, files: tuple[str, ...]):
+    global ALLOW_LEGACY_LICENSE_HEADERS
+    # CI currently runs --all-files; allow prior-year headers there so we can
+    # migrate touched files incrementally without requiring a mass rewrite.
+    ALLOW_LEGACY_LICENSE_HEADERS = all_files
+
     all_files_list = get_all_files(all_files, list(files))
     exit_codes = []
 
