@@ -1857,8 +1857,52 @@ def linear_softmax_cross_entropy_loss_linear_ce_tpu(
         )
 
 
+def linear_softmax_cross_entropy_loss_linear_ce_tpu_pallas_bwd(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    block_sizes: BlockSizes,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+    """Optimized TPU v4 linear CE path with Pallas backward."""
+    overrides = {
+        _FWD_FULL_H_DOT_ENV: "1",
+        _FWD_SPLIT_LABEL_DOT_ENV: "1",
+        _FWD_LSE_FORI_LOOP_ENV: "1",
+        _FWD_LSE_FORI_V_MULT_ENV: "4",
+        _BWD_USE_XLA_STREAMING_ENV: None,
+        # Force-disable incompatible benchmark-only modes.
+        _SKIP_LABEL_LOGITS_ENV: None,
+        _FWD_XW_BF16_ENV: None,
+        _FWD_DOT_ACCUM_BF16_ENV: None,
+        _FWD_SPLIT_LABEL_BF16_MUL_ENV: None,
+        _FWD_SPLIT_LABEL_PALLAS_ENV: None,
+        _FWD_INLINE_LABEL_SCALAR_ENV: None,
+        _FWD_INLINE_LABEL_TAKE_ENV: None,
+        _FWD_LSE_SCALAR_ENV: None,
+        _FWD_LSE_NO_REPEAT_ENV: None,
+        _FWD_LSE_STORE_PATH_ENV: None,
+    }
+    with _temporary_env(overrides):
+        return linear_softmax_cross_entropy_loss_pallas(
+            x,
+            labels,
+            w,
+            block_sizes=block_sizes,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            return_argmax=return_argmax,
+        )
+
+
 __all__ = [
     "PallasUnsupportedError",
     "linear_softmax_cross_entropy_loss_linear_ce_tpu",
+    "linear_softmax_cross_entropy_loss_linear_ce_tpu_pallas_bwd",
     "linear_softmax_cross_entropy_loss_pallas",
 ]

@@ -63,7 +63,7 @@ def _parse_args() -> argparse.Namespace:
         "--implementation",
         type=str,
         default="pallas_tpu",
-        choices=("pallas_tpu", "linear_ce_tpu", "xla", "reference"),
+        choices=("pallas_tpu", "linear_ce_tpu", "linear_ce_tpu_pallas_bwd", "xla", "reference"),
         help="Kernel backend implementation to benchmark.",
     )
     parser.add_argument("--input-dtype", type=str, default="bfloat16", help="Input dtype for x and w.")
@@ -611,7 +611,9 @@ def main() -> None:
             jax.clear_caches()
 
         variant_configs = (
-            pallas_configs if variant.implementation in ("pallas_tpu", "linear_ce_tpu") else [("none", None)]
+            pallas_configs
+            if variant.implementation in ("pallas_tpu", "linear_ce_tpu", "linear_ce_tpu_pallas_bwd")
+            else [("none", None)]
         )
         with _variant_env(variant):
             for label, cfg in variant_configs:

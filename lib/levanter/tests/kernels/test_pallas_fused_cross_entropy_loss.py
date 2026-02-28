@@ -180,7 +180,7 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.parametrize("implementation", ["pallas_tpu", "linear_ce_tpu"])
+@pytest.mark.parametrize("implementation", ["pallas_tpu", "linear_ce_tpu", "linear_ce_tpu_pallas_bwd"])
 def test_fused_cross_entropy_pallas_requires_tpu(implementation: str):
     if jax.default_backend() == "tpu":
         pytest.skip("requires non-TPU backend")
@@ -744,7 +744,7 @@ def test_fused_cross_entropy_default_non_divisible_vocab_matches_reference():
         pytest.skip("requires TPU backend")
 
     hidden, vocab, batch = 128, 130, 128
-    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    block_sizes = fused_api.BlockSizes(b_block_size=512, h_block_size=128, v_block_size=128)
 
     key = jax.random.PRNGKey(0)
     key_x, key_w, key_y = jax.random.split(key, 3)
@@ -828,7 +828,7 @@ def test_fused_cross_entropy_pallas_fori_split_fullh_backward_matches_xla(monkey
         pytest.skip("requires TPU backend")
 
     hidden, vocab, batch = 256, 2048, 512
-    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    block_sizes = fused_api.BlockSizes(b_block_size=512, h_block_size=128, v_block_size=128)
 
     monkeypatch.setenv("LEVANTER_PALLAS_TPU_FWD_FULL_H_DOT_BENCH", "1")
     monkeypatch.setenv("LEVANTER_PALLAS_TPU_FWD_SPLIT_LABEL_DOT_BENCH", "1")
@@ -871,12 +871,13 @@ def test_fused_cross_entropy_pallas_fori_split_fullh_backward_matches_xla(monkey
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
 
 
-def test_fused_cross_entropy_linear_ce_tpu_backward_matches_xla():
+@pytest.mark.parametrize("implementation", ["linear_ce_tpu", "linear_ce_tpu_pallas_bwd"])
+def test_fused_cross_entropy_linear_ce_tpu_backward_matches_xla(implementation: str):
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
 
     hidden, vocab, batch = 256, 2048, 512
-    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    block_sizes = fused_api.BlockSizes(b_block_size=512, h_block_size=128, v_block_size=128)
 
     key = jax.random.PRNGKey(37)
     key_x, key_w, key_y = jax.random.split(key, 3)
@@ -892,7 +893,7 @@ def test_fused_cross_entropy_linear_ce_tpu_backward_matches_xla():
             reduction="mean",
             block_sizes=block_sizes,
             dtype=jnp.float32,
-            implementation="linear_ce_tpu",
+            implementation=implementation,
         )
 
     def loss_xla(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
