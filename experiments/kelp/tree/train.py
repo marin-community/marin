@@ -129,7 +129,10 @@ class EditTrainingConfig:
     """Probability of including a docstring prompt when one is available.
     Only effective when the model config has prompt_tokens=True."""
 
-    wandb_project: str | None = None
+    wandb_entity: str | None = "open-athena"
+    """W&B entity (team/user). Defaults to open-athena."""
+
+    wandb_project: str | None = "kelp"
     """W&B project name. If set, enables W&B logging."""
 
     wandb_run_name: str | None = None
@@ -430,6 +433,7 @@ def train_edit_model(
             from dataclasses import asdict
 
             wandb_run = wandb.init(
+                entity=config.wandb_entity,
                 project=config.wandb_project,
                 name=config.wandb_run_name,
                 config=asdict(config),
