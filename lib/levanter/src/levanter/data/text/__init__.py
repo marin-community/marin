@@ -37,6 +37,16 @@ from .formats import (
     TextLmDatasetFormat,
     preprocessor_for_format,
 )
+from .preference import (
+    DpoExample,
+    PreferenceChatLmDatasetFormat,
+    PreferenceChatProcessor,
+    PreferenceLmDataConfig,
+    PreferencePairDataset,
+    ProcessedPreferenceChatDict,
+    dataset_for_preference_format,
+    preprocessor_for_preference_format,
+)
 from ._batch_tokenizer import BatchTokenizer
 
 __all__ = [
@@ -72,4 +82,13 @@ __all__ = [
     "LmDataConfig",
     "LMMixtureDatasetConfig",
     "count_corpus_sizes",
+    # Preference/DPO exports
+    "DpoExample",
+    "PreferenceChatLmDatasetFormat",
+    "PreferenceChatProcessor",
+    "PreferenceLmDataConfig",
+    "PreferencePairDataset",
+    "ProcessedPreferenceChatDict",
+    "dataset_for_preference_format",
+    "preprocessor_for_preference_format",
 ]

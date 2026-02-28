@@ -29,6 +29,7 @@ provider's view of resources, distinct from the Iris lifecycle states in vm.prot
 from __future__ import annotations
 
 import logging
+import socket
 import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -40,6 +41,53 @@ from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Label Keys
+# ============================================================================
+
+
+class Labels:
+    """Label keys for Iris-managed cloud resources.
+
+    All keys follow the format ``iris-{prefix}-<suffix>`` so resources are
+    self-documenting and namespaced per cluster.
+    """
+
+    def __init__(self, prefix: str):
+        self.iris_managed = f"iris-{prefix}-managed"
+        self.iris_scale_group = f"iris-{prefix}-scale-group"
+        self.iris_controller = f"iris-{prefix}-controller"
+        self.iris_controller_address = f"iris-{prefix}-controller-address"
+        self.iris_slice_id = f"iris-{prefix}-slice-id"
+
+
+# ============================================================================
+# Port Utilities
+# ============================================================================
+
+
+def find_free_port(start: int = -1) -> int:
+    """Find an available port.
+
+    Args:
+        start: Starting port for sequential scan. Default of -1 lets the kernel
+            pick a random ephemeral port, which avoids collisions when multiple
+            processes search for ports concurrently (e.g. pytest-xdist).
+    """
+    if start == -1:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+    for port in range(start, start + 1000):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
+
 
 # ============================================================================
 # Exception Types
@@ -228,7 +276,7 @@ class SliceHandle(Protocol):
     def scale_group(self) -> str:
         """Name of the scale group this slice belongs to.
 
-        Extracted from labels (e.g., labels["{prefix}-scale-group"]).
+        Extracted from labels (e.g., labels["iris-{prefix}-scale-group"]).
         """
         ...
 
@@ -274,12 +322,12 @@ class Platform(Protocol):
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a slice of connected workers (e.g., TPU pod, IB GPU cluster).
 
         The slice is the atomic scaling unit -- it succeeds or fails as a whole.
-        When bootstrap_config is provided, the platform handles worker bootstrapping
+        When worker_config is provided, the platform handles worker bootstrapping
         internally (docker setup, worker container startup). describe() returns
         BOOTSTRAPPING while in progress, then READY or FAILED when complete.
         """
@@ -333,6 +381,14 @@ class Platform(Protocol):
         """
         ...
 
+    def debug_report(self) -> None:
+        """Log diagnostic info about the controller after a failure.
+
+        Override to inspect platform-specific state (e.g. pod termination
+        reason, previous container logs). Default is a no-op.
+        """
+        ...
+
     def shutdown(self) -> None:
         """Release platform-owned resources (threads, connections, caches).
 
@@ -341,6 +397,23 @@ class Platform(Protocol):
 
         For LocalPlatform this stops worker threads managed by ThreadContainer.
         For GCP/Manual this is typically a no-op.
+        """
+        ...
+
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        """Resolve a container image reference for this platform's registry.
+
+        On GCP, rewrites ``ghcr.io/`` images to the Artifact Registry remote
+        repo for the given zone's continent.  Other platforms return the image
+        unchanged.
+
+        Args:
+            image: Container image tag (e.g. ``ghcr.io/org/img:v1``).
+            zone: Cloud zone used to select the regional mirror.  Required on
+                GCP when the image starts with ``ghcr.io/``.
+
+        Returns:
+            Resolved image tag ready for ``docker pull``.
         """
         ...
 
@@ -429,9 +502,10 @@ def default_stop_all(
     that timed-out threads don't block interpreter shutdown.
     """
     prefix = label_prefix or config.platform.label_prefix or "iris"
+    labels = Labels(prefix)
 
     target_names: list[str] = ["controller"]
-    all_slices = platform.list_all_slices(labels={f"{prefix}-managed": "true"})
+    all_slices = platform.list_all_slices(labels={labels.iris_managed: "true"})
     for s in all_slices:
         logger.info("Found managed slice %s", s.slice_id)
         target_names.append(f"slice:{s.slice_id}")

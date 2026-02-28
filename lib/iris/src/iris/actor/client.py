@@ -29,6 +29,7 @@ import cloudpickle
 from iris.actor.resolver import Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
+from iris.rpc.errors import call_with_retry
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ class ActorClient:
         max_backoff: float = 10.0,
         backoff_factor: float = 2.0,
         backoff_jitter: float = 0.25,
+        max_call_attempts: int = 5,
     ):
         """Initialize the actor client.
 
@@ -60,6 +62,8 @@ class ActorClient:
             max_backoff: Maximum delay between retries in seconds
             backoff_factor: Multiplier for exponential backoff
             backoff_jitter: Random jitter as fraction of delay (e.g., 0.25 = ±25%)
+            max_call_attempts: Maximum number of RPC call attempts on transient errors.
+                On each retry, the cached connection is cleared and re-resolved.
         """
         self._resolver = resolver
         self._name = name
@@ -69,6 +73,7 @@ class ActorClient:
         self._max_backoff = max_backoff
         self._backoff_factor = backoff_factor
         self._backoff_jitter = backoff_jitter
+        self._max_call_attempts = max_call_attempts
         self._rpc_client: ActorServiceClientSync | None = None
 
     def rpc_client(self) -> ActorServiceClientSync:
@@ -145,16 +150,24 @@ class _RpcMethod:
             serialized_kwargs=cloudpickle.dumps(kwargs),
         )
 
-        try:
+        def do_call():
             client = self._client.rpc_client()
             resp = client.call(call)
-        except Exception:
+            if resp.HasField("error"):
+                if resp.error.serialized_exception:
+                    raise cloudpickle.loads(resp.error.serialized_exception)
+                raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
+            return cloudpickle.loads(resp.serialized_value)
+
+        def clear_connection(_exc):
             self._client._rpc_client = None
-            raise
 
-        if resp.HasField("error"):
-            if resp.error.serialized_exception:
-                raise cloudpickle.loads(resp.error.serialized_exception)
-            raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
-
-        return cloudpickle.loads(resp.serialized_value)
+        return call_with_retry(
+            f"{self._client._name}.{self._method_name}",
+            do_call,
+            on_retry=clear_connection,
+            max_attempts=self._client._max_call_attempts,
+            initial_backoff=self._client._initial_backoff,
+            max_backoff=self._client._max_backoff,
+            backoff_factor=self._client._backoff_factor,
+        )

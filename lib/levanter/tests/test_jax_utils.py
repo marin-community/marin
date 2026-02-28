@@ -8,7 +8,11 @@ import numpy as np
 import pytest
 
 from haliax.partitioning import ResourceAxis
-from levanter.utils.jax_utils import best_effort_sharding, sharded_tree_size
+from levanter.utils.jax_utils import (
+    axis_resource_is_explicit,
+    best_effort_sharding,
+    sharded_tree_size,
+)
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
 
@@ -236,3 +240,17 @@ def test_tree_broadcast_to_edge_cases():
     target = {"a": [10, 20], "b": [30, 40]}
     result = tree_broadcast_to(prefix, target, is_leaf=is_leaf)
     assert result == {"a": [1, 2], "b": [1, 2]}
+
+
+def test_axis_resource_is_explicit():
+    mesh = jax.sharding.AbstractMesh(
+        (2, 2),
+        ("data", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit, jax.sharding.AxisType.Auto),
+    )
+
+    assert axis_resource_is_explicit(mesh, "data")
+    assert not axis_resource_is_explicit(mesh, "model")
+    assert not axis_resource_is_explicit(mesh, ("data", "model"))
+    assert not axis_resource_is_explicit(mesh, None)
+    assert not axis_resource_is_explicit(mesh, "unknown")

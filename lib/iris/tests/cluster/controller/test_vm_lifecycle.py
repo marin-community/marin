@@ -127,6 +127,9 @@ class FakePlatform:
         self._vm_to_create = vm_to_create or FakeWorkerHandle()
         self.created_vms: list[FakeWorkerHandle] = []
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
+
     def create_vm(self, config: config_pb2.VmConfig) -> FakeWorkerHandle:
         self.created_vms.append(self._vm_to_create)
         return self._vm_to_create
@@ -205,8 +208,8 @@ def test_start_controller_fresh(mock_wait_healthy, mock_bootstrap_script, config
     assert address == "http://10.0.0.5:10000"
     assert vm is new_vm
     assert len(new_vm.bootstrap_calls) == 1
-    assert new_vm.labels == {"test-controller": "true"}
-    assert "test-controller-address" in new_vm.metadata
+    assert new_vm.labels == {"iris-test-controller": "true"}
+    assert "iris-test-controller-address" in new_vm.metadata
     assert not new_vm.terminated
 
 

@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
-from .reference import linear_softmax_cross_entropy_loss_streaming
+from .reference import linear_softmax_cross_entropy_loss_reference, linear_softmax_cross_entropy_loss_streaming
 from .tuned_block_sizes import infer_xla_v_block_size
 
 
@@ -121,7 +121,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
-    return linear_softmax_cross_entropy_loss_streaming(
+    loss, lse, *_ = linear_softmax_cross_entropy_loss_streaming(
         x,
         labels,
         w,
@@ -130,6 +130,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
         logit_soft_cap=logit_soft_cap,
         precision=precision,
     )
+    return loss, lse
 
 
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
@@ -141,7 +142,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
 ) -> tuple[tuple[Float[Array, "B"], Float[Array, "B"]], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
-    loss, lse = linear_softmax_cross_entropy_loss_streaming(
+    loss, lse, *_ = linear_softmax_cross_entropy_loss_streaming(
         x,
         labels,
         w,
@@ -197,11 +198,35 @@ def linear_softmax_cross_entropy_loss_xla(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     if block_sizes is None:
         v_block_size = infer_xla_v_block_size(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
     else:
         v_block_size = block_sizes.v_block_size
+    if v_block_size >= w.shape[1]:
+        return linear_softmax_cross_entropy_loss_reference(
+            x,
+            labels,
+            w,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            return_argmax=return_argmax,
+        )
+
+    if return_argmax:
+        return linear_softmax_cross_entropy_loss_streaming(
+            x,
+            labels,
+            w,
+            block_size=v_block_size,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            return_argmax=True,
+        )
+
     return _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
         v_block_size,
         dtype,

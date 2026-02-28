@@ -8,7 +8,6 @@ Docker mode manually wires up Controller + Workers with DockerRuntime, which is
 needed for tests that exercise container-specific behavior (OOM, JAX env vars).
 """
 
-import socket
 import tempfile
 import time
 import uuid
@@ -17,6 +16,7 @@ from pathlib import Path
 from iris.client import IrisClient
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.controller.local import LocalController
+from iris.cluster.platform.base import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.cluster.worker.bundle_cache import BundleCache
@@ -29,13 +29,6 @@ from iris.time_utils import Duration
 # Factory type for creating per-worker environment providers.
 # Signature: (worker_id, num_workers) -> EnvironmentProvider
 EnvProviderFactory = Callable[[int, int], EnvironmentProvider]
-
-
-def find_free_port() -> int:
-    """Find an available port."""
-    with socket.socket() as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
 
 def unique_name(prefix: str) -> str:
@@ -62,7 +55,7 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(
-            cpu=8,
+            cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
             disk_bytes=50 * 1024**3,
             gpu_count=0,

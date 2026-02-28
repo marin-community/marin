@@ -51,7 +51,7 @@ class WorkerSnapshot(Protocol):
     """
 
     worker_id: WorkerId
-    available_cpu: int
+    available_cpu_millicores: int
     available_memory: int
     available_gpus: int
     available_tpus: int
@@ -87,7 +87,9 @@ class RejectionReason:
     def __str__(self) -> str:
         match self.kind:
             case RejectionKind.CPU:
-                return f"Insufficient CPU (need {self.details['need']}, available {self.details['have']})"
+                need_cores = self.details["need"] / 1000
+                have_cores = self.details["have"] / 1000
+                return f"Insufficient CPU (need {need_cores:g} cores, available {have_cores:g} cores)"
             case RejectionKind.MEMORY:
                 need_gb = self.details["need"] / (1024**3)
                 have_gb = self.details["have"] / (1024**3)
@@ -235,7 +237,7 @@ class WorkerCapacity:
     """
 
     worker_id: WorkerId
-    available_cpu: int
+    available_cpu_millicores: int
     available_memory: int
     available_gpus: int
     available_tpus: int
@@ -260,7 +262,7 @@ class WorkerCapacity:
         """
         return WorkerCapacity(
             worker_id=worker.worker_id,
-            available_cpu=worker.available_cpu,
+            available_cpu_millicores=worker.available_cpu_millicores,
             available_memory=worker.available_memory,
             available_gpus=worker.available_gpus,
             available_tpus=worker.available_tpus,
@@ -296,8 +298,10 @@ class WorkerCapacity:
 
         res = req.resources
 
-        if res.cpu > self.available_cpu:
-            return RejectionReason(kind=RejectionKind.CPU, details={"need": res.cpu, "have": self.available_cpu})
+        if res.cpu_millicores > self.available_cpu_millicores:
+            return RejectionReason(
+                kind=RejectionKind.CPU, details={"need": res.cpu_millicores, "have": self.available_cpu_millicores}
+            )
 
         if res.memory_bytes > self.available_memory:
             return RejectionReason(
@@ -335,7 +339,7 @@ class WorkerCapacity:
     def deduct(self, req: JobRequirements) -> None:
         """Deduct job's resources from available capacity."""
         res = req.resources
-        self.available_cpu -= res.cpu
+        self.available_cpu_millicores -= res.cpu_millicores
         self.available_memory -= res.memory_bytes
         self.available_gpus -= get_gpu_count(res.device)
         self.available_tpus -= get_tpu_count(res.device)
@@ -718,7 +722,7 @@ class Scheduler:
                     1
                     for check_wid in candidate_ids
                     if check_wid not in context.scheduled_workers
-                    and context.capacities[check_wid].available_cpu >= res.cpu
+                    and context.capacities[check_wid].available_cpu_millicores >= res.cpu_millicores
                     and context.capacities[check_wid].available_memory >= res.memory_bytes
                 )
                 if workers_with_capacity > 0:
@@ -750,13 +754,16 @@ class Scheduler:
                 task_id=task_id,
                 failure_reason=(
                     f"No worker matches constraints and has sufficient resources "
-                    f"(need cpu={res.cpu}, memory={res.memory_bytes}, "
+                    f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes}, "
                     f"constraints={[c.key for c in constraints]})"
                 ),
             )
         return TaskScheduleResult(
             task_id=task_id,
-            failure_reason=(f"No worker has sufficient resources (need cpu={res.cpu}, memory={res.memory_bytes})"),
+            failure_reason=(
+                f"No worker has sufficient resources "
+                f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes})"
+            ),
         )
 
     def find_assignments(

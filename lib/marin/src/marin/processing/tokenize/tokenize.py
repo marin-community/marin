@@ -7,7 +7,6 @@ Tokenize datasets using zephyr pipeline and write to Levanter cache format.
 Supports both regular file paths and HuggingFace datasets. For HF datasets, downloads
 them first then tokenizes the downloaded files.
 """
-
 import abc
 import dataclasses
 import json
@@ -41,6 +40,16 @@ from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
 
+MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
+
+
+def _compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int:
+    """Compute target group size to produce approximately max_workers groups.
+
+    Applies a floor of MIN_GROUP_BYTES to avoid degenerate tiny shards.
+    """
+    return max(total_input_bytes // max_workers, MIN_GROUP_BYTES)
+
 
 @dataclasses.dataclass(frozen=True)
 class HfDatasetSpec:
@@ -50,8 +59,20 @@ class HfDatasetSpec:
     name: str | None = None
 
 
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
+
+    max_workers: int = 4096
+    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
+    writer_batch_size: int = 65536
+    """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
+    overhead. Too large a value increases memory usage and delays progress checkpointing."""
+
+    num_shards: int | None = None
+    """Override the number tokenize shards. When set, files are grouped to produce approximately
+    this many shards instead of deriving the count from max_workers. This can be useful if you want
+    more shards than max_workers, for example to mitigate the cost of retrying a single shard."""
 
     @abc.abstractmethod
     def as_lm_dataset_source_config(
@@ -79,14 +100,6 @@ class TokenizeConfig(TokenizeConfigBase):
     The format of the dataset. This is used to determine how to tokenize the data.
     See Levanter's documentation for more details.
     """
-    window_size_bytes: int = 10_000_000_000
-    """Files are bundled into groups up to this size; each group becomes one shard.
-    Smaller values produce more shards and thus more parallelism (up to max_workers)."""
-    max_workers: int = 4096
-    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
-    writer_batch_size: int = 65536
-    """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
-    overhead. Too large a value increases memory usage and delays progress checkpointing."""
     allow_test_in_train: bool = False
     """
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
@@ -144,14 +157,6 @@ class HfTokenizeConfig(TokenizeConfigBase):
     name: str | None = None  # HF dataset name
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
-    window_size_bytes: int = 10_000_000_000
-    """Files are bundled into groups up to this size; each group becomes one shard.
-    Smaller values produce more shards and thus more parallelism (up to max_workers)."""
-    max_workers: int = 4096
-    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
-    writer_batch_size: int = 65536
-    """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
-    overhead. Too large a value increases memory usage and delays progress checkpointing."""
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
@@ -329,18 +334,22 @@ def tokenize(config: TokenizeConfigBase):
     def local_preprocess_paths(paths: list[str]) -> list[list[str]]:
         """Scan file sizes locally and bundle into groups for distributed processing."""
         filescan_start = time.monotonic()
-        with ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan") as local_ctx:
-            file_stats = list(
-                local_ctx.execute(
-                    Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
-                    verbose=False,
-                )
+        local_ctx = ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan")
+        file_stats = list(
+            local_ctx.execute(
+                Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
+                verbose=False,
             )
+        )
         total_input_bytes = sum(f["size"] for f in file_stats)
-        file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
+        if config.num_shards is not None:
+            target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.num_shards)
+        else:
+            target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.max_workers)
+        file_groups = list(_bundle_files_by_size(file_stats, target_group_bytes))
         logger.info(
             f"Grouped {len(paths):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
-            f"in {time.monotonic() - filescan_start:.1f}s."
+            f"(target {target_group_bytes / 1e9:.2f} GB/group) in {time.monotonic() - filescan_start:.1f}s."
         )
         return file_groups
 
@@ -418,23 +427,21 @@ def tokenize(config: TokenizeConfigBase):
     # TODO (rav): both train and val could run at the same time
     if train_paths and not split_already_done("train"):
         train_groups = local_preprocess_paths(train_paths)
-        with ZephyrContext(
+        ctx = ZephyrContext(
             resources=config.worker_resources,
             max_workers=min(config.max_workers, len(train_groups)),
             name="tokenize-train",
-            no_workers_timeout=20 * 60,
-        ) as ctx:
-            run_pipeline(ctx, train_groups, "train")
+        )
+        run_pipeline(ctx, train_groups, "train")
 
     if validation_paths and not split_already_done("validation"):
         validation_groups = local_preprocess_paths(validation_paths)
-        with ZephyrContext(
+        ctx = ZephyrContext(
             resources=config.worker_resources,
             max_workers=min(config.max_workers, len(validation_groups)),
             name="tokenize-validation",
-            no_workers_timeout=20 * 60,
-        ) as ctx:
-            run_pipeline(ctx, validation_groups, "validation")
+        )
+        run_pipeline(ctx, validation_groups, "validation")
 
 
 @draccus.wrap()

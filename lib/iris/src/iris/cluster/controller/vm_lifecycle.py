@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from iris.cluster.platform.base import (
+    Labels,
     Platform,
     RemoteWorkerHandle,
     StandaloneWorkerHandle,
@@ -264,14 +265,6 @@ def _controller_zones(config: config_pb2.IrisClusterConfig) -> list[str]:
     return ["local"]
 
 
-def _controller_label_key(label_prefix: str) -> str:
-    return f"{label_prefix}-controller"
-
-
-def _controller_address_metadata_key(label_prefix: str) -> str:
-    return f"{label_prefix}-controller-address"
-
-
 def _discover_controller_vm(
     platform: Platform,
     zones: list[str],
@@ -284,15 +277,16 @@ def _discover_controller_vm(
     StandaloneWorkerHandle since we know the controller VM supports these
     operations.
     """
+    labels = Labels(label_prefix)
     vms = platform.list_vms(
         zones=zones,
-        labels={_controller_label_key(label_prefix): "true"},
+        labels={labels.iris_controller: "true"},
     )
     if len(vms) > 1:
         vm_ids = [vm.vm_id for vm in vms]
         raise RuntimeError(
             f"Multiple controller VMs found matching label "
-            f"'{_controller_label_key(label_prefix)}=true': {vm_ids}. "
+            f"'{labels.iris_controller}=true': {vm_ids}. "
             f"Expected at most one controller VM. Remove duplicates before proceeding."
         )
     return cast(StandaloneWorkerHandle, vms[0]) if vms else None
@@ -303,9 +297,10 @@ def _build_controller_vm_config(
 ) -> config_pb2.VmConfig:
     """Build a VmConfig for the controller VM from cluster config."""
     label_prefix = config.platform.label_prefix or "iris"
+    labels = Labels(label_prefix)
     vm_config = config_pb2.VmConfig()
     vm_config.name = f"iris-controller-{label_prefix}"
-    vm_config.labels[_controller_label_key(label_prefix)] = "true"
+    vm_config.labels[labels.iris_controller] = "true"
 
     which = config.controller.WhichOneof("controller")
     if which == "gcp":
@@ -372,7 +367,7 @@ def start_controller(
         raise RuntimeError(f"Controller VM {vm_config.name} did not become reachable within 300s")
 
     # Bootstrap
-    bootstrap_script = build_controller_bootstrap_script_from_config(config)
+    bootstrap_script = build_controller_bootstrap_script_from_config(config, platform=platform)
     vm.bootstrap(bootstrap_script)
 
     # Health check
@@ -381,8 +376,9 @@ def start_controller(
         raise RuntimeError(f"Controller at {address} failed health check after bootstrap")
 
     # Tag for discovery: label for list_vms(), metadata for address
-    vm.set_labels({_controller_label_key(label_prefix): "true"})
-    vm.set_metadata({_controller_address_metadata_key(label_prefix): address})
+    labels = Labels(label_prefix)
+    vm.set_labels({labels.iris_controller: "true"})
+    vm.set_metadata({labels.iris_controller_address: address})
 
     logger.info("Controller started at %s", address)
     return address, vm

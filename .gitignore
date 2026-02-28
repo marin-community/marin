@@ -229,4 +229,5 @@ scr/*
 /scratch
 
 .claude
+.codex
 .entire
