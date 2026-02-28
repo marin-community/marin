@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -115,9 +116,13 @@ class Kubectl:
             logger.info("kubectl: %s\n  stdin=%s", " ".join(cmd), stdin[:2000])
         else:
             logger.info("kubectl: %s", " ".join(cmd))
+        t0 = time.monotonic()
         result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=effective_timeout)
+        elapsed_ms = (time.monotonic() - t0) * 1000
         if result.returncode != 0:
-            logger.info("kubectl exit %d: stderr=%s", result.returncode, result.stderr.strip()[:500])
+            logger.info("kubectl exit %d: %dms stderr=%s", result.returncode, elapsed_ms, result.stderr.strip()[:500])
+        elif elapsed_ms > 2000:
+            logger.warning("kubectl slow: %dms cmd=%s", elapsed_ms, " ".join(args))
         return result
 
     def apply_json(self, manifest: dict) -> None:
