@@ -36,24 +36,20 @@ IrisClusterConfig = config_pb2.IrisClusterConfig
 
 # Single source of truth for all default values
 DEFAULT_CONFIG = config_pb2.DefaultsConfig(
-    timeouts=config_pb2.TimeoutConfig(
-        boot_timeout=Duration.from_seconds(300).to_proto(),
-        init_timeout=Duration.from_seconds(600).to_proto(),
-        ssh_poll_interval=Duration.from_seconds(5).to_proto(),
-    ),
     ssh=config_pb2.SshConfig(
         user="root",
         connect_timeout=Duration.from_seconds(30).to_proto(),
     ),
     autoscaler=config_pb2.AutoscalerConfig(
         evaluation_interval=Duration.from_seconds(10).to_proto(),
-        requesting_timeout=Duration.from_seconds(120).to_proto(),
         scale_up_delay=Duration.from_seconds(60).to_proto(),
         scale_down_delay=Duration.from_seconds(300).to_proto(),
     ),
-    bootstrap=config_pb2.BootstrapConfig(
-        worker_port=10001,
+    worker=config_pb2.WorkerConfig(
+        port=10001,
         cache_dir="/var/cache/iris",
+        host="0.0.0.0",
+        port_range="30000-40000",
     ),
 )
 
@@ -111,8 +107,8 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             raise ValueError(f"Scale group '{name}' has invalid num_vms={sg_config.num_vms}.")
 
         resources = sg_config.resources
-        if resources.cpu < 0:
-            raise ValueError(f"Scale group '{name}' has invalid cpu={resources.cpu}.")
+        if resources.cpu_millicores < 0:
+            raise ValueError(f"Scale group '{name}' has invalid cpu_millicores={resources.cpu_millicores}.")
         if resources.memory_bytes < 0:
             raise ValueError(f"Scale group '{name}' has invalid memory_bytes={resources.memory_bytes}.")
         if resources.disk_bytes < 0:
@@ -143,8 +139,34 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
         if platform == "gcp":
             if not template.gcp.zone:
                 raise ValueError(f"Scale group '{name}': slice_template.gcp.zone must be non-empty.")
-            if not template.gcp.runtime_version:
-                raise ValueError(f"Scale group '{name}': slice_template.gcp.runtime_version must be non-empty.")
+            gcp_mode = template.gcp.mode
+            if gcp_mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
+                if template.preemptible:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices do not support preemptible instances.")
+                if sg_config.num_vms != 1:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices require num_vms=1.")
+                if sg_config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+                    raise ValueError(
+                        f"Scale group '{name}': VM-backed GCP slices currently require accelerator_type=cpu."
+                    )
+                if template.accelerator_type not in (
+                    config_pb2.ACCELERATOR_TYPE_UNSPECIFIED,
+                    config_pb2.ACCELERATOR_TYPE_CPU,
+                ):
+                    raise ValueError(
+                        f"Scale group '{name}': VM-backed GCP slices require slice_template.accelerator_type=cpu."
+                    )
+                if template.accelerator_variant:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices do not support accelerator_variant.")
+                if not template.gcp.machine_type:
+                    raise ValueError(
+                        f"Scale group '{name}': slice_template.gcp.machine_type must be non-empty for VM mode."
+                    )
+                if sg_config.resources.tpu_count > 0 or sg_config.resources.gpu_count > 0:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices currently support CPU-only resources.")
+            else:
+                if not template.gcp.runtime_version:
+                    raise ValueError(f"Scale group '{name}': slice_template.gcp.runtime_version must be non-empty.")
         elif platform == "manual":
             if not template.manual.hosts:
                 raise ValueError(f"Scale group '{name}': slice_template.manual.hosts must be non-empty.")
@@ -228,17 +250,17 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     _validate_scale_group_resources(config)
     _validate_slice_templates(config)
     _validate_worker_settings(config)
-    _validate_bootstrap_defaults(config)
+    _validate_worker_defaults(config)
 
 
-def _validate_bootstrap_defaults(config: config_pb2.IrisClusterConfig) -> None:
-    """Validate bootstrap defaults required for worker-based platforms.
+def _validate_worker_defaults(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate worker defaults required for worker-based platforms.
 
-    Local platform runs workers in-process and does not require bootstrap image/runtime.
+    Local platform runs workers in-process and does not require a docker image/runtime.
     GCP/manual/CoreWeave create remote worker processes and must provide a worker image.
     """
     # Some unit tests validate partial proto configs directly (without load_config/apply_defaults).
-    # Only enforce bootstrap image checks once defaults/platform are explicitly present.
+    # Only enforce worker image checks once defaults/platform are explicitly present.
     if not config.HasField("defaults"):
         return
 
@@ -246,15 +268,13 @@ def _validate_bootstrap_defaults(config: config_pb2.IrisClusterConfig) -> None:
     if platform_kind in (None, "local"):
         return
 
-    docker_image = config.defaults.bootstrap.docker_image.strip()
+    docker_image = config.defaults.worker.docker_image.strip()
     if not docker_image:
-        raise ValueError(
-            "defaults.bootstrap.docker_image is required for non-local platforms " "(gcp/manual/coreweave)."
-        )
+        raise ValueError("defaults.worker.docker_image is required for non-local platforms (gcp/manual/coreweave).")
 
-    runtime = config.defaults.bootstrap.runtime.strip()
+    runtime = config.defaults.worker.runtime.strip()
     if runtime and runtime not in {"docker", "kubernetes"}:
-        raise ValueError(f"defaults.bootstrap.runtime must be one of docker/kubernetes, got {runtime!r}.")
+        raise ValueError(f"defaults.worker.runtime must be one of docker/kubernetes, got {runtime!r}.")
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
@@ -306,16 +326,16 @@ def _merge_proto_fields(target, source) -> None:
 def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.DefaultsConfig) -> None:
     """Deep merge source defaults into target, field by field.
 
-    Sub-messages (timeouts, ssh, autoscaler, bootstrap) are merged field-by-field
+    Sub-messages (timeouts, ssh, autoscaler, worker) are merged field-by-field
     so that partially-specified user configs overlay hardcoded defaults without
-    wiping unset siblings. Top-level scalar fields (e.g. default_task_image) are
-    merged via _merge_proto_fields which copies any explicitly-set value.
+    wiping unset siblings. Top-level scalar fields are merged via
+    _merge_proto_fields which copies any explicitly-set value.
 
     Args:
         target: DefaultsConfig to merge into (modified in place)
         source: DefaultsConfig to merge from
     """
-    # Merge top-level scalar fields (e.g. default_task_image).
+    # Merge top-level scalar fields.
     # We skip message fields here since sub-messages need deep merging below.
     for field_desc in source.DESCRIPTOR.fields:
         if field_desc.message_type is not None:
@@ -324,17 +344,17 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
             setattr(target, field_desc.name, getattr(source, field_desc.name))
 
     # Deep-merge sub-messages so partial overrides work
-    if source.HasField("timeouts"):
-        _merge_proto_fields(target.timeouts, source.timeouts)
     if source.HasField("ssh"):
         _merge_proto_fields(target.ssh, source.ssh)
     if source.HasField("autoscaler"):
         _merge_proto_fields(target.autoscaler, source.autoscaler)
-    if source.HasField("bootstrap"):
-        _merge_proto_fields(target.bootstrap, source.bootstrap)
-        # Merge env_vars map separately (map fields don't use HasField)
-        for key, value in source.bootstrap.env_vars.items():
-            target.bootstrap.env_vars[key] = value
+    if source.HasField("worker"):
+        _merge_proto_fields(target.worker, source.worker)
+        # Merge map fields separately (map fields don't support HasField)
+        for key, value in source.worker.default_task_env.items():
+            target.worker.default_task_env[key] = value
+        for key, value in source.worker.worker_attributes.items():
+            target.worker.worker_attributes[key] = value
 
 
 def _validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: str = "autoscaler") -> None:
@@ -356,13 +376,6 @@ def _validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: st
         raise ValueError(
             f"{context}: evaluation_interval must be positive, got {interval_ms}ms. "
             f"This controls how often the autoscaler evaluates scaling decisions."
-        )
-
-    timeout_ms = config.requesting_timeout.milliseconds
-    if timeout_ms <= 0:
-        raise ValueError(
-            f"{context}: requesting_timeout must be positive, got {timeout_ms}ms. "
-            f"This controls how long to wait for VMs to provision before timing out."
         )
 
     # scale_up_delay and scale_down_delay can be zero (no cooldown) but not negative
@@ -608,12 +621,10 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     # Expand environment variables in controller_address only.
     # Other fields (e.g., docker_image, ssh.key_file) are used as-is.
     # This is intentional - controller_address often needs $IRIS_CONTROLLER_ADDRESS for dynamic discovery.
-    if "bootstrap" in data and "controller_address" in data["bootstrap"]:
-        data["bootstrap"]["controller_address"] = os.path.expandvars(data["bootstrap"]["controller_address"])
-    if "defaults" in data and "bootstrap" in data["defaults"]:
-        defaults_bootstrap = data["defaults"]["bootstrap"]
-        if "controller_address" in defaults_bootstrap:
-            defaults_bootstrap["controller_address"] = os.path.expandvars(defaults_bootstrap["controller_address"])
+    if "defaults" in data and "worker" in data["defaults"]:
+        defaults_worker = data["defaults"]["worker"]
+        if "controller_address" in defaults_worker:
+            defaults_worker["controller_address"] = os.path.expandvars(defaults_worker["controller_address"])
 
     _normalize_scale_group_resources(data)
     _expand_multi_zone_groups(data)
@@ -661,7 +672,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     validate_config(config)
 
     platform_kind = config.platform.WhichOneof("platform") if config.HasField("platform") else "unspecified"
-    logger.info(
+    logger.debug(
         "Config loaded: platform=%s, scale_groups=%s",
         platform_kind,
         list(config.scale_groups.keys()) if config.scale_groups else "(none)",
@@ -701,7 +712,7 @@ def _normalize_scale_group_resources(data: dict) -> None:
 
         cpu = resources.get("cpu")
         if cpu is not None:
-            normalized["cpu"] = int(cpu)
+            normalized["cpu_millicores"] = int(float(cpu) * 1000)
 
         memory = resources.get("ram")
         if memory is not None:
@@ -746,8 +757,8 @@ def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
             if not isinstance(resources, dict):
                 continue
             normalized: dict[str, object] = {}
-            if "cpu" in resources:
-                normalized["cpu"] = resources["cpu"]
+            if "cpu_millicores" in resources:
+                normalized["cpu"] = resources["cpu_millicores"] / 1000
             if "memory_bytes" in resources:
                 normalized["ram"] = resources["memory_bytes"]
             if "disk_bytes" in resources:
@@ -887,15 +898,15 @@ class IrisConfig:
         return IrisConfig(local_proto)
 
     def controller_address(self) -> str:
-        """Get controller address from bootstrap config, if set.
+        """Get controller address from worker config, if set.
 
         Returns:
             Controller address string, or empty string if not configured
         """
         # TODO: Derive controller address from controller.manual/local when unset.
-        bootstrap = self._proto.defaults.bootstrap
-        if bootstrap.HasField("controller_address"):
-            return bootstrap.controller_address
+        worker = self._proto.defaults.worker
+        if worker.HasField("controller_address"):
+            return worker.controller_address
         return ""
 
 
@@ -904,9 +915,8 @@ def create_autoscaler(
     autoscaler_config: config_pb2.AutoscalerConfig,
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     label_prefix: str,
-    bootstrap_config: config_pb2.BootstrapConfig | None = None,
+    base_worker_config: config_pb2.WorkerConfig | None = None,
     threads: ThreadContainer | None = None,
-    gcp_project: str = "",
 ):
     """Create autoscaler from Platform and explicit config.
 
@@ -915,10 +925,9 @@ def create_autoscaler(
         autoscaler_config: Autoscaler settings (already resolved with defaults)
         scale_groups: Map of scale group name to config
         label_prefix: Prefix for labels on managed resources
-        bootstrap_config: Worker bootstrap settings passed through to platform.create_slice().
+        base_worker_config: Base worker configuration passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
         threads: Thread container for background threads. Uses global default if not provided.
-        gcp_project: GCP project ID for AR remote repo image rewriting.
 
     Returns:
         Configured Autoscaler instance
@@ -966,6 +975,5 @@ def create_autoscaler(
         scale_groups=scaling_groups,
         config=autoscaler_config,
         platform=platform,
-        bootstrap_config=bootstrap_config,
-        gcp_project=gcp_project,
+        base_worker_config=base_worker_config,
     )

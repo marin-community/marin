@@ -397,8 +397,6 @@ def default_train(
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
             profiler=train_config.profiler,
-            profiler_start_step=train_config.profiler_start_step,
-            profiler_num_steps=train_config.profiler_num_steps,
             use_explicit_mesh_axes=train_config.explicit_mesh_axes,
         ),
         initialize_from_checkpoint_path=(

@@ -13,7 +13,12 @@ import pytest
 from starlette.testclient import TestClient
 
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.events import JobSubmittedEvent, WorkerRegisteredEvent
+from iris.cluster.controller.events import (
+    JobSubmittedEvent,
+    TaskAssignedEvent,
+    TaskStateChangedEvent,
+    WorkerRegisteredEvent,
+)
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
@@ -176,7 +181,7 @@ def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-job").to_wire(),
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
     )
@@ -184,7 +189,7 @@ def job_request():
 
 @pytest.fixture
 def resource_spec():
-    return cluster_pb2.ResourceSpecProto(cpu=4, memory_bytes=8 * 1024**3, disk_bytes=100 * 1024**3)
+    return cluster_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=8 * 1024**3, disk_bytes=100 * 1024**3)
 
 
 def test_list_jobs_returns_job_state_counts(client, state, job_request):
@@ -301,7 +306,7 @@ def test_list_jobs_includes_task_counts(client, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -364,7 +369,7 @@ def test_get_job_status_returns_original_request(client, state):
         name="request-detail-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=4,
+            cpu_millicores=4000,
             memory_bytes=8 * 1024**3,
             disk_bytes=100 * 1024**3,
         ),
@@ -393,7 +398,7 @@ def test_get_job_status_returns_original_request(client, state):
     assert ep.get("runCommand", {}).get("argv") == ["python", "-c", "pass"]
     # Verify resources
     res = returned_request.get("resources", {})
-    assert res["cpu"] == 4
+    assert res["cpuMillicores"] == 4000
     assert int(res["memoryBytes"]) == 8 * 1024**3
     assert int(res["diskBytes"]) == 100 * 1024**3
     # Verify environment
@@ -472,6 +477,9 @@ def mock_autoscaler():
                     ),
                 ],
                 current_demand=3,
+                availability_status="requesting",
+                availability_reason="scale-up in progress",
+                blocked_until=Timestamp.from_ms(0).to_proto(),
             ),
         ],
         current_demand={"test-group": 3},
@@ -506,6 +514,8 @@ def test_get_autoscaler_status_returns_status_when_enabled(client_with_autoscale
     group = data["groups"][0]
     assert group["name"] == "test-group"
     assert group["currentDemand"] == 3
+    assert group["availabilityStatus"] == "requesting"
+    assert group["availabilityReason"] == "scale-up in progress"
 
     # Verify demand tracking
     assert data["currentDemand"] == {"test-group": 3}
@@ -578,7 +588,7 @@ def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="diag-constraint",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
         constraints=[
@@ -638,11 +648,29 @@ def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
 # =============================================================================
 
 
-def test_vm_detail_page_escapes_vm_id(client):
-    """VM detail page escapes the VM ID to prevent XSS."""
-    response = client.get('/vm/"onmouseover="alert(1)')
+def test_worker_detail_page_escapes_id(client):
+    """Worker detail page escapes the ID to prevent XSS."""
+    response = client.get('/worker/"onmouseover="alert(1)')
     assert response.status_code == 200
     assert "onmouseover" not in response.text or "&quot;" in response.text
+
+
+def test_get_worker_status_recent_tasks_have_timestamps(client, state, make_worker_metadata, job_request):
+    """GetWorkerStatus returns recent_tasks with started_at populated from attempt timestamps."""
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    job_id = submit_job(state, "ts-job", job_request)
+    task_id = job_id.task(0)
+
+    state.handle_event(TaskAssignedEvent(task_id=task_id, worker_id=wid))
+    state.handle_event(TaskStateChangedEvent(task_id=task_id, new_state=cluster_pb2.TASK_STATE_RUNNING, attempt_id=0))
+    state.handle_event(TaskStateChangedEvent(task_id=task_id, new_state=cluster_pb2.TASK_STATE_SUCCEEDED, attempt_id=0))
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
+    tasks = resp.get("recentTasks", [])
+    assert len(tasks) == 1
+    assert tasks[0]["taskId"] == task_id.to_wire()
+    assert tasks[0].get("startedAt"), "started_at must be populated from attempt timestamps"
+    assert tasks[0].get("finishedAt"), "finished_at must be populated from attempt timestamps"
 
 
 def test_health_endpoint_returns_ok(client, state, make_worker_metadata, job_request):
@@ -718,7 +746,7 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
@@ -754,7 +782,7 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="big-cosched",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
@@ -807,7 +835,7 @@ def test_list_jobs_returns_all_jobs_for_pagination(client, state):
         request = cluster_pb2.Controller.LaunchJobRequest(
             name=f"job-{i:03d}",
             entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
         )
         submit_job(state, f"job-{i:03d}", request)

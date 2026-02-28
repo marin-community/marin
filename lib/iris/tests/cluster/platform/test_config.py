@@ -35,9 +35,9 @@ platform:
     project_id: my-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -85,9 +85,9 @@ platform:
   manual: {}
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
   ssh:
     user: ubuntu
@@ -146,9 +146,9 @@ platform:
     project_id: my-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -241,9 +241,9 @@ platform:
   manual: {{}}
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -275,9 +275,9 @@ platform:
     project_id: my-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -317,9 +317,9 @@ platform:
     project_id: my-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -365,9 +365,9 @@ platform:
   manual: {}
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
   ssh:
     user: ubuntu
@@ -413,9 +413,9 @@ platform:
     project_id: my-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/project/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
@@ -558,9 +558,9 @@ platform:
     project_id: test-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/test/worker:latest
-    worker_port: 10001
+    port: 10001
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
@@ -622,7 +622,7 @@ platform:
     project_id: test-project
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: gcr.io/test/worker:latest
 
 controller:
@@ -718,7 +718,7 @@ def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
         name="test",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         num_vms=1,
-        resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3),
+        resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
     )
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
     sg.slice_template.num_vms = 1
@@ -759,7 +759,7 @@ class TestConfigValidation:
         sg = config.scale_groups["test"]
         sg.name = "test"
         sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
-        sg.resources.CopyFrom(config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3))
+        sg.resources.CopyFrom(config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3))
         with pytest.raises(ValueError, match="must set num_vms"):
             validate_config(config)
 
@@ -772,8 +772,10 @@ class TestConfigValidation:
             validate_config(_config_with(accelerator_type=config_pb2.ACCELERATOR_TYPE_UNSPECIFIED))
 
     def test_rejects_negative_cpu(self):
-        with pytest.raises(ValueError, match="invalid cpu"):
-            validate_config(_config_with(resources=config_pb2.ScaleGroupResources(cpu=-1, memory_bytes=16 * 1024**3)))
+        with pytest.raises(ValueError, match="invalid cpu_millicores"):
+            validate_config(
+                _config_with(resources=config_pb2.ScaleGroupResources(cpu_millicores=-1000, memory_bytes=16 * 1024**3))
+            )
 
     def test_rejects_gcp_zone_not_in_platform_zones(self):
         """Validation fails when scale group zone is not in platform.gcp.zones."""
@@ -786,7 +788,7 @@ class TestConfigValidation:
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5litepod-8",
             num_vms=8,
-            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=4),
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=4),
         )
         sg.slice_template.gcp.zone = "zone-b"
         sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
@@ -806,13 +808,81 @@ class TestConfigValidation:
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
             accelerator_variant="v5litepod-8",
             num_vms=8,
-            resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=4),
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=4),
         )
         sg.slice_template.gcp.zone = "zone-a"
         sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
         config.scale_groups["tpu"].CopyFrom(sg)
 
         validate_config(config)  # Should not raise
+
+    def test_rejects_gcp_vm_mode_with_preemptible(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config_pb2.ScaleGroupConfig(
+            name="cpu-vm",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            num_vms=1,
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
+        )
+        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_template.preemptible = True
+        sg.slice_template.gcp.zone = "us-central1-a"
+        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+        sg.slice_template.gcp.machine_type = "n2-standard-4"
+        config.scale_groups["cpu-vm"].CopyFrom(sg)
+
+        with pytest.raises(ValueError, match="do not support preemptible"):
+            validate_config(config)
+
+    def test_rejects_gcp_vm_mode_with_num_vms_not_one(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config_pb2.ScaleGroupConfig(
+            name="cpu-vm",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            num_vms=2,
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
+        )
+        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_template.gcp.zone = "us-central1-a"
+        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+        sg.slice_template.gcp.machine_type = "n2-standard-4"
+        config.scale_groups["cpu-vm"].CopyFrom(sg)
+
+        with pytest.raises(ValueError, match="require num_vms=1"):
+            validate_config(config)
+
+    def test_rejects_gcp_vm_mode_with_non_cpu_accelerator(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config_pb2.ScaleGroupConfig(
+            name="gpu-vm",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            num_vms=1,
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, gpu_count=1),
+        )
+        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_GPU
+        sg.slice_template.gcp.zone = "us-central1-a"
+        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+        sg.slice_template.gcp.machine_type = "n2-standard-4"
+        config.scale_groups["gpu-vm"].CopyFrom(sg)
+
+        with pytest.raises(ValueError, match="require accelerator_type=cpu"):
+            validate_config(config)
+
+    def test_accepts_gcp_vm_mode_cpu_single_vm_non_preemptible(self):
+        config = config_pb2.IrisClusterConfig()
+        sg = config_pb2.ScaleGroupConfig(
+            name="cpu-vm",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            num_vms=1,
+            resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3),
+        )
+        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_template.gcp.zone = "us-central1-a"
+        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+        sg.slice_template.gcp.machine_type = "n2-standard-4"
+        config.scale_groups["cpu-vm"].CopyFrom(sg)
+
+        validate_config(config)
 
 
 def _gcp_scale_group(zone: str, *, preemptible: bool = False) -> config_pb2.ScaleGroupConfig:
@@ -821,7 +891,7 @@ def _gcp_scale_group(zone: str, *, preemptible: bool = False) -> config_pb2.Scal
         name="test",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
         num_vms=1,
-        resources=config_pb2.ScaleGroupResources(cpu=8, memory_bytes=16 * 1024**3, tpu_count=1),
+        resources=config_pb2.ScaleGroupResources(cpu_millicores=8000, memory_bytes=16 * 1024**3, tpu_count=1),
     )
     sg.slice_template.gcp.zone = zone
     sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
@@ -960,7 +1030,7 @@ platform:
     project_id: test
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
@@ -1005,7 +1075,7 @@ platform:
     project_id: test
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
@@ -1032,7 +1102,7 @@ platform:
     zones: [us-west4-a]
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
@@ -1059,7 +1129,7 @@ platform:
     project_id: test
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:
@@ -1109,7 +1179,7 @@ platform:
     zones: [us-central1-a]
 
 defaults:
-  bootstrap:
+  worker:
     docker_image: ghcr.io/test/iris-worker:latest
 
 scale_groups:

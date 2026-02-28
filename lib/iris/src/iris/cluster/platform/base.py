@@ -322,12 +322,12 @@ class Platform(Protocol):
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a slice of connected workers (e.g., TPU pod, IB GPU cluster).
 
         The slice is the atomic scaling unit -- it succeeds or fails as a whole.
-        When bootstrap_config is provided, the platform handles worker bootstrapping
+        When worker_config is provided, the platform handles worker bootstrapping
         internally (docker setup, worker container startup). describe() returns
         BOOTSTRAPPING while in progress, then READY or FAILED when complete.
         """
@@ -381,6 +381,14 @@ class Platform(Protocol):
         """
         ...
 
+    def debug_report(self) -> None:
+        """Log diagnostic info about the controller after a failure.
+
+        Override to inspect platform-specific state (e.g. pod termination
+        reason, previous container logs). Default is a no-op.
+        """
+        ...
+
     def shutdown(self) -> None:
         """Release platform-owned resources (threads, connections, caches).
 
@@ -389,6 +397,23 @@ class Platform(Protocol):
 
         For LocalPlatform this stops worker threads managed by ThreadContainer.
         For GCP/Manual this is typically a no-op.
+        """
+        ...
+
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        """Resolve a container image reference for this platform's registry.
+
+        On GCP, rewrites ``ghcr.io/`` images to the Artifact Registry remote
+        repo for the given zone's continent.  Other platforms return the image
+        unchanged.
+
+        Args:
+            image: Container image tag (e.g. ``ghcr.io/org/img:v1``).
+            zone: Cloud zone used to select the regional mirror.  Required on
+                GCP when the image starts with ``ghcr.io/``.
+
+        Returns:
+            Resolved image tag ready for ``docker pull``.
         """
         ...
 

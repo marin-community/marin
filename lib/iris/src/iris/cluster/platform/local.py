@@ -58,6 +58,41 @@ from iris.time_utils import Duration, Timestamp
 logger = logging.getLogger(__name__)
 
 
+def _build_local_worker_metadata(
+    attributes: dict[str, str | int | float],
+    device: cluster_pb2.DeviceConfig | None = None,
+    vm_address: str = "",
+) -> cluster_pb2.WorkerMetadata:
+    """Build WorkerMetadata for local in-process workers.
+
+    vm_address must be unique per worker so the autoscaler can correlate
+    workers with their slice VMs.
+    """
+    if device is None:
+        device = cluster_pb2.DeviceConfig()
+        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
+    proto_attrs: dict[str, cluster_pb2.AttributeValue] = {}
+    for key, value in attributes.items():
+        if isinstance(value, str):
+            proto_attrs[key] = cluster_pb2.AttributeValue(string_value=value)
+        elif isinstance(value, int):
+            proto_attrs[key] = cluster_pb2.AttributeValue(int_value=value)
+        elif isinstance(value, float):
+            proto_attrs[key] = cluster_pb2.AttributeValue(float_value=value)
+
+    return cluster_pb2.WorkerMetadata(
+        hostname="local",
+        ip_address="127.0.0.1",
+        cpu_count=1000,
+        memory_bytes=1000 * 1024**3,
+        disk_bytes=100 * 1024**3,
+        device=device,
+        attributes=proto_attrs,
+        vm_address=vm_address,
+    )
+
+
 # ============================================================================
 # Local Providers (in-process implementations for testing)
 # ============================================================================
@@ -70,49 +105,6 @@ class _LocalBundleProvider:
     def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
         del gcs_path, expected_hash
         return self._bundle_path
-
-
-class LocalEnvironmentProvider:
-    def __init__(
-        self,
-        cpu: int = 1000,
-        memory_gb: int = 1000,
-        attributes: dict[str, str | int | float] | None = None,
-        device: cluster_pb2.DeviceConfig | None = None,
-    ):
-        self._cpu = cpu
-        self._memory_gb = memory_gb
-        self._attributes = attributes or {}
-        self._device = device
-
-    def probe(self) -> cluster_pb2.WorkerMetadata:
-        if self._device is not None:
-            device = self._device
-        else:
-            device = cluster_pb2.DeviceConfig()
-            device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
-
-        proto_attrs = {}
-        for key, value in self._attributes.items():
-            if isinstance(value, str):
-                proto_attrs[key] = cluster_pb2.AttributeValue(string_value=value)
-            elif isinstance(value, int):
-                proto_attrs[key] = cluster_pb2.AttributeValue(int_value=value)
-            elif isinstance(value, float):
-                proto_attrs[key] = cluster_pb2.AttributeValue(float_value=value)
-
-        return cluster_pb2.WorkerMetadata(
-            hostname="local",
-            ip_address="127.0.0.1",
-            cpu_count=self._cpu,
-            memory_bytes=self._memory_gb * 1024**3,
-            disk_bytes=100 * 1024**3,  # Default 100GB for local
-            device=device,
-            attributes=proto_attrs,
-        )
-
-    def log_prefix(self) -> str | None:
-        return None
 
 
 # ============================================================================
@@ -404,6 +396,9 @@ class LocalPlatform:
         self._gpu_count_by_group = gpu_count_by_group or {}
         self._local_controller: object | None = None
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
+
     def create_vm(self, config: config_pb2.VmConfig) -> _LocalStandaloneWorkerHandle:
         """Create an in-process "VM". Used by start_controller() for local mode."""
         handle = _LocalStandaloneWorkerHandle(
@@ -418,14 +413,13 @@ class LocalPlatform:
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> LocalSliceHandle:
         """Create a local slice, optionally spawning real Worker instances.
 
         When controller_address was provided at construction, spawns real Workers
         that register with the controller (E2E mode). Otherwise creates in-memory
-        stubs (unit test mode). The bootstrap_config parameter is accepted for
-        interface compatibility but ignored — local workers are already READY.
+        stubs (unit test mode).
         """
         slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
         num_vms = config.num_vms or 1
@@ -501,14 +495,13 @@ class LocalPlatform:
                 for k, v in self._worker_attributes_by_group[sg_name].items():
                     attributes.setdefault(k, v)
 
-            environment_provider = LocalEnvironmentProvider(
-                cpu=1000,
-                memory_gb=1000,
-                attributes=attributes,
-                device=device,
+            worker_metadata = _build_local_worker_metadata(
+                attributes,
+                device,
+                vm_address=f"127.0.0.1:{worker_port}",
             )
 
-            worker_config = WorkerConfig(
+            wc = WorkerConfig(
                 host="127.0.0.1",
                 port=worker_port,
                 cache_dir=self._cache_path,
@@ -520,10 +513,10 @@ class LocalPlatform:
             )
             worker_threads = self._threads.create_child(f"worker-{worker_id}")
             worker = Worker(
-                worker_config,
+                wc,
                 bundle_provider=bundle_provider,
                 container_runtime=container_runtime,
-                environment_provider=environment_provider,
+                worker_metadata=worker_metadata,
                 port_allocator=self._port_allocator,
                 threads=worker_threads,
             )

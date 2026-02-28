@@ -8,7 +8,6 @@ from __future__ import annotations
 import io
 import os
 import posixpath
-import shutil
 import time
 import uuid
 from contextlib import contextmanager
@@ -19,7 +18,7 @@ import pytest
 from iris.cluster.config import load_config
 import fsspec.core
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.runtime.types import ContainerConfig
+from iris.cluster.runtime.types import ContainerConfig, ContainerPhase
 from iris.rpc import cluster_pb2
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
@@ -35,7 +34,7 @@ def _wait_finished(handle, timeout_seconds: float) -> cluster_pb2.TaskState:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         status = handle.status()
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             return cluster_pb2.TASK_STATE_SUCCEEDED if status.exit_code == 0 else cluster_pb2.TASK_STATE_FAILED
         time.sleep(2.0)
     raise TimeoutError(f"pod {handle.container_id} did not finish in {timeout_seconds}s")
@@ -162,12 +161,34 @@ def _coreweave_upload_env(config) -> object:
             fsspec.config.conf.pop("s3", None)
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
+@pytest.mark.timeout(120)
+def test_kubernetes_runtime_lifecycle(k8s_runtime: KubernetesRuntime):
+    """Full KubernetesRuntime lifecycle: create pod, run, succeed, read logs."""
+    run_id = uuid.uuid4().hex[:8]
+    config = ContainerConfig(
+        image="python:3.11-slim",
+        entrypoint=_entrypoint(["bash", "-c", "echo lifecycle-test-ok && sleep 2"]),
+        env={},
+        workdir="/app",
+        task_id=f"lifecycle-{run_id}",
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=100, memory_bytes=64 * 1024**2),
+    )
+
+    handle = k8s_runtime.create_container(config)
+    handle.run()
+
+    state = _wait_finished(handle, timeout_seconds=60)
+    assert state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+    logs = handle.log_reader().read_all()
+    assert any("lifecycle-test-ok" in line.data for line in logs)
+
+
 @pytest.mark.timeout(1800)
 def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: KubernetesRuntime):
     """CPU pod should extract bundle and complete successfully via KubernetesRuntime."""
     config = load_config(Path(__file__).resolve().parents[2] / "examples" / "coreweave.yaml")
-    image = config.defaults.default_task_image
+    image = config.defaults.worker.default_task_image
     run_id = uuid.uuid4().hex[:8]
     bundle_url = ""
     bundle_fs = None
@@ -202,7 +223,7 @@ def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: Kubernetes
             mounts=_cache_mounts(),
             network_mode="bridge",
             task_id=f"runtime-live-cpu-{run_id}",
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1 * 1024**3),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1 * 1024**3),
         )
         cpu_handle = coreweave_runtime.create_container(cpu_config)
         cpu_handle.run()
@@ -225,7 +246,6 @@ def test_coreweave_kubernetes_runtime_cpu_job_live(coreweave_runtime: Kubernetes
                 pass
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(1800)
 def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRuntime):
     """Incremental log reads via byte-offset cursor must not produce duplicate lines.
@@ -235,7 +255,7 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
     must equal the full log with zero duplicates.
     """
     config = load_config(Path(__file__).resolve().parents[2] / "examples" / "coreweave.yaml")
-    image = config.defaults.default_task_image
+    image = config.defaults.worker.default_task_image
     run_id = uuid.uuid4().hex[:8]
 
     # Emit 20 numbered lines with 0.1s spacing so multiple land in the same second
@@ -251,7 +271,7 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
             mounts=_cache_mounts(),
             network_mode="bridge",
             task_id=f"log-dedup-{run_id}",
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
         )
     )
     handle.run()
@@ -265,7 +285,7 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
         for line in new_lines:
             collected.append(line.data)
         status = handle.status()
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             # One final read to drain remaining
             for line in reader.read():
                 collected.append(line.data)
@@ -286,15 +306,14 @@ def test_incremental_log_reader_no_duplicates(coreweave_runtime: KubernetesRunti
     assert numbered == expected
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(3600)
 def test_coreweave_kubernetes_runtime_gpu_job_live(coreweave_runtime: KubernetesRuntime):
     """GPU pod should request GPU and prove device access via nvidia-smi."""
     config = load_config(Path(__file__).resolve().parents[2] / "examples" / "coreweave.yaml")
-    image = config.defaults.default_task_image
+    image = config.defaults.worker.default_task_image
     run_id = uuid.uuid4().hex[:8]
 
-    gpu_resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=4 * 1024**3)
+    gpu_resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=4 * 1024**3)
     gpu_resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="H100", count=1))
     gpu_config = ContainerConfig(
         image=image,
@@ -327,7 +346,6 @@ def test_coreweave_kubernetes_runtime_gpu_job_live(coreweave_runtime: Kubernetes
     assert gpu_state == cluster_pb2.TASK_STATE_SUCCEEDED, f"gpu pod failed logs={gpu_logs}"
 
 
-@pytest.mark.skipif(shutil.which("kubectl") is None, reason="kubectl is not available")
 @pytest.mark.timeout(600)
 def test_tensorstore_s3_roundtrip():
     """Verify tensorstore can write and read zarr3 data via S3-compatible storage.

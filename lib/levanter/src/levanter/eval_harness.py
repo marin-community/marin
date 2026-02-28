@@ -1536,17 +1536,25 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
 
         # Set up profiler configuration if enabled
         profiler_config = None
-        if config.trainer.profiler:
+        trainer_profiler = config.trainer.profiler
+        if trainer_profiler.is_enabled:
+            profiler_num_steps = trainer_profiler.resolve_num_profile_steps(
+                num_train_steps=config.trainer.num_train_steps
+            )
+        else:
+            profiler_num_steps = 0
+
+        if profiler_num_steps > 0:
             # Get the run_id that was set during initialize()
             run_id = config.trainer._maybe_set_id()
             run_dir = config.trainer.log_dir if run_id is None else config.trainer.log_dir / run_id
             profile_path = run_dir / "profiler"
             profiler_config = ProfilerConfig(
                 enabled=True,
-                start_step=config.trainer.profiler_start_step,
-                num_steps=config.trainer.profiler_num_steps,
+                start_step=trainer_profiler.start_step,
+                num_steps=profiler_num_steps,
                 profile_path=str(profile_path),
-                perfetto_link=config.trainer.profiler_perfetto_link,
+                perfetto_link=trainer_profiler.perfetto_link,
             )
 
         logger.info("Running LM eval harness....")

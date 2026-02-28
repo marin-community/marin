@@ -53,7 +53,7 @@ def _add_scale_group(
     sg.num_vms = num_vms
     sg.min_slices = 1
     sg.max_slices = 2
-    sg.resources.cpu = 128
+    sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024**3
     sg.resources.disk_bytes = 1024 * 1024**3
     sg.slice_template.preemptible = True
@@ -99,28 +99,28 @@ def _click_autoscaler_tab(page, cluster):
 
 
 def test_autoscaler_tab_shows_scale_groups(cluster, page, screenshot):
-    """Both scale groups appear in the Autoscaler tab's Scale Groups table."""
+    """Both scale groups appear and new routing/status sections render."""
     _click_autoscaler_tab(page, cluster)
 
     assert_visible(page, "text=tpu_v5e_16")
     assert_visible(page, "text=tpu_v5e_32")
+    assert_visible(page, "text=Waterfall Routing")
+    assert_visible(page, "text=Decision")
+    assert_visible(page, "text=Reason")
 
     screenshot("autoscaler-scale-groups")
 
 
-def test_autoscaler_tab_shows_slices(cluster, page, screenshot):
-    """Slice sub-rows with VM state indicators and VM counts are rendered."""
+def test_autoscaler_tab_shows_routing_table(cluster, page, screenshot):
+    """Waterfall Routing table has rows for each scale group."""
     _click_autoscaler_tab(page, cluster)
 
     if not _is_noop_page(page):
-        page.wait_for_selector(".vm-state-indicator", timeout=10000)
-        indicators = page.locator(".vm-state-indicator")
-        assert indicators.count() >= 2, f"Expected at least 2 vm-state-indicator elements, got {indicators.count()}"
+        page.wait_for_selector(".scale-groups-table", timeout=10000)
+        rows = page.locator(".scale-groups-table tbody tr")
+        assert rows.count() >= 2, f"Expected at least 2 routing table rows, got {rows.count()}"
 
-        vm_cells = page.locator("text=/\\d+ VMs/")
-        assert vm_cells.count() >= 2, f"Expected at least 2 VM count cells, got {vm_cells.count()}"
-
-    screenshot("autoscaler-slices")
+    screenshot("autoscaler-routing-table")
 
 
 def test_autoscaler_tab_recent_actions(cluster, page, screenshot):

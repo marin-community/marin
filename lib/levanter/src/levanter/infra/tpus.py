@@ -110,12 +110,18 @@ def start_tpu_vm_queued_resources(tpu_name, *, tpu_type, capacity_type, version,
 
     if version is not None:
         command.append(f"--runtime-version={version}")
-    if capacity_type in ["best-effort", "preemptible", "spot"]:
-        command.append("--best-effort")
-        command.append("--provisioning-model=SPOT")
-    elif capacity_type == "reserved":
+
+    normalized_capacity_type = capacity_type.replace("_", "-") if capacity_type is not None else None
+
+    if normalized_capacity_type in ["preemptible", "spot"]:
+        command.extend(["--spot", "--provisioning-model=SPOT"])
+    elif normalized_capacity_type == "best-effort":
+        # best-effort and spot are mutually exclusive tier flags; best-effort still
+        # requires spot provisioning.
+        command.extend(["--best-effort", "--provisioning-model=SPOT"])
+    elif normalized_capacity_type == "reserved":
         command.append("--reserved")
-    elif capacity_type == "on-demand" or capacity_type is None:
+    elif normalized_capacity_type == "on-demand" or normalized_capacity_type is None:
         pass
     else:
         raise ValueError(f"Unknown capacity type: {capacity_type}")

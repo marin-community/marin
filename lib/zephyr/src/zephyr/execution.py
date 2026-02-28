@@ -10,6 +10,7 @@ protocol.
 """
 
 from __future__ import annotations
+
 import enum
 import logging
 import os
@@ -26,8 +27,8 @@ from typing import Any, Protocol
 
 import cloudpickle
 import fsspec
-from fray.v2 import ActorConfig, ActorHandle, Client, ResourceConfig
-from iris.temp_buckets import get_temp_bucket_path
+from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
+from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import ExponentialBackoff
 
 from zephyr.dataset import Dataset
@@ -386,7 +387,7 @@ class ZephyrCoordinator:
             self._task_queue.append(task)
             self._retries += 1
 
-    def _check_worker_heartbeats(self, timeout: float = 30.0) -> None:
+    def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
         """Internal heartbeat check (called with lock held)."""
         now = time.monotonic()
         for worker_id, last in list(self._last_seen.items()):
@@ -408,6 +409,7 @@ class ZephyrCoordinator:
             self._worker_states[worker_id] = WorkerState.READY
 
             if self._shutdown:
+                self._worker_states[worker_id] = WorkerState.DEAD
                 return "SHUTDOWN"
 
             if self._fatal_error:
@@ -415,6 +417,7 @@ class ZephyrCoordinator:
 
             if not self._task_queue:
                 if self._is_last_stage:
+                    self._worker_states[worker_id] = WorkerState.DEAD
                     return "SHUTDOWN"
                 return None
 
@@ -702,7 +705,7 @@ class ZephyrCoordinator:
         """Load a new stage's tasks into the queue (legacy compat)."""
         self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
 
-    def check_heartbeats(self, timeout: float = 30.0) -> None:
+    def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
             self._check_worker_heartbeats(timeout)
@@ -794,39 +797,73 @@ class ZephyrWorker:
             heartbeat_thread.join(timeout=5.0)
             logger.debug("[%s] Polling loop ended", self._worker_id)
 
-    def _heartbeat_loop(self, coordinator: ActorHandle, interval: float = 5.0) -> None:
+    def _heartbeat_loop(
+        self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
+    ) -> None:
         logger.debug("[%s] Heartbeat loop starting", self._worker_id)
         heartbeat_count = 0
+        consecutive_failures = 0
         while not self._shutdown_event.is_set():
             try:
                 # Block on result to avoid congesting the coordinator RPC pipe
                 # with fire-and-forget heartbeats.
                 coordinator.heartbeat.remote(self._worker_id).result()
                 heartbeat_count += 1
+                consecutive_failures = 0
                 if heartbeat_count % 10 == 1:
                     logger.debug("[%s] Sent heartbeat #%d", self._worker_id, heartbeat_count)
             except Exception as e:
-                logger.warning("[%s] Heartbeat failed: %s", self._worker_id, e)
+                consecutive_failures += 1
+                logger.warning(
+                    "[%s] Heartbeat failed (%d/%d): %s",
+                    self._worker_id,
+                    consecutive_failures,
+                    max_consecutive_failures,
+                    e,
+                )
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error(
+                        "[%s] %d consecutive heartbeat failures — coordinator is unreachable, shutting down",
+                        self._worker_id,
+                        consecutive_failures,
+                    )
+                    self._shutdown_event.set()
+                    break
             self._shutdown_event.wait(timeout=interval)
         logger.debug("[%s] Heartbeat loop exiting after %d beats", self._worker_id, heartbeat_count)
 
     def _poll_loop(self, coordinator: ActorHandle) -> None:
         """Pure polling loop. Exits on SHUTDOWN signal, coordinator death, or shutdown event."""
-        loop_count = 0
         task_count = 0
         backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
 
-        while not self._shutdown_event.is_set():
-            loop_count += 1
-            if loop_count % 100 == 1:
-                logger.debug("[%s] Poll iteration #%d, tasks completed: %d", self._worker_id, loop_count, task_count)
+        future: ActorFuture | None = None
+        future_start = 0.0
+        warned = False
 
+        while not self._shutdown_event.is_set():
+            # Create a pull_task future if we don't have one in flight
+            if future is None:
+                future = coordinator.pull_task.remote(self._worker_id)
+                future_start = time.monotonic()
+                warned = False
+
+            # Poll with a short timeout so we stay responsive to shutdown
+            # without killing the worker (and its heartbeat thread) on slow
+            # deserialization.
             try:
-                response = coordinator.pull_task.remote(self._worker_id).result(timeout=30.0)
+                response = future.result(timeout=0.5)
+            except TimeoutError:
+                elapsed = time.monotonic() - future_start
+                if elapsed > 30 and not warned:
+                    logger.warning("[%s] Waiting for coordinator pull_task response (%.0fs)", self._worker_id, elapsed)
+                    warned = True
+                continue
             except Exception as e:
-                # Coordinator is dead or unreachable - exit gracefully
                 logger.info("[%s] pull_task failed (coordinator may be dead): %s", self._worker_id, e)
                 break
+
+            future = None  # consumed; next iteration will create a new one
 
             # SHUTDOWN signal - exit cleanly
             if response == "SHUTDOWN":
@@ -980,7 +1017,7 @@ class ZephyrContext:
             Defaults to 600s.
         max_execution_retries: Maximum number of times to retry a pipeline execution after
             an infrastructure failure (e.g., coordinator VM preemption). Application errors
-            (ZephyrWorkerError) are never retried. Defaults to 3.
+            (ZephyrWorkerError) are never retried. Defaults to 100.
     """
 
     client: Client | None = None
@@ -989,7 +1026,8 @@ class ZephyrContext:
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
-    max_execution_retries: int = 3
+    # NOTE: 100 is fairly aggressive but it fits the preemptible env better
+    max_execution_retries: int = 100
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -1020,17 +1058,7 @@ class ZephyrContext:
             self.no_workers_timeout = 6 * 60 * 60  # 6 hours
 
         if self.chunk_storage_prefix is None:
-            temp_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")
-            if temp_prefix is None:
-                marin_prefix = os.environ.get("MARIN_PREFIX")
-                if not marin_prefix:
-                    raise RuntimeError(
-                        "MARIN_PREFIX must be set when using a distributed backend.\n"
-                        "  Example: export MARIN_PREFIX=gs://marin-us-central2"
-                    )
-                temp_prefix = f"{marin_prefix}/tmp/zephyr"
-
-            self.chunk_storage_prefix = temp_prefix
+            self.chunk_storage_prefix = marin_temp_bucket(ttl_days=3, prefix="zephyr")
 
         # make sure each context is unique
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"

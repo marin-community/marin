@@ -7,29 +7,17 @@ platform:
     project_id: hai-gcp-models
 
 defaults:
-  default_task_image: ghcr.io/marin-community/iris-task:latest
-  timeouts:
-    boot_timeout:
-      milliseconds: 300000
-    init_timeout:
-      milliseconds: 600000
-    ssh_poll_interval:
-      milliseconds: 5000
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
-    requesting_timeout:
-      milliseconds: 120000
     scale_up_delay:
       milliseconds: 60000
     scale_down_delay:
       milliseconds: 300000
-  bootstrap:
+  worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
-    worker_port: 10001
-
-storage:
-  bundle_prefix: gs://marin-us-central2/tmp/iris/bundles
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+    port: 10001
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
@@ -39,6 +27,27 @@ controller:
     port: 10000
 
 scale_groups:
+  # Low-priority fallback CPU VM group for non-preemptible scheduling.
+  # Intentionally lower priority than accelerator groups.
+  # e2-highmem-2: best on-demand RAM/$ on GCP (~$0.09/hr, 8 GB/vCPU).
+  cpu_vm_e2_highmem_2_ondemand:
+    zones: [us-central1-a, us-east1-b, us-west1-a, europe-west4-a]
+    accelerator_type: cpu
+    num_vms: 1
+    priority: 1000
+    resources: { cpu: 2, ram: 16GB, disk: 100GB, tpu_count: 0, gpu_count: 0 }
+    min_slices: 0
+    max_slices: 16
+    slice_template:
+      accelerator_type: cpu
+      preemptible: false
+      gcp:
+        mode: GCP_SLICE_MODE_VM
+        machine_type: e2-highmem-2
+    worker:
+      attributes:
+        preemptible: "false"
+
   # ---------------------------------------------------------------------------
   # v5e (v5litepod) — europe-west4-b, us-west4-a
   # ---------------------------------------------------------------------------
