@@ -67,7 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=str, default="checkpoints/kelp-edit", help="Output directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--log-interval", type=int, default=10, help="Steps between logging")
-    parser.add_argument("--wandb-project", type=str, default=None, help="W&B project name (enables W&B logging)")
+    parser.add_argument("--wandb-entity", type=str, default="open-athena", help="W&B entity (team/user)")
+    parser.add_argument("--wandb-project", type=str, default="kelp", help="W&B project name (enables W&B logging)")
     parser.add_argument("--wandb-run-name", type=str, default=None, help="W&B run name")
     parser.add_argument(
         "--corpus-file",
@@ -154,6 +155,7 @@ def main():
         checkpoint_interval=args.checkpoint_interval,
         output_dir=args.output_dir,
         seed=args.seed,
+        wandb_entity=args.wandb_entity,
         wandb_project=args.wandb_project,
         wandb_run_name=args.wandb_run_name,
         max_corruption_steps=args.max_corruption_steps,
