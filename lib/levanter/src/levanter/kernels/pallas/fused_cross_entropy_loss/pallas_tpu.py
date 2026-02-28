@@ -6,7 +6,6 @@
 # Levanter's API and add optional logsumexp penalty, logit soft-cap, and
 # external loss weighting support.
 
-from contextlib import contextmanager
 from functools import lru_cache, partial
 import math
 import os
@@ -22,7 +21,6 @@ from jaxtyping import Array, Float, Int
 from .config import BlockSizes
 from .tuned_block_sizes import infer_xla_v_block_size, requires_tpu_label_layout_1024
 from ..cost_estimate_utils import with_io_bytes_accessed
-from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import _linear_softmax_cross_entropy_loss_streaming_bwd
 
 
@@ -32,48 +30,6 @@ class PallasUnsupportedError(NotImplementedError):
 
 NUM_LANES = 128
 _DISABLE_MEGACORE_ENV = "LEVANTER_PALLAS_TPU_DISABLE_MEGACORE"
-_SKIP_LABEL_LOGITS_ENV = "LEVANTER_PALLAS_TPU_SKIP_LABEL_LOGITS_BENCH"
-_FWD_XW_BF16_ENV = "LEVANTER_PALLAS_TPU_FWD_XW_BF16_BENCH"
-_FWD_DOT_ACCUM_BF16_ENV = "LEVANTER_PALLAS_TPU_FWD_DOT_ACCUM_BF16_BENCH"
-_FWD_FULL_H_DOT_ENV = "LEVANTER_PALLAS_TPU_FWD_FULL_H_DOT_BENCH"
-_FWD_SPLIT_LABEL_DOT_ENV = "LEVANTER_PALLAS_TPU_FWD_SPLIT_LABEL_DOT_BENCH"
-_FWD_SPLIT_LABEL_BF16_MUL_ENV = "LEVANTER_PALLAS_TPU_FWD_SPLIT_LABEL_BF16_MUL_BENCH"
-_FWD_SPLIT_LABEL_PALLAS_ENV = "LEVANTER_PALLAS_TPU_FWD_SPLIT_LABEL_PALLAS_BENCH"
-_FWD_INLINE_LABEL_SCALAR_ENV = "LEVANTER_PALLAS_TPU_FWD_INLINE_LABEL_SCALAR_BENCH"
-_FWD_INLINE_LABEL_TAKE_ENV = "LEVANTER_PALLAS_TPU_FWD_INLINE_LABEL_TAKE_BENCH"
-_FWD_LSE_SCALAR_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_SCALAR_BENCH"
-_FWD_LSE_NO_REPEAT_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_NO_REPEAT_BENCH"
-_FWD_LSE_FORI_LOOP_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_FORI_LOOP_BENCH"
-_FWD_LSE_FORI_V_MULT_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_FORI_V_MULT_BENCH"
-_FWD_LSE_STORE_PATH_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_STORE_PATH_BENCH"
-_BWD_USE_XLA_STREAMING_ENV = "LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH"
-
-
-def _fwd_cost_estimate(
-    x: jax.Array,
-    labels: jax.Array,
-    w: jax.Array,
-    *,
-    dtype: jnp.dtype | None,
-    logit_soft_cap: float | None,
-    precision: jax.lax.PrecisionLike,
-    kernel_inputs_specs,
-    kernel_outputs_specs,
-) -> pl.CostEstimate | None:
-    body_cost = pl.estimate_cost(
-        linear_softmax_cross_entropy_loss_reference,
-        x,
-        labels,
-        w,
-        dtype=dtype,
-        logit_soft_cap=logit_soft_cap,
-        precision=precision,
-    )
-    return with_io_bytes_accessed(
-        body_cost,
-        kernel_inputs_specs=kernel_inputs_specs,
-        kernel_outputs_specs=kernel_outputs_specs,
-    )
 
 
 def _backward_cost_reference(
@@ -177,23 +133,6 @@ def _labels_one_hot_emulated(
     return (cols == safe_labels[:, None]).astype(dtype)
 
 
-def _label_logits_for_block(
-    logits: jax.Array,
-    labels_adjusted: jax.Array,
-    *,
-    v_block_size: int,
-) -> jax.Array:
-    """Extract per-row label logit for a vocab block using an emulated one-hot selector."""
-    if _use_fwd_inline_label_take_bench():
-        labels_adjusted = labels_adjusted.astype(jnp.int32)
-        cols = jnp.arange(v_block_size, dtype=labels_adjusted.dtype)[None, :]
-        mask = cols == labels_adjusted[:, None]
-        return jnp.sum(jnp.where(mask, logits, jnp.zeros((), dtype=logits.dtype)), axis=-1)
-
-    labels_one_hot = _labels_one_hot_emulated(labels_adjusted, v_block_size, logits.dtype)
-    return jnp.sum(logits * labels_one_hot, axis=-1)
-
-
 def _mask_invalid_vocab_columns(
     logits: jax.Array,
     *,
@@ -271,106 +210,6 @@ def _infer_num_tensorcores() -> int:
     return 1
 
 
-def _skip_label_logits_bench() -> bool:
-    """Returns True when running the benchmark-only no-label-logits forward mode."""
-    return os.environ.get(_SKIP_LABEL_LOGITS_ENV, "") == "1"
-
-
-def _use_fwd_xw_bf16_bench() -> bool:
-    """Returns True when running benchmark-only bf16 xw_tiled forward mode."""
-    return os.environ.get(_FWD_XW_BF16_ENV, "") == "1"
-
-
-def _use_fwd_dot_accum_bf16_bench() -> bool:
-    """Returns True when running benchmark-only bf16 matmul-accum forward mode."""
-    return os.environ.get(_FWD_DOT_ACCUM_BF16_ENV, "") == "1"
-
-
-def _use_fwd_full_h_dot_bench() -> bool:
-    """Returns True when running benchmark-only full-H forward dot schedule."""
-    return os.environ.get(_FWD_FULL_H_DOT_ENV, "") == "1"
-
-
-def _use_fwd_split_label_dot_bench() -> bool:
-    """Returns True when running benchmark-only split label-dot forward mode."""
-    return os.environ.get(_FWD_SPLIT_LABEL_DOT_ENV, "") == "1"
-
-
-def _use_fwd_split_label_bf16_mul_bench() -> bool:
-    """Returns True when benchmark-only split-label mode uses bf16 multiplies."""
-    return os.environ.get(_FWD_SPLIT_LABEL_BF16_MUL_ENV, "") == "1"
-
-
-def _use_fwd_split_label_pallas_bench() -> bool:
-    """Returns True when benchmark-only split-label mode uses a pallas label kernel."""
-    return os.environ.get(_FWD_SPLIT_LABEL_PALLAS_ENV, "") == "1"
-
-
-def _use_fwd_inline_label_scalar_bench() -> bool:
-    """Returns True when benchmark-only forward uses scalar accumulators for CE."""
-    return os.environ.get(_FWD_INLINE_LABEL_SCALAR_ENV, "") == "1"
-
-
-def _use_fwd_inline_label_take_bench() -> bool:
-    """Returns True when benchmark-only forward uses take-based label extraction in-kernel."""
-    return os.environ.get(_FWD_INLINE_LABEL_TAKE_ENV, "") == "1"
-
-
-def _use_fwd_lse_scalar_bench() -> bool:
-    """Returns True when benchmark-only lse-only forward uses scalar accumulators."""
-    return os.environ.get(_FWD_LSE_SCALAR_ENV, "") == "1"
-
-
-def _use_fwd_lse_no_repeat_bench() -> bool:
-    """Returns True when benchmark-only lse-only forward avoids pltpu.repeat."""
-    return os.environ.get(_FWD_LSE_NO_REPEAT_ENV, "") == "1"
-
-
-def _use_fwd_lse_fori_loop_bench() -> bool:
-    """Returns True when benchmark-only lse-only forward uses an inner fori_loop."""
-    return os.environ.get(_FWD_LSE_FORI_LOOP_ENV, "") == "1"
-
-
-def _fwd_lse_fori_v_mult_bench() -> int:
-    """Outer V-block multiplier for benchmark-only lse fori-loop mode."""
-    raw = os.environ.get(_FWD_LSE_FORI_V_MULT_ENV, "")
-    if raw == "":
-        return 4
-    try:
-        value = int(raw)
-    except ValueError:
-        return 4
-    return max(1, value)
-
-
-def _use_fwd_lse_store_path_bench() -> bool:
-    """Returns True when benchmark-only forward forces the one-pass LSE store path."""
-    return os.environ.get(_FWD_LSE_STORE_PATH_ENV, "") == "1"
-
-
-def _use_bwd_xla_streaming_bench() -> bool:
-    """Returns True when benchmark-only backward uses XLA streaming backward."""
-    return os.environ.get(_BWD_USE_XLA_STREAMING_ENV, "") == "1"
-
-
-@contextmanager
-def _temporary_env(overrides: dict[str, str | None]):
-    previous = {key: os.environ.get(key) for key in overrides}
-    try:
-        for key, value in overrides.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-        yield
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-
 def _infer_core_grid(b_dim: int, block_sizes: BlockSizes) -> tuple[int, int]:
     num_cores = _infer_num_tensorcores()
     if num_cores > 1:
@@ -382,343 +221,6 @@ def _infer_core_grid(b_dim: int, block_sizes: BlockSizes) -> tuple[int, int]:
                 num_cores = 1
     num_b_blocks_per_core = b_dim // (num_cores * block_sizes.b_block_size)
     return num_cores, num_b_blocks_per_core
-
-
-def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
-    x_ref,
-    labels_ref,
-    w_ref,
-    lse_ref,
-    label_logits_ref,
-    xw_tiled,
-    m_scratch_ref,
-    l_scratch_ref,
-    label_logits_scratch_ref,
-    *,
-    v_dim: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-    compute_label_logits: bool,
-    dot_preferred_element_type: Optional[jnp.dtype],
-):
-    """Forward kernel (streaming logsumexp + label logits; no gathers)."""
-    core_index, b_index, v_index, h_index = (pl.program_id(i) for i in range(4))
-    del core_index, b_index
-    v_block_size = w_ref.shape[1]
-    num_v_blocks, num_h_blocks = (pl.num_programs(i) for i in range(2, 4))
-
-    @pl.when(v_index == num_v_blocks - 1)
-    def pad_non_aligned_v_block():
-        if v_dim % v_block_size != 0:
-            rem = v_dim % v_block_size
-            w_ref[:, rem:] = jnp.zeros((w_ref.shape[0], w_ref.shape[1] - rem), dtype=w_ref.dtype)
-
-    @pl.when(jnp.logical_and(v_index == 0, h_index == 0))
-    def init_accumulators():
-        m_scratch_ref[...] = jnp.full_like(m_scratch_ref, -jnp.inf)
-        l_scratch_ref[...] = jnp.zeros_like(l_scratch_ref)
-        label_logits_scratch_ref[...] = jnp.zeros_like(label_logits_scratch_ref)
-
-    @pl.when(h_index == 0)
-    def init_logits():
-        xw_tiled[...] = jnp.zeros_like(xw_tiled)
-
-    xw_tiled[...] += jax.lax.dot_general(
-        x_ref[...],
-        w_ref[...],
-        (((1,), (0,)), ((), ())),
-        preferred_element_type=dot_preferred_element_type,
-        precision=precision,
-    ).astype(xw_tiled.dtype)
-
-    @pl.when(h_index == num_h_blocks - 1)
-    def accumulate_block():
-        logits = xw_tiled[...]
-        if dtype is not None:
-            logits = logits.astype(dtype)
-        logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-        logits_f32 = logits.astype(jnp.float32)
-
-        if compute_label_logits:
-            labels_adjusted = labels_ref[...] - v_index * v_block_size
-            label_logits_block = _label_logits_for_block(
-                logits_f32,
-                labels_adjusted,
-                v_block_size=v_block_size,
-            )
-            label_logits_scratch_ref[...] += label_logits_block[:, None].astype(label_logits_scratch_ref.dtype)
-
-        logits_f32 = _mask_invalid_vocab_columns(
-            logits_f32,
-            v_index=v_index,
-            v_block_size=v_block_size,
-            v_dim=v_dim,
-        )
-
-        m_prev = m_scratch_ref[...].astype(jnp.float32)
-        l_prev = l_scratch_ref[...].astype(jnp.float32)
-        m_curr = jnp.max(logits_f32, axis=-1)[:, None]
-        m_next = jnp.maximum(m_prev, m_curr)
-
-        bkv_repeats, rem = divmod(v_block_size, NUM_LANES)
-        if rem != 0:
-            raise NotImplementedError(f"{v_block_size=} must be a multiple of {NUM_LANES}")
-        if _use_fwd_lse_no_repeat_bench():
-            logits_view = logits_f32.reshape((logits_f32.shape[0], NUM_LANES, bkv_repeats))
-            s_curr = jnp.exp(logits_view - m_next[:, :, None]).reshape(logits_f32.shape)
-        else:
-            s_curr = jnp.exp(logits_f32 - pltpu.repeat(m_next, bkv_repeats, axis=1))
-        l_curr = jax.lax.broadcast_in_dim(s_curr.sum(axis=-1), l_prev.shape, (0,))
-        alpha = jnp.exp(m_prev - m_next)
-        l_next = l_curr + alpha * l_prev
-        m_scratch_ref[...] = m_next.astype(m_scratch_ref.dtype)
-        l_scratch_ref[...] = l_next.astype(l_scratch_ref.dtype)
-
-    @pl.when(jnp.logical_and(v_index == num_v_blocks - 1, h_index == num_h_blocks - 1))
-    def finalize_loss():
-        lse_ref[...] = (jnp.log(l_scratch_ref[...]) + m_scratch_ref[...]).astype(lse_ref.dtype)
-        if compute_label_logits:
-            label_logits_ref[...] = label_logits_scratch_ref[...].astype(label_logits_ref.dtype)
-        else:
-            label_logits_ref[...] = jnp.zeros_like(label_logits_ref)
-
-
-def linear_softmax_cross_entropy_loss_forward_scalar_pallas_kernel(
-    x_ref,
-    labels_ref,
-    w_ref,
-    lse_ref,
-    label_logits_ref,
-    xw_tiled,
-    m_scratch_ref,
-    l_scratch_ref,
-    label_logits_scratch_ref,
-    *,
-    v_dim: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-    dot_preferred_element_type: Optional[jnp.dtype],
-):
-    """Forward CE kernel with scalar per-row accumulators (benchmark-only)."""
-    core_index, b_index, v_index, h_index = (pl.program_id(i) for i in range(4))
-    del core_index, b_index
-    v_block_size = w_ref.shape[1]
-    num_v_blocks, num_h_blocks = (pl.num_programs(i) for i in range(2, 4))
-
-    @pl.when(v_index == num_v_blocks - 1)
-    def pad_non_aligned_v_block():
-        if v_dim % v_block_size != 0:
-            rem = v_dim % v_block_size
-            w_ref[:, rem:] = jnp.zeros((w_ref.shape[0], w_ref.shape[1] - rem), dtype=w_ref.dtype)
-
-    @pl.when(jnp.logical_and(v_index == 0, h_index == 0))
-    def init_accumulators():
-        m_scratch_ref[...] = jnp.full_like(m_scratch_ref, -jnp.inf)
-        l_scratch_ref[...] = jnp.zeros_like(l_scratch_ref)
-        label_logits_scratch_ref[...] = jnp.zeros_like(label_logits_scratch_ref)
-
-    @pl.when(h_index == 0)
-    def init_logits():
-        xw_tiled[...] = jnp.zeros_like(xw_tiled)
-
-    xw_tiled[...] += jax.lax.dot_general(
-        x_ref[...],
-        w_ref[...],
-        (((1,), (0,)), ((), ())),
-        preferred_element_type=dot_preferred_element_type,
-        precision=precision,
-    ).astype(xw_tiled.dtype)
-
-    @pl.when(h_index == num_h_blocks - 1)
-    def accumulate_block():
-        logits = xw_tiled[...]
-        if dtype is not None:
-            logits = logits.astype(dtype)
-        logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-        logits_f32 = logits.astype(jnp.float32)
-        labels_adjusted = labels_ref[...] - v_index * v_block_size
-        label_logits_block = _label_logits_for_block(
-            logits_f32,
-            labels_adjusted,
-            v_block_size=v_block_size,
-        )
-        label_logits_scratch_ref[...] += label_logits_block.astype(label_logits_scratch_ref.dtype)
-
-        logits_f32 = _mask_invalid_vocab_columns(
-            logits_f32,
-            v_index=v_index,
-            v_block_size=v_block_size,
-            v_dim=v_dim,
-        )
-
-        m_prev = m_scratch_ref[...].astype(jnp.float32)
-        l_prev = l_scratch_ref[...].astype(jnp.float32)
-        m_curr = jnp.max(logits_f32, axis=-1)
-        m_next = jnp.maximum(m_prev, m_curr)
-        s_curr = jnp.exp(logits_f32 - m_next[:, None])
-        l_curr = s_curr.sum(axis=-1)
-        alpha = jnp.exp(m_prev - m_next)
-        l_next = l_curr + alpha * l_prev
-        m_scratch_ref[...] = m_next.astype(m_scratch_ref.dtype)
-        l_scratch_ref[...] = l_next.astype(l_scratch_ref.dtype)
-
-    @pl.when(jnp.logical_and(v_index == num_v_blocks - 1, h_index == num_h_blocks - 1))
-    def finalize_loss():
-        lse_ref[...] = (jnp.log(l_scratch_ref[...]) + m_scratch_ref[...]).astype(lse_ref.dtype)
-        label_logits_ref[...] = label_logits_scratch_ref[...].astype(label_logits_ref.dtype)
-
-
-def linear_softmax_lse_forward_pallas_kernel(
-    x_ref,
-    w_ref,
-    lse_ref,
-    xw_tiled,
-    m_scratch_ref,
-    l_scratch_ref,
-    *,
-    v_dim: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-    dot_preferred_element_type: Optional[jnp.dtype],
-):
-    """Forward kernel for logsumexp only (benchmark-only no-label mode)."""
-    core_index, b_index, v_index, h_index = (pl.program_id(i) for i in range(4))
-    del core_index, b_index
-    v_block_size = w_ref.shape[1]
-    num_v_blocks, num_h_blocks = (pl.num_programs(i) for i in range(2, 4))
-
-    @pl.when(v_index == num_v_blocks - 1)
-    def pad_non_aligned_v_block():
-        if v_dim % v_block_size != 0:
-            rem = v_dim % v_block_size
-            w_ref[:, rem:] = jnp.zeros((w_ref.shape[0], w_ref.shape[1] - rem), dtype=w_ref.dtype)
-
-    @pl.when(jnp.logical_and(v_index == 0, h_index == 0))
-    def init_accumulators():
-        m_scratch_ref[...] = jnp.full_like(m_scratch_ref, -jnp.inf)
-        l_scratch_ref[...] = jnp.zeros_like(l_scratch_ref)
-
-    @pl.when(h_index == 0)
-    def init_logits():
-        xw_tiled[...] = jnp.zeros_like(xw_tiled)
-
-    xw_tiled[...] += jax.lax.dot_general(
-        x_ref[...],
-        w_ref[...],
-        (((1,), (0,)), ((), ())),
-        preferred_element_type=dot_preferred_element_type,
-        precision=precision,
-    ).astype(xw_tiled.dtype)
-
-    @pl.when(h_index == num_h_blocks - 1)
-    def accumulate_block():
-        logits = xw_tiled[...]
-        if dtype is not None:
-            logits = logits.astype(dtype)
-        logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-        logits_f32 = logits.astype(jnp.float32)
-        logits_f32 = _mask_invalid_vocab_columns(
-            logits_f32,
-            v_index=v_index,
-            v_block_size=v_block_size,
-            v_dim=v_dim,
-        )
-
-        m_prev = m_scratch_ref[...].astype(jnp.float32)
-        l_prev = l_scratch_ref[...].astype(jnp.float32)
-        m_curr = jnp.max(logits_f32, axis=-1)[:, None]
-        m_next = jnp.maximum(m_prev, m_curr)
-
-        bkv_repeats, rem = divmod(v_block_size, NUM_LANES)
-        if rem != 0:
-            raise NotImplementedError(f"{v_block_size=} must be a multiple of {NUM_LANES}")
-
-        s_curr = jnp.exp(logits_f32 - pltpu.repeat(m_next, bkv_repeats, axis=1))
-        l_curr = jax.lax.broadcast_in_dim(s_curr.sum(axis=-1), l_prev.shape, (0,))
-        alpha = jnp.exp(m_prev - m_next)
-        l_next = l_curr + alpha * l_prev
-        m_scratch_ref[...] = m_next.astype(m_scratch_ref.dtype)
-        l_scratch_ref[...] = l_next.astype(l_scratch_ref.dtype)
-
-    @pl.when(jnp.logical_and(v_index == num_v_blocks - 1, h_index == num_h_blocks - 1))
-    def finalize_loss():
-        lse_ref[...] = (jnp.log(l_scratch_ref[...]) + m_scratch_ref[...]).astype(lse_ref.dtype)
-
-
-def linear_softmax_lse_forward_scalar_pallas_kernel(
-    x_ref,
-    w_ref,
-    lse_ref,
-    xw_tiled,
-    m_scratch_ref,
-    l_scratch_ref,
-    *,
-    v_dim: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-    dot_preferred_element_type: Optional[jnp.dtype],
-):
-    """Forward kernel for logsumexp only with scalar per-row accumulators (benchmark-only)."""
-    core_index, b_index, v_index, h_index = (pl.program_id(i) for i in range(4))
-    del core_index, b_index
-    v_block_size = w_ref.shape[1]
-    num_v_blocks, num_h_blocks = (pl.num_programs(i) for i in range(2, 4))
-
-    @pl.when(v_index == num_v_blocks - 1)
-    def pad_non_aligned_v_block():
-        if v_dim % v_block_size != 0:
-            rem = v_dim % v_block_size
-            w_ref[:, rem:] = jnp.zeros((w_ref.shape[0], w_ref.shape[1] - rem), dtype=w_ref.dtype)
-
-    @pl.when(jnp.logical_and(v_index == 0, h_index == 0))
-    def init_accumulators():
-        m_scratch_ref[...] = jnp.full_like(m_scratch_ref, -jnp.inf)
-        l_scratch_ref[...] = jnp.zeros_like(l_scratch_ref)
-
-    @pl.when(h_index == 0)
-    def init_logits():
-        xw_tiled[...] = jnp.zeros_like(xw_tiled)
-
-    xw_tiled[...] += jax.lax.dot_general(
-        x_ref[...],
-        w_ref[...],
-        (((1,), (0,)), ((), ())),
-        preferred_element_type=dot_preferred_element_type,
-        precision=precision,
-    ).astype(xw_tiled.dtype)
-
-    @pl.when(h_index == num_h_blocks - 1)
-    def accumulate_block():
-        logits = xw_tiled[...]
-        if dtype is not None:
-            logits = logits.astype(dtype)
-        logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-        logits_f32 = logits.astype(jnp.float32)
-        logits_f32 = _mask_invalid_vocab_columns(
-            logits_f32,
-            v_index=v_index,
-            v_block_size=v_block_size,
-            v_dim=v_dim,
-        )
-
-        m_prev = m_scratch_ref[...].astype(jnp.float32)
-        l_prev = l_scratch_ref[...].astype(jnp.float32)
-        m_curr = jnp.max(logits_f32, axis=-1)
-        m_next = jnp.maximum(m_prev, m_curr)
-        s_curr = jnp.exp(logits_f32 - m_next[:, None])
-        l_curr = s_curr.sum(axis=-1)
-        alpha = jnp.exp(m_prev - m_next)
-        l_next = l_curr + alpha * l_prev
-        m_scratch_ref[...] = m_next.astype(m_scratch_ref.dtype)
-        l_scratch_ref[...] = l_next.astype(l_scratch_ref.dtype)
-
-    @pl.when(jnp.logical_and(v_index == num_v_blocks - 1, h_index == num_h_blocks - 1))
-    def finalize_loss():
-        lse_ref[...] = (jnp.log(l_scratch_ref[...]) + m_scratch_ref[...]).astype(lse_ref.dtype)
 
 
 def linear_softmax_lse_forward_fori_pallas_kernel(
@@ -735,7 +237,7 @@ def linear_softmax_lse_forward_fori_pallas_kernel(
     precision: jax.lax.PrecisionLike,
     dot_preferred_element_type: Optional[jnp.dtype],
 ):
-    """Forward lse-only kernel that loops over V sub-blocks inside each program (benchmark-only)."""
+    """Forward kernel for streaming LSE with an inner fori loop over V subtile blocks."""
     core_index, b_index, v_index, h_index = (pl.program_id(i) for i in range(4))
     del core_index, b_index, h_index
     v_block_size = w_ref.shape[1]
@@ -743,7 +245,7 @@ def linear_softmax_lse_forward_fori_pallas_kernel(
 
     if v_block_size % v_compute_block_size != 0:
         raise NotImplementedError(f"{v_block_size=} must be divisible by {v_compute_block_size=}")
-    bkv_repeats, rem = divmod(v_compute_block_size, NUM_LANES)
+    repeats, rem = divmod(v_compute_block_size, NUM_LANES)
     if rem != 0:
         raise NotImplementedError(f"{v_compute_block_size=} must be a multiple of {NUM_LANES}")
 
@@ -758,9 +260,9 @@ def linear_softmax_lse_forward_fori_pallas_kernel(
         m_scratch_ref[...] = jnp.full_like(m_scratch_ref, -jnp.inf)
         l_scratch_ref[...] = jnp.zeros_like(l_scratch_ref)
 
-    def body(v_compute_index, state):
+    def body(i, state):
         m_prev, l_prev = state
-        slice_v = pl.ds(v_compute_index * v_compute_block_size, v_compute_block_size)
+        slice_v = pl.ds(i * v_compute_block_size, v_compute_block_size)
         w_chunk = w_ref[:, slice_v]
         logits = jax.lax.dot_general(
             x_ref[...],
@@ -774,17 +276,13 @@ def linear_softmax_lse_forward_fori_pallas_kernel(
         logits = _apply_logit_soft_cap(logits, logit_soft_cap)
         logits_f32 = logits.astype(jnp.float32)
 
-        block_offset = v_index * v_block_size + v_compute_index * v_compute_block_size
+        block_offset = v_index * v_block_size + i * v_compute_block_size
         cols = jnp.arange(v_compute_block_size, dtype=jnp.int32) + block_offset
         logits_f32 = jnp.where(cols[None, :] < v_dim, logits_f32, -jnp.inf)
 
         m_curr = jnp.max(logits_f32, axis=-1)[:, None]
         m_next = jnp.maximum(m_prev, m_curr)
-        if _use_fwd_lse_no_repeat_bench():
-            logits_view = logits_f32.reshape((logits_f32.shape[0], NUM_LANES, bkv_repeats))
-            s_curr = jnp.exp(logits_view - m_next[:, :, None]).reshape(logits_f32.shape)
-        else:
-            s_curr = jnp.exp(logits_f32 - pltpu.repeat(m_next, bkv_repeats, axis=1))
+        s_curr = jnp.exp(logits_f32 - pltpu.repeat(m_next, repeats, axis=1))
         l_curr = jax.lax.broadcast_in_dim(s_curr.sum(axis=-1), l_prev.shape, (0,))
         alpha = jnp.exp(m_prev - m_next)
         l_next = l_curr + alpha * l_prev
@@ -792,82 +290,16 @@ def linear_softmax_lse_forward_fori_pallas_kernel(
 
     @pl.when(True)
     def accumulate_block():
-        num_iters = v_block_size // v_compute_block_size
         m_prev = m_scratch_ref[...].astype(jnp.float32)
         l_prev = l_scratch_ref[...].astype(jnp.float32)
+        num_iters = v_block_size // v_compute_block_size
         m_next, l_next = jax.lax.fori_loop(0, num_iters, body, (m_prev, l_prev), unroll=True)
         m_scratch_ref[...] = m_next.astype(m_scratch_ref.dtype)
         l_scratch_ref[...] = l_next.astype(l_scratch_ref.dtype)
 
     @pl.when(v_index == num_v_blocks - 1)
-    def finalize_loss():
+    def finalize():
         lse_ref[...] = (jnp.log(l_scratch_ref[...]) + m_scratch_ref[...]).astype(lse_ref.dtype)
-
-
-def _linear_softmax_lse_forward_store(
-    x: Float[Array, "B H"],
-    w: Float[Array, "H V"],
-    *,
-    block_sizes: BlockSizes,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-    xw_dtype: jnp.dtype,
-    dot_preferred_element_type: Optional[jnp.dtype],
-    use_full_h_dot: bool,
-) -> Float[Array, "B"]:
-    """Runs the simple one-pass matmul+streaming-LSE path used in ladder benchmarks."""
-    b_dim, h_dim = x.shape
-    v_dim = w.shape[1]
-
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
-    forward_h_block_size = h_dim if use_full_h_dot else block_sizes.h_block_size
-    num_h_blocks = 1 if use_full_h_dot else math.ceil(h_dim / block_sizes.h_block_size)
-    num_v_blocks = math.ceil(v_dim / block_sizes.v_block_size)
-    num_cores, num_b_blocks_per_core = _infer_core_grid(b_dim, block_sizes)
-
-    lse_shape = jax.ShapeDtypeStruct(shape=(b_dim, NUM_LANES), dtype=out_dtype)
-    lse_lanes = pl.pallas_call(
-        partial(
-            linear_softmax_lse_forward_pallas_kernel,
-            v_dim=v_dim,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-            dot_preferred_element_type=dot_preferred_element_type,
-        ),
-        in_specs=[
-            pl.BlockSpec(
-                (block_sizes.b_block_size, forward_h_block_size),
-                lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0 if use_full_h_dot else k),
-                memory_space=pltpu.VMEM,
-            ),  # x
-            pl.BlockSpec(
-                (forward_h_block_size, block_sizes.v_block_size),
-                lambda c, i, j, k: (0 if use_full_h_dot else k, j),
-                memory_space=pltpu.VMEM,
-            ),  # w
-        ],
-        out_specs=pl.BlockSpec(
-            (block_sizes.b_block_size, NUM_LANES),
-            lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0),
-            memory_space=pltpu.VMEM,
-        ),
-        out_shape=lse_shape,
-        scratch_shapes=(
-            pltpu.VMEM(
-                (block_sizes.b_block_size, block_sizes.v_block_size),
-                dtype=xw_dtype,
-            ),  # xw_tiled
-            pltpu.VMEM((block_sizes.b_block_size, NUM_LANES), dtype=out_dtype),  # m_scratch
-            pltpu.VMEM((block_sizes.b_block_size, NUM_LANES), dtype=out_dtype),  # l_scratch
-        ),
-        grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_h_blocks),
-        compiler_params=pltpu.CompilerParams(
-            dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary"),
-        ),
-    )(x, w)
-    return lse_lanes[:, 0]
 
 
 def _linear_softmax_lse_forward_fori(
@@ -878,27 +310,25 @@ def _linear_softmax_lse_forward_fori(
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-    dot_preferred_element_type: Optional[jnp.dtype],
-    use_full_h_dot: bool,
+    v_outer_mult: int,
 ) -> Float[Array, "B"]:
-    """Runs benchmark-only forward LSE path that loops over V sub-blocks inside each program."""
-    if not use_full_h_dot:
-        raise PallasUnsupportedError("Benchmark-only lse-fori path requires full-H forward dot mode.")
-
-    b_dim, h_dim = x.shape
+    """Streaming LSE path with full-H dot and a fori-loop over V subtile blocks."""
+    h_dim = x.shape[-1]
     v_dim = w.shape[1]
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
-    forward_h_block_size = h_dim
-    num_h_blocks = 1
-
-    v_compute_block_size = block_sizes.v_block_size
-    v_outer_mult = _fwd_lse_fori_v_mult_bench()
-    v_outer_block_size = v_compute_block_size * v_outer_mult
-
-    num_v_blocks = math.ceil(v_dim / v_outer_block_size)
+    b_dim = x.shape[0]
     num_cores, num_b_blocks_per_core = _infer_core_grid(b_dim, block_sizes)
 
+    v_compute_block_size = block_sizes.v_block_size
+    v_outer_block_size = block_sizes.v_block_size * v_outer_mult
+    if v_outer_block_size % NUM_LANES != 0:
+        raise PallasUnsupportedError(
+            f"v_outer_block_size must be a multiple of {NUM_LANES}, got {v_outer_block_size}."
+        )
+
+    num_v_outer_blocks = math.ceil(v_dim / v_outer_block_size)
+    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
     lse_shape = jax.ShapeDtypeStruct(shape=(b_dim, NUM_LANES), dtype=out_dtype)
+
     lse_lanes = pl.pallas_call(
         partial(
             linear_softmax_lse_forward_fori_pallas_kernel,
@@ -907,16 +337,16 @@ def _linear_softmax_lse_forward_fori(
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
-            dot_preferred_element_type=dot_preferred_element_type,
+            dot_preferred_element_type=jnp.float32,
         ),
         in_specs=[
             pl.BlockSpec(
-                (block_sizes.b_block_size, forward_h_block_size),
+                (block_sizes.b_block_size, h_dim),
                 lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0),
                 memory_space=pltpu.VMEM,
             ),  # x
             pl.BlockSpec(
-                (forward_h_block_size, v_outer_block_size),
+                (h_dim, v_outer_block_size),
                 lambda c, i, j, k: (0, j),
                 memory_space=pltpu.VMEM,
             ),  # w
@@ -931,7 +361,7 @@ def _linear_softmax_lse_forward_fori(
             pltpu.VMEM((block_sizes.b_block_size, NUM_LANES), dtype=out_dtype),  # m_scratch
             pltpu.VMEM((block_sizes.b_block_size, NUM_LANES), dtype=out_dtype),  # l_scratch
         ),
-        grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_h_blocks),
+        grid=(num_cores, num_b_blocks_per_core, num_v_outer_blocks, 1),
         compiler_params=pltpu.CompilerParams(
             dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary"),
         ),
@@ -939,80 +369,9 @@ def _linear_softmax_lse_forward_fori(
     return lse_lanes[:, 0]
 
 
-def linear_label_logits_forward_pallas_kernel(
-    x_ref,
-    labels_ref,
-    w_ref,
-    label_logits_ref,
-    xw_tiled,
-    label_logits_scratch_ref,
-    *,
-    v_dim: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-    dot_preferred_element_type: Optional[jnp.dtype],
-):
-    """Forward kernel for label logits only (benchmark-only split-label mode)."""
-    core_index, b_index, v_index, h_index = (pl.program_id(i) for i in range(4))
-    del core_index, b_index
-    v_block_size = w_ref.shape[1]
-    num_v_blocks, num_h_blocks = (pl.num_programs(i) for i in range(2, 4))
-
-    @pl.when(v_index == num_v_blocks - 1)
-    def pad_non_aligned_v_block():
-        if v_dim % v_block_size != 0:
-            rem = v_dim % v_block_size
-            w_ref[:, rem:] = jnp.zeros((w_ref.shape[0], w_ref.shape[1] - rem), dtype=w_ref.dtype)
-
-    @pl.when(jnp.logical_and(v_index == 0, h_index == 0))
-    def init_accumulators():
-        label_logits_scratch_ref[...] = jnp.zeros_like(label_logits_scratch_ref)
-
-    @pl.when(h_index == 0)
-    def init_logits():
-        xw_tiled[...] = jnp.zeros_like(xw_tiled)
-
-    xw_tiled[...] += jax.lax.dot_general(
-        x_ref[...],
-        w_ref[...],
-        (((1,), (0,)), ((), ())),
-        preferred_element_type=dot_preferred_element_type,
-        precision=precision,
-    ).astype(xw_tiled.dtype)
-
-    @pl.when(h_index == num_h_blocks - 1)
-    def accumulate_block():
-        logits = xw_tiled[...]
-        if dtype is not None:
-            logits = logits.astype(dtype)
-        logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-        logits_f32 = logits.astype(jnp.float32)
-        labels_adjusted = labels_ref[...] - v_index * v_block_size
-        label_logits_block = _label_logits_for_block(
-            logits_f32,
-            labels_adjusted,
-            v_block_size=v_block_size,
-        )
-        label_logits_scratch_ref[...] += label_logits_block.astype(label_logits_scratch_ref.dtype)
-
-    @pl.when(jnp.logical_and(v_index == num_v_blocks - 1, h_index == num_h_blocks - 1))
-    def finalize_loss():
-        label_logits_ref[...] = label_logits_scratch_ref[...].astype(label_logits_ref.dtype)
-
-
 @partial(
     jax.jit,
-    static_argnames=[
-        "block_sizes",
-        "dtype",
-        "logit_soft_cap",
-        "precision",
-        "return_argmax",
-        "compute_label_logits",
-        "xw_dtype",
-        "dot_preferred_element_type",
-    ],
+    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision", "return_argmax"],
 )
 def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     x: Float[Array, "B H"],
@@ -1024,335 +383,30 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
-    compute_label_logits: bool = True,
-    xw_dtype: Optional[jnp.dtype] = None,
-    dot_preferred_element_type: Optional[jnp.dtype] = jnp.float32,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Forward Pallas kernel wrapper (per-example loss + logsumexp)."""
-    force_lse_store_path = _use_fwd_lse_store_path_bench()
-    split_label_dot = compute_label_logits and (_use_fwd_split_label_dot_bench() or force_lse_store_path)
-    split_label_dot_pallas = split_label_dot and _use_fwd_split_label_pallas_bench()
-    inline_label_scalar = compute_label_logits and not split_label_dot and _use_fwd_inline_label_scalar_bench()
-    _validate_inputs(x, labels, w, block_sizes, require_label_layout=(compute_label_logits and not split_label_dot))
+    _validate_inputs(x, labels, w, block_sizes, require_label_layout=False)
     if return_argmax:
         raise PallasUnsupportedError("Pallas backend does not support return_argmax. Use XLA for return_argmax=True.")
 
-    h_dim = x.shape[-1]
-    v_dim = w.shape[1]
-    b_dim = x.shape[0]
-
-    use_full_h_dot = _use_fwd_full_h_dot_bench()
-    forward_h_block_size = h_dim if use_full_h_dot else block_sizes.h_block_size
-    num_h_blocks = 1 if use_full_h_dot else math.ceil(h_dim / block_sizes.h_block_size)
-    num_v_blocks = math.ceil(v_dim / block_sizes.v_block_size)
-    num_cores, num_b_blocks_per_core = _infer_core_grid(b_dim, block_sizes)
-
     out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
-    xw_dtype = jnp.dtype(xw_dtype) if xw_dtype is not None else out_dtype
-    if compute_label_logits and not split_label_dot:
-        if inline_label_scalar:
-            scalar_out_shape = [
-                jax.ShapeDtypeStruct(shape=(b_dim,), dtype=out_dtype),
-                jax.ShapeDtypeStruct(shape=(b_dim,), dtype=out_dtype),
-            ]
-            lse, label_logits = pl.pallas_call(
-                partial(
-                    linear_softmax_cross_entropy_loss_forward_scalar_pallas_kernel,
-                    v_dim=v_dim,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
-                    dot_preferred_element_type=dot_preferred_element_type,
-                ),
-                in_specs=[
-                    pl.BlockSpec(
-                        (block_sizes.b_block_size, forward_h_block_size),
-                        lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0 if use_full_h_dot else k),
-                        memory_space=pltpu.VMEM,
-                    ),  # x
-                    pl.BlockSpec(
-                        (block_sizes.b_block_size,),
-                        lambda c, i, j, k: (c * num_b_blocks_per_core + i),
-                        memory_space=pltpu.VMEM,
-                    ),  # labels
-                    pl.BlockSpec(
-                        (forward_h_block_size, block_sizes.v_block_size),
-                        lambda c, i, j, k: (0 if use_full_h_dot else k, j),
-                        memory_space=pltpu.VMEM,
-                    ),  # w
-                ],
-                out_specs=[
-                    pl.BlockSpec(
-                        (block_sizes.b_block_size,),
-                        lambda c, i, j, k: (c * num_b_blocks_per_core + i),
-                        memory_space=pltpu.VMEM,
-                    ),  # lse
-                    pl.BlockSpec(
-                        (block_sizes.b_block_size,),
-                        lambda c, i, j, k: (c * num_b_blocks_per_core + i),
-                        memory_space=pltpu.VMEM,
-                    ),  # label logits
-                ],
-                out_shape=scalar_out_shape,
-                scratch_shapes=(
-                    pltpu.VMEM(
-                        (block_sizes.b_block_size, block_sizes.v_block_size),
-                        dtype=xw_dtype,
-                    ),  # xw_tiled
-                    pltpu.VMEM((block_sizes.b_block_size,), dtype=out_dtype),  # m_scratch
-                    pltpu.VMEM((block_sizes.b_block_size,), dtype=out_dtype),  # l_scratch
-                    pltpu.VMEM((block_sizes.b_block_size,), dtype=out_dtype),  # label_logits
-                ),
-                grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_h_blocks),
-                compiler_params=pltpu.CompilerParams(
-                    dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary"),
-                ),
-            )(x, labels, w)
-        else:
-            out_shape = [
-                jax.ShapeDtypeStruct(shape=(b_dim, NUM_LANES), dtype=out_dtype),
-                jax.ShapeDtypeStruct(shape=(b_dim, NUM_LANES), dtype=out_dtype),
-            ]
-            lse_lanes, label_logits_lanes = pl.pallas_call(
-                partial(
-                    linear_softmax_cross_entropy_loss_forward_pallas_kernel,
-                    v_dim=v_dim,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
-                    compute_label_logits=compute_label_logits,
-                    dot_preferred_element_type=dot_preferred_element_type,
-                ),
-                in_specs=[
-                    pl.BlockSpec(
-                        (block_sizes.b_block_size, forward_h_block_size),
-                        lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0 if use_full_h_dot else k),
-                        memory_space=pltpu.VMEM,
-                    ),  # x
-                    pl.BlockSpec(
-                        (block_sizes.b_block_size,),
-                        lambda c, i, j, k: (c * num_b_blocks_per_core + i),
-                        memory_space=pltpu.VMEM,
-                    ),  # labels
-                    pl.BlockSpec(
-                        (forward_h_block_size, block_sizes.v_block_size),
-                        lambda c, i, j, k: (0 if use_full_h_dot else k, j),
-                        memory_space=pltpu.VMEM,
-                    ),  # w
-                ],
-                out_specs=[
-                    pl.BlockSpec(
-                        (block_sizes.b_block_size, NUM_LANES),
-                        lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0),
-                        memory_space=pltpu.VMEM,
-                    ),  # lse lanes
-                    pl.BlockSpec(
-                        (block_sizes.b_block_size, NUM_LANES),
-                        lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0),
-                        memory_space=pltpu.VMEM,
-                    ),  # label logits lanes
-                ],
-                out_shape=out_shape,
-                scratch_shapes=(
-                    pltpu.VMEM(
-                        (block_sizes.b_block_size, block_sizes.v_block_size),
-                        dtype=xw_dtype,
-                    ),  # xw_tiled
-                    pltpu.VMEM((block_sizes.b_block_size, NUM_LANES), dtype=out_dtype),  # m_scratch
-                    pltpu.VMEM((block_sizes.b_block_size, NUM_LANES), dtype=out_dtype),  # l_scratch
-                    pltpu.VMEM((block_sizes.b_block_size, NUM_LANES), dtype=out_dtype),  # label_logits
-                ),
-                grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_h_blocks),
-                compiler_params=pltpu.CompilerParams(
-                    dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary"),
-                ),
-                cost_estimate=_fwd_cost_estimate(
-                    x,
-                    labels,
-                    w,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
-                    kernel_inputs_specs=(x, labels, w),
-                    kernel_outputs_specs=out_shape,
-                ),
-            )(x, labels, w)
-            lse = lse_lanes[:, 0]
-            label_logits = label_logits_lanes[:, 0]
-    else:
-        if force_lse_store_path:
-            lse = _linear_softmax_lse_forward_store(
-                x,
-                w,
-                block_sizes=block_sizes,
-                dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
-                precision=precision,
-                xw_dtype=xw_dtype,
-                dot_preferred_element_type=dot_preferred_element_type,
-                use_full_h_dot=use_full_h_dot,
-            )
-        else:
-            if _use_fwd_lse_fori_loop_bench():
-                lse = _linear_softmax_lse_forward_fori(
-                    x,
-                    w,
-                    block_sizes=block_sizes,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
-                    dot_preferred_element_type=dot_preferred_element_type,
-                    use_full_h_dot=use_full_h_dot,
-                )
-            else:
-                lse_scalar = _use_fwd_lse_scalar_bench()
-                lse_shape = jax.ShapeDtypeStruct(shape=(b_dim, NUM_LANES), dtype=out_dtype)
-                if lse_scalar:
-                    lse_scalar_shape = jax.ShapeDtypeStruct(shape=(b_dim,), dtype=out_dtype)
-                    lse = pl.pallas_call(
-                        partial(
-                            linear_softmax_lse_forward_scalar_pallas_kernel,
-                            v_dim=v_dim,
-                            dtype=dtype,
-                            logit_soft_cap=logit_soft_cap,
-                            precision=precision,
-                            dot_preferred_element_type=dot_preferred_element_type,
-                        ),
-                        in_specs=[
-                            pl.BlockSpec(
-                                (block_sizes.b_block_size, forward_h_block_size),
-                                lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0 if use_full_h_dot else k),
-                                memory_space=pltpu.VMEM,
-                            ),  # x
-                            pl.BlockSpec(
-                                (forward_h_block_size, block_sizes.v_block_size),
-                                lambda c, i, j, k: (0 if use_full_h_dot else k, j),
-                                memory_space=pltpu.VMEM,
-                            ),  # w
-                        ],
-                        out_specs=pl.BlockSpec(
-                            (block_sizes.b_block_size,),
-                            lambda c, i, j, k: (c * num_b_blocks_per_core + i),
-                            memory_space=pltpu.VMEM,
-                        ),
-                        out_shape=lse_scalar_shape,
-                        scratch_shapes=(
-                            pltpu.VMEM(
-                                (block_sizes.b_block_size, block_sizes.v_block_size),
-                                dtype=xw_dtype,
-                            ),  # xw_tiled
-                            pltpu.VMEM((block_sizes.b_block_size,), dtype=out_dtype),  # m_scratch
-                            pltpu.VMEM((block_sizes.b_block_size,), dtype=out_dtype),  # l_scratch
-                        ),
-                        grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_h_blocks),
-                        compiler_params=pltpu.CompilerParams(
-                            dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary"),
-                        ),
-                    )(x, w)
-                else:
-                    lse_lanes = pl.pallas_call(
-                        partial(
-                            linear_softmax_lse_forward_pallas_kernel,
-                            v_dim=v_dim,
-                            dtype=dtype,
-                            logit_soft_cap=logit_soft_cap,
-                            precision=precision,
-                            dot_preferred_element_type=dot_preferred_element_type,
-                        ),
-                        in_specs=[
-                            pl.BlockSpec(
-                                (block_sizes.b_block_size, forward_h_block_size),
-                                lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0 if use_full_h_dot else k),
-                                memory_space=pltpu.VMEM,
-                            ),  # x
-                            pl.BlockSpec(
-                                (forward_h_block_size, block_sizes.v_block_size),
-                                lambda c, i, j, k: (0 if use_full_h_dot else k, j),
-                                memory_space=pltpu.VMEM,
-                            ),  # w
-                        ],
-                        out_specs=pl.BlockSpec(
-                            (block_sizes.b_block_size, NUM_LANES),
-                            lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0),
-                            memory_space=pltpu.VMEM,
-                        ),
-                        out_shape=lse_shape,
-                        scratch_shapes=(
-                            pltpu.VMEM(
-                                (block_sizes.b_block_size, block_sizes.v_block_size),
-                                dtype=xw_dtype,
-                            ),  # xw_tiled
-                            pltpu.VMEM((block_sizes.b_block_size, NUM_LANES), dtype=out_dtype),  # m_scratch
-                            pltpu.VMEM((block_sizes.b_block_size, NUM_LANES), dtype=out_dtype),  # l_scratch
-                        ),
-                        grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_h_blocks),
-                        compiler_params=pltpu.CompilerParams(
-                            dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary"),
-                        ),
-                    )(x, w)
-                    lse = lse_lanes[:, 0]
-        if split_label_dot:
-            if split_label_dot_pallas:
-                label_logits_shape = jax.ShapeDtypeStruct(shape=(b_dim,), dtype=out_dtype)
-                label_logits = pl.pallas_call(
-                    partial(
-                        linear_label_logits_forward_pallas_kernel,
-                        v_dim=v_dim,
-                        dtype=dtype,
-                        logit_soft_cap=logit_soft_cap,
-                        precision=precision,
-                        dot_preferred_element_type=dot_preferred_element_type,
-                    ),
-                    in_specs=[
-                        pl.BlockSpec(
-                            (block_sizes.b_block_size, forward_h_block_size),
-                            lambda c, i, j, k: (c * num_b_blocks_per_core + i, 0 if use_full_h_dot else k),
-                            memory_space=pltpu.VMEM,
-                        ),  # x
-                        pl.BlockSpec(
-                            (block_sizes.b_block_size,),
-                            lambda c, i, j, k: (c * num_b_blocks_per_core + i),
-                            memory_space=pltpu.VMEM,
-                        ),  # labels
-                        pl.BlockSpec(
-                            (forward_h_block_size, block_sizes.v_block_size),
-                            lambda c, i, j, k: (0 if use_full_h_dot else k, j),
-                            memory_space=pltpu.VMEM,
-                        ),  # w
-                    ],
-                    out_specs=pl.BlockSpec(
-                        (block_sizes.b_block_size,),
-                        lambda c, i, j, k: (c * num_b_blocks_per_core + i),
-                        memory_space=pltpu.VMEM,
-                    ),
-                    out_shape=label_logits_shape,
-                    scratch_shapes=(
-                        pltpu.VMEM(
-                            (block_sizes.b_block_size, block_sizes.v_block_size),
-                            dtype=xw_dtype,
-                        ),  # xw_tiled
-                        pltpu.VMEM((block_sizes.b_block_size,), dtype=out_dtype),  # label_logits
-                    ),
-                    grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_h_blocks),
-                    compiler_params=pltpu.CompilerParams(
-                        dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary"),
-                    ),
-                )(x, labels, w)
-            else:
-                label_weight = jnp.take(w, labels.astype(jnp.int32), axis=1).T
-                label_mul_dtype = out_dtype
-                if _use_fwd_split_label_bf16_mul_bench():
-                    label_mul_dtype = x.dtype
-                label_logits = jnp.sum(
-                    x.astype(label_mul_dtype) * label_weight.astype(label_mul_dtype),
-                    axis=-1,
-                    dtype=out_dtype,
-                )
-                if logit_soft_cap is not None:
-                    label_logits = _apply_logit_soft_cap(label_logits, logit_soft_cap)
-        else:
-            label_logits = jnp.zeros_like(lse)
+    lse = _linear_softmax_lse_forward_fori(
+        x,
+        w,
+        block_sizes=block_sizes,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+        v_outer_mult=4,
+    )
 
+    label_weight = jnp.take(w, labels.astype(jnp.int32), axis=1).T
+    label_logits = jnp.sum(
+        x.astype(out_dtype) * label_weight.astype(out_dtype),
+        axis=-1,
+        dtype=out_dtype,
+    )
+    label_logits = _apply_logit_soft_cap(label_logits, logit_soft_cap)
     loss = lse - label_logits
     return loss, lse
 
@@ -1685,11 +739,6 @@ def _make_custom_vjp(
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-    compute_label_logits: bool,
-    xw_dtype: Optional[jnp.dtype],
-    dot_preferred_element_type: Optional[jnp.dtype],
-    use_full_h_dot: bool,
-    use_split_label_dot: bool,
     use_bwd_xla_streaming: bool,
 ):
     block_sizes = BlockSizes(
@@ -1707,9 +756,6 @@ def _make_custom_vjp(
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
-            compute_label_logits=compute_label_logits,
-            xw_dtype=xw_dtype,
-            dot_preferred_element_type=dot_preferred_element_type,
         )
 
     @jax.custom_vjp
@@ -1721,18 +767,6 @@ def _make_custom_vjp(
         return (loss, lse), (x, labels, w, lse)
 
     def _fn_bwd(residuals, ct):
-        if not compute_label_logits:
-            raise PallasUnsupportedError(
-                "LEVANTER_PALLAS_TPU_SKIP_LABEL_LOGITS_BENCH=1 is benchmark-only and does not support backward."
-            )
-        if xw_dtype is not None and (dtype is None or jnp.dtype(xw_dtype) != jnp.dtype(dtype)):
-            raise PallasUnsupportedError(
-                "LEVANTER_PALLAS_TPU_FWD_XW_BF16_BENCH=1 is benchmark-only and does not support backward."
-            )
-        if dot_preferred_element_type is None:
-            raise PallasUnsupportedError(
-                "LEVANTER_PALLAS_TPU_FWD_DOT_ACCUM_BF16_BENCH=1 is benchmark-only and does not support backward."
-            )
         x, labels, w, lse = residuals
         dout_loss, dout_lse = ct
         dout_loss = _zeros_like_if_needed(dout_loss, lse)
@@ -1786,17 +820,6 @@ def linear_softmax_cross_entropy_loss_pallas(
     """Pallas implementation returning (loss, lse) per example."""
     if return_argmax:
         raise PallasUnsupportedError("Pallas backend does not support return_argmax. Use XLA for return_argmax=True.")
-    compute_label_logits = not _skip_label_logits_bench()
-    forward_accum_dtype = jnp.dtype(dtype) if dtype is not None else None
-    xw_dtype = forward_accum_dtype
-    if _use_fwd_xw_bf16_bench():
-        xw_dtype = jnp.dtype(jnp.bfloat16)
-    use_full_h_dot = _use_fwd_full_h_dot_bench()
-    use_split_label_dot = _use_fwd_split_label_dot_bench() or _use_fwd_lse_store_path_bench()
-    use_bwd_xla_streaming = _use_bwd_xla_streaming_bench()
-    dot_preferred_element_type: Optional[jnp.dtype] = jnp.float32
-    if _use_fwd_dot_accum_bf16_bench():
-        dot_preferred_element_type = None
     fn = _make_custom_vjp(
         block_sizes.b_block_size,
         block_sizes.h_block_size,
@@ -1804,12 +827,7 @@ def linear_softmax_cross_entropy_loss_pallas(
         dtype,
         logit_soft_cap,
         precision,
-        compute_label_logits,
-        xw_dtype,
-        dot_preferred_element_type,
-        use_full_h_dot,
-        use_split_label_dot,
-        use_bwd_xla_streaming,
+        False,
     )
     return fn(x, labels, w)
 
@@ -1826,35 +844,18 @@ def linear_softmax_cross_entropy_loss_linear_ce_tpu(
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Optimized TPU v4 linear CE path: pallas forward + XLA streaming backward."""
-    overrides = {
-        _FWD_FULL_H_DOT_ENV: "1",
-        _FWD_SPLIT_LABEL_DOT_ENV: "1",
-        _FWD_LSE_FORI_LOOP_ENV: "1",
-        _FWD_LSE_FORI_V_MULT_ENV: "4",
-        _BWD_USE_XLA_STREAMING_ENV: "1",
-        # Force-disable incompatible benchmark-only modes.
-        _SKIP_LABEL_LOGITS_ENV: None,
-        _FWD_XW_BF16_ENV: None,
-        _FWD_DOT_ACCUM_BF16_ENV: None,
-        _FWD_SPLIT_LABEL_BF16_MUL_ENV: None,
-        _FWD_SPLIT_LABEL_PALLAS_ENV: None,
-        _FWD_INLINE_LABEL_SCALAR_ENV: None,
-        _FWD_INLINE_LABEL_TAKE_ENV: None,
-        _FWD_LSE_SCALAR_ENV: None,
-        _FWD_LSE_NO_REPEAT_ENV: None,
-        _FWD_LSE_STORE_PATH_ENV: None,
-    }
-    with _temporary_env(overrides):
-        return linear_softmax_cross_entropy_loss_pallas(
-            x,
-            labels,
-            w,
-            block_sizes=block_sizes,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-            return_argmax=return_argmax,
-        )
+    if return_argmax:
+        raise PallasUnsupportedError("Pallas backend does not support return_argmax. Use XLA for return_argmax=True.")
+    fn = _make_custom_vjp(
+        block_sizes.b_block_size,
+        block_sizes.h_block_size,
+        block_sizes.v_block_size,
+        dtype,
+        logit_soft_cap,
+        precision,
+        True,
+    )
+    return fn(x, labels, w)
 
 
 def linear_softmax_cross_entropy_loss_linear_ce_tpu_pallas_bwd(
@@ -1869,35 +870,16 @@ def linear_softmax_cross_entropy_loss_linear_ce_tpu_pallas_bwd(
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Optimized TPU v4 linear CE path with Pallas backward."""
-    overrides = {
-        _FWD_FULL_H_DOT_ENV: "1",
-        _FWD_SPLIT_LABEL_DOT_ENV: "1",
-        _FWD_LSE_FORI_LOOP_ENV: "1",
-        _FWD_LSE_FORI_V_MULT_ENV: "4",
-        _BWD_USE_XLA_STREAMING_ENV: None,
-        # Force-disable incompatible benchmark-only modes.
-        _SKIP_LABEL_LOGITS_ENV: None,
-        _FWD_XW_BF16_ENV: None,
-        _FWD_DOT_ACCUM_BF16_ENV: None,
-        _FWD_SPLIT_LABEL_BF16_MUL_ENV: None,
-        _FWD_SPLIT_LABEL_PALLAS_ENV: None,
-        _FWD_INLINE_LABEL_SCALAR_ENV: None,
-        _FWD_INLINE_LABEL_TAKE_ENV: None,
-        _FWD_LSE_SCALAR_ENV: None,
-        _FWD_LSE_NO_REPEAT_ENV: None,
-        _FWD_LSE_STORE_PATH_ENV: None,
-    }
-    with _temporary_env(overrides):
-        return linear_softmax_cross_entropy_loss_pallas(
-            x,
-            labels,
-            w,
-            block_sizes=block_sizes,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-            return_argmax=return_argmax,
-        )
+    return linear_softmax_cross_entropy_loss_pallas(
+        x,
+        labels,
+        w,
+        block_sizes=block_sizes,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+        return_argmax=return_argmax,
+    )
 
 
 __all__ = [

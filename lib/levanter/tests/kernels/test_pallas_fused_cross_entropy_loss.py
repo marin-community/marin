@@ -823,17 +823,12 @@ def test_fused_cross_entropy_pallas_non_divisible_vocab_dx_matches_xla():
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
 
 
-def test_fused_cross_entropy_pallas_fori_split_fullh_backward_matches_xla(monkeypatch: pytest.MonkeyPatch):
+def test_fused_cross_entropy_pallas_backward_matches_xla():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
 
     hidden, vocab, batch = 256, 2048, 512
     block_sizes = fused_api.BlockSizes(b_block_size=512, h_block_size=128, v_block_size=128)
-
-    monkeypatch.setenv("LEVANTER_PALLAS_TPU_FWD_FULL_H_DOT_BENCH", "1")
-    monkeypatch.setenv("LEVANTER_PALLAS_TPU_FWD_SPLIT_LABEL_DOT_BENCH", "1")
-    monkeypatch.setenv("LEVANTER_PALLAS_TPU_FWD_LSE_FORI_LOOP_BENCH", "1")
-    monkeypatch.setenv("LEVANTER_PALLAS_TPU_FWD_LSE_FORI_V_MULT_BENCH", "2")
 
     key = jax.random.PRNGKey(29)
     key_x, key_w, key_y = jax.random.split(key, 3)
@@ -866,7 +861,6 @@ def test_fused_cross_entropy_pallas_fori_split_fullh_backward_matches_xla(monkey
     gx_pallas, gw_pallas = jax.grad(loss_pallas, argnums=(0, 1))(x, w)
     gx_xla, gw_xla = jax.grad(loss_xla, argnums=(0, 1))(x, w)
 
-    # This mode uses a benchmark-only forward schedule but should preserve CE gradients.
     assert jnp.allclose(gx_pallas, gx_xla, atol=1e-4, rtol=1e-4)
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
 
