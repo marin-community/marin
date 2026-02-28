@@ -6,6 +6,12 @@ You will need to setup your SSH key in `gcloud` to get started.
 It is usually faster than wiring a full Ray job when you want quick iteration. It is less good if you want to run many different commands in parallel,
 or if you want to run a long experiment and not worry about the TPU going away.
 
+## Critical concurrency rule
+
+Run at most one TPU job at a time on a given dev TPU VM. Only one process can run TPU code at a time on the same dev TPU.
+Do not launch concurrent TPU commands (including in separate shells, tmux panes, or background jobs) against one dev TPU;
+queue them and run sequentially instead.
+
 ## What it does
 
 - `allocate`: reserves a TPU VM and keeps it alive while the command runs. It also creates an SSH alias for the TPU and writes config to `~/.ssh/config` so you can connect easily.
@@ -118,6 +124,7 @@ source ~/.local/bin/env
 ```
 
 Then run multiple commands directly on remote.
+Run them one at a time when they execute TPU code.
 
 ### 3) Pull profiles and traces
 
