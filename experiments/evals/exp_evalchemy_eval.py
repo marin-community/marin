@@ -70,7 +70,6 @@ SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
 ]
 
 CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([HUMANEVAL_PLUS], SEEDS[:3]),  # 3 seeds
     ([MBPP_PLUS, CODEELO, CODEFORCES, LIVECODEBENCH], SEEDS[:1]),  # 1 seed
 ]
 
