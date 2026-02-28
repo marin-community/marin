@@ -165,9 +165,9 @@ class RMSNorm(eqx.Module):
 
 
 def _prepare_moe_dispatch(
-    x_flat: Float[Array, "T D"],
-    topk_idx: Int[Array, "T K"],
-    topk_weights: Float[Array, "T K"],
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
     *,
     num_experts: int,
 ) -> tuple[
@@ -179,41 +179,35 @@ def _prepare_moe_dispatch(
     """Flatten + argsort by expert into grouped layout for GMM."""
     # #2704: keep argsort-grouped dispatch as the canonical compact routing
     # strategy, matching the behavior carried forward from 89318a910.
-    tokens, topk = topk_idx.shape
-    expert_ids = topk_idx.reshape(tokens * topk)
-    dispatch_weights = topk_weights.reshape(tokens * topk)
+    tokens, topk = selected_experts.shape
+    expert_ids = selected_experts.reshape(tokens * topk)
+    dispatch_weights = combine_weights.reshape(tokens * topk)
 
     sort_idx = jnp.argsort(expert_ids, axis=0)
     token_ids = jnp.arange(tokens * topk, dtype=jnp.int32) // topk
     token_ids_sort = token_ids[sort_idx]
-    x_sort = x_flat[token_ids_sort]
-    w_sort = dispatch_weights[sort_idx].astype(x_flat.dtype)
+    x_sort = x[token_ids_sort]
+    w_sort = dispatch_weights[sort_idx].astype(x.dtype)
     group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
     return x_sort, w_sort, token_ids_sort, group_sizes
 
 
 def _moe_mlp_local(
-    x: Float[Array, "B S D"],
-    moe_router: Float[Array, "D E"],
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
     moe_w13: Float[Array, "E D I2"],
     moe_w2: Float[Array, "E I D"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
-    num_experts_per_token: int,
-) -> Float[Array, "B S D"]:
+    _num_experts_per_token: int,
+) -> Float[Array, "T D"]:
     """Per-shard non-EP MoE FFN path with argsort routing + grouped matmul."""
-    b, s, _ = x.shape
-    x_flat = rearrange(x, "b s d -> (b s) d")
-
-    router_logits = jnp.einsum("td,de->te", x_flat, moe_router)
-    topk_logits, topk_idx = jax.lax.top_k(router_logits, num_experts_per_token)
-    topk_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
-
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
-        x_flat,
-        topk_idx,
-        topk_weights,
+        x,
+        selected_experts,
+        combine_weights,
         num_experts=num_experts,
     )
 
@@ -222,8 +216,7 @@ def _moe_mlp_local(
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
     out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2, group_sizes)
 
-    out_flat = jnp.zeros_like(x_flat).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
-    return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+    return jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
 
 
 def _shared_dense_mlp(
@@ -235,9 +228,9 @@ def _shared_dense_mlp(
 ) -> Float[Array, "B S D"]:
     """Dense shared-expert FFN path that can be fused outside routed MoE dispatch."""
     b, s, _ = x.shape
-    x_flat = rearrange(x, "b s d -> (b s) d")
+    x = rearrange(x, "b s d -> (b s) d")
     shared_dim = shared_w2.shape[0]
-    shared13 = jnp.einsum("td,dm->tm", x_flat, shared_w13)
+    shared13 = jnp.einsum("td,dm->tm", x, shared_w13)
     shared_gate, shared_up = jnp.split(shared13, [shared_dim], axis=-1)
     out_flat = jnp.einsum("tm,md->td", activation_fn(shared_gate) * shared_up, shared_w2)
     return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
@@ -252,32 +245,30 @@ def _batch_spec_from_x(x: jax.Array, mesh: jax.sharding.AbstractMesh | None) -> 
 
 
 def _moe_mlp_ep_ring_local(
-    x_local: Float[Array, "B S D"],
-    moe_router: Float[Array, "D E"],
+    x_local: Float[Array, "TL D"],
+    selected_experts_local: Int[Array, "TL K"],
+    combine_weights_local: Float[Array, "TL K"],
     moe_w13_local: Float[Array, "EL D I2"],
     moe_w2_local: Float[Array, "EL I D"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
-    num_experts_per_token: int,
+    _num_experts_per_token: int,
     capacity_factor: float,
-) -> Float[Array, "B S D"]:
+) -> Float[Array, "TL D"]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
-    b, s, _ = x_local.shape
-    x_flat_local = rearrange(x_local, "b s d -> (b s) d")
-    # #2710 ring EP strategy: each shard routes against global tokens.
-    # NB: this means we receive all tokens on the DP axis, best for low EP.
-    x_flat_global = jax.lax.all_gather(x_flat_local, "expert", tiled=True)
+    # #2710 ring EP strategy: gather tokens and their selected-expert routing
+    # assignments across expert shards, then psum-scatter back to local tokens.
+    x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
+    selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
+    combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
 
-    router_logits = jnp.einsum("td,de->te", x_flat_global, moe_router)
-    topk_logits, topk_idx = jax.lax.top_k(router_logits, num_experts_per_token)
-    topk_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x_local.dtype)
-
-    tokens = x_flat_global.shape[0]
-    assignments = tokens * num_experts_per_token
-    expert_flat = topk_idx.reshape(assignments)
-    weight_flat = topk_weights.reshape(assignments)
-    token_flat = jnp.arange(assignments, dtype=jnp.int32) // num_experts_per_token
+    tokens = x_global.shape[0]
+    topk = selected_experts_global.shape[1]
+    assignments = tokens * topk
+    expert_flat = selected_experts_global.reshape(assignments)
+    weight_flat = combine_weights_global.reshape(assignments)
+    token_flat = jnp.arange(assignments, dtype=jnp.int32) // topk
 
     sort_idx = jnp.argsort(expert_flat, axis=0)
     expert_sorted = jnp.take(expert_flat, sort_idx, axis=0)
@@ -308,7 +299,7 @@ def _moe_mlp_ep_ring_local(
     expert_local = jnp.take(expert_sorted, local_idx, axis=0) - expert_start
     weight_local = jnp.take(weight_sorted, local_idx, axis=0)
 
-    x_take = jnp.take(x_flat_global, token_local, axis=0)
+    x_take = jnp.take(x_global, token_local, axis=0)
     x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
     weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
     expert_local = jnp.where(valid, expert_local, 0)
@@ -323,31 +314,29 @@ def _moe_mlp_ep_ring_local(
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
     out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
-    out_global = (
-        jnp.zeros_like(x_flat_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
-    )
+    out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
     # #2710 ring EP strategy: collect only this shard's token slice after
     # reducing contributions from experts across the EP mesh.
-    out_flat_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
-    return rearrange(out_flat_local, "(b s) d -> b s d", b=b, s=s)
+    return jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
 
 
 @named_call
 def moe_mlp(
-    x: Float[Array, "B S D"],
-    moe_router: Float[Array, "D E"],
-    moe_w13: Float[Array, "E D I2"],
-    moe_w2: Float[Array, "E I D"],
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    w_up_gate: Float[Array, "E D I2"],
+    w_down: Float[Array, "E I D"],
     *,
-    num_experts_per_token: int,
     activation: MoeActivation = ActivationFunctionEnum.silu,
     mesh: jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
-) -> Float[Array, "B S D"]:
+) -> Float[Array, "T D"]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
-    This helper handles local and EP execution, but intentionally excludes the
-    shared dense expert path so callers can compose/fuse it separately.
+    This helper handles dispatch/permute/unpermute (+EP collectives) from
+    precomputed token-to-expert assignments. Routing logits/top-k selection
+    stays in the caller (e.g. `MoEMLP.__call__`).
     """
     if mesh is None:
         mesh = get_abstract_mesh()
@@ -357,14 +346,26 @@ def moe_mlp(
     else:
         activation_fn = activation
 
-    num_experts = int(moe_w13.shape[0])
-    if moe_w2.shape[0] != num_experts:
+    if x.ndim != 2:
+        raise ValueError(f"x must be rank-2 [T, D], got shape={x.shape}")
+    if selected_experts.ndim != 2:
+        raise ValueError(f"selected_experts must be rank-2 [T, K], got shape={selected_experts.shape}")
+    if selected_experts.shape != combine_weights.shape:
         raise ValueError(
-            f"moe_w2 expert dimension ({moe_w2.shape[0]}) must match moe_w13 expert dimension ({num_experts})"
+            "selected_experts and combine_weights must have identical [T, K] shapes; "
+            f"got {selected_experts.shape} vs {combine_weights.shape}"
         )
-    if moe_router.shape[1] != num_experts:
+    if selected_experts.shape[0] != x.shape[0]:
         raise ValueError(
-            f"moe_router expert dimension ({moe_router.shape[1]}) must match moe_w13 expert dimension ({num_experts})"
+            f"selected_experts/combine_weights token dim ({selected_experts.shape[0]}) must match x token "
+            f"dim ({x.shape[0]})"
+        )
+
+    num_experts_per_token = int(selected_experts.shape[1])
+    num_experts = int(w_up_gate.shape[0])
+    if w_down.shape[0] != num_experts:
+        raise ValueError(
+            f"w_down expert dimension ({w_down.shape[0]}) must match w_up_gate expert dimension ({num_experts})"
         )
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
@@ -373,12 +374,13 @@ def moe_mlp(
     if mesh is None or mesh.empty:
         return _moe_mlp_local(
             x,
-            moe_router,
-            moe_w13,
-            moe_w2,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
             activation_fn=activation_fn,
             num_experts=num_experts,
-            num_experts_per_token=num_experts_per_token,
+            _num_experts_per_token=num_experts_per_token,
         )
 
     batch_spec = _batch_spec_from_x(x, mesh)
@@ -394,20 +396,21 @@ def moe_mlp(
                 _moe_mlp_ep_ring_local,
                 activation_fn=activation_fn,
                 num_experts=num_experts,
-                num_experts_per_token=num_experts_per_token,
+                _num_experts_per_token=num_experts_per_token,
                 capacity_factor=capacity_factor,
             ),
             mesh=mesh,
             in_specs=(
                 batch_spec,
-                P(None, None),
+                batch_spec,
+                batch_spec,
                 P("expert", None, None),
                 P("expert", None, None),
             ),
             out_specs=batch_spec,
             check_vma=False,
         )
-        return shard_fn(x, moe_router, moe_w13, moe_w2)
+        return shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
     # semantics without EP collectives.
@@ -416,19 +419,20 @@ def moe_mlp(
             _moe_mlp_local,
             activation_fn=activation_fn,
             num_experts=num_experts,
-            num_experts_per_token=num_experts_per_token,
+            _num_experts_per_token=num_experts_per_token,
         ),
         mesh=mesh,
         in_specs=(
             batch_spec,
-            P(None, None),
+            batch_spec,
+            batch_spec,
             local_expert_spec,
             local_expert_spec,
         ),
         out_specs=batch_spec,
         check_vma=False,
     )
-    return shard_fn(x, moe_router, moe_w13, moe_w2)
+    return shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
 
 
 class MoEMLP(eqx.Module):
@@ -474,16 +478,24 @@ class MoEMLP(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
-        routed = moe_mlp(
-            x,
-            self.moe_router,
+        b, s, _ = x.shape
+        x_tokens = rearrange(x, "b s d -> (b s) d")
+        router_logits = jnp.einsum("td,de->te", x_tokens, self.moe_router)
+        topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
+        combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
+
+        routed_flat = moe_mlp(
+            x_tokens,
+            selected_experts.astype(jnp.int32),
+            combine_weights,
             self.moe_w13,
             self.moe_w2,
-            num_experts_per_token=self.cfg.num_experts_per_token,
             activation=ActivationFunctionEnum.silu,
             mesh=get_abstract_mesh(),
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
         )
+        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
+        routed = reshard(routed, _batch_spec(get_abstract_mesh()))
 
         if self.shared_w13 is None or self.shared_w2 is None:
             return routed

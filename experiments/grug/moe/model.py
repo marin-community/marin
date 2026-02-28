@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+
 from dataclasses import dataclass
 
 import equinox as eqx
@@ -11,21 +12,46 @@ from einops import rearrange
 from haliax.jax_utils import named_call
 from jax import random
 from jax.sharding import PartitionSpec as P
-from jax.sharding import reshard
+from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
+from levanter.grug.grug_moe import MoeActivation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pbatch, Pvocab, unshard
+from levanter.grug.sharding import Pvocab, unshard
+from levanter.utils.activation import ActivationFunctionEnum
+
+_DEFAULT_EP_CAPACITY_FACTOR = 1.25
+
+
+def _mesh_has_axis(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> bool:
+    if mesh is None or mesh.empty:
+        return False
+    return axis_name in mesh.shape
+
+
+def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
+    if mesh is None or mesh.empty:
+        return 1
+    return int(mesh.shape.get(axis_name, 1))
+
+
+def _batch_spec(mesh: jax.sharding.AbstractMesh | None) -> P:
+    if _mesh_has_axis(mesh, "expert"):
+        return P(("data", "expert"))
+    return P(("data",))
 
 
 @dataclass(frozen=True)
 class GrugModelConfig:
-    """Hyperparameters for the Grug Llama-style transformer."""
+    """Hyperparameters for the compact grug MoE transformer."""
 
     vocab_size: int
     hidden_dim: int = 2048
     intermediate_dim: int = 5632
+    shared_expert_intermediate_dim: int = 5632
+    num_experts: int = 8
+    num_experts_per_token: int = 2
     num_layers: int = 24
     num_heads: int = 16
     num_kv_heads: int = 16
@@ -43,6 +69,14 @@ class GrugModelConfig:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
             raise ValueError("max_seq_len must be positive")
+        if self.num_experts <= 0:
+            raise ValueError("num_experts must be positive")
+        if self.num_experts_per_token <= 0:
+            raise ValueError("num_experts_per_token must be positive")
+        if self.num_experts_per_token > self.num_experts:
+            raise ValueError("num_experts_per_token must be <= num_experts")
+        if self.shared_expert_intermediate_dim < 0:
+            raise ValueError("shared_expert_intermediate_dim must be non-negative")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -56,21 +90,21 @@ class GrugModelConfig:
 
 
 class CausalSelfAttention(eqx.Module):
-    w_q: jax.Array
-    w_k: jax.Array
-    w_v: jax.Array
-    w_o: jax.Array
+    w_q: Float[Array, "D NH"]
+    w_k: Float[Array, "D MH"]
+    w_v: Float[Array, "D MH"]
+    w_o: Float[Array, "NH D"]
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
-        d_model, n_heads, n_kv_heads, head_dim = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d_model, n_heads * head_dim), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d_model, n_kv_heads * head_dim), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d_model, n_kv_heads * head_dim), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n_heads * head_dim, d_model), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
+            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
+            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
+            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             cfg=cfg,
         )
 
@@ -78,6 +112,7 @@ class CausalSelfAttention(eqx.Module):
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
+        batch_spec = _batch_spec(get_abstract_mesh())
 
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
@@ -85,27 +120,7 @@ class CausalSelfAttention(eqx.Module):
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         attn_out = attention(q, k, v, mask)
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=Pbatch)
-
-
-class MLP(eqx.Module):
-    mlp_up: jax.Array
-    mlp_down: jax.Array
-
-    @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MLP":
-        k_up, k_down = random.split(key, 2)
-        d_model, d_ff = cfg.hidden_dim, cfg.intermediate_dim
-        return MLP(
-            mlp_up=reshard(_init_weight(k_up, (d_model, d_ff), cfg.initializer_std), P("data", "model")),
-            mlp_down=reshard(_init_weight(k_down, (d_ff, d_model), cfg.initializer_std), P("model", "data")),
-        )
-
-    @named_call
-    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
-        up = jnp.einsum("bsh,hm->bsm", x, self.mlp_up)
-        activated = jax.nn.relu(up)
-        return jnp.einsum("bsm,mh->bsh", activated, self.mlp_down, out_sharding=Pbatch)
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
 
 class RMSNorm(eqx.Module):
@@ -126,11 +141,108 @@ class RMSNorm(eqx.Module):
         return (normed * weight).astype(dtype)
 
 
+def _shared_dense_mlp(
+    x: Float[Array, "B S D"],
+    shared_w_up_gate: Float[Array, "D J2"],
+    shared_w_down: Float[Array, "J D"],
+    *,
+    activation: MoeActivation = ActivationFunctionEnum.silu,
+) -> Float[Array, "B S D"]:
+    if isinstance(activation, ActivationFunctionEnum):
+        activation_fn = activation.to_jax_fn()
+    else:
+        activation_fn = activation
+
+    b, s, _ = x.shape
+    x_flat = rearrange(x, "b s d -> (b s) d")
+    shared_dim = shared_w_down.shape[0]
+    shared_up_gate = jnp.einsum("td,dm->tm", x_flat, shared_w_up_gate)
+    shared_gate, shared_up = jnp.split(shared_up_gate, [shared_dim], axis=-1)
+    out_flat = jnp.einsum("tm,md->td", activation_fn(shared_gate) * shared_up, shared_w_down)
+    return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+
+
+class MoEMLP(eqx.Module):
+    router: jax.Array
+    w_up_gate: jax.Array
+    w_down: jax.Array
+    shared_w_up_gate: jax.Array | None
+    shared_w_down: jax.Array | None
+    cfg: GrugModelConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
+        k_router, k_w_up_gate, k_w_down, k_shared_up_gate, k_shared_down = random.split(key, 5)
+        mesh = get_abstract_mesh()
+
+        expert_axis_size = _mesh_axis_size(mesh, "expert")
+        if cfg.num_experts % expert_axis_size != 0:
+            raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
+
+        expert_param_spec = P("expert", None, None) if _mesh_has_axis(mesh, "expert") else P(None, None, None)
+
+        d, e, i, j = (
+            cfg.hidden_dim,
+            cfg.num_experts,
+            cfg.intermediate_dim,
+            cfg.shared_expert_intermediate_dim,
+        )
+
+        shared_w_up_gate = None
+        shared_w_down = None
+        if j > 0:
+            shared_w_up_gate = reshard(_init_weight(k_shared_up_gate, (d, 2 * j), cfg.initializer_std), P(None, None))
+            shared_w_down = reshard(_init_weight(k_shared_down, (j, d), cfg.initializer_std), P(None, None))
+
+        return MoEMLP(
+            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            w_up_gate=reshard(_init_weight(k_w_up_gate, (e, d, 2 * i), cfg.initializer_std), expert_param_spec),
+            w_down=reshard(_init_weight(k_w_down, (e, i, d), cfg.initializer_std), expert_param_spec),
+            shared_w_up_gate=shared_w_up_gate,
+            shared_w_down=shared_w_down,
+            cfg=cfg,
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        b, s, _ = x.shape
+        x_flat = rearrange(x, "b s d -> (b s) d")
+        router_logits = jnp.einsum("td,de->te", x_flat, self.router)
+        topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
+        combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
+
+        routed_flat = moe_mlp(
+            x_flat,
+            selected_experts.astype(jnp.int32),
+            combine_weights,
+            self.w_up_gate,
+            self.w_down,
+            activation=ActivationFunctionEnum.silu,
+            mesh=get_abstract_mesh(),
+            capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+        )
+        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
+        routed = reshard(routed, _batch_spec(get_abstract_mesh()))
+
+        if self.shared_w_up_gate is None:
+            assert self.shared_w_down is None
+            return routed
+        assert self.shared_w_down is not None
+
+        shared_out = _shared_dense_mlp(
+            x,
+            self.shared_w_up_gate,
+            self.shared_w_down,
+            activation=ActivationFunctionEnum.silu,
+        )
+        return routed + shared_out
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
-    mlp: MLP
+    mlp: MoEMLP
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -139,7 +251,7 @@ class Block(eqx.Module):
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp=MLP.init(cfg, key=mlp_key),
+            mlp=MoEMLP.init(cfg, key=mlp_key),
         )
 
     @named_call
@@ -163,6 +275,7 @@ class Transformer(eqx.Module):
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
         blocks = tuple(Block.init(cfg, key=layer_key) for layer_key in block_keys)
         final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+
         return Transformer(
             token_embed=token_embed,
             output_proj=output_proj,
@@ -180,7 +293,8 @@ class Transformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
 
-        hidden = self.token_embed.at[token_ids].get(out_sharding=Pbatch)
+        batch_spec = _batch_spec(get_abstract_mesh())
+        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         for block in self.blocks:
             hidden = eqx.filter_checkpoint(block)(hidden, mask)
         return self.final_norm(hidden)
@@ -191,10 +305,11 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
+        batch_spec = _batch_spec(get_abstract_mesh())
         hidden = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=Pbatch)
+        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
-    def compute_next_token_loss(
+    def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
         loss_weight: Float[Array, "B S"],
@@ -228,23 +343,34 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
     """Return a small abstract mesh and token sharding for lowering contract tests."""
     if num_devices <= 0:
         raise ValueError(f"num_devices must be positive, got {num_devices}")
+    # Keep expert axis at 2 when possible to exercise EP lowering, otherwise
+    # fall back to expert=1.
+    expert = 2 if num_devices % 2 == 0 else 1
+    data = max(1, num_devices // expert)
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(num_devices, 1),
-        axis_names=("data", "model"),
+        axis_sizes=(data, expert, 1),
+        axis_names=("data", "expert", "model"),
         axis_types=(
+            jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
         ),
     )
-    return mesh, P(("data",), None)
+    return mesh, P(("data", "expert"), None)
+
+
+GrugMoeModelConfig = GrugModelConfig
 
 
 __all__ = [
-    "MLP",
     "Block",
     "CausalSelfAttention",
     "GrugModelConfig",
+    "GrugMoeModelConfig",
+    "MoEMLP",
+    "MoeActivation",
     "RMSNorm",
     "Transformer",
     "debug_mesh_and_token_pspec",
+    "moe_mlp",
 ]

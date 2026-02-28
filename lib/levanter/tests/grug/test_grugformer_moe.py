@@ -213,30 +213,34 @@ def test_functional_moe_mlp_accepts_literal_and_callable_activation():
     )
     batch = 4
     seq = 4
-    x = jax.random.normal(jax.random.key(13), (batch, seq, cfg.hidden_dim), dtype=jnp.float32)
-    router = jax.random.normal(jax.random.key(14), (cfg.hidden_dim, cfg.num_experts), dtype=jnp.float32)
+    x = jax.random.normal(jax.random.key(13), (batch * seq, cfg.hidden_dim), dtype=jnp.float32)
     w13 = jax.random.normal(
         jax.random.key(15), (cfg.num_experts, cfg.hidden_dim, 2 * cfg.intermediate_dim), dtype=jnp.float32
     )
     w2 = jax.random.normal(
         jax.random.key(16), (cfg.num_experts, cfg.intermediate_dim, cfg.hidden_dim), dtype=jnp.float32
     )
+    selected_experts = jax.random.randint(
+        jax.random.key(17), (batch * seq, cfg.num_experts_per_token), 0, cfg.num_experts, dtype=jnp.int32
+    )
+    combine_logits = jax.random.normal(jax.random.key(18), (batch * seq, cfg.num_experts_per_token), dtype=jnp.float32)
+    combine_weights = jax.nn.softmax(combine_logits, axis=-1)
 
     y_enum = moe_mlp(
         x,
-        router,
+        selected_experts,
+        combine_weights,
         w13,
         w2,
-        num_experts_per_token=cfg.num_experts_per_token,
         activation=ActivationFunctionEnum.silu,
         mesh=None,
     )
     y_callable = moe_mlp(
         x,
-        router,
+        selected_experts,
+        combine_weights,
         w13,
         w2,
-        num_experts_per_token=cfg.num_experts_per_token,
         activation=lambda t: jax.nn.silu(t),
         mesh=None,
     )
