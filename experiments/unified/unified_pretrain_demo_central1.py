@@ -63,6 +63,7 @@ VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 UNIFIED_TOKENIZER_PATH = "gs://marin-us-central1/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm/hf_85m_levanter_cache_v2"
 UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
+TEXT_EVAL_CACHE_PATH = "gs://marin-vlm/text_eval_cache"
 
 # Eval benchmark categories (used for tagging in eval metrics)
 UNDERSTANDING_BENCHMARKS = {"textvqa", "chartqa", "ai2d", "mmmu"}
@@ -170,6 +171,8 @@ def unified_data_config(
     eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
+    text_eval_benchmarks: list[str] | None = None,
+    text_eval_cache_path: str = TEXT_EVAL_CACHE_PATH,
 ) -> LmDataConfig:
     """Build data mixture with Nemotron text + multimodal cache for unified model training.
 
@@ -178,14 +181,17 @@ def unified_data_config(
         multimodal_weight: Total weight for multimodal data, split between understanding
             and generation according to und_gen_ratio.
         multimodal_cache_path: GCS path to the pre-built multimodal Levanter cache.
-        eval_benchmarks: List of eval benchmark names to include as validation-only
+        eval_benchmarks: List of VLM eval benchmark names to include as validation-only
             components (train_weight=0.0). Set to None to disable eval.
-        eval_cache_path: GCS path to eval benchmark Levanter caches.
+        eval_cache_path: GCS path to VLM eval benchmark Levanter caches.
         w_visual: Override for the visual token loss weight. When set, replaces
             the preprocessing-baked w_visual at data loading time. None uses the
             original preprocessing value unchanged.
         und_gen_ratio: Ratio of understanding to generation weight. E.g. 3.0 means
             understanding gets 3/(3+1) of multimodal_weight, generation gets 1/(3+1).
+        text_eval_benchmarks: List of text eval benchmark names (e.g. hellaswag, mmlu)
+            to include as validation-only components. Set to None to disable.
+        text_eval_cache_path: GCS path to text eval benchmark Levanter caches.
     """
     # Text: only hq_actual from Nemotron-CC
     nemotron_steps = tokenize_nemotron()
@@ -263,6 +269,22 @@ def unified_data_config(
             )
             weights[f"eval_{bench}"] = 0.0
 
+    # Text eval benchmarks: weight 0.0 → eval-only.
+    # These are pure text (no visual tokens), so no loss_weight_transform needed.
+    if text_eval_benchmarks is not None:
+        text_prebuilt_format = PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+        )
+        for bench in text_eval_benchmarks:
+            components[f"text_eval_{bench}"] = DatasetComponent(
+                cache_dir=f"{text_eval_cache_path}/{bench}",
+                format=text_prebuilt_format,
+                pack=True,
+                tags=["eval", "text"],
+            )
+            weights[f"text_eval_{bench}"] = 0.0
+
     data_config = LmDataConfig(
         tokenizer=UNIFIED_TOKENIZER_PATH,
         components=components,
@@ -323,6 +345,14 @@ DEFAULT_EVAL_BENCHMARKS = [
     "imagenet_small",
 ]
 
+DEFAULT_TEXT_EVAL_BENCHMARKS = [
+    "hellaswag",
+    "winogrande",
+    "arc_easy",
+    "arc_challenge",
+    "mmlu",
+]
+
 
 def make_unified_0_6b(
     text_weight: float = 1.0,
@@ -330,6 +360,7 @@ def make_unified_0_6b(
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
+    text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-0.6b-demo",
@@ -339,6 +370,7 @@ def make_unified_0_6b(
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
             und_gen_ratio=und_gen_ratio,
+            text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_0_6b,
         train_config=_demo_train_config(learning_rate=3e-4),
@@ -357,6 +389,7 @@ def make_unified_1_7b(
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
+    text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-1.7b-demo",
@@ -366,6 +399,7 @@ def make_unified_1_7b(
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
             und_gen_ratio=und_gen_ratio,
+            text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_1_7b,
         train_config=_demo_train_config(learning_rate=3e-4),
@@ -383,6 +417,7 @@ def make_unified_4b(
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
+    text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-4b-demo",
@@ -392,6 +427,7 @@ def make_unified_4b(
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
             und_gen_ratio=und_gen_ratio,
+            text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_4b,
         train_config=_demo_train_config(learning_rate=1.5e-4),
