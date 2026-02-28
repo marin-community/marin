@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_EXTENSIONS: tuple[str, ...] = (".py", ".pyi", ".js", ".jsx", ".ts", ".tsx")
+DEFAULT_EXTENSIONS: tuple[str, ...] = (".py", ".md")
 DEFAULT_IGNORED_DIRS: frozenset[str] = frozenset(
     {
         ".git",
@@ -435,7 +435,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extensions",
         default=",".join(DEFAULT_EXTENSIONS),
-        help=("Comma-separated file extensions to include, e.g. '.py,.pyi'. " "Ignored if --all-files is set."),
+        help=("Comma-separated file extensions to include, e.g. '.py,.md'. " "Ignored if --all-files is set."),
     )
     parser.add_argument(
         "--all-files",

@@ -53,13 +53,13 @@ uv run python scripts/grug_dir_diff.py \
 
 What it does:
 
-- Recursively compares both directories (default extensions: `.py`, `.pyi`, `.js`, `.jsx`, `.ts`, `.tsx`)
+- Recursively compares both directories (default extensions: `.py`, `.md`)
 - Builds one `/tmp/grug-diff/index.html` report with top-level summary + file table
 - Renders inline side-by-side diffs on that same page (changed/added/removed by default)
 
 Useful flags:
 
-- `--extensions .py,.pyi`: restrict file types
+- `--extensions .py,.md`: restrict file types
 - `--all-files`: include everything instead of extension filtering
 - `--show-unchanged`: generate pages for unchanged files too
 - `--context-lines 5`: tune context around edits
