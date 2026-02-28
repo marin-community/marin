@@ -33,6 +33,7 @@ __all__ = [
     "HUMANITYS_LAST_EXAM",
     "JEEBENCH",
     "LIVECODEBENCH",
+    "LIVECODEBENCH_V5_OFFICIAL",
     "MATH500",
     "MBPP_PLUS",
 ]
@@ -61,6 +62,9 @@ MBPP_PLUS = EvalTaskConfig(name="MBPPPlus", num_fewshot=0, task_alias="MBPPPlus"
 LIVECODEBENCH = EvalTaskConfig(
     name="LiveCodeBench", num_fewshot=0, task_alias="LiveCodeBench", task_kwargs={"n_repeat": 1}
 )
+LIVECODEBENCH_V5_OFFICIAL = EvalTaskConfig(
+    name="LiveCodeBenchv5_official", num_fewshot=0, task_alias="LiveCodeBenchv5_official", task_kwargs={"n_repeat": 1}
+)
 BIGCODEBENCH = EvalTaskConfig(name="BigCodeBench", num_fewshot=0, task_alias="BigCodeBench")
 CODEFORCES = EvalTaskConfig(name="CodeForces", num_fewshot=0, task_alias="CodeForces", task_kwargs={"n_repeat": 1})
 CODEELO = EvalTaskConfig(name="CodeElo", num_fewshot=0, task_alias="CodeElo", task_kwargs={"n_repeat": 1})
@@ -76,14 +80,22 @@ JEEBENCH = EvalTaskConfig(name="JEEBench", num_fewshot=0, task_alias="JEEBench",
 # =============================================================================
 ALICE_IN_WONDERLAND = EvalTaskConfig(name="AIW", num_fewshot=0, task_alias="AIW")
 HUMANITYS_LAST_EXAM = EvalTaskConfig(
-    name="HumanitysLastExam", num_fewshot=0, task_alias="HumanitysLastExam", task_kwargs={"n_repeat": 1}
+    name="HLE", num_fewshot=0, task_alias="HLE", task_kwargs={"n_repeat": 1}
 )
 
 # =============================================================================
 # Task groups
 # =============================================================================
 EVALCHEMY_MATH_TASKS = (AIME24, AIME25, AMC23, MATH500, HMMT)
-EVALCHEMY_CODE_TASKS = (HUMANEVAL_PLUS, MBPP_PLUS, LIVECODEBENCH, BIGCODEBENCH, CODEFORCES, CODEELO)
+EVALCHEMY_CODE_TASKS = (
+    HUMANEVAL_PLUS,
+    MBPP_PLUS,
+    LIVECODEBENCH,
+    LIVECODEBENCH_V5_OFFICIAL,
+    BIGCODEBENCH,
+    CODEFORCES,
+    CODEELO,
+)
 EVALCHEMY_SCIENCE_TASKS = (GPQA_DIAMOND, JEEBENCH)
 EVALCHEMY_REASONING_TASKS = (ALICE_IN_WONDERLAND, HUMANITYS_LAST_EXAM)
 

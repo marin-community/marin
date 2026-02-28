@@ -5,7 +5,7 @@
 Example experiment for running Evalchemy reasoning benchmarks.
 
 Evalchemy (https://github.com/mlfoundations/evalchemy) provides specialized
-reasoning tasks including AIME24/25, MATH500, HumanEval+, MBPP+, and more.
+reasoning tasks including AIME24/25, MATH500, HLE, and more.
 """
 import argparse
 import sys
@@ -19,12 +19,11 @@ from experiments.evals.evalchemy_task_configs import (
     CODEFORCES,
     GPQA_DIAMOND,
     HMMT,
-    HUMANEVAL_PLUS,
     HUMANITYS_LAST_EXAM,
     JEEBENCH,
     LIVECODEBENCH,
+    LIVECODEBENCH_V5_OFFICIAL,
     MATH500,
-    MBPP_PLUS,
 )
 from fray.cluster import ResourceConfig
 
@@ -70,7 +69,7 @@ SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
 ]
 
 CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([MBPP_PLUS, CODEELO, CODEFORCES, LIVECODEBENCH], SEEDS[:1]),  # 1 seed
+    ([CODEELO, CODEFORCES, LIVECODEBENCH, LIVECODEBENCH_V5_OFFICIAL], SEEDS[:1]),  # 1 seed
 ]
 
 SUITE_TO_TASK_SEED_GROUPS: dict[str, list[tuple[list, list[int]]]] = {
