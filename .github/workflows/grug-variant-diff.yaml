@@ -94,38 +94,6 @@ jobs:
             const pagesPublished = process.env.PAGES_PUBLISHED === 'true';
             const artifactUrl = process.env.ARTIFACT_URL || '';
 
-            let body = `${marker}\n`;
-
-            if (reportCount === 0) {
-              body += '🤖 No newly added `experiments/grug/<variant>/` directory was detected in this PR.';
-            } else {
-              body += '🤖 Grug variant diff report\n\n';
-              if (!pagesPublished) {
-                body += 'Rendered GitHub Pages links were not published for this run.\n\n';
-              }
-
-              body += '| New Variant | Closest Existing Variant | Distance Score | Diff |\n';
-              body += '|---|---|---:|---|\n';
-
-              for (const report of manifest.reports) {
-                const variant = report.variant;
-                const closest = report.closest_variant;
-                const score = report.distance_score;
-                const link = pagesPublished
-                  ? `[Open](${pagesUrl}/${variant}/index.html)`
-                  : `artifact:\`${report.report_relpath}\``;
-                body += `| \`${variant}\` | \`${closest}\` | ${score} | ${link} |\n`;
-              }
-
-              if (artifactUrl) {
-                body += `\nArtifact fallback: [Download report bundle](${artifactUrl})\n`;
-              }
-
-              if (!pagesPublished) {
-                body += '\nFor fork PRs, this workflow usually cannot publish to `gh-pages`; artifact link remains available.';
-              }
-            }
-
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, {
@@ -136,6 +104,44 @@ jobs:
             });
 
             const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+
+            if (reportCount === 0) {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner,
+                  repo,
+                  comment_id: existing.id,
+                });
+              }
+              return;
+            }
+
+            let body = '🤖 Grug variant diff report\n';
+            body += `${marker}\n\n`;
+            if (!pagesPublished) {
+              body += 'Rendered GitHub Pages links were not published for this run.\n\n';
+            }
+
+            body += '| New Variant | Closest Existing Variant | Distance Score | Diff |\n';
+            body += '|---|---|---:|---|\n';
+
+            for (const report of manifest.reports) {
+              const variant = report.variant;
+              const closest = report.closest_variant;
+              const score = report.distance_score;
+              const link = pagesPublished
+                ? `[Open](${pagesUrl}/${variant}/index.html)`
+                : `artifact:\`${report.report_relpath}\``;
+              body += `| \`${variant}\` | \`${closest}\` | ${score} | ${link} |\n`;
+            }
+
+            if (artifactUrl) {
+              body += `\nArtifact fallback: [Download report bundle](${artifactUrl})\n`;
+            }
+
+            if (!pagesPublished) {
+              body += '\nFor fork PRs, this workflow usually cannot publish to `gh-pages`; artifact link remains available.';
+            }
 
             if (existing) {
               await github.rest.issues.updateComment({
