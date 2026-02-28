@@ -17,10 +17,10 @@ from iris.cluster.platform.bootstrap import (
 from iris.rpc import config_pb2
 
 
-def _bootstrap_config(**overrides: object) -> config_pb2.BootstrapConfig:
-    cfg = config_pb2.BootstrapConfig(
+def _worker_config(**overrides: object) -> config_pb2.WorkerConfig:
+    cfg = config_pb2.WorkerConfig(
         docker_image="gcr.io/test/iris-worker:latest",
-        worker_port=10001,
+        port=10001,
         cache_dir="/var/cache/iris",
         controller_address="10.0.0.10:10000",
     )
@@ -30,44 +30,41 @@ def _bootstrap_config(**overrides: object) -> config_pb2.BootstrapConfig:
 
 
 def test_build_worker_bootstrap_script_includes_controller_address() -> None:
-    script = build_worker_bootstrap_script(_bootstrap_config(), vm_address="10.0.0.2")
+    script = build_worker_bootstrap_script(_worker_config())
 
-    assert "--controller-address 10.0.0.10:10000" in script
-    assert "--config /etc/iris/config.yaml" not in script
+    assert "controller_address" in script
+    assert "10.0.0.10:10000" in script
     assert "gcr.io/test/iris-worker:latest" in script
-    assert "IRIS_VM_ADDRESS=10.0.0.2" in script
 
 
 def test_build_worker_bootstrap_script_configures_ar_auth() -> None:
     ar_image = "us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:latest"
-    cfg = _bootstrap_config(docker_image=ar_image)
+    cfg = _worker_config(docker_image=ar_image)
 
-    script = build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
+    script = build_worker_bootstrap_script(cfg)
 
     assert f'if echo "{ar_image}" | grep -q -- "-docker.pkg.dev/"' in script
     assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
 
 
 def test_build_worker_bootstrap_script_requires_controller_address() -> None:
-    cfg = _bootstrap_config()
+    cfg = _worker_config()
     cfg.controller_address = ""
 
     with pytest.raises(ValueError, match="controller_address"):
-        build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
+        build_worker_bootstrap_script(cfg)
 
 
-def test_build_worker_bootstrap_script_includes_env_vars() -> None:
-    """Env vars in BootstrapConfig appear in the generated script."""
-    cfg = _bootstrap_config()
-    cfg.env_vars["IRIS_WORKER_ATTRIBUTES"] = '{"region": "us-west4"}'
-    cfg.env_vars["IRIS_SCALE_GROUP"] = "west-group"
+def test_build_worker_bootstrap_script_embeds_worker_config_json() -> None:
+    """WorkerConfig fields appear in the embedded JSON in the generated script."""
+    cfg = _worker_config()
+    cfg.default_task_env["IRIS_SCALE_GROUP"] = "west-group"
 
-    script = build_worker_bootstrap_script(cfg, vm_address="10.0.0.2")
+    script = build_worker_bootstrap_script(cfg)
 
-    assert "IRIS_WORKER_ATTRIBUTES=" in script
-    assert "us-west4" in script
-    assert "IRIS_SCALE_GROUP=" in script
+    assert "IRIS_SCALE_GROUP" in script
     assert "west-group" in script
+    assert "worker_config.json" in script
 
 
 def test_render_template_preserves_docker_templates() -> None:

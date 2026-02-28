@@ -322,12 +322,12 @@ class Platform(Protocol):
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a slice of connected workers (e.g., TPU pod, IB GPU cluster).
 
         The slice is the atomic scaling unit -- it succeeds or fails as a whole.
-        When bootstrap_config is provided, the platform handles worker bootstrapping
+        When worker_config is provided, the platform handles worker bootstrapping
         internally (docker setup, worker container startup). describe() returns
         BOOTSTRAPPING while in progress, then READY or FAILED when complete.
         """
@@ -378,6 +378,14 @@ class Platform(Protocol):
 
         GCP: SSH tunnel with port forwarding.
         Manual/Local: returns address directly (nullcontext).
+        """
+        ...
+
+    def debug_report(self) -> None:
+        """Log diagnostic info about the controller after a failure.
+
+        Override to inspect platform-specific state (e.g. pod termination
+        reason, previous container logs). Default is a no-op.
         """
         ...
 

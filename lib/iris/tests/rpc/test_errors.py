@@ -46,6 +46,11 @@ def test_is_retryable_error_invalid_argument() -> None:
     assert is_retryable_error(err) is False
 
 
+def test_is_retryable_error_deadline_exceeded() -> None:
+    err = ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out")
+    assert is_retryable_error(err) is True
+
+
 def test_is_retryable_error_non_connect_error() -> None:
     """Non-ConnectError exceptions should not be retryable."""
     err = ValueError("Something wrong")
@@ -97,6 +102,21 @@ def test_call_with_retry_fails_after_max_attempts() -> None:
         call_with_retry("test_op", always_fail, max_attempts=3)
 
     assert exc_info.value.code == Code.UNAVAILABLE
+
+
+def test_call_with_retry_retries_on_deadline_exceeded() -> None:
+    call_count = 0
+
+    def retry_then_succeed():
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out")
+        return "success"
+
+    result = call_with_retry("test_op", retry_then_succeed, initial_backoff=0.001, max_backoff=0.001)
+    assert result == "success"
+    assert call_count == 3
 
 
 def test_call_with_retry_no_retry_on_not_found() -> None:

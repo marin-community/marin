@@ -27,6 +27,9 @@ Usage:
     # Custom per-job timeout
     uv run python scripts/smoke-test.py --job-timeout 120
 
+    # Local mode: in-process controller and workers (no cloud VMs)
+    uv run python scripts/smoke-test.py --mode local
+
     # Keep cluster running on failure for debugging
     uv run python scripts/smoke-test.py --mode keep
 
@@ -44,10 +47,13 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Literal, TextIO
+from collections.abc import Callable
 
 import click
 from iris.client import IrisClient
@@ -72,7 +78,7 @@ logger = logging.getLogger("smoke-test")
 IRIS_ROOT = Path(__file__).parent.parent
 DEFAULT_CONFIG_PATH = IRIS_ROOT / "examples" / "smoke.yaml"
 
-DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; allows autoscaling/scheduling slack in CI
+DEFAULT_JOB_TIMEOUT = 600  # 10 minutes; all jobs launch in parallel, this is the global wait ceiling
 DEFAULT_BOOT_TIMEOUT = 300  # 5 minutes; cluster start + connection
 
 
@@ -269,6 +275,10 @@ class AcceleratorConfig:
     @property
     def is_gpu(self) -> bool:
         return self.device_type == "gpu"
+
+    @property
+    def is_tpu(self) -> bool:
+        return self.device_type == "tpu"
 
     def make_device(self) -> cluster_pb2.DeviceConfig:
         if self.is_gpu:
@@ -533,9 +543,9 @@ def _terminate_process(proc: subprocess.Popen, name: str, timeout: float = 10.0)
 # =============================================================================
 
 
-def _hello_tpu_job():
+def _hello_job():
     """Simple job that prints and returns."""
-    print("Hello from TPU!")
+    print("Hello from accelerator!")
     return 42
 
 
@@ -548,7 +558,7 @@ def _quick_task_job(task_id: int):
     return task_id
 
 
-def _assert_region_child(expected_region: str, device_type: str, device_variant: str, device_count: int):
+def _assert_region_child(expected_region: str):
     """Parent job that submits a child and asserts the child inherits the region constraint.
 
     Uses iris_ctx() to get the IrisClient and submit a child without explicit
@@ -557,8 +567,6 @@ def _assert_region_child(expected_region: str, device_type: str, device_variant:
     """
     from iris.client.client import iris_ctx
     from iris.cluster.types import ResourceSpec as RS
-    from iris.cluster.types import gpu_device as _gpu_device
-    from iris.cluster.types import tpu_device as _tpu_device
 
     ctx = iris_ctx()
 
@@ -578,15 +586,10 @@ def _assert_region_child(expected_region: str, device_type: str, device_variant:
         print(f"Child validated inherited region: {actual}")
         return actual
 
-    if device_type == "gpu":
-        device = _gpu_device(device_variant, device_count)
-    else:
-        device = _tpu_device(device_variant, device_count if device_count > 0 else None)
-
     child = ctx.client.submit(
         entrypoint=Entrypoint.from_callable(_child_check_region),
         name="smoke-inherited-child",
-        resources=RS(device=device),
+        resources=RS(cpu=1, memory="1GB", disk="1GB"),
     )
     child.wait(timeout=60, raise_on_failure=True)
     print(f"Parent: child completed with inherited region={expected_region}")
@@ -649,12 +652,6 @@ def _jax_tpu_job():
     return result
 
 
-def _hello_gpu_job():
-    """Simple job that prints and returns on a GPU worker."""
-    print("Hello from GPU!")
-    return 42
-
-
 def _check_gpus_job(expected_count: int):
     """Verify that the expected number of GPUs are visible via nvidia-smi."""
     import subprocess as _sp
@@ -703,8 +700,11 @@ class SmokeTestConfig:
     accelerator: AcceleratorConfig
     boot_timeout_seconds: int = DEFAULT_BOOT_TIMEOUT
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
-    local: bool = False  # Run locally without GCP
-    mode: Literal["full", "keep", "redeploy"] = "full"
+    mode: Literal["full", "keep", "redeploy", "local"] = "full"
+
+    @property
+    def local(self) -> bool:
+        return self.mode == "local"
 
 
 # =============================================================================
@@ -720,6 +720,14 @@ class TestResult:
     passed: bool
     message: str
     duration_seconds: float
+
+
+@dataclass
+class SmokeTestCase:
+    """Executable smoke test case."""
+
+    label: str
+    run: Callable[[IrisClient], TestResult]
 
 
 # =============================================================================
@@ -767,7 +775,7 @@ class SmokeTestRunner:
             controller_url: str | None = None
 
             if self.config.mode != "redeploy":
-                if self.config.mode in ("full", "keep") and not self.config.local:
+                if self.config.mode in ("full", "keep"):
                     _log_section("PHASE 0: Clean Start")
                     self._cleanup_existing()
                     if self._interrupted:
@@ -835,10 +843,10 @@ class SmokeTestRunner:
         logger.info("=" * 60)
         logger.info("")
         logger.info("Config: %s", self.config.config_path)
+        logger.info("Mode: %s", self.config.mode)
         logger.info("Boot timeout: %ds", self.config.boot_timeout_seconds)
         logger.info("Job timeout: %ds", self.config.job_timeout_seconds)
         logger.info("Accelerator: %s (%s)", self._accel.label(), self._accel.device_type)
-        logger.info("Local: %s", self.config.local)
 
     # ----- Cluster lifecycle via CLI -----
 
@@ -917,72 +925,83 @@ class SmokeTestRunner:
     # ----- Test execution -----
 
     def _run_tests(self, controller_url: str):
-        """Run test jobs against the cluster, choosing GPU or TPU suite."""
-        client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
+        """Run test jobs against the cluster."""
+        tests = self._build_test_cases()
+        self._run_test_cases_parallel(controller_url, tests)
 
-        if self._accel.is_gpu:
-            self._run_gpu_tests(client)
-        else:
-            self._run_tpu_tests(client)
-
-    def _run_test_step(self, client: IrisClient, label: str, method, *args) -> bool:
-        """Run one test step: log, execute, record result, check deadline.
-
-        Returns False if the runner should stop (interrupted/deadline).
-        """
-        logger.info(label)
-        result = method(client, *args)
-        self._results.append(result)
-        self._log_autoscaler_status()
-        return not self._interrupted
-
-    # ----- GPU test suite -----
-
-    def _run_gpu_tests(self, client: IrisClient):
+    def _build_test_cases(self) -> list[SmokeTestCase]:
+        """Build the test list based on accelerator type and local mode."""
         a = self._accel
-        tests = [
-            (f"Simple GPU job ({a.label()})", self._run_simple_gpu_job),
-            (f"Concurrent GPU jobs (3x {a.label()})", self._run_concurrent_gpu_jobs),
-        ]
+        local = self.config.local
+        scheduling_only = local and a.is_tpu
+        so = self._maybe_scheduling_only
+
+        tests: list[SmokeTestCase] = []
+
+        tests.append(SmokeTestCase(f"Simple job ({a.label()})", so(self._run_simple_job, scheduling_only)))
+        tests.append(SmokeTestCase(f"Concurrent jobs (3x {a.label()})", so(self._run_concurrent_jobs, scheduling_only)))
+
+        if a.is_tpu:
+            tests.append(
+                SmokeTestCase(
+                    f"Coscheduled multi-task job ({a.variant})", so(self._run_coscheduled_job, scheduling_only)
+                )
+            )
+
+        if a.is_tpu and not local:
+            tests.append(SmokeTestCase(f"JAX TPU job ({a.variant})", self._run_jax_tpu_job))
+
+        if a.is_gpu and not local:
+            tests.append(SmokeTestCase(f"Multi-GPU device check ({a.label()})", self._run_gpu_check_job))
+
         if self._has_non_preemptible_cpu_group():
-            tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
-        if not self.config.local:
-            tests.append((f"Multi-GPU device check ({a.label()})", self._run_gpu_check_job))
-        if a.region and not self.config.local:
-            tests.append((f"Region-constrained GPU job ({a.region})", self._run_region_constrained_gpu_job))
+            tests.append(SmokeTestCase("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
 
-        total = len(tests)
-        for i, (label, method) in enumerate(tests, 1):
-            if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method):
-                return
+        if a.region and not (a.is_gpu and local):
+            tests.append(
+                SmokeTestCase(
+                    f"Region-constrained job ({a.region})", so(self._run_region_constrained_job, scheduling_only)
+                )
+            )
+            tests.append(
+                SmokeTestCase(
+                    f"Nested constraint propagation ({a.region})", so(self._run_nested_constraint_job, scheduling_only)
+                )
+            )
 
-    def _run_simple_gpu_job(self, client: IrisClient) -> TestResult:
-        return self._run_job_test(
-            client=client,
-            test_name=f"Simple GPU job ({self._accel.label()})",
-            entrypoint=Entrypoint.from_callable(_hello_gpu_job),
-            job_name=f"smoke-simple-gpu-{self._run_id}",
-            resources=ResourceSpec(device=self._accel.make_device()),
-        )
+        return tests
 
-    def _run_concurrent_gpu_jobs(self, client: IrisClient) -> TestResult:
-        resources = ResourceSpec(device=self._accel.make_device())
-        test_name = f"Concurrent GPU jobs (3x {self._accel.label()})"
-        jobs_config = [
-            (Entrypoint.from_callable(_quick_task_job, i), f"smoke-concurrent-gpu-{self._run_id}-{i}", resources)
-            for i in range(3)
-        ]
-        try:
-            duration, failed_jobs = self._submit_and_wait_multiple(client, jobs_config, test_name)
-            if not failed_jobs:
-                logger.info("  [PASS] All 3 jobs completed in %.1fs", duration)
-                return TestResult(test_name, True, f"All completed in {duration:.1f}s", duration)
-            else:
-                logger.error("  [FAIL] Some jobs failed: %s", ", ".join(failed_jobs))
-                return TestResult(test_name, False, f"Failed: {', '.join(failed_jobs)}", duration)
-        except TimeoutError:
-            logger.error("  [FAIL] Timed out waiting for jobs")
-            return TestResult(test_name, False, f"Timed out after {self.config.job_timeout_seconds}s", 0.0)
+    def _maybe_scheduling_only(self, method, scheduling_only: bool):
+        """Wrap a test method with scheduling_only=True when needed."""
+        if scheduling_only:
+            return partial(method, scheduling_only=True)
+        return method
+
+    def _run_test_cases_parallel(self, controller_url: str, tests: list[SmokeTestCase]) -> None:
+        """Run all suite tests in parallel so resource demand is requested at once."""
+        if not tests:
+            return
+
+        logger.info("Launching %d smoke tests in parallel", len(tests))
+
+        def _run_case(case: SmokeTestCase) -> TestResult:
+            client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
+            logger.info("[START] %s", case.label)
+            return case.run(client)
+
+        with ThreadPoolExecutor(max_workers=len(tests), thread_name_prefix="smoke-test") as executor:
+            future_pairs = [(case, executor.submit(_run_case, case)) for case in tests]
+            for case, future in future_pairs:
+                if self._interrupted:
+                    future.cancel()
+                    continue
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.exception("  [FAIL] %s raised an exception", case.label)
+                    result = TestResult(case.label, False, f"Exception: {e}", 0.0)
+                self._results.append(result)
+                self._log_autoscaler_status()
 
     def _run_gpu_check_job(self, client: IrisClient) -> TestResult:
         return self._run_job_test(
@@ -992,55 +1011,6 @@ class SmokeTestRunner:
             job_name=f"smoke-gpu-check-{self._run_id}",
             resources=ResourceSpec(device=self._accel.make_device()),
         )
-
-    def _run_region_constrained_gpu_job(self, client: IrisClient) -> TestResult:
-        return self._run_job_test(
-            client=client,
-            test_name=f"Region-constrained GPU job ({self._accel.region})",
-            entrypoint=Entrypoint.from_callable(_hello_gpu_job),
-            job_name=f"smoke-region-gpu-{self._run_id}",
-            resources=ResourceSpec(device=self._accel.make_device()),
-            constraints=[region_constraint([self._accel.region])],
-        )
-
-    # ----- TPU test suite -----
-
-    def _run_tpu_tests(self, client: IrisClient):
-        a = self._accel
-        if self.config.local:
-            tests = [
-                (f"Simple TPU job ({a.variant})", self._run_simple_tpu_job, True),
-                (f"Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs, True),
-                (f"Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job, True),
-            ]
-            if self._has_non_preemptible_cpu_group():
-                tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job, False))
-            if a.region:
-                tests.append((f"Region-constrained job ({a.region})", self._run_region_constrained_job, True))
-                tests.append((f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job, True))
-
-            total = len(tests)
-            for i, (label, method, scheduling_only) in enumerate(tests, 1):
-                if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method, scheduling_only):
-                    return
-            return
-
-        tests = [
-            (f"Simple TPU job ({a.variant})", self._run_simple_tpu_job),
-            (f"Concurrent TPU jobs (3x {a.variant})", self._run_concurrent_tpu_jobs),
-            (f"Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job),
-            (f"JAX TPU job ({a.variant})", self._run_jax_tpu_job),
-        ]
-        if self._has_non_preemptible_cpu_group():
-            tests.append(("Non-preemptible CPU job", self._run_non_preemptible_cpu_job))
-        if a.region:
-            tests.append((f"Region-constrained job ({a.region})", self._run_region_constrained_job))
-            tests.append((f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
-
-        total = len(tests)
-        for i, (label, method) in enumerate(tests, 1):
-            if not self._run_test_step(client, f"[Test {i}/{total}] {label}", method):
-                return
 
     def _has_non_preemptible_cpu_group(self) -> bool:
         """Return True when config contains an active non-preemptible CPU group."""
@@ -1192,21 +1162,21 @@ class SmokeTestRunner:
         state_name = cluster_pb2.JobState.Name(status.state)
         return False, f"Did not reach schedulable state in {timeout}s (state={state_name})", status
 
-    def _run_simple_tpu_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
-        """Run a simple TPU job that just prints and returns."""
+    def _run_simple_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
+        """Run a simple job that just prints and returns."""
         return self._run_job_test(
             client=client,
-            test_name=f"Simple TPU job ({self._accel.variant})",
-            entrypoint=Entrypoint.from_callable(_hello_tpu_job),
+            test_name=f"Simple job ({self._accel.label()})",
+            entrypoint=Entrypoint.from_callable(_hello_job),
             job_name=f"smoke-simple-{self._run_id}",
             resources=ResourceSpec(device=self._accel.make_device()),
             scheduling_only=scheduling_only,
         )
 
-    def _run_concurrent_tpu_jobs(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
-        """Submit 3 concurrent TPU jobs to test parallel provisioning and queueing."""
+    def _run_concurrent_jobs(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
+        """Submit 3 concurrent jobs to test parallel provisioning and queueing."""
         resources = ResourceSpec(device=self._accel.make_device())
-        test_name = f"Concurrent TPU jobs (3x {self._accel.variant})"
+        test_name = f"Concurrent jobs (3x {self._accel.label()})"
         jobs_config = [
             (Entrypoint.from_callable(_quick_task_job, i), f"smoke-concurrent-{self._run_id}-{i}", resources)
             for i in range(3)
@@ -1262,13 +1232,13 @@ class SmokeTestRunner:
         )
 
     def _run_region_constrained_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
-        """Run a job with an explicit region constraint."""
+        """Run a CPU-only job with an explicit region constraint."""
         return self._run_job_test(
             client=client,
             test_name=f"Region-constrained job ({self._accel.region})",
-            entrypoint=Entrypoint.from_callable(_hello_tpu_job),
+            entrypoint=Entrypoint.from_callable(_hello_job),
             job_name=f"smoke-region-{self._run_id}",
-            resources=ResourceSpec(device=self._accel.make_device()),
+            resources=ResourceSpec(cpu=1, memory="1GB", disk="1GB"),
             constraints=[region_constraint([self._accel.region])],
             scheduling_only=scheduling_only,
         )
@@ -1282,9 +1252,9 @@ class SmokeTestRunner:
         return self._run_job_test(
             client=client,
             test_name="Nested constraint propagation",
-            entrypoint=Entrypoint.from_callable(_assert_region_child, a.region, a.device_type, a.variant, a.count),
+            entrypoint=Entrypoint.from_callable(_assert_region_child, a.region),
             job_name=f"smoke-nested-{self._run_id}",
-            resources=ResourceSpec(device=a.make_device()),
+            resources=ResourceSpec(cpu=1, memory="1GB", disk="1GB"),
             constraints=[region_constraint([a.region])],
             scheduling_only=scheduling_only,
         )
@@ -1515,22 +1485,17 @@ class SmokeTestRunner:
 )
 @click.option(
     "--mode",
-    type=click.Choice(["full", "keep", "redeploy"]),
+    type=click.Choice(["full", "keep", "redeploy", "local"]),
     default="full",
     show_default=True,
-    help="Execution mode: 'full' (clean start + teardown), 'keep' (clean start + keep VMs), 'redeploy' (reuse VMs)",
-)
-@click.option(
-    "--local",
-    is_flag=True,
-    help="Run locally without GCP (in-process controller and workers)",
+    help="Execution mode: 'full' (clean start + teardown), 'keep' (clean start + keep VMs), "
+    "'redeploy' (reuse VMs), 'local' (in-process controller and workers, no cloud VMs)",
 )
 def main(
     config_path: Path,
     boot_timeout_seconds: int,
     job_timeout_seconds: int,
     mode: str,
-    local: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
 
@@ -1542,6 +1507,9 @@ def main(
 
         # Basic smoke test (uses examples/smoke.yaml by default)
         uv run python scripts/smoke-test.py
+
+        # Local mode: in-process controller and workers
+        uv run python scripts/smoke-test.py --mode local
 
         # CoreWeave GPU smoke test
         uv run python scripts/smoke-test.py --config examples/coreweave.yaml
@@ -1563,7 +1531,6 @@ def main(
         boot_timeout_seconds=boot_timeout_seconds,
         job_timeout_seconds=job_timeout_seconds,
         mode=mode,  # type: ignore
-        local=local,
     )
 
     runner = SmokeTestRunner(config)

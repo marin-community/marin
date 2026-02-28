@@ -21,9 +21,14 @@ import pytest
 from iris.cluster.platform.base import (
     CloudSliceState,
     Labels,
+    PlatformError,
     QuotaExhaustedError,
 )
-from iris.cluster.platform.gcp import GcpPlatform, _validate_slice_config
+from iris.cluster.platform.gcp import (
+    GcpPlatform,
+    _build_vm_slice_id,
+    _validate_slice_config,
+)
 from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.platform.manual import ManualPlatform
 from iris.managed_thread import ThreadContainer
@@ -325,6 +330,43 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
         assert handle.slice_id not in {s.slice_id for s in listed_after}
 
 
+def test_gcp_build_vm_slice_id_bounds_and_normalizes():
+    slice_id = _build_vm_slice_id(
+        "smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
+        1772123761944,
+    )
+    assert len(slice_id) <= 63
+    assert "_" not in slice_id
+    assert slice_id.endswith("-1772123761944")
+
+
+def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "cpu-vm"
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        handle = platform.create_slice(cfg)
+        assert len(handle.slice_id) <= 63
+        assert "_" not in handle.slice_id
+        status = handle.describe()
+        assert len(status.workers) == 1
+        assert getattr(status.workers[0]._remote_exec, "ssh_user", None) == "iris"
+        listed = platform.list_all_slices(labels={Labels("iris").iris_managed: "true"})
+        assert handle.slice_id in {s.slice_id for s in listed}
+
+
 def test_gcp_empty_accelerator_variant_rejected():
     """create_slice with empty accelerator_variant raises ValueError."""
     fake = FakeGcloud()
@@ -386,8 +428,8 @@ def test_gcp_list_slices_skips_deleting_tpus():
         assert handle.slice_id not in slice_ids
 
 
-def test_gcp_create_slice_resolves_ghcr_image_in_bootstrap_config():
-    """create_slice rewrites GHCR images in bootstrap_config via resolve_image."""
+def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
+    """create_slice rewrites GHCR images in worker_config via resolve_image."""
     fake = FakeGcloud()
     gcp_config = config_pb2.GcpPlatformConfig(project_id="my-proj")
     platform = GcpPlatform(gcp_config, label_prefix="iris")
@@ -400,17 +442,17 @@ def test_gcp_create_slice_resolves_ghcr_image_in_bootstrap_config():
     cfg.gcp.zone = "europe-west4-b"
     cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
 
-    bc = config_pb2.BootstrapConfig(
+    wc = config_pb2.WorkerConfig(
         docker_image="ghcr.io/marin-community/iris-worker:latest",
-        worker_port=10001,
+        port=10001,
         controller_address="controller:10000",
         cache_dir="/var/cache/iris",
     )
 
     with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
-        platform.create_slice(cfg, bootstrap_config=bc)
+        platform.create_slice(cfg, worker_config=wc)
 
-    assert bc.docker_image == "europe-docker.pkg.dev/my-proj/ghcr-mirror/marin-community/iris-worker:latest"
+    assert wc.docker_image == "europe-docker.pkg.dev/my-proj/ghcr-mirror/marin-community/iris-worker:latest"
 
 
 def test_gcp_list_slices_skips_inactive_vm_instances():
@@ -653,3 +695,91 @@ def test_gcp_list_all_slices_multi_zone():
         assert handle_b.slice_id in slice_ids
         assert handle_a.slice_id in slice_ids
         assert handle_b.slice_id in slice_ids
+
+
+# =============================================================================
+# Section 6: GCE VM Slice Bootstrap via Startup-Script
+#
+# Tests for the startup-script metadata bootstrap path (no SSH for bootstrap).
+# =============================================================================
+
+
+def test_gcp_vm_slice_bootstrap_monitors_serial_port():
+    """VM slice bootstrap waits for startup-script completion via serial port monitoring."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+
+    wc = config_pb2.WorkerConfig(
+        docker_image="test-image:latest",
+        port=10001,
+        controller_address="controller:10000",
+        cache_dir="/var/cache/iris",
+    )
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        handle = platform.create_slice(cfg, worker_config=wc)
+
+        # Simulate serial port output from the startup-script.
+        fake.append_serial_output(
+            handle._vm_name,
+            "us-central2-b",
+            "[iris-init] Starting Iris worker bootstrap\n"
+            "[iris-init] Phase: prerequisites\n"
+            "[iris-init] Docker installed\n"
+            "[iris-init] Phase: docker_pull\n"
+            "[iris-init] Worker container started\n"
+            "[iris-init] Worker is healthy\n"
+            "[iris-init] Bootstrap complete\n",
+        )
+
+        # Run bootstrap synchronously (the background thread does this).
+        platform._run_vm_slice_bootstrap(handle, wc, poll_interval=0.01, cloud_ready_timeout=5.0)
+
+        with handle._bootstrap_lock:
+            assert handle._bootstrap_state == CloudSliceState.READY
+
+
+def test_gcp_vm_slice_bootstrap_detects_startup_script_failure():
+    """VM slice bootstrap raises on [iris-init] ERROR in serial output."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+
+    wc = config_pb2.WorkerConfig(
+        docker_image="test-image:latest",
+        port=10001,
+        controller_address="controller:10000",
+        cache_dir="/var/cache/iris",
+    )
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        handle = platform.create_slice(cfg, worker_config=wc)
+
+        # Simulate an error in the startup-script.
+        fake.append_serial_output(
+            handle._vm_name,
+            "us-central2-b",
+            "[iris-init] Starting Iris worker bootstrap\n" "[iris-init] ERROR: Worker container exited unexpectedly\n",
+        )
+
+        with pytest.raises(PlatformError, match="bootstrap failed"):
+            platform._run_vm_slice_bootstrap(handle, wc, poll_interval=0.01, cloud_ready_timeout=5.0)

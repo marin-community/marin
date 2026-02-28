@@ -1,15 +1,17 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import dataclasses
 import hashlib
 import json
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
 
-from fray.v2.types import ResourceConfig
 from iris.marin_fs import marin_prefix
 
 
@@ -22,7 +24,7 @@ class StepSpec:
     """Name of the step, used for readability and in the output path."""
     output_path_prefix: str | None = None
     """Output path prefix for the step. If not provided, it will be taken from the MARIN_PREFIX environment variable."""
-    deps: list["StepSpec"] = dataclasses.field(default_factory=list)
+    deps: list[StepSpec] = dataclasses.field(default_factory=list)
     """Steps that this step depends on. Their output paths are used for dependency tracking and cache invalidation."""
     hash_attrs: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Attributes to include in the hash calculation for the step. Used for cache invalidation.
@@ -68,12 +70,31 @@ class StepSpec:
         prefix = self.output_path_prefix or marin_prefix()
         return f"{prefix}/{self.name_with_hash}"
 
-    # Resources
-    resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
-    """CPU/GPU/TPU (defaults resolved)."""
+    @cached_property
+    def executable_fn(self) -> Callable[[str], Any]:
+        """Fully-wrapped fn: remote(disk_cache(distributed_lock(raw_fn))).
 
-    env_vars: dict[str, str] = dataclasses.field(default_factory=dict)
-    """Environment variables (defaults resolved)."""
+        Caching, distributed locking, heartbeats, artifact saving, and status
+        writes all happen inside the wrapped callable. For remote steps, the
+        entire chain runs inside the Fray job.
+        """
+        from marin.execution.artifact import Artifact
+        from marin.execution.disk_cache import disk_cache
+        from marin.execution.distributed_lock import distributed_lock
+        from marin.execution.remote import RemoteCallable
 
-    pip_dependency_groups: list[str] = dataclasses.field(default_factory=list)
-    """Pip deps (defaults resolved)."""
+        raw_fn = self.fn.fn if isinstance(self.fn, RemoteCallable) else self.fn
+
+        wrapped = disk_cache(
+            distributed_lock(raw_fn),
+            output_path=self.output_path,
+            save_fn=Artifact.save,
+            load_fn=Artifact.load,
+        )
+
+        if isinstance(self.fn, RemoteCallable):
+            job_name = f"{self.name_with_hash}-{uuid.uuid4().hex[:8]}"
+            remote_callable = self.fn.named(job_name)
+            wrapped = dataclasses.replace(remote_callable, fn=wrapped)
+
+        return wrapped

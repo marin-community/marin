@@ -123,7 +123,7 @@ class ScalingDecision(_message.Message):
     def __init__(self, scale_group: _Optional[str] = ..., action: _Optional[_Union[ScalingAction, str]] = ..., slice_delta: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...
 
 class ScaleGroupStatus(_message.Message):
-    __slots__ = ("name", "config", "current_demand", "peak_demand", "backoff_until", "consecutive_failures", "last_scale_up", "last_scale_down", "slices", "slice_state_counts", "availability_status", "availability_reason", "blocked_until")
+    __slots__ = ("name", "config", "current_demand", "peak_demand", "backoff_until", "consecutive_failures", "last_scale_up", "last_scale_down", "slices", "slice_state_counts", "availability_status", "availability_reason", "blocked_until", "scale_up_cooldown_until")
     class SliceStateCountsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -144,6 +144,7 @@ class ScaleGroupStatus(_message.Message):
     AVAILABILITY_STATUS_FIELD_NUMBER: _ClassVar[int]
     AVAILABILITY_REASON_FIELD_NUMBER: _ClassVar[int]
     BLOCKED_UNTIL_FIELD_NUMBER: _ClassVar[int]
+    SCALE_UP_COOLDOWN_UNTIL_FIELD_NUMBER: _ClassVar[int]
     name: str
     config: _config_pb2.ScaleGroupConfig
     current_demand: int
@@ -157,7 +158,8 @@ class ScaleGroupStatus(_message.Message):
     availability_status: str
     availability_reason: str
     blocked_until: _time_pb2.Timestamp
-    def __init__(self, name: _Optional[str] = ..., config: _Optional[_Union[_config_pb2.ScaleGroupConfig, _Mapping]] = ..., current_demand: _Optional[int] = ..., peak_demand: _Optional[int] = ..., backoff_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., consecutive_failures: _Optional[int] = ..., last_scale_up: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., last_scale_down: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., slices: _Optional[_Iterable[_Union[SliceInfo, _Mapping]]] = ..., slice_state_counts: _Optional[_Mapping[str, int]] = ..., availability_status: _Optional[str] = ..., availability_reason: _Optional[str] = ..., blocked_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    scale_up_cooldown_until: _time_pb2.Timestamp
+    def __init__(self, name: _Optional[str] = ..., config: _Optional[_Union[_config_pb2.ScaleGroupConfig, _Mapping]] = ..., current_demand: _Optional[int] = ..., peak_demand: _Optional[int] = ..., backoff_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., consecutive_failures: _Optional[int] = ..., last_scale_up: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., last_scale_down: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., slices: _Optional[_Iterable[_Union[SliceInfo, _Mapping]]] = ..., slice_state_counts: _Optional[_Mapping[str, int]] = ..., availability_status: _Optional[str] = ..., availability_reason: _Optional[str] = ..., blocked_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., scale_up_cooldown_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class AutoscalerAction(_message.Message):
     __slots__ = ("timestamp", "action_type", "scale_group", "slice_id", "reason", "status")

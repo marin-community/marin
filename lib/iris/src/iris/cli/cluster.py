@@ -64,11 +64,10 @@ def _get_autoscaler_status(controller_url: str) -> vm_pb2.AutoscalerStatus:
     return client.get_autoscaler_status(request).status
 
 
-def _get_vm_logs(controller_url: str, vm_id: str, tail: int) -> tuple[str, str, int]:
+def _get_worker_status(controller_url: str, worker_id: str) -> cluster_pb2.Controller.GetWorkerStatusResponse:
     client = cluster_connect.ControllerServiceClientSync(controller_url)
-    request = cluster_pb2.Controller.GetVmLogsRequest(vm_id=vm_id, tail=tail)
-    response = client.get_vm_logs(request)
-    return response.logs, response.vm_id, response.state
+    request = cluster_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
+    return client.get_worker_status(request)
 
 
 def _parse_ghcr_tag(image_tag: str) -> tuple[str, str, str] | None:
@@ -151,12 +150,12 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
 def _build_cluster_images(config, verbose: bool = False) -> dict[str, str]:
     built: dict[str, str] = {}
 
-    for tag, typ in [(config.defaults.bootstrap.docker_image, "worker"), (config.controller.image, "controller")]:
+    for tag, typ in [(config.defaults.worker.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
             _build_and_push_for_tag(tag, typ, verbose=verbose)
             built[typ] = tag
 
-    task_tag = config.defaults.default_task_image
+    task_tag = config.defaults.worker.default_task_image
     if task_tag:
         _build_and_push_task_image(task_tag, verbose=verbose)
         built["task"] = task_tag
@@ -176,8 +175,8 @@ def _pin_latest_images(config) -> dict[str, str]:
 
     tags = {
         "controller": config.controller.image,
-        "worker": config.defaults.bootstrap.docker_image,
-        "task": config.defaults.default_task_image,
+        "worker": config.defaults.worker.docker_image,
+        "task": config.defaults.worker.default_task_image,
     }
     needs_pin = any(tag.endswith(":latest") for tag in tags.values() if tag)
     if not needs_pin:
@@ -189,9 +188,9 @@ def _pin_latest_images(config) -> dict[str, str]:
     if pinned["controller"]:
         config.controller.image = pinned["controller"]
     if pinned["worker"]:
-        config.defaults.bootstrap.docker_image = pinned["worker"]
+        config.defaults.worker.docker_image = pinned["worker"]
     if pinned["task"]:
-        config.defaults.default_task_image = pinned["task"]
+        config.defaults.worker.default_task_image = pinned["task"]
 
     click.echo("Pinning :latest image tags to git SHA for this run:")
     for name, tag in pinned.items():
@@ -452,28 +451,31 @@ def vm_status(ctx, scale_group):
 
 @vm.command("logs")
 @click.argument("vm_id")
-@click.option("--tail", type=int, default=0, help="Show last N lines (0 = all)")
 @click.pass_context
-def vm_logs(ctx, vm_id, tail):
+def vm_logs(ctx, vm_id):
     """Show VM initialization logs."""
     controller_url = require_controller_url(ctx)
     try:
-        log_content, returned_vm_id, state = _get_vm_logs(controller_url, vm_id, tail)
+        resp = _get_worker_status(controller_url, vm_id)
     except ConnectError as e:
         from connectrpc.code import Code
 
         if e.code == Code.NOT_FOUND:
-            click.echo(f"VM not found: {vm_id}", err=True)
+            click.echo(f"Worker not found: {vm_id}", err=True)
         else:
-            click.echo(f"Error fetching logs: {e}", err=True)
+            click.echo(f"Error fetching status: {e}", err=True)
         raise SystemExit(1) from None
     except Exception as e:
         click.echo(f"Error connecting to controller: {e}", err=True)
         raise SystemExit(1) from None
-    click.echo(f"VM: {returned_vm_id}")
-    click.echo(f"State: {vm_state_name(state)}")
+    if resp.vm and resp.vm.vm_id:
+        click.echo(f"VM: {resp.vm.vm_id}")
+        click.echo(f"State: {vm_state_name(resp.vm.state)}")
+    if resp.worker and resp.worker.worker_id:
+        click.echo(f"Worker: {resp.worker.worker_id}")
+        click.echo(f"Healthy: {resp.worker.healthy}")
     click.echo("---")
-    click.echo(log_content if log_content else "(no logs available)")
+    click.echo(resp.bootstrap_logs if resp.bootstrap_logs else "(no bootstrap logs available)")
 
 
 # =============================================================================

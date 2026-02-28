@@ -155,6 +155,22 @@ message ResourceUsage {
   int32 process_count = 6;
 }
 
+// Host-level resource snapshot collected by the worker during each heartbeat.
+message WorkerResourceSnapshot {
+  iris.time.Timestamp timestamp = 1;
+  // Host CPU utilization as percentage (0-100 averaged across cores)
+  int32 cpu_percent = 2;
+  // Host memory
+  int64 memory_used_bytes = 3;
+  int64 memory_total_bytes = 4;
+  // Host disk (primary mount)
+  int64 disk_used_bytes = 5;
+  int64 disk_total_bytes = 6;
+  // Aggregate task stats
+  int32 running_task_count = 7;
+  int32 total_process_count = 8;
+}
+
 message BuildMetrics {
   iris.time.Timestamp build_started = 1;
   iris.time.Timestamp build_finished = 2;
@@ -370,9 +386,8 @@ message WorkerMetadata {
   // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
 
-  // VM address from IRIS_VM_ADDRESS env var, used for autoscaler VM tracking.
-  // For cloud VMs, this is the VM's IP address injected by the Platform bootstrap.
-  // For local workers, this may be empty or a local identifier.
+  // VM IP address used for autoscaler slice/worker matching.
+  // Self-discovered by the worker at startup via socket probe.
   string vm_address = 41;
 }
 
@@ -518,23 +533,17 @@ message Controller {
     iris.time.Timestamp registered_at = 4;
   }
 
-  message RunningTaskEntry {
+  // Lean task status reported by the worker during heartbeat.
+  // Covers both running and completed tasks in a single type.
+  message WorkerTaskStatus {
     string task_id = 1;
     int32 attempt_id = 2;
     TaskState state = 3;
-    string log_directory = 4;  // Storage location for logs (e.g., "gs://bucket/path/worker/task/attempt")
-  }
-
-  // A task completion reported by the worker in its heartbeat response.
-  // Workers report completions for expected_tasks that have reached a terminal state.
-  message CompletedTaskEntry {
-    string task_id = 1;
-    TaskState state = 4;
-    int32 exit_code = 5;
-    string error = 6;
-    iris.time.Timestamp finished_at = 7;
-    int32 attempt_id = 8;
-    string log_directory = 9;  // Storage location for logs (e.g., "gs://bucket/path/worker/task/attempt")
+    int32 exit_code = 4;
+    string error = 5;
+    iris.time.Timestamp finished_at = 6;
+    string log_directory = 7;
+    ResourceUsage resource_usage = 8;
   }
 
 
@@ -617,18 +626,6 @@ message Controller {
     iris.vm.AutoscalerStatus status = 1;
   }
 
-  // --- VM Logs ---
-  message GetVmLogsRequest {
-    string vm_id = 1;
-    int32 tail = 2;  // 0 = all lines
-  }
-
-  message GetVmLogsResponse {
-    string logs = 1;
-    string vm_id = 2;
-    iris.vm.VmState state = 3;
-  }
-
   // --- Transactions / Actions Log ---
   message TransactionAction {
     iris.time.Timestamp timestamp = 1;
@@ -643,6 +640,15 @@ message Controller {
 
   message GetTransactionsResponse {
     repeated TransactionAction actions = 1;
+  }
+
+  // --- Cluster Summary ---
+  message GetClusterSummaryRequest {}
+  message GetClusterSummaryResponse {
+    map<string, int32> job_state_counts = 1;
+    int32 total_jobs = 2;
+    int32 total_workers = 3;
+    int32 healthy_workers = 4;
   }
 
   // --- Task/Job Logs (batch fetching) ---
@@ -683,17 +689,17 @@ message Controller {
     repeated ProcessLogRecord records = 1;
   }
 
-  // --- Machine Detail (unified VM + worker view) ---
-  message GetMachineStatusRequest {
+  // --- Worker Detail (unified VM + worker view) ---
+  message GetWorkerStatusRequest {
     string id = 1;  // VM ID or worker ID — resolved against both
   }
 
-  message GetMachineStatusResponse {
+  message GetWorkerStatusResponse {
     // VM info (null if identifier matched a worker with no VM)
     iris.vm.VmInfo vm = 1;
     string scale_group = 2;
 
-    // Worker health (null if no worker registered for this machine)
+    // Worker health (null if no worker registered)
     WorkerHealthStatus worker = 3;
 
     // Bootstrap logs (from VM init)
@@ -701,6 +707,15 @@ message Controller {
 
     // Worker daemon logs (proxied from worker, empty if unhealthy/absent)
     repeated ProcessLogRecord worker_logs = 5;
+
+    // Recent tasks that ran or are running on this worker (newest first)
+    repeated TaskStatus recent_tasks = 6;
+
+    // Current host-level resource snapshot (from latest heartbeat)
+    WorkerResourceSnapshot current_resources = 7;
+
+    // Recent resource history (ring buffer of snapshots from heartbeats)
+    repeated WorkerResourceSnapshot resource_history = 8;
   }
 
 }
@@ -788,15 +803,16 @@ message HeartbeatRequest {
 
   // Tasks the controller believes this worker is running.
   // Worker compares against its actual state and reports completions/failures.
-  repeated Controller.RunningTaskEntry expected_tasks = 3;
+  repeated Controller.WorkerTaskStatus expected_tasks = 3;
 }
 
 message HeartbeatResponse {
-  // Tasks currently running on this worker
-  repeated Controller.RunningTaskEntry running_tasks = 1;
+  // All tasks known to the worker (running + recently completed), reported as a
+  // single unified list.  Replaces the former running_tasks + completed_tasks split.
+  repeated Controller.WorkerTaskStatus tasks = 4;
 
-  // Tasks from expected_tasks that have finished (with exit code, error, state)
-  repeated Controller.CompletedTaskEntry completed_tasks = 2;
+  // Current host-level resource snapshot
+  WorkerResourceSnapshot resource_snapshot = 3;
 }
 
 // ============================================================================
@@ -828,11 +844,11 @@ service ControllerService {
   // Autoscaler
   rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
 
-  // VM Logs
-  rpc GetVmLogs(Controller.GetVmLogsRequest) returns (Controller.GetVmLogsResponse);
-
   // Transactions / Actions Log
   rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
+
+  // Cluster summary (aggregated counts)
+  rpc GetClusterSummary(Controller.GetClusterSummaryRequest) returns (Controller.GetClusterSummaryResponse);
 
   // Task logs (proxied to worker)
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
@@ -843,8 +859,8 @@ service ControllerService {
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 
-  // Unified machine detail (VM + worker + logs in one call)
-  rpc GetMachineStatus(Controller.GetMachineStatusRequest) returns (Controller.GetMachineStatusResponse);
+  // Unified worker detail (VM + worker + logs in one call)
+  rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
 }
 
 service WorkerService {

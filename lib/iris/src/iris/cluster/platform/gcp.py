@@ -32,7 +32,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Iterator
@@ -49,7 +52,6 @@ from iris.cluster.platform.base import (
     Labels,
     PlatformError,
     QuotaExhaustedError,
-    RemoteWorkerHandle,
     SliceStatus,
     WorkerStatus,
     default_stop_all,
@@ -88,6 +90,10 @@ _VM_STATE_MAP: dict[str, CloudSliceState] = {
 }
 
 _ACTIVE_VM_SLICE_STATES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
+_GCE_NAME_MAX_LEN = 63
+_GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
+_GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
+_GCE_VM_SLICE_SSH_USER = "iris"
 
 
 def _format_labels(labels: dict[str, str]) -> str:
@@ -99,6 +105,29 @@ def _build_label_filter(labels: dict[str, str]) -> str:
     """Build a gcloud --filter expression for label matching."""
     parts = [f"labels.{k}={v}" for k, v in labels.items()]
     return " AND ".join(parts)
+
+
+def _build_vm_slice_id(name_prefix: str, epoch_ms: int) -> str:
+    """Build a bounded VM slice id valid for both GCE instance names and labels."""
+    suffix = str(epoch_ms)
+    max_prefix_len = _GCE_NAME_MAX_LEN - len(suffix) - 1
+    if max_prefix_len <= 0:
+        raise ValueError("Timestamp suffix leaves no room for VM slice id prefix")
+
+    normalized = _GCE_NAME_RE.sub("-", name_prefix.lower())
+    normalized = re.sub(r"-+", "-", normalized)
+    normalized = _GCE_NAME_EDGE_RE.sub("", normalized)
+    if not normalized:
+        normalized = "slice"
+    if not normalized[0].isalpha():
+        normalized = f"slice-{normalized}"
+
+    trimmed = normalized[:max_prefix_len]
+    trimmed = _GCE_NAME_EDGE_RE.sub("", trimmed)
+    if not trimmed:
+        trimmed = "slice"
+
+    return f"{trimmed}-{suffix}"
 
 
 def _extract_node_name(resource_name: str) -> str:
@@ -590,6 +619,7 @@ class GcpVmSliceHandle:
             project_id=self._project_id,
             zone=self._zone,
             vm_name=self._vm_name,
+            ssh_user=_GCE_VM_SLICE_SSH_USER,
         )
         worker = GcpStandaloneWorkerHandle(
             _vm_id=f"{self._slice_id}-worker-0",
@@ -663,6 +693,51 @@ class GcpPlatform:
             return image
         return rewrite_ghcr_to_ar_remote(image, multi_region, self._project_id)
 
+    def _best_effort_delete_tpu(self, slice_id: str, zone: str) -> None:
+        """Try to delete a TPU VM that may have been partially created.
+
+        Silently ignores "not found" errors (resource was never created).
+        """
+        cmd = [
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "delete",
+            slice_id,
+            f"--zone={zone}",
+            f"--project={self._project_id}",
+            "--quiet",
+        ]
+        logger.info("Best-effort cleanup of TPU %s in %s", slice_id, zone)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error = result.stderr.strip()
+            if "not found" not in error.lower():
+                logger.warning("Cleanup of TPU %s failed: %s", slice_id, error)
+
+    def _best_effort_delete_vm(self, vm_name: str, zone: str) -> None:
+        """Try to delete a GCE VM that may have been partially created.
+
+        Silently ignores "not found" errors (resource was never created).
+        """
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "delete",
+            vm_name,
+            f"--zone={zone}",
+            f"--project={self._project_id}",
+            "--quiet",
+        ]
+        logger.info("Best-effort cleanup of VM %s in %s", vm_name, zone)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error = result.stderr.strip()
+            if "not found" not in error.lower():
+                logger.warning("Cleanup of VM %s failed: %s", vm_name, error)
+
     def create_vm(self, config: config_pb2.VmConfig) -> GcpStandaloneWorkerHandle:
         """Create a GCE instance. Returns a handle with SSH and label/metadata support."""
         _validate_vm_config(config)
@@ -703,6 +778,7 @@ class GcpPlatform:
             if "already exists" in error_msg.lower():
                 logger.info("GCE instance %s already exists, getting its IP", config.name)
             else:
+                self._best_effort_delete_vm(config.name, zone)
                 raise _classify_gcloud_error(error_msg)
 
         # Get internal/external IP
@@ -726,18 +802,18 @@ class GcpPlatform:
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> GcpSliceHandle | GcpVmSliceHandle:
         """Create a GCP-backed slice (TPU pod or single VM)."""
         _validate_slice_config(config)
         if config.gcp.mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
-            return self._create_vm_slice(config, bootstrap_config)
-        return self._create_tpu_slice(config, bootstrap_config)
+            return self._create_vm_slice(config, worker_config)
+        return self._create_tpu_slice(config, worker_config)
 
     def _create_tpu_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> GcpSliceHandle:
         """Create a TPU slice via gcloud."""
         gcp = config.gcp
@@ -766,6 +842,9 @@ class GcpPlatform:
         logger.info("gcloud command: %s", cmd)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
+            # GCP may have partially created the resource before reporting failure.
+            # Best-effort delete to avoid orphaned TPU VMs.
+            self._best_effort_delete_tpu(slice_id, gcp.zone)
             raise _classify_gcloud_error(result.stderr.strip())
 
         handle = GcpSliceHandle(
@@ -777,15 +856,15 @@ class GcpPlatform:
             _label_prefix=self._label_prefix,
             _accelerator_variant=config.accelerator_variant,
             _ssh_config=self._ssh_config,
-            _bootstrapping=bootstrap_config is not None,
+            _bootstrapping=worker_config is not None,
         )
 
-        if bootstrap_config:
-            bootstrap_config.docker_image = self.resolve_image(bootstrap_config.docker_image, zone=gcp.zone)
+        if worker_config:
+            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
 
             def _bootstrap_worker():
                 try:
-                    self._run_bootstrap(handle, bootstrap_config)
+                    self._run_bootstrap(handle, worker_config)
                 except Exception as e:
                     logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
                     with handle._bootstrap_lock:
@@ -802,17 +881,31 @@ class GcpPlatform:
     def _create_vm_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> GcpVmSliceHandle:
-        """Create a single GCE VM that behaves as a one-worker slice."""
+        """Create a single GCE VM that behaves as a one-worker slice.
+
+        When worker_config is provided the bootstrap script is passed as GCE
+        startup-script metadata so the VM self-bootstraps on first boot (and on
+        every subsequent ``gcloud compute instances reset``).  This eliminates
+        the need to SSH into the VM for initial setup and avoids the
+        root-container SSH identity bug.
+        """
         gcp = config.gcp
-        slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+        slice_id = _build_vm_slice_id(config.name_prefix, Timestamp.now().epoch_ms())
         vm_name = slice_id
         machine_type = gcp.machine_type or DEFAULT_MACHINE_TYPE
         boot_disk_size = config.disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
 
         labels = dict(config.labels)
         labels[self._iris_labels.iris_slice_id] = slice_id
+
+        # Pre-render the bootstrap script so we can bake it into VM metadata.
+        # The worker discovers its own VM address at runtime via socket probe.
+        startup_script: str | None = None
+        if worker_config:
+            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
+            startup_script = build_worker_bootstrap_script(worker_config)
 
         cmd = [
             "gcloud",
@@ -831,10 +924,27 @@ class GcpPlatform:
             "--format=json",
         ]
 
+        # Write the startup-script to a temp file and pass via --metadata-from-file
+        # to avoid shell-escaping issues with large inline scripts.
+        script_file_path: str | None = None
+        if startup_script:
+            f = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
+            f.write(startup_script)
+            f.close()
+            script_file_path = f.name
+            cmd.append(f"--metadata-from-file=startup-script={script_file_path}")
+
         logger.info("Creating VM slice: %s (vm=%s, zone=%s, type=%s)", slice_id, vm_name, gcp.zone, machine_type)
         logger.info("gcloud command: %s", cmd)
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        finally:
+            if script_file_path:
+                os.unlink(script_file_path)
         if result.returncode != 0:
+            # GCP may have partially created the VM before reporting failure.
+            # Best-effort delete to avoid orphaned VMs.
+            self._best_effort_delete_vm(vm_name, gcp.zone)
             raise _classify_gcloud_error(result.stderr.strip())
 
         handle = GcpVmSliceHandle(
@@ -846,14 +956,14 @@ class GcpPlatform:
             _created_at=Timestamp.now(),
             _label_prefix=self._label_prefix,
             _ssh_config=self._ssh_config,
-            _bootstrapping=bootstrap_config is not None,
+            _bootstrapping=worker_config is not None,
         )
 
-        if bootstrap_config:
+        if worker_config:
 
             def _bootstrap_worker():
                 try:
-                    self._run_vm_slice_bootstrap(handle, bootstrap_config)
+                    self._run_vm_slice_bootstrap(handle, worker_config)
                 except Exception as e:
                     logger.error("Bootstrap failed for VM slice %s: %s", handle.slice_id, e)
                     with handle._bootstrap_lock:
@@ -870,7 +980,7 @@ class GcpPlatform:
     def _run_bootstrap(
         self,
         handle: GcpSliceHandle,
-        bootstrap_config: config_pb2.BootstrapConfig,
+        worker_config: config_pb2.WorkerConfig,
         poll_interval: float = 10.0,
         cloud_ready_timeout: float = 600.0,
     ) -> None:
@@ -915,7 +1025,7 @@ class GcpPlatform:
             try:
                 if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
                     raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-                script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
+                script = build_worker_bootstrap_script(worker_config)
                 worker.bootstrap(script)
             except Exception as e:
                 errors.append((worker.worker_id, e))
@@ -948,14 +1058,22 @@ class GcpPlatform:
     def _run_vm_slice_bootstrap(
         self,
         handle: GcpVmSliceHandle,
-        bootstrap_config: config_pb2.BootstrapConfig,
+        worker_config: config_pb2.WorkerConfig,
         poll_interval: float = 5.0,
         cloud_ready_timeout: float = 600.0,
     ) -> None:
-        """Wait for VM to be RUNNING, then bootstrap the single worker."""
+        """Monitor GCE startup-script bootstrap via serial port output.
+
+        The bootstrap script was baked into VM metadata at creation time, so the
+        VM self-bootstraps on first boot.  This method polls
+        ``gcloud compute instances get-serial-port-output`` for ``[iris-init]``
+        log lines until the script emits ``Bootstrap complete`` or the timeout
+        expires.  No SSH is required.
+        """
         deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
         poll_duration = Duration.from_seconds(poll_interval)
-        worker: RemoteWorkerHandle | None = None
+
+        # Phase 1: wait for VM to reach RUNNING with an IP.
         while not deadline.expired():
             cloud_status = handle._describe_cloud()
             if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
@@ -963,20 +1081,57 @@ class GcpPlatform:
                     f"VM slice {handle.slice_id} entered {cloud_status.state} while waiting for cloud READY"
                 )
             if cloud_status.state == CloudSliceState.READY and cloud_status.workers:
-                worker = cloud_status.workers[0]
-                if worker.internal_address:
+                if cloud_status.workers[0].internal_address:
                     break
             time.sleep(poll_duration.to_seconds())
         else:
             raise PlatformError(f"VM slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
 
-        assert worker is not None
-        if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
-            raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-        script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
-        worker.bootstrap(script)
+        # Phase 2: tail serial port output for [iris-init] progress lines.
+        # GCE serial port output is append-only; we track the byte offset so
+        # each poll returns only new output.
+        serial_offset = 0
+        bootstrap_complete = False
+        bootstrap_failed = False
 
-        logger.info("Bootstrap completed for VM slice %s", handle.slice_id)
+        while not deadline.expired():
+            serial_cmd = [
+                "gcloud",
+                "compute",
+                "instances",
+                "get-serial-port-output",
+                handle._vm_name,
+                f"--project={self._project_id}",
+                f"--zone={handle._zone}",
+                f"--start={serial_offset}",
+            ]
+            result = subprocess.run(serial_cmd, capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout:
+                for line in result.stdout.splitlines():
+                    if "[iris-init]" in line:
+                        logger.info("[%s serial] %s", handle.slice_id, line.strip())
+                    if "Bootstrap complete" in line:
+                        bootstrap_complete = True
+                    if "[iris-init] ERROR" in line:
+                        bootstrap_failed = True
+
+                # Advance offset past what we already read.
+                serial_offset += len(result.stdout)
+
+            if bootstrap_complete:
+                break
+            if bootstrap_failed:
+                raise PlatformError(
+                    f"Startup-script bootstrap failed for VM slice {handle.slice_id} (see serial output above)"
+                )
+
+            time.sleep(poll_duration.to_seconds())
+        else:
+            raise PlatformError(
+                f"VM slice {handle.slice_id} startup-script did not complete within {cloud_ready_timeout}s"
+            )
+
+        logger.info("Bootstrap completed for VM slice %s (via startup-script)", handle.slice_id)
         with handle._bootstrap_lock:
             handle._bootstrap_state = CloudSliceState.READY
 

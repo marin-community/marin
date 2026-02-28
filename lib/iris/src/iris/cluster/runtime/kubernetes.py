@@ -30,7 +30,13 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerErrorKind,
+    ContainerPhase,
+    ContainerStats,
+    ContainerStatus,
+)
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
 from iris.time_utils import Deadline, Duration
@@ -334,7 +340,7 @@ class KubernetesContainerHandle:
 
     def status(self) -> ContainerStatus:
         if not self._pod_name:
-            return ContainerStatus(running=False, error="Pod not started")
+            return ContainerStatus(phase=ContainerPhase.STOPPED, error="Pod not started")
 
         pod = self.kubectl.get_json("pod", self._pod_name)
         if pod is None:
@@ -350,11 +356,11 @@ class KubernetesContainerHandle:
                     self._pod_not_found_count,
                     _POD_NOT_FOUND_RETRY_COUNT,
                 )
-                return ContainerStatus(running=True)
+                return ContainerStatus(phase=ContainerPhase.PENDING)
 
             attempt = self.config.attempt_id if self.config.attempt_id is not None else -1
             return ContainerStatus(
-                running=False,
+                phase=ContainerPhase.STOPPED,
                 error=(
                     "Task pod not found after retry window: "
                     f"name={self._pod_name}, namespace={self.kubectl.namespace}, "
@@ -369,8 +375,10 @@ class KubernetesContainerHandle:
         self._pod_not_found_deadline = None
 
         phase = pod.get("status", {}).get("phase", "")
-        if phase in ("Pending", "Running"):
-            return ContainerStatus(running=True)
+        if phase == "Pending":
+            return ContainerStatus(phase=ContainerPhase.PENDING)
+        if phase == "Running":
+            return ContainerStatus(phase=ContainerPhase.RUNNING)
 
         statuses = pod.get("status", {}).get("containerStatuses", [])
         terminated = {}
@@ -388,7 +396,7 @@ class KubernetesContainerHandle:
             error = message or reason or None
         oom_killed = reason == "OOMKilled"
         return ContainerStatus(
-            running=False,
+            phase=ContainerPhase.STOPPED,
             exit_code=exit_code if isinstance(exit_code, int) else 1,
             error=error,
             oom_killed=oom_killed,
@@ -398,8 +406,18 @@ class KubernetesContainerHandle:
         return KubernetesLogReader(self.kubectl, self._pod_name, "task")
 
     def stats(self) -> ContainerStats:
-        # This can be implemented via metrics.k8s.io when available.
-        return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+        if not self._pod_name:
+            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+        metrics = self.kubectl.top_pod(self._pod_name)
+        if metrics is None:
+            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+        cpu_mc, mem_bytes = metrics
+        return ContainerStats(
+            memory_mb=mem_bytes // (1024 * 1024),
+            cpu_percent=cpu_mc // 10,
+            process_count=1,
+            available=True,
+        )
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU) or memray (memory)."""

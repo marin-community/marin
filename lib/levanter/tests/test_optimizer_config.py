@@ -246,3 +246,20 @@ def test_wsds_schedule_with_cycle_points():
     assert np.isclose(sched_fn(701), 1e-3)
     assert np.isclose(sched_fn(969), 1e-3)
     assert sched_fn(971) < 1e-3
+
+
+def test_warmup_longer_than_run_does_not_jump():
+    optimizer = AdamConfig(
+        learning_rate=3e-3,
+        weight_decay=0.0,
+        warmup=1000,
+        decay=0.2,
+        min_lr_ratio=0.1,
+        lr_schedule="cosine",
+    )
+
+    sched_fn = optimizer.lr_scheduler(200)
+
+    assert np.isclose(sched_fn(160), 0.0024, atol=1e-6)
+    assert sched_fn(161) > sched_fn(160)
+    assert np.isclose(sched_fn(200), 3e-3, atol=1e-6)
