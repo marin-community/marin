@@ -115,8 +115,8 @@ def line_change_counts(left_lines: list[str], right_lines: list[str]) -> tuple[i
 def render_report_page(
     *,
     entries: list[DiffEntry],
-    left_dir: Path,
-    right_dir: Path,
+    left_label: str,
+    right_label: str,
     output_file: Path,
     extensions: tuple[str, ...],
     include_all_files: bool,
@@ -161,8 +161,8 @@ def render_report_page(
         table_html = difflib.HtmlDiff(tabsize=4, wrapcolumn=120).make_table(
             left_lines,
             right_lines,
-            fromdesc=html.escape(str(left_dir / entry.rel_path)),
-            todesc=html.escape(str(right_dir / entry.rel_path)),
+            fromdesc=html.escape(f"{left_label}/{entry.rel_path}"),
+            todesc=html.escape(f"{right_label}/{entry.rel_path}"),
             context=True,
             numlines=context_lines,
         )
@@ -300,8 +300,8 @@ def render_report_page(
     <main id=\"top\">
       <section class=\"panel\">
         <h1>Directory Diff Report</h1>
-        <div><strong>Left:</strong> {html.escape(str(left_dir.resolve()))}</div>
-        <div><strong>Right:</strong> {html.escape(str(right_dir.resolve()))}</div>
+        <div><strong>Left:</strong> {html.escape(left_label)}</div>
+        <div><strong>Right:</strong> {html.escape(right_label)}</div>
         <div class=\"filters\"><strong>Filter:</strong> {html.escape(extensions_label)}</div>
         <div class=\"filters\"><strong>Generated:</strong> {now_utc}</div>
         <div class=\"filters\"><strong>Inline Diffs:</strong> {len(rendered_entries)} files</div>
@@ -339,6 +339,8 @@ def build_directory_diff_report(
     left_dir: Path,
     right_dir: Path,
     output_dir: Path,
+    left_label: str | None = None,
+    right_label: str | None = None,
     extensions: tuple[str, ...],
     include_all_files: bool,
     show_unchanged: bool,
@@ -397,10 +399,13 @@ def build_directory_diff_report(
 
     entries.sort(key=lambda entry: (STATUS_ORDER[entry.status], entry.rel_path))
     index_file = output_dir / "index.html"
+
+    left_display = left_label if left_label is not None else str(left_dir)
+    right_display = right_label if right_label is not None else str(right_dir)
     render_report_page(
         entries=entries,
-        left_dir=left_dir,
-        right_dir=right_dir,
+        left_label=left_display,
+        right_label=right_display,
         output_file=index_file,
         extensions=extensions,
         include_all_files=include_all_files,

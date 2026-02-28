@@ -222,6 +222,8 @@ def build_manifest(
                 left_dir=candidate_dirs[closest.closest_variant],
                 right_dir=variant_dir,
                 output_dir=report_dir,
+                left_label=f"experiments/grug/{closest.closest_variant}",
+                right_label=f"experiments/grug/{variant_name}",
                 extensions=extensions,
                 include_all_files=False,
                 show_unchanged=False,

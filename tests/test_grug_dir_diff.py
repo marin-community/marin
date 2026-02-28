@@ -60,3 +60,30 @@ def test_collect_files_honors_all_files_flag(tmp_path: Path):
 
     all_files = collect_files(root, extensions=(".py",), include_all_files=True)
     assert set(all_files) == {"a.py", "notes.txt"}
+
+
+def test_build_directory_diff_report_uses_display_labels(tmp_path: Path):
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    out = tmp_path / "report"
+
+    _write(left / "changed.py", "a = 1\n")
+    _write(right / "changed.py", "a = 2\n")
+
+    index_path, _entries = build_directory_diff_report(
+        left_dir=left,
+        right_dir=right,
+        output_dir=out,
+        left_label="experiments/grug/base",
+        right_label="experiments/grug/moe",
+        extensions=(".py",),
+        include_all_files=False,
+        show_unchanged=False,
+        context_lines=2,
+    )
+
+    html = index_path.read_text(encoding="utf-8")
+    assert "<strong>Left:</strong> experiments/grug/base" in html
+    assert "<strong>Right:</strong> experiments/grug/moe" in html
+    assert "experiments/grug/base/changed.py" in html
+    assert "experiments/grug/moe/changed.py" in html
