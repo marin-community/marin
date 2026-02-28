@@ -56,6 +56,7 @@ What it does:
 - Recursively compares both directories (default extensions: `.py`, `.md`)
 - Builds one `/tmp/grug-diff/index.html` report with top-level summary + file table
 - Renders inline side-by-side diffs on that same page (changed/added/removed by default)
+- PRs that add a new `experiments/grug/<variant>/` also get this diff posted automatically by CI.
 
 Useful flags:
 

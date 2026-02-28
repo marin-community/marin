@@ -45,9 +45,12 @@ Update `docs/reports/grug-archive.md` with:
 - commit SHA (when known)
 - purpose
 - status (`active`, `superseded`, `deleted`)
-- diff link (local report path, PR comment link, or published Pages diff URL)
+- diff link (prefer the CI-posted PR comment link; fallback to local report path)
 
-Generate the diff report before logging it:
+For PRs that add a new `experiments/grug/<variant>/`, CI posts a visual diff
+comment automatically. Copy that link into the archive entry.
+
+If you need a local fallback, generate the diff report manually:
 
 ```bash
 uv run python scripts/grug_dir_diff.py \
