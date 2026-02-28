@@ -1706,15 +1706,6 @@ def _make_custom_vjp(
             raise PallasUnsupportedError(
                 "LEVANTER_PALLAS_TPU_FWD_DOT_ACCUM_BF16_BENCH=1 is benchmark-only and does not support backward."
             )
-        if use_full_h_dot:
-            raise PallasUnsupportedError(
-                "LEVANTER_PALLAS_TPU_FWD_FULL_H_DOT_BENCH=1 is benchmark-only and does not support backward."
-            )
-        if use_split_label_dot:
-            raise PallasUnsupportedError(
-                "Split-label forward modes (LEVANTER_PALLAS_TPU_FWD_SPLIT_LABEL_DOT_BENCH=1 or "
-                "LEVANTER_PALLAS_TPU_FWD_LSE_STORE_PATH_BENCH=1) are benchmark-only and do not support backward."
-            )
         x, labels, w, lse = residuals
         dout_loss, dout_lse = ct
         dout_loss = _zeros_like_if_needed(dout_loss, lse)

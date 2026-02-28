@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright 2026 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import warnings
@@ -222,6 +222,88 @@ def test_infer_block_sizes_preserves_defaults_without_128_aligned_divisors():
 
     assert block_sizes.b_block_size == 1024
     assert block_sizes.h_block_size == 512
+
+
+@pytest.mark.parametrize(
+    ("device_kind", "expected"),
+    [
+        ("TPU v4", True),
+        ("TPU v5", True),
+        ("TPU v5e", True),
+        ("TPU v6e", False),
+        ("NVIDIA H100", False),
+    ],
+)
+def test_requires_tpu_label_layout_1024(device_kind: str, expected: bool):
+    assert tuned_block_sizes.requires_tpu_label_layout_1024(device_kind) is expected
+
+
+def test_infer_num_tensorcores_respects_disable_megacore_env(monkeypatch):
+    fake_device = type("FakeDevice", (), {"device_kind": "TPU v4"})()
+    monkeypatch.setattr(pallas_tpu.jax, "default_backend", lambda: "tpu")
+    monkeypatch.setattr(pallas_tpu.jax, "devices", lambda: [fake_device])
+
+    monkeypatch.delenv(pallas_tpu._DISABLE_MEGACORE_ENV, raising=False)
+    assert pallas_tpu._infer_num_tensorcores() == 2
+
+    monkeypatch.setenv(pallas_tpu._DISABLE_MEGACORE_ENV, "1")
+    assert pallas_tpu._infer_num_tensorcores() == 1
+
+
+def test_infer_block_sizes_respects_v5e_label_layout_constraint_for_large_batches():
+    block_sizes = infer_block_sizes(
+        b=1536,
+        h=768,
+        v=8192,
+        dtype=jnp.float32,
+        device_kind="TPU v5e",
+    )
+    assert block_sizes.b_block_size == 1024
+    assert block_sizes.h_block_size == 384
+
+
+def test_infer_block_sizes_has_v6_tuned_profile():
+    block_sizes = infer_block_sizes(
+        b=1024,
+        h=512,
+        v=8192,
+        dtype=jnp.float32,
+        device_kind="TPU v6e",
+    )
+    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)
+
+
+def test_infer_block_sizes_has_v4_mid_h_large_vocab_profile():
+    block_sizes = infer_block_sizes(
+        b=8192,
+        h=1024,
+        v=128_000,
+        dtype=jnp.bfloat16,
+        device_kind="TPU v4",
+    )
+    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=256)
+
+
+def test_infer_block_sizes_keeps_gb10_bucket_for_gb10_devices():
+    block_sizes = infer_block_sizes(
+        b=8192,
+        h=1024,
+        v=128_000,
+        dtype=jnp.bfloat16,
+        device_kind="NVIDIA GB10",
+    )
+    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=32, v_block_size=1024)
+
+
+def test_infer_block_sizes_treats_unknown_tpu_kind_as_tpu_for_shape_sanitization():
+    block_sizes = infer_block_sizes(
+        b=768,
+        h=384,
+        v=4096,
+        dtype=jnp.float32,
+        device_kind="TPU experimental",
+    )
+    assert block_sizes == fused_api.BlockSizes(b_block_size=768, h_block_size=384, v_block_size=1024)
 
 
 def test_default_implementation_on_cpu_skips_expected_tpu_warning():
@@ -736,5 +818,53 @@ def test_fused_cross_entropy_pallas_non_divisible_vocab_dx_matches_xla():
     gx_pallas, gw_pallas = jax.grad(loss_pallas, argnums=(0, 1))(x, w)
     gx_xla, gw_xla = jax.grad(loss_xla, argnums=(0, 1))(x, w)
 
+    assert jnp.allclose(gx_pallas, gx_xla, atol=1e-4, rtol=1e-4)
+    assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
+
+
+def test_fused_cross_entropy_pallas_fori_split_fullh_backward_matches_xla(monkeypatch: pytest.MonkeyPatch):
+    if jax.default_backend() != "tpu":
+        pytest.skip("requires TPU backend")
+
+    hidden, vocab, batch = 256, 2048, 512
+    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    monkeypatch.setenv("LEVANTER_PALLAS_TPU_FWD_FULL_H_DOT_BENCH", "1")
+    monkeypatch.setenv("LEVANTER_PALLAS_TPU_FWD_SPLIT_LABEL_DOT_BENCH", "1")
+    monkeypatch.setenv("LEVANTER_PALLAS_TPU_FWD_LSE_FORI_LOOP_BENCH", "1")
+    monkeypatch.setenv("LEVANTER_PALLAS_TPU_FWD_LSE_FORI_V_MULT_BENCH", "2")
+
+    key = jax.random.PRNGKey(29)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+    x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
+
+    def loss_pallas(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation="pallas_tpu",
+        )
+
+    def loss_xla(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation="xla",
+        )
+
+    gx_pallas, gw_pallas = jax.grad(loss_pallas, argnums=(0, 1))(x, w)
+    gx_xla, gw_xla = jax.grad(loss_xla, argnums=(0, 1))(x, w)
+
+    # This mode uses a benchmark-only forward schedule but should preserve CE gradients.
     assert jnp.allclose(gx_pallas, gx_xla, atol=1e-4, rtol=1e-4)
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
