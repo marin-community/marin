@@ -266,3 +266,77 @@ def test_moe_mlp_validates_shapes():
 
     with pytest.raises(ValueError, match="must match w_up_gate expert dimension"):
         moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down[:-1], mesh=None)
+
+
+def test_moe_mlp_returns_dropped_count_when_requested():
+    tokens = 16
+    hidden_dim = 16
+    intermediate_dim = 24
+    num_experts = 4
+    topk = 2
+
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(4),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+
+    out, dropped = moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        mesh=None,
+        report_capacity_overflow=True,
+    )
+    assert out.shape == (tokens, hidden_dim)
+    assert dropped.shape == ()
+    assert int(dropped) == 0
+
+
+def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires an even number of >=2 devices")
+
+    tokens = len(jax.devices()) * 8
+    hidden_dim = 16
+    intermediate_dim = 24
+    num_experts = 4
+    topk = 2
+
+    key = jax.random.key(5)
+    x = jax.random.normal(key, (tokens, hidden_dim), dtype=jnp.float32)
+    selected_experts = jnp.zeros((tokens, topk), dtype=jnp.int32)
+    combine_weights = jnp.full((tokens, topk), 0.5, dtype=jnp.float32)
+    w_up_gate = jax.random.normal(
+        jax.random.key(6), (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32
+    )
+    w_down = jax.random.normal(jax.random.key(7), (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x = jax.sharding.reshard(x, batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+        w_down = jax.sharding.reshard(w_down, expert_sharding)
+
+        out, dropped = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            mesh=None,
+            report_capacity_overflow=True,
+        )
+
+    assert out.shape == (tokens, hidden_dim)
+    assert dropped.shape == ()
+    assert int(dropped) > 0

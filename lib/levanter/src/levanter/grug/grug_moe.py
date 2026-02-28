@@ -91,7 +91,7 @@ def _moe_mlp_local(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
-) -> Float[Array, "T D"]:
+) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Per-shard non-EP MoE FFN path with argsort routing + grouped matmul."""
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
         x,
@@ -105,7 +105,8 @@ def _moe_mlp_local(
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
     out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2, group_sizes)
 
-    return jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
+    out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
+    return out, jnp.array(0, dtype=jnp.int32)
 
 
 def _batch_spec_from_x(x: jax.Array, mesh: jax.sharding.AbstractMesh | None) -> P:
@@ -126,8 +127,8 @@ def _moe_mlp_ep_ring_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-    report_capacity_overflow: bool,
-) -> Float[Array, "TL D"]:
+    _report_capacity_overflow: bool,
+) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
@@ -164,20 +165,7 @@ def _moe_mlp_ep_ring_local(
 
     local_idx = jnp.nonzero(local_mask, size=local_capacity, fill_value=0)[0]
     local_count = jnp.sum(local_mask, dtype=jnp.int32)
-    if report_capacity_overflow:
-        dropped = jnp.maximum(local_count - local_capacity, 0)
-
-        def _log_overflow(_):
-            jax.debug.print(
-                "moe_mlp EP capacity overflow: dropped {dropped} expert assignments "
-                "(local_count={local_count}, local_capacity={local_capacity})",
-                dropped=dropped,
-                local_count=local_count,
-                local_capacity=local_capacity,
-            )
-            return ()
-
-        jax.lax.cond(dropped > 0, _log_overflow, lambda _: (), operand=None)
+    dropped_local = jnp.maximum(local_count - local_capacity, 0)
     valid = jnp.arange(local_capacity, dtype=jnp.int32) < local_count
     valid_weight = valid.astype(jnp.float32)
 
@@ -203,7 +191,9 @@ def _moe_mlp_ep_ring_local(
     out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
     # #2710 ring EP strategy: collect only this shard's token slice after
     # reducing contributions from experts across the EP mesh.
-    return jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+    out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+    dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+    return out_local, dropped_total
 
 
 @named_call
@@ -218,15 +208,15 @@ def moe_mlp(
     mesh: jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
-) -> Float[Array, "T D"]:
+) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
     This helper handles dispatch/permute/unpermute (+EP collectives) from
     precomputed token-to-expert assignments. Routing logits/top-k selection
     stays in the caller (e.g. model MLP block).
 
-    Set `report_capacity_overflow=True` to emit debug prints when the EP ring
-    path drops assignments due to fixed local capacity.
+    Set `report_capacity_overflow=True` to also return a scalar count of
+    dropped expert assignments from EP capacity clipping.
     """
     if mesh is None:
         mesh = get_abstract_mesh()
@@ -261,7 +251,7 @@ def moe_mlp(
     expert_axis_size = _mesh_axis_size(mesh, "expert")
 
     if mesh is None or mesh.empty:
-        return _moe_mlp_local(
+        out, dropped = _moe_mlp_local(
             x,
             selected_experts,
             combine_weights,
@@ -270,6 +260,9 @@ def moe_mlp(
             activation_fn=activation_fn,
             num_experts=num_experts,
         )
+        if report_capacity_overflow:
+            return out, dropped
+        return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
     local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
@@ -285,7 +278,7 @@ def moe_mlp(
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
-                report_capacity_overflow=report_capacity_overflow,
+                _report_capacity_overflow=report_capacity_overflow,
             ),
             mesh=mesh,
             in_specs=(
@@ -295,10 +288,13 @@ def moe_mlp(
                 P("expert", None, None),
                 P("expert", None, None),
             ),
-            out_specs=batch_spec,
+            out_specs=(batch_spec, P()),
             check_vma=False,
         )
-        return shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        if report_capacity_overflow:
+            return out, dropped
+        return out
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
     # semantics without EP collectives.
@@ -316,10 +312,13 @@ def moe_mlp(
             local_expert_spec,
             local_expert_spec,
         ),
-        out_specs=batch_spec,
+        out_specs=(batch_spec, P()),
         check_vma=False,
     )
-    return shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    if report_capacity_overflow:
+        return out, dropped
+    return out
 
 
 __all__ = [
