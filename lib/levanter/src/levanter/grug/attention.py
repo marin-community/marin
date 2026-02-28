@@ -3,7 +3,11 @@
 import functools
 import inspect
 import math
+import re
+import warnings
 from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from typing import Literal, TypeAlias, cast
 
 import equinox as eqx
 import jax
@@ -14,6 +18,9 @@ from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
+from levanter.kernels.pallas.attention import infer_block_sizes as _infer_attention_block_sizes
+
+Backend: TypeAlias = Literal["pallas_tpu", "pallas_gpu", "reference"]
 
 
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
@@ -379,23 +386,418 @@ def _tpu_splash_attention(
     return jnp.transpose(out, (0, 2, 1, 3)).astype(v.dtype)
 
 
-def attention(
+def _gpu_block_size(seq_len: int, max_block: int = 128, *, block_override: int | None = None) -> int:
+    """Resolve a divisibility-safe GPU tile size.
+
+    Tuned tables are the primary source for block sizes. This helper is the
+    normalization/fallback layer that enforces divisibility against the runtime
+    sequence length for both explicit overrides and auto-derived caps.
+    """
+    if seq_len <= 0:
+        raise ValueError(f"seq_len must be positive, got {seq_len}")
+
+    if block_override is not None:
+        if block_override <= 0:
+            raise ValueError(f"block_override must be positive, got {block_override}")
+        max_block = block_override
+
+    cap = min(seq_len, max_block)
+    for preferred in (16, 1):
+        block = cap - (cap % preferred)
+        while block >= preferred:
+            if seq_len % block == 0:
+                return block
+            block -= preferred
+    return 1
+
+
+@dataclass(frozen=True, slots=True)
+class BlockSizes:
+    """GPU attention tiling configuration."""
+
+    block_q: int | None = None
+    block_k: int | None = None
+    block_q_dkv: int | None = None
+    block_kv_dkv: int | None = None
+    block_q_dq: int | None = None
+    block_kv_dq: int | None = None
+    num_warps: int | None = None
+    num_stages: int | None = None
+
+
+def _resolved_gpu_block_sizes(
+    block_sizes: BlockSizes,
+    *,
+    batch: int,
+    seq_len: int,
+    num_heads: int,
+    head_dim: int,
+    dtype: jnp.dtype,
+) -> BlockSizes:
+    tuned = _infer_attention_block_sizes(
+        batch,
+        seq_len,
+        num_heads,
+        head_dim,
+        dtype=dtype,
+    )
+    return BlockSizes(
+        block_q=block_sizes.block_q if block_sizes.block_q is not None else tuned.block_q,
+        block_k=block_sizes.block_k if block_sizes.block_k is not None else tuned.block_k,
+        block_q_dkv=block_sizes.block_q_dkv if block_sizes.block_q_dkv is not None else tuned.block_q_dkv,
+        block_kv_dkv=block_sizes.block_kv_dkv if block_sizes.block_kv_dkv is not None else tuned.block_kv_dkv,
+        block_q_dq=block_sizes.block_q_dq if block_sizes.block_q_dq is not None else tuned.block_q_dq,
+        block_kv_dq=block_sizes.block_kv_dq if block_sizes.block_kv_dq is not None else tuned.block_kv_dq,
+        num_warps=block_sizes.num_warps if block_sizes.num_warps is not None else tuned.num_warps,
+        num_stages=block_sizes.num_stages if block_sizes.num_stages is not None else tuned.num_stages,
+    )
+
+
+def _backend_block_sizes(
+    block_sizes: BlockSizes | dict[str, BlockSizes] | None,
+    backend: Backend,
+) -> BlockSizes:
+    if block_sizes is None:
+        resolved = BlockSizes()
+    elif isinstance(block_sizes, BlockSizes):
+        resolved = block_sizes
+    elif not isinstance(block_sizes, dict):
+        raise TypeError(
+            f"block_sizes must be BlockSizes, dict[str, BlockSizes], or None; got {type(block_sizes).__name__}"
+        )
+    else:
+        if not all(isinstance(k, str) and isinstance(v, BlockSizes) for k, v in block_sizes.items()):
+            raise TypeError("dict block_sizes entries must be Backend -> BlockSizes")
+        block_lookup = {_normalize_block_size_key(k): v for k, v in block_sizes.items()}
+        resolved = BlockSizes()
+        for key in _backend_block_size_keys(backend):
+            matched = block_lookup.get(key)
+            if matched is not None:
+                resolved = matched
+                break
+
+    return resolved
+
+
+def _normalize_block_size_key(raw: str | Backend) -> str:
+    normalized = str(raw).replace("_", " ").strip().lower()
+    return " ".join(normalized.split())
+
+
+def _backend_block_size_keys(backend: Backend) -> list[str]:
+    backend_key = _normalize_block_size_key(backend)
+    backend_key_no_prefix = backend_key.replace("pallas ", "")
+    candidates: list[str] = []
+
+    def add_candidate(candidate: str | None) -> None:
+        if candidate is None:
+            return
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    try:
+        device = jax.devices()[0]
+    except Exception:
+        add_candidate(backend_key)
+        add_candidate(backend_key_no_prefix)
+        add_candidate("auto")
+        return candidates
+
+    kind = getattr(device, "device_kind", None)
+    if kind is None:
+        add_candidate(backend_key)
+        add_candidate(backend_key_no_prefix)
+        add_candidate("auto")
+        return candidates
+
+    norm_kind = _normalize_block_size_key(str(kind))
+    add_candidate(norm_kind)
+
+    parts = norm_kind.split()
+    if parts:
+        add_candidate(parts[0])
+        add_candidate(parts[-1])
+        if len(parts) >= 2:
+            full_kind_key = f"{parts[0]} {parts[1]}"
+            add_candidate(full_kind_key)
+            # TPU-style family extraction (e.g. v5p -> v5). NVIDIA kinds like
+            # "gb10" do not match this branch and rely on exact-kind keys.
+            m = re.fullmatch(r"v(\d+)[a-z0-9]*", parts[1])
+            if m:
+                family_key = f"{parts[0]} {m.group(1)}"
+                add_candidate(family_key)
+                v_family_key = f"{parts[0]} v{m.group(1)}"
+                add_candidate(v_family_key)
+
+    add_candidate(backend_key)
+    add_candidate(backend_key_no_prefix)
+    add_candidate("auto")
+
+    return candidates
+
+
+def _broadcast_segment_ids_for_gpu(
+    segment_ids: jax.Array,
+    *,
+    batch_size: int,
+    seq_len: int,
+    name: str,
+) -> jax.Array:
+    if segment_ids.ndim == 1:
+        if batch_size != 1:
+            raise NotImplementedError(
+                f"{name} is 1D but batch size is {batch_size}; "
+                "1D segment ids are only supported for unbatched inputs."
+            )
+        if segment_ids.shape[0] != seq_len:
+            raise ValueError(f"{name} must have length {seq_len}, got {segment_ids.shape[0]}")
+        return segment_ids[None, :]
+
+    if segment_ids.ndim == 2:
+        if segment_ids.shape[1] != seq_len:
+            raise ValueError(f"{name} must have shape [batch, {seq_len}], got {segment_ids.shape}")
+        if segment_ids.shape[0] == 1:
+            if batch_size == 1:
+                return segment_ids
+            return jnp.tile(segment_ids, (batch_size, 1))
+        if segment_ids.shape[0] != batch_size:
+            raise NotImplementedError(
+                f"{name} expects batch dimension {batch_size} or a shared singleton batch, got shape "
+                f"{segment_ids.shape}."
+            )
+        return segment_ids
+
+    raise NotImplementedError(
+        f"{name} must be [S] for unbatched inputs or 2D with shape [1, {seq_len}] / [batch, {seq_len}], "
+        f"got ndim={segment_ids.ndim}."
+    )
+
+
+def _gpu_splash_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | jax.Array | None,
+    block_sizes: BlockSizes | None = None,
+) -> Float[Array, "B Q Hq D"]:
+    from jax.experimental.pallas.ops.gpu.attention import BlockSizes as _MhaBlockSizes
+    from levanter.kernels.pallas.attention import mha as gpu_mha
+
+    B, Q, Hq, D = q.shape
+    _, K, Hkv, D_kv = k.shape
+    if D != D_kv:
+        raise ValueError(f"q and k must have equal head dimension, got q={D}, k={D_kv}")
+    if k.shape[1] != v.shape[1] or Hkv != v.shape[2] or D_kv != v.shape[3]:
+        raise ValueError("k and v must have matching [B, K, Hkv, D] shapes")
+    if Hq != Hkv:
+        if Hq % Hkv != 0:
+            raise ValueError(f"num_heads ({Hq}) must be divisible by num_kv_heads ({Hkv})")
+        repeat = Hq // Hkv
+        k = jnp.repeat(k, repeat, axis=2)
+        v = jnp.repeat(v, repeat, axis=2)
+
+    causal = False
+    segment_ids = None
+
+    if isinstance(mask, AttentionMask):
+        if mask.sliding_window is not None and mask.sliding_window <= 0:
+            raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
+        causal = bool(mask.is_causal)
+
+        if mask.segment_ids is not None:
+            q_segment_ids, kv_segment_ids = mask.segment_ids
+            q_segment_ids = _broadcast_segment_ids_for_gpu(
+                q_segment_ids, batch_size=B, seq_len=Q, name="query segment ids"
+            )
+            kv_segment_ids = _broadcast_segment_ids_for_gpu(
+                kv_segment_ids, batch_size=B, seq_len=K, name="kv segment ids"
+            )
+            segment_ids = (q_segment_ids, kv_segment_ids)
+    elif mask is not None:
+        raise NotImplementedError("GPU splash attention supports only AttentionMask or None masks.")
+
+    block_sizes = _resolved_gpu_block_sizes(
+        block_sizes if block_sizes is not None else BlockSizes(),
+        batch=B,
+        seq_len=Q,
+        num_heads=Hq,
+        head_dim=D,
+        dtype=q.dtype,
+    )
+
+    q_block = _gpu_block_size(Q, block_override=block_sizes.block_q)
+    k_block = _gpu_block_size(K, block_override=block_sizes.block_k)
+    if block_sizes.block_q_dkv is not None:
+        block_q_dkv = _gpu_block_size(Q, block_override=block_sizes.block_q_dkv)
+    else:
+        block_q_dkv = None
+    if block_sizes.block_kv_dkv is not None:
+        block_kv_dkv = _gpu_block_size(K, block_override=block_sizes.block_kv_dkv)
+    else:
+        block_kv_dkv = None
+    if block_sizes.block_q_dq is not None:
+        block_q_dq = _gpu_block_size(Q, block_override=block_sizes.block_q_dq)
+    else:
+        block_q_dq = None
+    if block_sizes.block_kv_dq is not None:
+        block_kv_dq = _gpu_block_size(K, block_override=block_sizes.block_kv_dq)
+    else:
+        block_kv_dq = None
+
+    mha_block_sizes = _MhaBlockSizes(
+        block_q=q_block,
+        block_k=k_block,
+        block_q_dkv=block_q_dkv,
+        block_kv_dkv=block_kv_dkv,
+        block_q_dq=block_q_dq,
+        block_kv_dq=block_kv_dq,
+    )
+
+    def _run_fast() -> Float[Array, "B Q Hq D"]:
+        return gpu_mha(
+            q,
+            k,
+            v,
+            segment_ids=segment_ids,
+            sm_scale=1.0 / math.sqrt(D),
+            causal=causal,
+            sliding_window=mask.sliding_window if isinstance(mask, AttentionMask) else None,
+            block_sizes=mha_block_sizes,
+            num_warps=block_sizes.num_warps if block_sizes is not None else None,
+            num_stages=block_sizes.num_stages if block_sizes is not None else None,
+        ).astype(v.dtype)
+
+    return _run_fast()
+
+
+def _ensure_attention_batch_dim(
+    q: Float[Array, "B Q Hq D"] | Float[Array, "Q Hq D"],
+    k: Float[Array, "B K Hkv D"] | Float[Array, "K Hkv D"],
+    v: Float[Array, "B K Hkv D"] | Float[Array, "K Hkv D"],
+) -> tuple[Float[Array, "B Q Hq D"], Float[Array, "B K Hkv D"], Float[Array, "B K Hkv D"], bool]:
+    if q.ndim == 4 and k.ndim == 4 and v.ndim == 4:
+        return q, k, v, False
+
+    if q.ndim == 3 and k.ndim == 3 and v.ndim == 3:
+        return q[None, ...], k[None, ...], v[None, ...], True
+
+    raise ValueError(
+        f"q/k/v must be all rank-4 (batched) or all rank-3 (unbatched), got ndim={[q.ndim, k.ndim, v.ndim]}"
+    )
+
+
+Implementation: TypeAlias = Literal["pallas_tpu", "pallas_gpu", "reference"]
+ArrayImpl = Callable[
+    [
+        Float[Array, "B Q Hq D"],
+        Float[Array, "B K Hkv D"],
+        Float[Array, "B K Hkv D"],
+        AttentionMask | jnp.ndarray | None,
+    ],
+    Float[Array, "B Q Hq D"],
+]
+BackendBlockSizes: TypeAlias = BlockSizes | dict[str, BlockSizes]
+
+
+def _reference_attention_impl(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
 ) -> Float[Array, "B Q Hq D"]:
-    if jax.default_backend() == "tpu":
-        if isinstance(mask, jax.Array):
-            return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
-        return _tpu_splash_attention(q, k, v, mask)
     return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+
+
+def _default_implementation() -> tuple[Implementation, ...]:
+    backend = jax.default_backend()
+    if backend == "tpu":
+        return ("pallas_tpu", "reference")
+    if backend == "gpu":
+        return ("pallas_gpu", "reference")
+    return ("reference",)
+
+
+IMPLEMENTATIONS: dict[str, ArrayImpl] = {
+    "reference": _reference_attention_impl,
+    "pallas_gpu": _gpu_splash_attention,
+    "pallas_tpu": _tpu_splash_attention,
+}
+
+
+def attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
+    block_sizes: BackendBlockSizes | None = None,
+) -> Float[Array, "B Q Hq D"]:
+    q, k, v, squeeze_batch = _ensure_attention_batch_dim(q, k, v)
+
+    if implementation is None:
+        impls: Sequence[Implementation | ArrayImpl] = _default_implementation()
+        explicit = False
+    elif isinstance(implementation, Sequence) and not isinstance(implementation, (str, bytes)):
+        impls = cast(Sequence[Implementation | ArrayImpl], implementation)
+        explicit = len(impls) == 1
+    else:
+        impls = (cast(Implementation, implementation),)
+        explicit = True
+
+    errors: list[Exception] = []
+    for impl in impls:
+        if callable(impl):
+            try:
+                result = impl(q, k, v, mask)
+                return result[0] if squeeze_batch else result
+            except NotImplementedError as e:
+                if explicit:
+                    raise
+                warnings.warn(
+                    "Pallas splash attention unavailable, falling back to reference: " f"{e}",
+                    RuntimeWarning,
+                )
+                errors.append(e)
+                continue
+        else:
+            fn = IMPLEMENTATIONS.get(cast(str, impl))
+            if fn is None:
+                raise ValueError(f"Unsupported implementation: {impl}")
+            try:
+                if impl == "pallas_gpu":
+                    impl_block_sizes = _backend_block_sizes(
+                        block_sizes,
+                        "pallas_gpu",
+                    )
+                    result = fn(
+                        q,
+                        k,
+                        v,
+                        mask,
+                        block_sizes=impl_block_sizes,
+                    )
+                else:
+                    result = fn(q, k, v, mask)
+                return result[0] if squeeze_batch else result
+            except NotImplementedError as e:
+                if explicit:
+                    raise
+                warnings.warn(
+                    "Pallas splash attention unavailable, falling back to reference: " f"{e}",
+                    RuntimeWarning,
+                )
+                errors.append(e)
+                continue
+    raise ExceptionGroup("all implementations failed", errors)
 
 
 __all__ = [
     "AttentionMask",
+    "BlockSizes",
     "RotaryConfig",
     "apply_rotary_embedding",
+    "Implementation",
     "attention",
     "reference_attention",
 ]
