@@ -8,7 +8,7 @@
   "reports": [
     {
       "closest_variant": "base",
-      "distance_score": 266,
+      "distance_score": 276,
       "report_relpath": "moe/index.html",
       "status_counts": {
         "added": 0,
