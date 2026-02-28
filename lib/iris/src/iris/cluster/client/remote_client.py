@@ -82,6 +82,7 @@ class RemoteClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
+        reservation: cluster_pb2.ReservationConfig | None = None,
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -128,6 +129,8 @@ class RemoteClusterClient:
             request.timeout.CopyFrom(timeout.to_proto())
         if coscheduling is not None:
             request.coscheduling.CopyFrom(coscheduling)
+        if reservation is not None:
+            request.reservation.CopyFrom(reservation)
         self._client.launch_job(request)
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:

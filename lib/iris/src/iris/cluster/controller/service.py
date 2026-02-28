@@ -302,8 +302,14 @@ class ControllerServiceImpl:
             if autoscaler_hint and is_active_scale_up_hint(autoscaler_hint):
                 pending_reason = autoscaler_hint
 
-        # Build reservation status if the job has a reservation
+        # Build reservation status if the job has a reservation.
+        # When unsatisfied, override pending_reason with fulfillment info.
         reservation_status = self._build_reservation_status(job)
+        if reservation_status is not None and not reservation_status.satisfied:
+            pending_reason = (
+                f"Waiting for reservation: {reservation_status.fulfilled}/{reservation_status.total_entries}"
+                " entries fulfilled"
+            )
 
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
