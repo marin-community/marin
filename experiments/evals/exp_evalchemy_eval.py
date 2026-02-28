@@ -58,18 +58,19 @@ SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
 # Tasks in the same group share the same set of seeds.
 # Compile steps are automatically created for groups with >1 seed.
 
+# Seed counts per benchmark follow OpenThoughts (https://arxiv.org/pdf/2506.04178).
 MATH_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([AIME24, AIME25, AMC23, HMMT], SEEDS[:5]),  # 5 seeds
-    ([MATH500], SEEDS[:1]),  # 1 seed
+    ([AIME24, AIME25, AMC23, HMMT], SEEDS[:10]),
+    ([MATH500], SEEDS[:1]),
 ]
 
 SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([GPQA_DIAMOND], SEEDS[:3]),  # 3 seeds
-    ([JEEBENCH, HUMANITYS_LAST_EXAM], SEEDS[:1]),  # 1 seed
+    ([GPQA_DIAMOND, JEEBENCH, HUMANITYS_LAST_EXAM], SEEDS[:3]),
 ]
 
 CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([CODEELO, CODEFORCES, LIVECODEBENCH, LIVECODEBENCH_V5_OFFICIAL], SEEDS[:1]),  # 1 seed
+    ([LIVECODEBENCH, LIVECODEBENCH_V5_OFFICIAL], SEEDS[:6]),
+    ([CODEELO, CODEFORCES], SEEDS[:3]),
 ]
 
 SUITE_TO_TASK_SEED_GROUPS: dict[str, list[tuple[list, list[int]]]] = {
