@@ -821,6 +821,157 @@ def _stream_subprocess_output_to_file(
     return thread
 
 
+def _dev_tpu_cluster_candidates(args: argparse.Namespace) -> list[str]:
+    cluster_candidates = [args.dev_tpu_cluster, *args.dev_tpu_fallback_cluster]
+    deduped_clusters: list[str] = []
+    seen_clusters: set[str] = set()
+    for cluster in cluster_candidates:
+        if cluster in seen_clusters:
+            continue
+        seen_clusters.add(cluster)
+        deduped_clusters.append(cluster)
+    return deduped_clusters
+
+
+def _dev_tpu_allocation_log_path(args: argparse.Namespace) -> Path:
+    log_path = getattr(args, "_managed_dev_tpu_allocation_log", None)
+    if log_path is None:
+        log_path = args.dev_tpu_allocate_log
+    if log_path is None:
+        log_path = REPO_ROOT / ".agents/logs/gdn_codex_loop/dev_tpu_allocate.log"
+    return Path(log_path).resolve()
+
+
+def _stop_managed_dev_tpu_process(args: argparse.Namespace, *, graceful_timeout: float) -> None:
+    proc = getattr(args, "_managed_dev_tpu_proc", None)
+    pump_thread = getattr(args, "_managed_dev_tpu_pump_thread", None)
+    if isinstance(proc, subprocess.Popen):
+        _terminate_process(proc, graceful_timeout=graceful_timeout)
+    if isinstance(pump_thread, threading.Thread):
+        pump_thread.join(timeout=2.0)
+    if hasattr(args, "_managed_dev_tpu_proc"):
+        delattr(args, "_managed_dev_tpu_proc")
+    if hasattr(args, "_managed_dev_tpu_pump_thread"):
+        delattr(args, "_managed_dev_tpu_pump_thread")
+
+
+def _try_reacquire_managed_dev_tpu(args: argparse.Namespace, *, reason: str) -> bool:
+    if not args.hold_dev_tpu or not args.dev_tpu_name:
+        return False
+
+    now = time.time()
+    last_attempt = float(getattr(args, "_managed_dev_tpu_reacquire_last_attempt", 0.0))
+    min_retry_interval = max(30.0, float(getattr(args, "validation_retry_sleep", 0.0)))
+    if now - last_attempt < min_retry_interval:
+        remaining = min_retry_interval - (now - last_attempt)
+        print(
+            "[gdnctl] managed dev TPU re-acquire is rate-limited; skipping for "
+            f"{remaining:.1f}s (reason={reason}).",
+            file=sys.stderr,
+        )
+        return False
+    args._managed_dev_tpu_reacquire_last_attempt = now
+
+    print(f"[gdnctl] attempting managed dev TPU re-acquire ({reason})", file=sys.stderr)
+    _stop_managed_dev_tpu_process(args, graceful_timeout=min(args.dev_tpu_stop_timeout, 15.0))
+    if hasattr(args, "active_dev_tpu_cluster"):
+        delattr(args, "active_dev_tpu_cluster")
+
+    allocation_log = _dev_tpu_allocation_log_path(args)
+    allocation_log.parent.mkdir(parents=True, exist_ok=True)
+    if allocation_log.exists():
+        try:
+            allocation_log.unlink()
+        except OSError:
+            pass
+
+    clusters = _dev_tpu_cluster_candidates(args)
+    last_error: str | None = None
+    attempts = max(1, int(args.dev_tpu_allocate_attempts))
+    for attempt in range(1, attempts + 1):
+        for cluster in clusters:
+            allocate_cmd = _build_dev_tpu_allocate_cmd(args, cluster=cluster)
+            print(
+                "[gdnctl] managed dev TPU re-acquire attempt "
+                f"{attempt}/{attempts} on cluster {cluster}",
+                file=sys.stderr,
+            )
+            _echo_cmd(allocate_cmd)
+            proc = subprocess.Popen(
+                allocate_cmd,
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            ready_event = threading.Event()
+            pump_thread = _stream_subprocess_output_to_file(
+                proc,
+                output_path=allocation_log,
+                ready_markers=DEV_TPU_READY_MARKERS,
+                ready_event=ready_event,
+            )
+
+            deadline = time.time() + args.dev_tpu_ready_timeout
+            timed_out = False
+            while time.time() < deadline:
+                if ready_event.is_set():
+                    args.active_dev_tpu_cluster = cluster
+                    args._managed_dev_tpu_proc = proc
+                    args._managed_dev_tpu_pump_thread = pump_thread
+                    args._managed_dev_tpu_allocation_log = str(allocation_log)
+                    print(
+                        "[gdnctl] managed dev TPU re-acquire is active: "
+                        f"dev-tpu-{args.dev_tpu_name} (cluster {cluster})"
+                    )
+                    return True
+
+                rc = proc.poll()
+                if rc is not None:
+                    tail = _tail_text(allocation_log)
+                    last_error = (
+                        "[gdnctl] managed dev TPU re-acquire exited before becoming active "
+                        f"(exit={rc}, cluster={cluster}, attempt={attempt}).\n"
+                        f"See log: {allocation_log}\n"
+                        f"{tail}"
+                    )
+                    break
+                time.sleep(2.0)
+            else:
+                timed_out = True
+                tail = _tail_text(allocation_log)
+                last_error = (
+                    "[gdnctl] timed out waiting for managed dev TPU re-acquire to become active "
+                    f"(cluster={cluster}, attempt={attempt}).\n"
+                    f"See log: {allocation_log}\n"
+                    f"{tail}"
+                )
+
+            if timed_out:
+                _terminate_process(proc, graceful_timeout=min(args.dev_tpu_stop_timeout, 15.0))
+            else:
+                _terminate_process(proc, graceful_timeout=5.0)
+            pump_thread.join(timeout=2.0)
+            if last_error:
+                print(last_error, file=sys.stderr)
+
+        if attempt < attempts and args.dev_tpu_allocate_retry_sleep > 0:
+            print(
+                "[gdnctl] retrying managed dev TPU re-acquire in "
+                f"{args.dev_tpu_allocate_retry_sleep:.1f}s",
+                file=sys.stderr,
+            )
+            time.sleep(args.dev_tpu_allocate_retry_sleep)
+
+    print(
+        "[gdnctl] managed dev TPU re-acquire failed; continuing with Ray fallback.\n"
+        + (last_error or ""),
+        file=sys.stderr,
+    )
+    return False
+
+
 @contextmanager
 def _hold_dev_tpu_for_loop(
     args: argparse.Namespace,
@@ -834,16 +985,10 @@ def _hold_dev_tpu_for_loop(
     if not args.dev_tpu_name:
         raise SystemExit("[gdnctl] --hold-dev-tpu requires --dev-tpu-name.")
 
-    cluster_candidates = [args.dev_tpu_cluster, *args.dev_tpu_fallback_cluster]
-    deduped_clusters: list[str] = []
-    seen_clusters: set[str] = set()
-    for cluster in cluster_candidates:
-        if cluster in seen_clusters:
-            continue
-        seen_clusters.add(cluster)
-        deduped_clusters.append(cluster)
+    deduped_clusters = _dev_tpu_cluster_candidates(args)
 
     allocation_log = Path(args.dev_tpu_allocate_log or (log_dir / "dev_tpu_allocate.log")).resolve()
+    args._managed_dev_tpu_allocation_log = str(allocation_log)
     allocation_log.parent.mkdir(parents=True, exist_ok=True)
     if allocation_log.exists():
         allocation_log.unlink()
@@ -882,18 +1027,22 @@ def _hold_dev_tpu_for_loop(
             while time.time() < deadline:
                 if ready_event.is_set():
                     args.active_dev_tpu_cluster = cluster
+                    args._managed_dev_tpu_proc = proc
+                    args._managed_dev_tpu_pump_thread = pump_thread
                     print("[gdnctl] dev TPU allocation is active: " f"dev-tpu-{args.dev_tpu_name} (cluster {cluster})")
                     try:
                         yield
                     finally:
+                        release_cluster = getattr(args, "active_dev_tpu_cluster", cluster)
                         print(
                             "[gdnctl] releasing managed dev TPU allocation: "
-                            f"dev-tpu-{args.dev_tpu_name} (cluster {cluster})"
+                            f"dev-tpu-{args.dev_tpu_name} (cluster {release_cluster})"
                         )
-                        _terminate_process(proc, graceful_timeout=args.dev_tpu_stop_timeout)
-                        pump_thread.join(timeout=2.0)
+                        _stop_managed_dev_tpu_process(args, graceful_timeout=args.dev_tpu_stop_timeout)
                         if hasattr(args, "active_dev_tpu_cluster"):
                             delattr(args, "active_dev_tpu_cluster")
+                        if hasattr(args, "_managed_dev_tpu_allocation_log"):
+                            delattr(args, "_managed_dev_tpu_allocation_log")
                     return
 
                 rc = proc.poll()
@@ -1935,6 +2084,19 @@ def _run_validation_tests_once(args: argparse.Namespace) -> tuple[int, bool]:
         rc = cmd_dev_tpu_test(dev_test_args)
         if rc == 0:
             return 0, True
+        if _try_reacquire_managed_dev_tpu(args, reason="validation tests failed on held dev TPU"):
+            retry_cluster = getattr(args, "active_dev_tpu_cluster", None)
+            if retry_cluster is not None:
+                retry_args = argparse.Namespace(
+                    cluster=retry_cluster,
+                    tpu_name=args.dev_tpu_name,
+                    tests=args.validation_tests,
+                    pytest_args=args.validation_pytest_args,
+                    no_sync=args.validation_dev_no_sync,
+                )
+                rc = cmd_dev_tpu_test(retry_args)
+                if rc == 0:
+                    return 0, True
         print(
             "[gdnctl] validation tests failed on held dev TPU; trying Ray fallback.",
             file=sys.stderr,
@@ -2009,48 +2171,57 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
     profile_prefix = f"{args.validation_profile_run_name_prefix}_iter{iteration:03d}"
     active_cluster = getattr(args, "active_dev_tpu_cluster", None)
     if args.dev_tpu_name and active_cluster is not None:
-        dev_profile_args = argparse.Namespace(
-            cluster=active_cluster,
-            tpu_name=args.dev_tpu_name,
-            tpu=args.validation_profile_tpu,
-            size=args.validation_profile_size,
-            num_steps=args.validation_profile_num_steps,
-            profile_start_step=args.validation_profile_start_step,
-            profile_num_steps=args.validation_profile_num_steps_window,
-            batch_size=args.validation_profile_batch_size,
-            chunk_size=args.validation_profile_chunk_size,
-            segment_size=args.validation_profile_segment_size,
-            run_name_prefix=profile_prefix,
-            wandb_mode=args.validation_profile_wandb_mode,
-            profile_env=args.validation_profile_env,
-            marin_prefix=args.validation_profile_marin_prefix,
-            dry_run=args.validation_profile_dry_run,
-            no_sync=args.validation_dev_no_sync,
-        )
-        cmd = [
-            *DEV_TPU,
-            "--cluster",
-            dev_profile_args.cluster,
-            "--tpu-name",
-            dev_profile_args.tpu_name,
-            "execute",
-        ]
-        _append_profile_env(cmd, dev_profile_args)
-        if dev_profile_args.marin_prefix:
-            marin_prefix = dev_profile_args.marin_prefix
-        else:
-            marin_prefix = f"gs://marin-{dev_profile_args.cluster}"
-        cmd += ["-e", f"MARIN_PREFIX={marin_prefix}"]
-        if dev_profile_args.no_sync:
-            cmd.append("--no-sync")
-        profile_args = ["--force_run_failed", "true"]
-        if dev_profile_args.dry_run:
-            profile_args += ["--dry_run", "true"]
-        profile_cmd_lines = _profile_command_lines(include_tpu_sync=True, profile_args=profile_args)
-        cmd += ["--", " && ".join(profile_cmd_lines)]
-        rc, output_text = _run_command_with_output(cmd)
+        def _run_on_cluster(cluster: str) -> tuple[int, str]:
+            dev_profile_args = argparse.Namespace(
+                cluster=cluster,
+                tpu_name=args.dev_tpu_name,
+                tpu=args.validation_profile_tpu,
+                size=args.validation_profile_size,
+                num_steps=args.validation_profile_num_steps,
+                profile_start_step=args.validation_profile_start_step,
+                profile_num_steps=args.validation_profile_num_steps_window,
+                batch_size=args.validation_profile_batch_size,
+                chunk_size=args.validation_profile_chunk_size,
+                segment_size=args.validation_profile_segment_size,
+                run_name_prefix=profile_prefix,
+                wandb_mode=args.validation_profile_wandb_mode,
+                profile_env=args.validation_profile_env,
+                marin_prefix=args.validation_profile_marin_prefix,
+                dry_run=args.validation_profile_dry_run,
+                no_sync=args.validation_dev_no_sync,
+            )
+            cmd = [
+                *DEV_TPU,
+                "--cluster",
+                dev_profile_args.cluster,
+                "--tpu-name",
+                dev_profile_args.tpu_name,
+                "execute",
+            ]
+            _append_profile_env(cmd, dev_profile_args)
+            if dev_profile_args.marin_prefix:
+                marin_prefix = dev_profile_args.marin_prefix
+            else:
+                marin_prefix = f"gs://marin-{dev_profile_args.cluster}"
+            cmd += ["-e", f"MARIN_PREFIX={marin_prefix}"]
+            if dev_profile_args.no_sync:
+                cmd.append("--no-sync")
+            profile_args = ["--force_run_failed", "true"]
+            if dev_profile_args.dry_run:
+                profile_args += ["--dry_run", "true"]
+            profile_cmd_lines = _profile_command_lines(include_tpu_sync=True, profile_args=profile_args)
+            cmd += ["--", " && ".join(profile_cmd_lines)]
+            return _run_command_with_output(cmd)
+
+        rc, output_text = _run_on_cluster(active_cluster)
         if rc == 0:
             return 0, True, _collect_profile_metrics(args, output_text=output_text, profile_prefix=profile_prefix)
+        if _try_reacquire_managed_dev_tpu(args, reason="validation profile failed on held dev TPU"):
+            retry_cluster = getattr(args, "active_dev_tpu_cluster", None)
+            if retry_cluster is not None:
+                rc, output_text = _run_on_cluster(retry_cluster)
+                if rc == 0:
+                    return 0, True, _collect_profile_metrics(args, output_text=output_text, profile_prefix=profile_prefix)
         print(
             "[gdnctl] validation profile failed on held dev TPU; trying Ray fallback.",
             file=sys.stderr,
