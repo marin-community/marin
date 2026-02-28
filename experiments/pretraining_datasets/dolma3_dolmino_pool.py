@@ -309,9 +309,11 @@ def _resolve_partition_paths(partition_name: str) -> list:
 
     paths = []
     for pattern in dir_patterns:
-        if "*" in pattern:
-            # For glob patterns, we need to expand them
-            # The pattern will be resolved at execution time
+        # stem-heavy-crawl files are flat (topic.NNNNN.jsonl.zst), not in subdirectories
+        if pattern.startswith("stem-heavy-crawl/"):
+            paths.append(base_dir / pattern)
+        elif "*" in pattern:
+            # For glob patterns matching subdirectories (e.g., stack_edu_fim-C_*)
             paths.append(base_dir / pattern / "**/*.jsonl.zst")
         else:
             # Direct directory reference
