@@ -257,6 +257,16 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
 
 # TPU v6 uses conservative profiles until dedicated sweeps land.
 TUNED_BLOCK_SIZES["TPU v6"] = dict(TUNED_BLOCK_SIZES["TPU v5e"])
+TUNED_BLOCK_SIZES["TPU v6"][("bfloat16", "mid-h-large-vocab")] = BlockSizes(
+    b_block_size=1024,
+    h_block_size=1024,
+    v_block_size=1024,
+)
+TUNED_BLOCK_SIZES["TPU v6"][("float32", "mid-h-large-vocab")] = BlockSizes(
+    b_block_size=1024,
+    h_block_size=1024,
+    v_block_size=1024,
+)
 
 
 SHAPE_BUCKETS: list[ShapeBucket] = [
