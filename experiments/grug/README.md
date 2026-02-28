@@ -40,6 +40,31 @@ uv run lib/marin/src/marin/run/ray_run.py \
   -- python experiments/grug/base/launch.py
 ```
 
+## Visual diff for template variants
+
+When template-copying `experiments/grug/base/` to a new variant, use the HTML diff tool to review changes:
+
+```bash
+uv run python scripts/grug_dir_diff.py \
+  experiments/grug/base \
+  experiments/grug/<variant> \
+  --out /tmp/grug-diff
+```
+
+What it does:
+
+- Recursively compares both directories (default extensions: `.py`, `.pyi`, `.js`, `.jsx`, `.ts`, `.tsx`)
+- Builds one `/tmp/grug-diff/index.html` report with top-level summary + file table
+- Renders inline side-by-side diffs on that same page (changed/added/removed by default)
+
+Useful flags:
+
+- `--extensions .py,.pyi`: restrict file types
+- `--all-files`: include everything instead of extension filtering
+- `--show-unchanged`: generate pages for unchanged files too
+- `--context-lines 5`: tune context around edits
+- `--no-open`: generate the report without launching a browser
+
 ## Common edit points
 
 - Architecture changes: `experiments/grug/base/model.py`
