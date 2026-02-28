@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "eb0dd24f771c",
+  "strategy": "manual-commit",
+  "branch": "kevin/serve",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "scripts/serving/vllm_server.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/eb/0dd24f771c/0/metadata.json",
+      "transcript": "/eb/0dd24f771c/0/full.jsonl",
+      "context": "/eb/0dd24f771c/0/context.md",
+      "content_hash": "/eb/0dd24f771c/0/content_hash.txt",
+      "prompt": "/eb/0dd24f771c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 143,
+    "cache_creation_tokens": 85112,
+    "cache_read_tokens": 9101388,
+    "output_tokens": 24017,
+    "api_call_count": 119
+  }
+}
