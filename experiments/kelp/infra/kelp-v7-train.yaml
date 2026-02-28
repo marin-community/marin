@@ -81,7 +81,7 @@ run: |
   # Build W&B flags if WANDB_API_KEY is set.
   WANDB_FLAGS=""
   if [ -n "${WANDB_API_KEY:-}" ]; then
-    WANDB_FLAGS="--wandb-project kelp --wandb-run-name kelp-v7-prompt-conditioning"
+    WANDB_FLAGS="--wandb-entity open-athena --wandb-project kelp --wandb-run-name kelp-v7-prompt-conditioning"
   fi
 
   .venv/bin/python experiments/kelp/train.py \
