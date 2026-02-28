@@ -349,11 +349,10 @@ def test_list_users_returns_aggregates(client, state):
     resp = rpc_post(client, "ListUsers")
     users = {entry["user"]: entry for entry in resp.get("users", [])}
 
-    assert users["alice"]["totalJobs"] == 2
-    assert users["alice"]["activeJobs"] == 2
-    assert users["alice"]["totalTasks"] == 2
-    assert users["bob"]["totalJobs"] == 1
-    assert users["bob"]["totalTasks"] == 1
+    assert users["alice"]["jobStateCounts"]["pending"] == 2
+    assert users["alice"]["taskStateCounts"]["pending"] == 2
+    assert users["bob"]["jobStateCounts"]["pending"] == 1
+    assert users["bob"]["taskStateCounts"]["pending"] == 1
 
 
 def test_cluster_summary_includes_total_users(client, state):
@@ -371,11 +370,6 @@ def test_cluster_summary_includes_total_users(client, state):
     assert resp["totalUsers"] == 2
 
 
-def test_users_route_serves_dashboard_shell(client):
-    """The /users route serves the same dashboard shell."""
-    resp = client.get("/users")
-    assert resp.status_code == 200
-    assert "Iris Controller" in resp.text
 
 
 def test_get_job_status_returns_retry_info(client, state, job_request):

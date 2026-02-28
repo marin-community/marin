@@ -66,8 +66,8 @@ The controller exposes live user aggregates over RPC:
 - `ListUsers` returns one `UserSummary` per user
 - `GetClusterSummary` includes `total_users`
 
-The controller dashboard now has a `/users` entrypoint and a `users` tab that
-renders:
+The controller dashboard exposes a `users` tab in the existing hash-based tab
+navigation and renders:
 
 - user name
 - active jobs

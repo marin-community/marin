@@ -9,6 +9,7 @@ For the full IrisContext with client/registry/resolver, use iris.client.
 import json
 import os
 import getpass
+import logging
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
@@ -16,6 +17,8 @@ from google.protobuf import json_format
 
 from iris.cluster.types import Constraint, JobName
 from iris.rpc import cluster_pb2
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -117,12 +120,25 @@ def set_job_info(info: JobInfo | None) -> None:
 
 def resolve_job_user(explicit_user: str | None = None) -> str:
     """Resolve the submitting user for a new top-level job."""
+    if explicit_user is not None:
+        if not explicit_user.strip():
+            raise ValueError("Job user must not be empty")
+        return explicit_user
+
     resolved = explicit_user
-    if resolved is None:
-        info = get_job_info()
-        resolved = info.user if info is not None else getpass.getuser()
+    info = get_job_info()
+    if info is not None:
+        return info.user
+
+    try:
+        resolved = getpass.getuser()
+    except (OSError, KeyError, ImportError) as exc:
+        logger.warning("Falling back to default Iris job user 'root': could not resolve local user (%s)", exc)
+        return "root"
+
     if not resolved or not resolved.strip():
-        raise ValueError("Job user must not be empty")
+        logger.warning("Falling back to default Iris job user 'root': local user was empty")
+        return "root"
     return resolved
 
 

@@ -86,21 +86,21 @@ from typing import Self
 class JobName:
     """Structured hierarchical job name.
 
-    Canonical form: /namespace/parent/child
-    Tasks are job names with numeric suffix: /namespace/parent/child/0
+    Canonical form: /user/root-job/child
+    Tasks are job names with numeric suffix: /user/root-job/child/0
 
-    Job names form a tree rooted at the namespace:
-        /root-job
-        /root-job/child-1
-        /root-job/child-1/grandchild
-        /root-job/0
+    Job names form a tree rooted at the root job (after the user prefix):
+        /alice/root-job
+        /alice/root-job/child-1
+        /alice/root-job/child-1/grandchild
+        /alice/root-job/0
     """
 
     _parts: tuple[str, ...]
 
     def __post_init__(self):
-        if not self._parts:
-            raise ValueError("JobName cannot be empty")
+        if len(self._parts) < 2:
+            raise ValueError("JobName must include at least user and root job")
         for part in self._parts:
             if "/" in part:
                 raise ValueError(f"JobName component cannot contain '/': {part}")
@@ -109,12 +109,12 @@ class JobName:
 
     @classmethod
     def from_string(cls, s: str) -> Self:
-        """Parse a job name string like '/root/child/grandchild'.
+        """Parse a job name string like '/user/root/child/grandchild'.
 
         Examples:
-            JobName.from_string("/my-job") -> JobName(("my-job",))
-            JobName.from_string("/parent/child") -> JobName(("parent", "child"))
-            JobName.from_string("/job/0") -> JobName(("job", "0"))
+            JobName.from_string("/alice/my-job") -> JobName(("alice", "my-job"))
+            JobName.from_string("/alice/parent/child") -> JobName(("alice", "parent", "child"))
+            JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
         if not s:
             raise ValueError("Job name cannot be empty")
@@ -123,9 +123,9 @@ class JobName:
         return cls(tuple(s[1:].split("/")))
 
     @classmethod
-    def root(cls, name: str) -> Self:
+    def root(cls, user: str, name: str) -> Self:
         """Create a root job name (no parent)."""
-        return cls((name,))
+        return cls((user, name))
 
     def child(self, name: str) -> Self:
         """Create a child job name."""
@@ -137,21 +137,21 @@ class JobName:
         Tasks are job names with a numeric suffix.
 
         Example:
-            JobName.from_string("/my-job").task(0) -> JobName(("my-job", "0"))
+            JobName.from_string("/alice/my-job").task(0) -> JobName(("alice", "my-job", "0"))
         """
         return JobName(self._parts + (str(index),))
 
     @property
     def parent(self) -> Self | None:
         """Get parent job name, or None if this is a root job."""
-        if len(self._parts) == 1:
+        if len(self._parts) == 2:
             return None
         return JobName(self._parts[:-1])
 
     @property
     def namespace(self) -> str:
-        """Get the namespace (root component) for actor isolation."""
-        return self._parts[0]
+        """Get the namespace (user/root job) for actor isolation."""
+        return "/".join(self._parts[:2])
 
     @property
     def name(self) -> str:
@@ -161,7 +161,7 @@ class JobName:
     @property
     def is_root(self) -> bool:
         """True if this is a root job (no parent)."""
-        return len(self._parts) == 1
+        return len(self._parts) == 2
 
     @property
     def task_index(self) -> int | None:
@@ -177,7 +177,7 @@ class JobName:
         return self.task_index is not None
 
     def __str__(self) -> str:
-        """Canonical wire format: '/root/child/grandchild'."""
+        """Canonical wire format: '/user/root/child/grandchild'."""
         return "/" + "/".join(self._parts)
 
     def __repr__(self) -> str:
@@ -235,7 +235,7 @@ or ordering.
 ## Namespace Control Flow
 
 Namespaces provide actor isolation - actors in one namespace cannot discover actors in another.
-The namespace is the root component of a job name, shared by all jobs in a hierarchy.
+The namespace is the `user/root-job` prefix, shared by all jobs in a hierarchy.
 
 ### Current Flow (string manipulation)
 
@@ -269,22 +269,22 @@ The namespace is the root component of a job name, shared by all jobs in a hiera
 │ Client submits job                                                      │
 │   ctx = get_iris_ctx()                                                  │
 │   if ctx:                                                               │
-│       job_name = ctx.job_name.child("my-job")   # /parent/my-job        │
+│       job_name = ctx.job_name.child("my-job")   # /alice/parent/my-job  │
 │   else:                                                                 │
-│       job_name = JobName.root(user, "my-job")   # /user/my-job           │
+│       job_name = JobName.root("alice", "my-job") # /alice/my-job        │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Namespace derivation (no parsing needed)                                │
-│   namespace = job_name.namespace   # "user/my-job" or "user/parent"     │
+│   namespace = job_name.namespace   # "alice/my-job" or "alice/parent"   │
 │               ^^^^ direct property access                               │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Wire format for RPC                                                     │
-│   request.name = job_name.to_wire()   # "/parent/my-job"                │
+│   request.name = job_name.to_wire()   # "/alice/parent/my-job"          │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -304,7 +304,7 @@ The namespace is the root component of a job name, shared by all jobs in a hiera
 
 ### Key Changes
 
-1. **No string parsing for namespace**: `job_name.namespace` directly returns the root component
+1. **No string parsing for namespace**: `job_name.namespace` directly returns the `user/root-job` prefix
 2. **No string concatenation for hierarchy**: `parent.child("name")` builds the path
 3. **Wire format explicit**: `to_wire()` / `from_wire()` at RPC boundaries
 4. **Namespace type unchanged**: `Namespace` class remains, constructed from `job_name.namespace`
@@ -323,6 +323,11 @@ The migration follows a **spiral approach**: each stage is a vertical slice that
 
 **Tests**:
 - Parsing: `JobName.from_string("/a/b/c")`
+- Construction: `JobName.root("alice", "a").child("b").child("c")`
+- Parent derivation: `JobName.from_string("/alice/a/b/c").parent == JobName.from_string("/alice/a/b")`
+- Namespace: `JobName.from_string("/alice/a/b/c").namespace == "alice/a"`
+- Task creation: `JobName.root("alice", "job").task(0) == JobName.from_string("/alice/job/0")`
+- Parsing: `JobName.from_string("/alice/a/b/c")`
 - Construction: `JobName.root("alice", "a").child("b").child("c")`
 - Parent derivation: `JobName.from_string("/alice/a/b/c").parent == JobName.from_string("/alice/a/b")`
 - Namespace: `JobName.from_string("/alice/a/b/c").namespace == "alice/a"`
@@ -455,9 +460,9 @@ Tasks are leaf nodes in the hierarchy - they cannot have children. If a task cre
 the child inherits from the parent *job* name, not the task name:
 
 ```
-/my-job           <- job
-/my-job/0         <- task (leaf)
-/my-job/child     <- child job created by task 0 (inherits from /my-job, not /my-job/0)
+/alice/my-job           <- job
+/alice/my-job/0         <- task (leaf)
+/alice/my-job/child     <- child job created by task 0 (inherits from /alice/my-job, not /alice/my-job/0)
 ```
 
 Despite this semantic difference, a separate TaskName class isn't needed because:
@@ -468,7 +473,7 @@ Despite this semantic difference, a separate TaskName class isn't needed because
 
 ### Why Leading Slash in Canonical Form?
 
-Job names are absolute paths from the root namespace, similar to file system paths. The leading slash makes this explicit and prevents ambiguity between relative and absolute names.
+Job names are absolute paths from the root user namespace, similar to file system paths. The leading slash makes this explicit and prevents ambiguity between relative and absolute names.
 
 ### Wire Format
 

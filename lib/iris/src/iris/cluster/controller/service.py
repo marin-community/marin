@@ -1072,19 +1072,17 @@ class ControllerServiceImpl:
         del request, ctx
         users = sorted(
             self._state.list_user_stats(),
-            key=lambda entry: (-entry.active_job_count, -entry.running_task_count, entry.user),
+            key=lambda entry: (
+                -sum(count for state, count in entry.job_state_counts.items() if state not in {"succeeded", "failed", "killed", "worker_failed", "unschedulable"}),
+                -(entry.task_state_counts.get("running", 0)),
+                entry.user,
+            ),
         )
         return cluster_pb2.Controller.ListUsersResponse(
             users=[
                 cluster_pb2.Controller.UserSummary(
                     user=entry.user,
-                    total_jobs=entry.job_count,
-                    active_jobs=entry.active_job_count,
-                    running_jobs=entry.running_job_count,
-                    pending_jobs=entry.pending_job_count,
-                    total_tasks=entry.task_count,
-                    running_tasks=entry.running_task_count,
-                    completed_tasks=entry.completed_task_count,
+                    task_state_counts=entry.task_state_counts,
                     job_state_counts=entry.job_state_counts,
                 )
                 for entry in users

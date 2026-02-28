@@ -63,7 +63,6 @@ class ControllerDashboard:
 
         routes = [
             Route("/", self._dashboard),
-            Route("/users", self._dashboard),
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/health", self._health),

@@ -25,3 +25,13 @@ def test_resolve_job_user_falls_back_to_os_user(monkeypatch):
     set_job_info(None)
     monkeypatch.setattr("getpass.getuser", lambda: "local-user")
     assert resolve_job_user() == "local-user"
+
+
+def test_resolve_job_user_falls_back_to_root_when_os_user_lookup_fails(monkeypatch):
+    set_job_info(None)
+
+    def _raise():
+        raise OSError("no passwd entry")
+
+    monkeypatch.setattr("getpass.getuser", _raise)
+    assert resolve_job_user() == "root"

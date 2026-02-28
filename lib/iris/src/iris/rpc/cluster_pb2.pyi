@@ -809,7 +809,14 @@ class Controller(_message.Message):
         total_users: int
         def __init__(self, job_state_counts: _Optional[_Mapping[str, int]] = ..., total_jobs: _Optional[int] = ..., total_workers: _Optional[int] = ..., healthy_workers: _Optional[int] = ..., total_users: _Optional[int] = ...) -> None: ...
     class UserSummary(_message.Message):
-        __slots__ = ("user", "total_jobs", "active_jobs", "running_jobs", "pending_jobs", "total_tasks", "running_tasks", "completed_tasks", "job_state_counts")
+        __slots__ = ("user", "task_state_counts", "job_state_counts")
+        class TaskStateCountsEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
         class JobStateCountsEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -818,24 +825,12 @@ class Controller(_message.Message):
             value: int
             def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
         USER_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_JOBS_FIELD_NUMBER: _ClassVar[int]
-        ACTIVE_JOBS_FIELD_NUMBER: _ClassVar[int]
-        RUNNING_JOBS_FIELD_NUMBER: _ClassVar[int]
-        PENDING_JOBS_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_TASKS_FIELD_NUMBER: _ClassVar[int]
-        RUNNING_TASKS_FIELD_NUMBER: _ClassVar[int]
-        COMPLETED_TASKS_FIELD_NUMBER: _ClassVar[int]
+        TASK_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
         JOB_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
         user: str
-        total_jobs: int
-        active_jobs: int
-        running_jobs: int
-        pending_jobs: int
-        total_tasks: int
-        running_tasks: int
-        completed_tasks: int
+        task_state_counts: _containers.ScalarMap[str, int]
         job_state_counts: _containers.ScalarMap[str, int]
-        def __init__(self, user: _Optional[str] = ..., total_jobs: _Optional[int] = ..., active_jobs: _Optional[int] = ..., running_jobs: _Optional[int] = ..., pending_jobs: _Optional[int] = ..., total_tasks: _Optional[int] = ..., running_tasks: _Optional[int] = ..., completed_tasks: _Optional[int] = ..., job_state_counts: _Optional[_Mapping[str, int]] = ...) -> None: ...
+        def __init__(self, user: _Optional[str] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., job_state_counts: _Optional[_Mapping[str, int]] = ...) -> None: ...
     class ListUsersRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...

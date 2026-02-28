@@ -654,14 +654,8 @@ message Controller {
 
   message UserSummary {
     string user = 1;
-    int32 total_jobs = 2;
-    int32 active_jobs = 3;
-    int32 running_jobs = 4;
-    int32 pending_jobs = 5;
-    int32 total_tasks = 6;
-    int32 running_tasks = 7;
-    int32 completed_tasks = 8;
-    map<string, int32> job_state_counts = 9;
+    map<string, int32> task_state_counts = 2;
+    map<string, int32> job_state_counts = 3;
   }
 
   message ListUsersRequest {}

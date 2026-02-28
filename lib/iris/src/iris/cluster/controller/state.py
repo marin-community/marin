@@ -45,7 +45,6 @@ from iris.cluster.types import (
     get_device_variant,
     get_gpu_count,
     get_tpu_count,
-    is_job_finished,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
@@ -598,14 +597,8 @@ class UserStats:
     """Aggregate counts for a single user."""
 
     user: str
-    job_count: int = 0
-    active_job_count: int = 0
-    running_job_count: int = 0
-    pending_job_count: int = 0
-    task_count: int = 0
-    running_task_count: int = 0
-    completed_task_count: int = 0
-    job_state_counts: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+    task_state_counts: dict[str, int] = field(default_factory=dict)
+    job_state_counts: dict[str, int] = field(default_factory=dict)
 
 
 # =============================================================================
@@ -1518,63 +1511,36 @@ class ControllerState:
             by_user = {}
             for job in self._jobs.values():
                 task_ids = self._tasks_by_job.get(job.job_id, [])
-                task_count = len(task_ids)
-                running_task_count = 0
-                completed_task_count = 0
                 for task_id in task_ids:
                     task = self._tasks.get(task_id)
                     if task is None:
                         continue
-                    if task.state == cluster_pb2.TASK_STATE_RUNNING:
-                        running_task_count += 1
-                    if task.state in (
-                        cluster_pb2.TASK_STATE_SUCCEEDED,
-                        cluster_pb2.TASK_STATE_KILLED,
-                        cluster_pb2.TASK_STATE_FAILED,
-                        cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-                        cluster_pb2.TASK_STATE_WORKER_FAILED,
-                    ):
-                        completed_task_count += 1
 
                 bucket = by_user.setdefault(
                     job.job_id.user,
                     {
-                        "job_count": 0,
-                        "active_job_count": 0,
-                        "running_job_count": 0,
-                        "pending_job_count": 0,
-                        "task_count": 0,
-                        "running_task_count": 0,
-                        "completed_task_count": 0,
+                        "task_state_counts": {},
                         "job_state_counts": {},
                     },
                 )
-                counts = bucket["job_state_counts"]
-                assert isinstance(counts, dict)
+                task_counts = bucket["task_state_counts"]
+                assert isinstance(task_counts, dict)
+                for task_id in task_ids:
+                    task = self._tasks.get(task_id)
+                    if task is None:
+                        continue
+                    task_state_name = cluster_pb2.TaskState.Name(task.state).removeprefix("TASK_STATE_").lower()
+                    task_counts[task_state_name] = task_counts.get(task_state_name, 0) + 1
+                job_counts = bucket["job_state_counts"]
+                assert isinstance(job_counts, dict)
                 state_name = cluster_pb2.JobState.Name(job.state).removeprefix("JOB_STATE_").lower()
-                counts[state_name] = counts.get(state_name, 0) + 1
-                bucket["job_count"] += 1
-                if not is_job_finished(job.state):
-                    bucket["active_job_count"] += 1
-                if job.state == cluster_pb2.JOB_STATE_RUNNING:
-                    bucket["running_job_count"] += 1
-                if job.state == cluster_pb2.JOB_STATE_PENDING:
-                    bucket["pending_job_count"] += 1
-                bucket["task_count"] += task_count
-                bucket["running_task_count"] += running_task_count
-                bucket["completed_task_count"] += completed_task_count
+                job_counts[state_name] = job_counts.get(state_name, 0) + 1
 
             return [
                 UserStats(
                     user=user,
-                    job_count=int(bucket["job_count"]),
-                    active_job_count=int(bucket["active_job_count"]),
-                    running_job_count=int(bucket["running_job_count"]),
-                    pending_job_count=int(bucket["pending_job_count"]),
-                    task_count=int(bucket["task_count"]),
-                    running_task_count=int(bucket["running_task_count"]),
-                    completed_task_count=int(bucket["completed_task_count"]),
-                    job_state_counts=MappingProxyType(dict(bucket["job_state_counts"])),
+                    task_state_counts=dict(bucket["task_state_counts"]),
+                    job_state_counts=dict(bucket["job_state_counts"]),
                 )
                 for user, bucket in by_user.items()
             ]

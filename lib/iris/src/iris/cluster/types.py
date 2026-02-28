@@ -45,7 +45,7 @@ class JobName:
 
     def __post_init__(self):
         if len(self._parts) < 2:
-            raise ValueError("JobName must include at least user and root job")
+            raise ValueError("JobName must use canonical '/<user>/<job>[...]' format")
         for part in self._parts:
             if "/" in part:
                 raise ValueError(f"JobName component cannot contain '/': {part}")
@@ -62,10 +62,12 @@ class JobName:
             JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
         if not s:
-            raise ValueError("Job name cannot be empty")
+            raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
         if not s.startswith("/"):
-            raise ValueError(f"Job name must start with '/': {s}")
+            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
         parts = tuple(s[1:].split("/"))
+        if len(parts) < 2:
+            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
         if any(not part or not part.strip() for part in parts):
             raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
         return cls(parts)
