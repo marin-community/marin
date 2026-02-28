@@ -35,7 +35,7 @@ jobs:
 
       - name: Generate variant diff reports
         run: |
-          python scripts/grug_variant_diff_ci.py \
+          python -m scripts.grug_variant_diff_ci \
             --base-sha "${{ github.event.pull_request.base.sha }}" \
             --head-sha "${{ github.event.pull_request.head.sha }}" \
             --output-dir grug-diff-report \
