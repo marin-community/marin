@@ -41,9 +41,23 @@ Keep each pass scoped to one bucket:
 Update `docs/reports/grug-archive.md` with:
 
 - path
+- origin (`base`, `moe`, or another source variant)
 - commit SHA (when known)
 - purpose
 - status (`active`, `superseded`, `deleted`)
+- diff link (local report path, PR comment link, or published Pages diff URL)
+
+Generate the diff report before logging it:
+
+```bash
+uv run python scripts/grug_dir_diff.py \
+  experiments/grug/base \
+  experiments/grug/<variant> \
+  --out /tmp/grug-diff
+```
+
+Then include a link to the report in the archive entry so reviewers can inspect
+template-copy changes quickly.
 
 ### 4) Upstream to base if it wins
 
