@@ -1,18 +1,23 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import logging
+from types import SimpleNamespace
+
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
-import haliax as hax
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
-from levanter.eval import LossFnOutput, TaggedEvaluator
-from levanter.grug.model import GrugModelConfig
+from levanter.eval import EvalResult, LossFnOutput, TaggedEvaluator, cb_tagged_evaluate
 from levanter.models.lm_model import LmExample
+from levanter.tracker import current_tracker
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.utils.tree_utils import inference_mode
 
 from .test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
@@ -120,21 +125,11 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
         examples.append(GrugLmExample.causal(tokens))
 
     dataset = ListAsyncDataset(examples)
-    grug_cfg = GrugModelConfig(
-        vocab_size=vocab_size,
-        hidden_dim=16,
-        intermediate_dim=64,
-        num_layers=1,
-        num_heads=4,
-        num_kv_heads=4,
-        max_seq_len=seq_len,
-    )
 
     def fake_grug_loss_fn(
         _params,
         token_ids,
         _loss_weight,
-        _cfg,
         *,
         mask=None,
         reduction="mean",
@@ -156,7 +151,6 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
                 _model,
                 batch.tokens,
                 batch.loss_weight,
-                grug_cfg,
                 mask=batch.attn_mask,
                 reduction="none",
                 logsumexp_weight=None,
@@ -175,3 +169,46 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
 
     assert np.isfinite(result.micro_avg_loss)
     assert "grug" in result.tag_micro_losses
+
+
+def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
+    class _FakeEvaluator:
+        tokenizer = None
+        dataset = SimpleNamespace(tag_to_index={"base": 0})
+
+        def evaluate(self, _model):
+            return EvalResult(
+                micro_avg_loss=1.0,
+                macro_avg_loss=1.0,
+                tag_macro_losses={},
+                tag_micro_losses={},
+                total_eval_loading_time=0.0,
+            )
+
+    logger_name = "test.cb_tagged_evaluate"
+    tracker = JsonLoggerConfig(logger_name=logger_name).init(run_id=None)
+    caplog.set_level(logging.INFO, logger=logger_name)
+
+    callback = cb_tagged_evaluate(_FakeEvaluator(), prefix="eval", eval_current=True, eval_ema=True)
+
+    with current_tracker(tracker):
+        step0 = SimpleNamespace(step=0, model=object(), eval_model=object())
+        callback(step0)
+        callback(step0, force=True)
+        step1 = SimpleNamespace(step=1, model=object(), eval_model=object())
+        callback(step1)
+
+    log_events = []
+    for record in caplog.records:
+        if record.name != logger_name:
+            continue
+        payload = json.loads(record.message)
+        if payload.get("event") == "log":
+            log_events.append(payload)
+
+    assert len(log_events) == 4
+    assert [event["step"] for event in log_events] == [0, 0, 1, 1]
+    assert "eval/loss" in log_events[0]["metrics"]
+    assert "eval/ema/loss" in log_events[1]["metrics"]
+    assert "eval/loss" in log_events[2]["metrics"]
+    assert "eval/ema/loss" in log_events[3]["metrics"]
