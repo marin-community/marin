@@ -1,0 +1,158 @@
+Implement the following plan:
+
+# Plan: vLLM Server Script for Reserved TPU
+
+## Context
+
+We need a CLI script to start and manage a public vLLM inference server on a reserved v4-8 TPU instance (35.186.47.159, us-central2-b). The script SSHes into the TPU, starts a Docker container running vLLM, and provides lifecycle management. Defaults to serving `Qwen/Qwen3-8B`.
+
+## New File
+
+**`scripts/serving/vllm_server.py`** — Click-based CLI with `start`, `stop`, `logs`, `status` subcommands.
+
+## Design
+
+### SSH approach
+Direct SSH to the external IP (`ssh user@35.186.47.159 <command>`). Simpler than `gcloud compute tpus tpu-vm ssh` for a known reserved instance. SSH options match `DirectSshRemoteExec` from `lib/iris/src/iris/cluster/platform/remote_exec.py`.
+
+### Docker container management
+Builds a `docker run -d --net=host --privileged --shm-size=100gb ...` command (same flags as `_docker_run_args_for_resource()` and `_build_docker_run_command()` in `lib/marin/src/marin/inference/vllm_server.py`), executes it remotely via SSH. Container uses a fixed name (`marin-vllm-serving`) for easy lifecycle management.
+
+### Environment variables
+Replicates `_vllm_jax_env()` from `lib/marin/src/marin/inference/vllm_server.py:747-775`: `TOKENIZERS_PARALLELISM`, `MODEL_IMPL_TYPE`, `TPU_MIN_LOG_LEVEL`, `JAX_COMPILATION_CACHE_DIR`, etc. Forwards `HF_TOKEN` for gated model access.
+
+### CLI structure (Click, matching project convention)
+- **`start`** — SSH in, remove stale container, start Docker, print endpoint URL, optionally tail logs
+- **`stop`** — `docker rm -f` the container remotely
+- **`logs`** — View/follow container logs remotely
+- **`status`** — Check container state + hit `/v1/models` to confirm vLLM readiness
+
+### Defaults
+| Setting | Default |
+|---------|---------|
+| Model | `Qwen/Qwen3-8B` |
+| Port | `8000` |
+| Docker image | `vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e` |
+| Host bind | `0.0.0.0` (public) |
+| TPU IP | `35.186.47.159` |
+| Container name | `marin-vllm-serving` |
+
+### Key options
+`--model`, `--port`, `--docker-image`, `--max-model-len`, `--hf-token` (envvar `HF_TOKEN`), `--extra-args`, `--host` (TPU IP), `--user` (SSH user), `--ssh-key`, `--tail/--no-tail`
+
+## Reference files
+- `lib/marin/src/marin/inference/vllm_server.py` — Docker command construction, env vars, image defaults
+- `scripts/ray/dev_tpu.py` — Click CLI pattern, SSH helpers
+- `lib/iris/src/iris/cluster/platform/remote_exec.py` — SSH options pattern
+
+## Usage output after `start`
+The script prints the endpoint and example commands:
+```
+Endpoint: http://35.186.47.159:8000/v1
+
+  curl http://35.186.47.159:8000/v1/models
+  curl http://35.186.47.159:8000/v1/chat/completions -H 'Content-Type: application/json' \
+    -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hello"}],"max_tokens":128}'
+
+  Python: OpenAI(base_url="http://35.186.47.159:8000/v1", api_key="unused")
+```
+
+## Verification
+1. Run `./infra/pre-commit.py --all-files --fix` for lint/format
+2. Test: `uv run scripts/serving/vllm_server.py --help` — confirm CLI renders
+3. Test: `uv run scripts/serving/vllm_server.py status --host 35.186.47.159` — confirm SSH connectivity
+4. Test: `uv run scripts/serving/vllm_server.py start` — confirm container starts and endpoint prints
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kevin/.REDACTED.jsonl
+
+---
+
+is the server running? How do I test it?
+
+---
+
+Start the server for me and validate that it's working properly with a quick smoke test
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+skip compilation going forward because it's slow
+
+---
+
+I said to skip the compilation in vLLM
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+Replace env flag used to skip precompile with --enforce-eager
+
+---
+
+Give me a quick shell command to test the server
+
+---
+
+curl http://ampere7.stanford.edu:8080/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model": "MiniMaxAI/MiniMax-M2.5",
+      "messages": [{"role": "user", "content": "What is your name?"}],
+      "max_tokens": 200
+    }' Can we update the server (if needed) to support a simpler user query in the style like this?
+
+---
+
+Tried on my mac but got: curl http://35.186.47.159:8000/v1/chat/completions \                                       
+    -H "Content-Type: application/json" \
+    -d '{
+      "model": "Qwen/Qwen3-8B",
+      "messages": [{"role": "user", "content": "What is your name?"}],
+      "max_tokens": 200
+    }'
+{"detail":"Method Not Allowed"}curl: (3) URL rejected: Malformed input to a URL function
+zsh: command not found: -H
+
+---
+
+Great, give me a command with a tool call like: curl http://ampere7.stanford.edu:8080/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model": "MiniMaxAI/MiniMax-M2.5",
+      "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+      "tools": [{
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather for a location",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": {"type": "string", "description": "City name"}
+            },
+            "required": ["location"]
+          }
+        }
+      }],
+      "max_tokens": 200
+    }'
+
+---
+
+curl http://35.186.47.159:8000/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"What is the weather in San Francisco?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the current weather for a location","parameters":{"type":"object","properties":{"location":{"type":"string","description":"City name"}},"required":["location"]}}}],"max_tokens":200}'
+{"error":{"message":"\"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set","type":"BadRequestError","param":null,"code":400}}%
+
+---
+
+[Request interrupted by user]
+
+---
+
+Rename this branch to kevin/serve, add the previous one line curl example to docstring of vllm_server.py and commit vllm_server.py
