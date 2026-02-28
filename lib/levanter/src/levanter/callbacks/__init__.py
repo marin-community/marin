@@ -19,6 +19,7 @@ from levanter.callbacks._metrics import (
     logger,
     pbar_logger,
 )
+from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
 from levanter.callbacks.profiler import _flush_while_waiting, profile
 from levanter.data import DataLoader
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
@@ -249,4 +250,6 @@ __all__ = [
     "log_performance_stats",
     "log_step_info",
     "pbar_logger",
+    "CallbackStateView",
+    "StateCallbackRunner",
 ]

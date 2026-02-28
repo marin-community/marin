@@ -381,6 +381,14 @@ class Platform(Protocol):
         """
         ...
 
+    def debug_report(self) -> None:
+        """Log diagnostic info about the controller after a failure.
+
+        Override to inspect platform-specific state (e.g. pod termination
+        reason, previous container logs). Default is a no-op.
+        """
+        ...
+
     def shutdown(self) -> None:
         """Release platform-owned resources (threads, connections, caches).
 
