@@ -63,6 +63,18 @@ class ScalingAction(Enum):
     SCALE_UP = "scale_up"
 
 
+@dataclass(frozen=True)
+class ReservationTag:
+    """Identifies which reservation entry triggered a scale-up.
+
+    Carried through demand → decision → worker config so that provisioned
+    workers get tagged with the reservation they belong to.
+    """
+
+    job_id: str
+    entry_idx: int
+
+
 @dataclass
 class ScalingDecision:
     """A single scaling decision for a scale group.
@@ -72,16 +84,14 @@ class ScalingDecision:
         action: Whether to scale up or down
         slice_id: For scale_down, the specific slice to terminate (None for scale_up)
         reason: Human-readable explanation of why this decision was made
-        reservation_job_id: If this scale-up was triggered by a reservation, the job ID
-        reservation_entry_idx: If this scale-up was triggered by a reservation, the entry index
+        reservation: If this scale-up was triggered by a reservation, the tag to apply
     """
 
     scale_group: str
     action: ScalingAction
     slice_id: str | None = None
     reason: str = ""
-    reservation_job_id: str | None = None
-    reservation_entry_idx: int | None = None
+    reservation: ReservationTag | None = None
 
 
 @dataclass
@@ -98,8 +108,7 @@ class DemandEntry:
     required_regions: frozenset[str] | None = None
     required_zones: frozenset[str] | None = None
     invalid_reason: str | None = None
-    reservation_job_id: str | None = None
-    reservation_entry_idx: int | None = None
+    reservation: ReservationTag | None = None
 
 
 @dataclass
@@ -596,12 +605,11 @@ class Autoscaler:
             group.update_demand(demand)
             decision = self._evaluate_group(group, demand, ts)
             if decision:
-                # Propagate reservation info from the first reservation demand entry
+                # Propagate reservation tag from the first reservation demand entry
                 # that triggered this scale-up, so workers get tagged.
                 for entry in allocated_entries:
-                    if entry.reservation_job_id is not None:
-                        decision.reservation_job_id = entry.reservation_job_id
-                        decision.reservation_entry_idx = entry.reservation_entry_idx
+                    if entry.reservation is not None:
+                        decision.reservation = entry.reservation
                         break
                 decisions.append(decision)
 
@@ -686,8 +694,7 @@ class Autoscaler:
                     group,
                     timestamp,
                     reason=decision.reason,
-                    reservation_job_id=decision.reservation_job_id,
-                    reservation_entry_idx=decision.reservation_entry_idx,
+                    reservation=decision.reservation,
                 )
 
     def _execute_scale_up(
@@ -695,8 +702,7 @@ class Autoscaler:
         group: ScalingGroup,
         ts: Timestamp,
         reason: str = "",
-        reservation_job_id: str | None = None,
-        reservation_entry_idx: int | None = None,
+        reservation: ReservationTag | None = None,
     ) -> None:
         """Initiate async scale-up for a scale group.
 
@@ -707,7 +713,7 @@ class Autoscaler:
         group.begin_scale_up(timestamp=ts)
 
         def _scale_up_wrapper(stop_event):
-            self._do_scale_up(group, ts, reason, reservation_job_id, reservation_entry_idx)
+            self._do_scale_up(group, ts, reason, reservation)
 
         self._threads.spawn(
             target=_scale_up_wrapper,
@@ -719,8 +725,7 @@ class Autoscaler:
         group: ScalingGroup,
         ts: Timestamp,
         reason: str = "",
-        reservation_job_id: str | None = None,
-        reservation_entry_idx: int | None = None,
+        reservation: ReservationTag | None = None,
     ) -> bool:
         """Execute the actual blocking scale-up work.
 
@@ -735,7 +740,7 @@ class Autoscaler:
 
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
-            wc = self._per_group_worker_config(group, reservation_job_id, reservation_entry_idx)
+            wc = self._per_group_worker_config(group, reservation)
             slice_obj = group.scale_up(worker_config=wc, timestamp=ts)
             group.complete_scale_up(slice_obj, ts)
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
@@ -761,8 +766,7 @@ class Autoscaler:
     def _per_group_worker_config(
         self,
         group: ScalingGroup,
-        reservation_job_id: str | None = None,
-        reservation_entry_idx: int | None = None,
+        reservation: ReservationTag | None = None,
     ) -> config_pb2.WorkerConfig | None:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""
         if not self._base_worker_config:
@@ -793,10 +797,9 @@ class Autoscaler:
             wc.worker_attributes["scale-group"] = group.config.name
 
         # Reservation tags for pre-provisioned workers
-        if reservation_job_id is not None:
-            wc.worker_attributes["reservation-job"] = reservation_job_id
-        if reservation_entry_idx is not None:
-            wc.worker_attributes["reservation-entry"] = str(reservation_entry_idx)
+        if reservation is not None:
+            wc.worker_attributes["reservation-job"] = reservation.job_id
+            wc.worker_attributes["reservation-entry"] = str(reservation.entry_idx)
 
         return wc
 

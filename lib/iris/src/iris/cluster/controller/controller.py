@@ -14,7 +14,7 @@ from typing import Protocol
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
+from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry, ReservationTag
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.scheduler import (
@@ -145,12 +145,12 @@ def _demand_from_reservations(state: ControllerState) -> list[DemandEntry]:
     Each reservation entry maps 1:1 to a DemandEntry, creating persistent
     demand that keeps the autoscaler from scaling down reserved capacity.
 
-    Entries that already have a provisioned worker (matched by reservation-entry
-    attribute) still generate demand (to prevent scale-down) but with
-    reservation_entry_idx=None so the autoscaler won't re-tag new workers
-    with an already-assigned index.
+    Entries that already have a provisioned worker (matched by reservation
+    attributes) still generate demand (to prevent scale-down) but with
+    reservation=None so the autoscaler won't re-tag new workers with a
+    duplicate index.
     """
-    # Build lookup: (job_id_wire, entry_idx_str) → True for provisioned entries
+    # Build lookup of already-provisioned (job_id, entry_idx) pairs.
     provisioned: set[tuple[str, str]] = set()
     for worker in state.list_all_workers():
         attrs = worker.metadata.attributes
@@ -196,11 +196,9 @@ def _demand_from_reservations(state: ControllerState) -> list[DemandEntry]:
                     required_regions=required_regions,
                     required_zones=required_zones,
                     invalid_reason=invalid_reason,
-                    reservation_job_id=job_wire,
-                    # Only set entry_idx for entries that still need a worker.
-                    # Already-provisioned entries keep demand alive but don't
-                    # tag new workers with a duplicate index.
-                    reservation_entry_idx=None if already_provisioned else idx,
+                    # Already-provisioned entries anchor demand (prevent scale-down)
+                    # but carry no tag — only unprovisioned entries tag new workers.
+                    reservation=None if already_provisioned else ReservationTag(job_id=job_wire, entry_idx=idx),
                 )
             )
     return entries
