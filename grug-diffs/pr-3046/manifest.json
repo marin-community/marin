@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "moe"
+  ],
+  "base_sha": "8d752a775fd0a1e0906d0dc21d5b599cca0f1502",
+  "head_sha": "901bf8bd51151e79634bcad109c8744f353e45bd",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 266,
+      "report_relpath": "moe/index.html",
+      "status_counts": {
+        "added": 0,
+        "changed": 3,
+        "removed": 0,
+        "unchanged": 1
+      },
+      "variant": "moe"
+    }
+  ]
+}
