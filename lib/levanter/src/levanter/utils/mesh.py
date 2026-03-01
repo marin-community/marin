@@ -8,10 +8,11 @@ from typing import Union, Sequence, Tuple, Mapping, Dict
 
 from draccus import field
 
-from haliax.partitioning import ResourceMapping
 import jax
 from jax.experimental import mesh_utils
 from jax.sharding import AxisType, Mesh
+
+from levanter.utils.types import ResourceMapping
 
 REPLICA_DCN_AXIS = "replica_dcn"
 REPLICA_AXIS = "replica"

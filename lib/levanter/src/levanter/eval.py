@@ -21,7 +21,6 @@ from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
 
 import haliax as hax
-from haliax.partitioning import ResourceMapping
 
 import levanter.tracker
 from levanter.callbacks import StepInfo
@@ -33,6 +32,7 @@ from levanter.utils.jax_utils import axis_resource_is_explicit
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.stat_utils import RunningMean
 from levanter.utils.tree_utils import inference_mode
+from levanter.utils.types import ResourceMapping
 
 
 logger = logging.getLogger(__name__)
