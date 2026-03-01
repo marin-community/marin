@@ -26,7 +26,6 @@ import logging
 import random
 import tempfile
 import time
-import typing
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Callable, Iterator, List, Optional, Tuple, TypeVar, Union
@@ -1465,7 +1464,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
                 )
             model = hax.shard(model, parameter_axis_mapping)
 
-        model = typing.cast(ArrayLmHarnessModel, inference_mode(model, True))
+        model = inference_mode(model, True)
 
         # Set up profiler configuration if enabled
         profiler_config = None
