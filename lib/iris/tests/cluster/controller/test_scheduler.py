@@ -75,7 +75,7 @@ def submit_job(
     timestamp_ms: int | None = None,
 ) -> list[ControllerTask]:
     """Submit a job via event and return created tasks."""
-    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root(job_id)
+    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     state.handle_event(
         JobSubmittedEvent(
@@ -184,7 +184,7 @@ def job_request():
     ) -> cluster_pb2.Controller.LaunchJobRequest:
         from iris.time_utils import Duration
 
-        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root(name)
+        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
         request = cluster_pb2.Controller.LaunchJobRequest(
             name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
@@ -210,7 +210,7 @@ def coscheduled_job_request():
         replicas: int = 4,
         group_by: str = "tpu-name",
     ) -> cluster_pb2.Controller.LaunchJobRequest:
-        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root(name)
+        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
         req = cluster_pb2.Controller.LaunchJobRequest(
             name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
@@ -387,7 +387,7 @@ def test_scheduler_detects_timed_out_tasks(state, worker_metadata):
     tasks = submit_job(state, "j1", request)
 
     # Manually set the deadline to 2 seconds ago (using monotonic time)
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
     job.scheduling_deadline = Deadline(time.monotonic() - 2.0)
 
     # When building context, the timed-out task should be filtered out
@@ -928,7 +928,7 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     submit_job(state, "busy", busy_req)
 
     # Assign the busy job's tasks to wa0 and wa1
-    busy_tasks = state.get_job_tasks(JobName.root("busy"))
+    busy_tasks = state.get_job_tasks(JobName.root("test-user", "busy"))
     assign_task_to_worker(state, busy_tasks[0], WorkerId("wa0"))
     assign_task_to_worker(state, busy_tasks[1], WorkerId("wa1"))
     transition_task_to_running(state, busy_tasks[0])
@@ -1299,7 +1299,7 @@ def test_tpu_count_released_after_task_completion(scheduler, state):
     context = _build_context(scheduler, state)
     result = scheduler.find_assignments(context)
     assert len(result.assignments) == 1
-    assert result.assignments[0][0].parent == JobName.root("j2")
+    assert result.assignments[0][0].parent == JobName.root("test-user", "j2")
 
 
 # =============================================================================
@@ -1347,15 +1347,15 @@ def test_scheduler_assigns_deeper_job_before_shallow(scheduler, state, job_reque
 
     # Submit root job and child job (both with 1 CPU)
     submit_job(state, "root", job_request("root", cpu=1))
-    submit_job(state, "/root/child", job_request("child", cpu=1))
+    submit_job(state, "/test-user/root/child", job_request("child", cpu=1))
 
     # Run scheduler
     result = schedule_until_done(scheduler, state)
 
     # Both tasks assigned, child first
     assert len(result.assignments) == 2
-    assert result.assignments[0][0].parent == JobName.from_string("/root/child")
-    assert result.assignments[1][0].parent == JobName.root("root")
+    assert result.assignments[0][0].parent == JobName.from_string("/test-user/root/child")
+    assert result.assignments[1][0].parent == JobName.root("test-user", "root")
 
 
 def test_scheduler_assigns_older_root_tree_first(scheduler, state, job_request, worker_metadata):
@@ -1370,8 +1370,8 @@ def test_scheduler_assigns_older_root_tree_first(scheduler, state, job_request, 
 
     assert len(result.assignments) == 2
     # user-a-job submitted first
-    assert result.assignments[0][0].parent == JobName.root("user-a-job")
-    assert result.assignments[1][0].parent == JobName.root("user-b-job")
+    assert result.assignments[0][0].parent == JobName.root("test-user", "user-a-job")
+    assert result.assignments[1][0].parent == JobName.root("test-user", "user-b-job")
 
 
 def test_scheduler_child_of_older_tree_beats_newer_root(scheduler, state, job_request, worker_metadata):
@@ -1385,15 +1385,15 @@ def test_scheduler_child_of_older_tree_beats_newer_root(scheduler, state, job_re
     submit_job(state, "new-tree", job_request("new-tree", cpu=1))
 
     # Submit child of old tree
-    submit_job(state, "/old-tree/child", job_request("child", cpu=1))
+    submit_job(state, "/test-user/old-tree/child", job_request("child", cpu=1))
 
     result = schedule_until_done(scheduler, state)
 
     assert len(result.assignments) == 3
     # Order: child (depth 2), old-tree (depth 1, older), new-tree (depth 1, newer)
-    assert result.assignments[0][0].parent == JobName.from_string("/old-tree/child")
-    assert result.assignments[1][0].parent == JobName.root("old-tree")
-    assert result.assignments[2][0].parent == JobName.root("new-tree")
+    assert result.assignments[0][0].parent == JobName.from_string("/test-user/old-tree/child")
+    assert result.assignments[1][0].parent == JobName.root("test-user", "old-tree")
+    assert result.assignments[2][0].parent == JobName.root("test-user", "new-tree")
 
 
 # =============================================================================
@@ -1637,7 +1637,7 @@ def test_coscheduled_tpu_jobs_cannot_double_book_group(scheduler, state):
     result3 = schedule_until_done(scheduler, state)
     assert len(result3.assignments) == 4
     assigned_jobs = {task_id.parent for task_id, _ in result3.assignments}
-    assert assigned_jobs == {JobName.root("j2")}
+    assert assigned_jobs == {JobName.root("test-user", "j2")}
 
 
 def test_scheduler_fifo_within_same_depth_and_tree(scheduler, state, job_request, worker_metadata):
@@ -1648,8 +1648,8 @@ def test_scheduler_fifo_within_same_depth_and_tree(scheduler, state, job_request
     submit_job(state, "tree", job_request("tree", cpu=1))
 
     # Submit two children
-    submit_job(state, "/tree/child-a", job_request("child-a", cpu=1))
-    submit_job(state, "/tree/child-b", job_request("child-b", cpu=1))
+    submit_job(state, "/test-user/tree/child-a", job_request("child-a", cpu=1))
+    submit_job(state, "/test-user/tree/child-b", job_request("child-b", cpu=1))
 
     result = schedule_until_done(scheduler, state)
 
@@ -1659,12 +1659,12 @@ def test_scheduler_fifo_within_same_depth_and_tree(scheduler, state, job_request
     child_assignments = [
         (task_id, worker_id)
         for task_id, worker_id in result.assignments
-        if task_id.parent.parent == JobName.root("tree")
+        if task_id.parent.parent == JobName.root("test-user", "tree")
     ]
     assert len(child_assignments) == 2
     # child-a submitted first
-    assert child_assignments[0][0].parent == JobName.from_string("/tree/child-a")
-    assert child_assignments[1][0].parent == JobName.from_string("/tree/child-b")
+    assert child_assignments[0][0].parent == JobName.from_string("/test-user/tree/child-a")
+    assert child_assignments[1][0].parent == JobName.from_string("/test-user/tree/child-b")
 
 
 # =============================================================================

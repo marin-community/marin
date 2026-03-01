@@ -53,6 +53,68 @@ _SLOW_STORAGE_READ_MS = 2000
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
+TERMINAL_USER_JOB_STATES = frozenset(
+    {
+        cluster_pb2.JOB_STATE_SUCCEEDED,
+        cluster_pb2.JOB_STATE_FAILED,
+        cluster_pb2.JOB_STATE_KILLED,
+        cluster_pb2.JOB_STATE_WORKER_FAILED,
+        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+    }
+)
+USER_TASK_STATES = (
+    cluster_pb2.TASK_STATE_PENDING,
+    cluster_pb2.TASK_STATE_ASSIGNED,
+    cluster_pb2.TASK_STATE_BUILDING,
+    cluster_pb2.TASK_STATE_RUNNING,
+    cluster_pb2.TASK_STATE_SUCCEEDED,
+    cluster_pb2.TASK_STATE_FAILED,
+    cluster_pb2.TASK_STATE_KILLED,
+    cluster_pb2.TASK_STATE_UNSCHEDULABLE,
+    cluster_pb2.TASK_STATE_WORKER_FAILED,
+)
+USER_JOB_STATES = (
+    cluster_pb2.JOB_STATE_PENDING,
+    cluster_pb2.JOB_STATE_BUILDING,
+    cluster_pb2.JOB_STATE_RUNNING,
+    cluster_pb2.JOB_STATE_SUCCEEDED,
+    cluster_pb2.JOB_STATE_FAILED,
+    cluster_pb2.JOB_STATE_KILLED,
+    cluster_pb2.JOB_STATE_WORKER_FAILED,
+    cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+)
+
+
+def _task_state_key(state: int) -> str:
+    """Return the lowercase RPC key for a task state enum."""
+    return task_state_name(state).removeprefix("TASK_STATE_").lower()
+
+
+def _job_state_key(state: int) -> str:
+    """Return the lowercase RPC key for a job state enum."""
+    return job_state_name(state).removeprefix("JOB_STATE_").lower()
+
+
+def _active_job_count(job_state_counts: dict[int, int]) -> int:
+    """Return the count of non-terminal jobs in a user aggregate."""
+    return sum(count for state, count in job_state_counts.items() if state not in TERMINAL_USER_JOB_STATES)
+
+
+def _task_state_counts_for_summary(task_state_counts: dict[int, int]) -> dict[str, int]:
+    """Convert enum-keyed task counts to the string-keyed RPC shape."""
+    counts = {_task_state_key(state): 0 for state in USER_TASK_STATES}
+    for state, count in task_state_counts.items():
+        counts[_task_state_key(state)] = count
+    return counts
+
+
+def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str, int]:
+    """Convert enum-keyed job counts to the string-keyed RPC shape."""
+    counts = {_job_state_key(state): 0 for state in USER_JOB_STATES}
+    for state, count in job_state_counts.items():
+        counts[_job_state_key(state)] = count
+    return counts
+
 
 class AutoscalerProtocol(Protocol):
     """Protocol for autoscaler operations used by ControllerServiceImpl."""
@@ -1060,6 +1122,33 @@ class ControllerServiceImpl:
             total_jobs=len(jobs),
             total_workers=len(workers),
             healthy_workers=healthy,
+            total_users=len(self._state.list_user_stats()),
+        )
+
+    def list_users(
+        self,
+        request: cluster_pb2.Controller.ListUsersRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.ListUsersResponse:
+        """Return live per-user aggregate counts for the dashboard."""
+        del request, ctx
+        users = sorted(
+            self._state.list_user_stats(),
+            key=lambda entry: (
+                -_active_job_count(entry.job_state_counts),
+                -(entry.task_state_counts.get(cluster_pb2.TASK_STATE_RUNNING, 0)),
+                entry.user,
+            ),
+        )
+        return cluster_pb2.Controller.ListUsersResponse(
+            users=[
+                cluster_pb2.Controller.UserSummary(
+                    user=entry.user,
+                    task_state_counts=_task_state_counts_for_summary(entry.task_state_counts),
+                    job_state_counts=_job_state_counts_for_summary(entry.job_state_counts),
+                )
+                for entry in users
+            ]
         )
 
     # --- Process Logs ---

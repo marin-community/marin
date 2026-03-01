@@ -64,6 +64,9 @@ class ControllerService(Protocol):
     async def get_cluster_summary(self, request: cluster__pb2.Controller.GetClusterSummaryRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetClusterSummaryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def list_users(self, request: cluster__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListUsersResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -241,6 +244,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_cluster_summary,
+                ),
+                "/iris.cluster.ControllerService/ListUsers": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListUsers",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.ListUsersRequest,
+                        output=cluster__pb2.Controller.ListUsersResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_users,
                 ),
                 "/iris.cluster.ControllerService/GetTaskLogs": Endpoint.unary(
                     method=MethodInfo(
@@ -614,6 +627,26 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def list_users(
+        self,
+        request: cluster__pb2.Controller.ListUsersRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.ListUsersResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListUsers",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.ListUsersRequest,
+                output=cluster__pb2.Controller.ListUsersResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     async def get_task_logs(
         self,
         request: cluster__pb2.Controller.GetTaskLogsRequest,
@@ -980,6 +1013,8 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_cluster_summary(self, request: cluster__pb2.Controller.GetClusterSummaryRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetClusterSummaryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_users(self, request: cluster__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListUsersResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_process_logs(self, request: cluster__pb2.Controller.GetProcessLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetProcessLogsResponse:
@@ -1153,6 +1188,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_cluster_summary,
+                ),
+                "/iris.cluster.ControllerService/ListUsers": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListUsers",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.ListUsersRequest,
+                        output=cluster__pb2.Controller.ListUsersResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_users,
                 ),
                 "/iris.cluster.ControllerService/GetTaskLogs": EndpointSync.unary(
                     method=MethodInfo(
@@ -1520,6 +1565,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.GetClusterSummaryRequest,
                 output=cluster__pb2.Controller.GetClusterSummaryResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_users(
+        self,
+        request: cluster__pb2.Controller.ListUsersRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.ListUsersResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListUsers",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.ListUsersRequest,
+                output=cluster__pb2.Controller.ListUsersResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
