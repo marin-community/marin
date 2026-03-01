@@ -11,7 +11,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-from jax._src.mesh import get_concrete_mesh
 from jax import Array
 from jax import shard_map
 
@@ -33,6 +32,7 @@ from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
+from levanter.utils.mesh import get_active_mesh
 from levanter.utils.partitioning import pspec_for_axis
 from levanter.utils.types import BlockFoldable
 
@@ -340,7 +340,7 @@ class MixtralSparseMoeBlock(eqx.Module):
     def _route(self, router_probs: NamedArray, Token: Axis, TopExperts: Axis):
         @partial(
             shard_map,
-            mesh=get_concrete_mesh(),
+            mesh=get_active_mesh(),
             in_specs=pspec_for_axis(router_probs.axes),
             out_specs=(
                 pspec_for_axis((Token, TopExperts)),
@@ -367,7 +367,7 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         @partial(
             shard_map,
-            mesh=get_concrete_mesh(),
+            mesh=get_active_mesh(),
             in_specs=(
                 pspec_for_axis(x_flat.axes),
                 pspec_for_axis(topk_idx_flat.axes),
@@ -405,7 +405,7 @@ class MixtralSparseMoeBlock(eqx.Module):
     ):
         @partial(
             shard_map,
-            mesh=get_concrete_mesh(),
+            mesh=get_active_mesh(),
             in_specs=(
                 pspec_for_axis(out_repeat_sort.axes),
                 pspec_for_axis(sort_idx.axes),

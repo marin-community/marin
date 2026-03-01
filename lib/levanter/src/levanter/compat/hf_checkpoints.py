@@ -47,7 +47,6 @@ from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
-from jax._src.mesh import get_concrete_mesh
 from jax.random import PRNGKey
 from jax.sharding import PartitionSpec
 from jaxtyping import Array, PRNGKeyArray
@@ -62,6 +61,7 @@ from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
+from levanter.utils.mesh import get_active_mesh
 from levanter.utils.py_utils import dataclass_with_default_init
 from levanter.utils.types import ResourceMapping
 
@@ -272,7 +272,7 @@ def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
         except AttributeError:
             pass
 
-    mesh = get_concrete_mesh()
+    mesh = get_active_mesh()
 
     loop = get_loop()
     bes = functools.partial(best_effort_sharding, mesh=mesh)

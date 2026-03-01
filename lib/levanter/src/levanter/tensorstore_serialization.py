@@ -25,6 +25,7 @@ from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
 from levanter.utils import fsspec_utils, jax_utils
+from levanter.utils.mesh import get_active_mesh
 from levanter.utils.partitioning import sharding_for_axis
 from levanter.utils.types import ResourceMapping
 
@@ -162,12 +163,10 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
         # `eqx.filter_eval_shape` can produce `NamedSharding(mesh=AbstractMesh(...))`, but JAX array
         # deserialization requires a concrete device assignment (i.e., a concrete Mesh).
         if isinstance(sharding, jax.sharding.NamedSharding) and isinstance(sharding.mesh, jax.sharding.AbstractMesh):
-            from jax._src.mesh import get_concrete_mesh
-
-            concrete_mesh = mesh or get_concrete_mesh()
+            concrete_mesh = mesh or get_active_mesh()
             if isinstance(concrete_mesh, jax.sharding.AbstractMesh) or concrete_mesh is None or concrete_mesh.empty:
                 # Fall back to JAX's concrete mesh getter when available.
-                concrete_mesh = get_concrete_mesh()
+                concrete_mesh = get_active_mesh()
 
             if concrete_mesh is not None and not concrete_mesh.empty:
                 return jax.sharding.NamedSharding(concrete_mesh, sharding.spec)

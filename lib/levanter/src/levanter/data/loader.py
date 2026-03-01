@@ -18,7 +18,6 @@ import numpy
 from jax import Array
 from jax import numpy as jnp
 from jax import tree_util as jtu
-from jax._src.mesh import get_concrete_mesh
 from jax.experimental import multihost_utils
 from jax.sharding import Mesh, PartitionSpec
 from jaxtyping import PyTree
@@ -35,7 +34,7 @@ from levanter.schedule import BatchSchedule, IntSchedule
 from levanter.shapes import NamedShapeSpec, ShapeSpec, to_raw_shape
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import local_cpu_mesh
-from levanter.utils.mesh import activate_mesh
+from levanter.utils.mesh import activate_mesh, get_active_mesh
 from levanter.utils.partitioning import (
     current_thread_local_mapping,
     physical_axis_name,
@@ -115,7 +114,7 @@ class DataLoader(Iterable[Ex]):
         self.data_store = data
 
         if mesh is None:
-            mesh = get_concrete_mesh()
+            mesh = get_active_mesh()
         self.mesh = mesh
 
         if isinstance(batch_size, hax.Axis):
@@ -125,6 +124,9 @@ class DataLoader(Iterable[Ex]):
         else:
             self.batch_axis_name = batch_axis_name or "batch"
             self.scheduler = BatchSchedule(batch_size)
+
+        if mesh is None:
+            raise ValueError("DataLoader requires an explicit mesh or an active mesh context.")
 
         self._batch_sharding = sharding_for_axis(self.batch_axis_name, axis_resources, mesh)
         with activate_mesh(mesh):
