@@ -135,6 +135,7 @@ def main(config: TrainLmConfig):
 
         # some axes we need
         EvalBatch = config.trainer.EvalBatch
+        batch_axis_resource = levanter.eval.resolve_batch_axis_resource(EvalBatch, compute_axis_mapping)
         model_max_seq_len = config.model.max_seq_len
         train_length = config.train_seq_len
         if train_length is None:
@@ -220,7 +221,7 @@ def main(config: TrainLmConfig):
                 tokenizer=tokenizer,
                 device_mesh=trainer.device_mesh,
                 axis_mapping=compute_axis_mapping,
-                batch_axis_resource=levanter.eval.resolve_batch_axis_resource(EvalBatch, compute_axis_mapping),
+                batch_axis_resource=batch_axis_resource,
                 max_examples_per_dataset=max_eval_examples_per_ds,
                 mp=config.trainer.mp,
                 checkpoint_path=checkpoint_path,
@@ -282,7 +283,7 @@ def main(config: TrainLmConfig):
                     EvalBatch,
                     axis_resources=compute_axis_mapping,
                     mp=trainer.mp,
-                    batch_axis_resource=levanter.eval.resolve_batch_axis_resource(EvalBatch, compute_axis_mapping),
+                    batch_axis_resource=batch_axis_resource,
                 ),
                 every=config.eval_harness_steps,
             )
@@ -304,7 +305,7 @@ def main(config: TrainLmConfig):
                         dataset,
                         prefix=os.path.join("analysis", name) if name else "analysis",
                         batch_size=EvalBatch.size,
-                        mapping=compute_axis_mapping,
+                        mapping={EvalBatch.name: batch_axis_resource},
                     ),
                     every=config.trainer.steps_per_eval,
                 )
