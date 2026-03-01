@@ -1,6 +1,3 @@
-# Copyright 2025 The Levanter Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # Copyright 2026 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
