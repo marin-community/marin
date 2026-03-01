@@ -15,13 +15,20 @@ import numpy as np
 import optax
 from jax import numpy as jnp
 
-import haliax
-
 import levanter.tracker
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from levanter.optim.skipstep import SkipStepConfig
 from levanter.optim.util import log_norm_passthrough, scan_aware_clip_by_block_rms
 from levanter.utils.jax_utils import leaf_key_paths
+
+
+def _is_named_array_like(x) -> bool:
+    # NamedArray duck-typing keeps this module independent of Haliax imports.
+    return hasattr(x, "axes") and hasattr(x, "array")
+
+
+def _is_jax_or_named_array_like(x) -> bool:
+    return eqx.is_array(x) or _is_named_array_like(x)
 
 
 @dataclass(frozen=True)
@@ -168,7 +175,7 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
             )
 
             def is_leaf(x):
-                return eqx.is_array(x) or isinstance(x, eqx.Module) or haliax.is_named_array(x)
+                return eqx.is_array(x) or isinstance(x, eqx.Module) or _is_named_array_like(x)
 
             # mask based on regex or module path
             def _apply_on(decayed_paths, x, from_root_key_path, from_class_keypath):
@@ -187,7 +194,7 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
                         is_leaf=lambda y: x is not y and is_leaf(y),
                     )
                     return this_mask
-                elif not haliax.util.is_jax_or_hax_array_like(x):
+                elif not _is_jax_or_named_array_like(x):
                     return x
 
                 should_decay = None
