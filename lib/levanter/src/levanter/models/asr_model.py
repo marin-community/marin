@@ -5,6 +5,7 @@ import abc
 from typing import Optional, Type, cast
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
@@ -119,6 +120,27 @@ class ASRMixin(abc.ABC):
         )
 
         return loss
+
+    def compute_loss_array(
+        self,
+        example: AudioTextExample,
+        *,
+        key=None,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+    ) -> jax.Array:
+        """
+        Compute ASR loss and always return a plain JAX array.
+        """
+        loss = self.compute_loss(
+            example,
+            key=key,
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+        )
+        if isinstance(loss, hax.NamedArray):
+            return loss.array
+        return jnp.asarray(loss)
 
     @property
     def vocab_size(self) -> int:
