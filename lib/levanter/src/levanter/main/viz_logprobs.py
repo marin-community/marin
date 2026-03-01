@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import jmp
 
 import haliax as hax
@@ -17,13 +18,13 @@ import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data import DataLoader
+from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
-from levanter.models.loss import next_token_loss
+from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
-from levanter.utils.partitioning import round_axis_for_partitioning
+from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
 from levanter.utils.tree_utils import inference_mode
 from levanter.visualization import compute_and_diff_log_probs, compute_and_visualize_log_probs
 
@@ -59,11 +60,12 @@ def main(config: VizLmConfig):
     EvalBatch = config.trainer.EvalBatch
     Pos = config.model.max_Pos.resize(config.max_eval_length)
 
-    validation_sets = config.data.validation_sets(Pos)
+    validation_sets = config.data.validation_grug_sets(seq_len=Pos.size)
 
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
     batch_axis_resource = config.trainer.batch_axis_resource
+    loader_axis_resources = {EvalBatch.name: batch_axis_resource} if batch_axis_resource is not None else None
 
     with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)
@@ -77,28 +79,28 @@ def main(config: VizLmConfig):
 
         # don't want to compute the mask w.r.t. the final token
 
-        @hax.named_jit(axis_resources=compute_axis_mapping)
-        def compute_log_probs(model: LmHeadModel, example: LmExample):
+        @named_jit(axis_resources=compute_axis_mapping)
+        def compute_log_probs(model: LmHeadModel, example: GrugLmExample):
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
 
-            activations = model.activations(example.tokens, example.attn_mask, key=key)
-            logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
-
-            loss = next_token_loss(
-                model.Pos,
-                model.Vocab,
-                logits=logits,
-                true_ids=example.tokens,
-                loss_weight=example.loss_weight,
+            loss = model.compute_next_token_loss_array(
+                example,
+                batch_axis=EvalBatch,
                 reduction=None,
+                reduction_axis=(),
             )
-            logprobs = -loss
-            # roll forward to get the loss for each predicted token
-            logprobs = hax.roll(logprobs, 1, Pos)
-            logits = hax.roll(logits, 1, Pos)
-            argmaxes = hax.argmax(logits, axis=Vocab)
-            return logprobs.rearrange((EvalBatch, Pos)).array, argmaxes.rearrange((EvalBatch, Pos)).array
+
+            named_example = named_lm_example_from_grug(example, Pos=Pos, batch_axis=EvalBatch)
+            activations = model.activations(named_example.tokens, named_example.attn_mask, key=key)
+            if isinstance(activations, tuple):
+                activations = activations[0]
+            logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed).array
+
+            # Roll forward to align each prediction with its target token.
+            logprobs = jnp.roll(-loss, 1, axis=-1)
+            argmaxes = jnp.roll(jnp.argmax(logits, axis=-1), 1, axis=-1)
+            return logprobs, argmaxes
 
         model: LmHeadModel
 
@@ -153,7 +155,7 @@ def main(config: VizLmConfig):
                 config.trainer.eval_batch_size,
                 batch_axis_name=EvalBatch.name,
                 mesh=config.trainer.device_mesh,
-                axis_resources={EvalBatch.name: batch_axis_resource},
+                axis_resources=loader_axis_resources,
             )
 
             if name:
