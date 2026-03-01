@@ -3,7 +3,6 @@
 
 """HTTP dashboard with Connect RPC and web UI for worker monitoring."""
 
-import uvicorn
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -28,7 +27,6 @@ class WorkerDashboard:
         self._host = host
         self._port = port
         self._app = self._create_app()
-        self._server: uvicorn.Server | None = None
 
     @property
     def port(self) -> int:
@@ -64,19 +62,3 @@ class WorkerDashboard:
 
     def _task_detail_page(self, request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("Task Detail", "/static/worker/task-detail.js"))
-
-    def run(self) -> None:
-        import uvicorn
-
-        uvicorn.run(self._app, host=self._host, port=self._port)
-
-    async def run_async(self) -> None:
-        import uvicorn
-
-        config = uvicorn.Config(self._app, host=self._host, port=self._port)
-        self._server = uvicorn.Server(config)
-        await self._server.serve()
-
-    async def shutdown(self) -> None:
-        if self._server:
-            self._server.should_exit = True

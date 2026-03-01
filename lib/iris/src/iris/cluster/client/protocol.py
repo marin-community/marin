@@ -5,10 +5,30 @@
 
 from typing import Protocol
 
-from iris.cluster.client.remote_client import TaskStateLogger
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
+
+
+class TaskStateLogger(Protocol):
+    """Observer for task state changes during streaming job wait.
+
+    Implement this protocol to customize how task lifecycle events and log
+    output are presented.  The streaming loop in ``wait_for_job_with_streaming``
+    calls these methods as child-job states transition and log batches arrive.
+    """
+
+    def task_started(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
+        """Called when a child job is first observed in the status list."""
+        ...
+
+    def task_finished(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
+        """Called when a child job reaches a terminal state (success or failure)."""
+        ...
+
+    def task_logging(self, response: cluster_pb2.Controller.GetTaskLogsResponse) -> None:
+        """Called with each batch of fetched task logs."""
+        ...
 
 
 class ClusterClient(Protocol):
