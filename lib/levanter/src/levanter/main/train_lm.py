@@ -26,7 +26,7 @@ from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -294,20 +294,16 @@ def main(config: TrainLmConfig):
             )
 
         @named_jit(axis_resources=compute_axis_mapping)
-        def compute_logits(model: LmHeadModel, example: LmExample | GrugLmExample):
+        def compute_logits(model: ArrayLmHeadModel, example: LmExample | GrugLmExample):
             model = trainer.mp.cast_to_compute(model)
-            if isinstance(example, LmExample):
-                activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-                head = model.get_lm_head()
-                return hax.dot(activations, head, axis=model.Embed)
-
-            logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=EvalBatch, key=None)
+            token_ids = example.tokens.array if isinstance(example, LmExample) else example.tokens
+            logits_array = model.logits_from_token_ids_array(token_ids, batch_axis=EvalBatch, key=None)
             if logits_array.ndim == 2:
-                return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))
+                return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), Vocab))
             if logits_array.ndim == 3:
                 batch_axis = Axis(EvalBatch.name, logits_array.shape[0])
                 pos_axis = Pos.resize(logits_array.shape[1])
-                return hax.named(logits_array, (batch_axis, pos_axis, model.Vocab))
+                return hax.named(logits_array, (batch_axis, pos_axis, Vocab))
             raise ValueError(f"Unexpected logits rank for analysis callbacks: {logits_array.ndim}")
 
         if config.log_entropy:
