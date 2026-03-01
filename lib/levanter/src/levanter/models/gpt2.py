@@ -21,6 +21,7 @@ from haliax.state_dict import ModuleWithStateDictSerialization
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig, LmWithHfSerializationMixin
 from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention
 from levanter.models.lm_model import LmConfig
+from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -256,9 +257,12 @@ class Gpt2Transformer(ModuleWithStateDictSerialization):
 
     @staticmethod
     def init(config: Gpt2Config, *, key):
-        # vectorize the blocks
-        blocks = Stacked.init(config.Layers, Gpt2Block, gradient_checkpointing=config.gradient_checkpointing)(
+        blocks = init_scan_foldable(
+            config.Layers,
+            Gpt2Block,
             config,
+            scan_layers=True,
+            gradient_checkpointing=config.gradient_checkpointing,
             key=shaped_rng_split(key, config.num_layers),
         )
         ln_f = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_bias=config.use_bias)

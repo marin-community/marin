@@ -24,6 +24,7 @@ from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Embeddings, Gpt2Mlp
 from levanter.models.hyena import HyenaConfig, HyenaOperator
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.scan_layers import init_scan_foldable
 
 
 @LmConfig.register_subclass("gpt2_hyena")
@@ -117,9 +118,12 @@ class Gpt2HyenaBackbone(ModuleWithStateDictSerialization):
 
     @staticmethod
     def init(config: Gpt2HyenaConfig, *, key):
-        # vectorize the blocks
-        blocks = Stacked.init(config.Layers, Gpt2HyenaBlock, gradient_checkpointing=config.gradient_checkpointing)(
+        blocks = init_scan_foldable(
+            config.Layers,
+            Gpt2HyenaBlock,
             config,
+            scan_layers=True,
+            gradient_checkpointing=config.gradient_checkpointing,
             key=shaped_rng_split(key, config.num_layers),
         )
         ln_f = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_bias=config.hyena.use_bias)
