@@ -27,7 +27,7 @@ import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.text.examples import GrugLmExample
-from levanter.models.lm_model import LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -162,7 +162,7 @@ def _join_prefix(prefix: str, tag: str) -> str:
 
 
 def _default_lm_eval_loss_fn(
-    model: LmHeadModel,
+    model: ArrayLmHeadModel,
     batch: GrugLmExample,
     *,
     EvalBatch: hax.Axis,
@@ -206,7 +206,7 @@ def cb_tagged_lm_evaluate(
     prefix: str = "eval",
     mp: jmp.Policy = None,
     checkpoint_path: Optional[str] = None,
-    loss_fn: Callable[[LmHeadModel, GrugLmExample], LossFnOutput] | None = None,
+    loss_fn: Callable[[ArrayLmHeadModel, GrugLmExample], LossFnOutput] | None = None,
 ) -> Callable[[StepInfo], None]:
     """
     Evaluates multiple tagged datasets using a given evaluation function.
@@ -236,7 +236,7 @@ def cb_tagged_lm_evaluate(
 
     if loss_fn is None:
 
-        def loss_fn(model: LmHeadModel, batch: GrugLmExample) -> LossFnOutput:
+        def loss_fn(model: ArrayLmHeadModel, batch: GrugLmExample) -> LossFnOutput:
             return _default_lm_eval_loss_fn(
                 model,
                 batch,

@@ -21,7 +21,7 @@ from levanter.data.text import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
@@ -90,7 +90,7 @@ def main(config: EvalLmConfig):
 
         mp: jmp.Policy = config.trainer.mp
 
-        def eval_loss_fn(model: LmHeadModel, batch: GrugLmExample) -> LossFnOutput:
+        def eval_loss_fn(model: ArrayLmHeadModel, batch: GrugLmExample) -> LossFnOutput:
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
             with hax.axis_mapping(compute_axis_mapping):
