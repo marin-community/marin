@@ -22,6 +22,7 @@ from jaxtyping import Array
 from optax import GradientTransformation, Updates
 from optax._src.utils import canonicalize_dtype
 
+from levanter.models.scan_layers import is_scan_container
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.mesh import DATA_AXIS
 
@@ -150,11 +151,11 @@ def scale_by_soap(
         scanned_layers_ = jax.tree.map(
             lambda x: (
                 jax.tree.map(lambda _: True, x, is_leaf=lambda x: isinstance(x, jax.Array))
-                if isinstance(x, hax.nn.Stacked)
+                if is_scan_container(x)
                 else jax.tree.map(lambda _: False, x, is_leaf=lambda x: isinstance(x, jax.Array))
             ),
             params,
-            is_leaf=lambda x: isinstance(x, hax.nn.Stacked),
+            is_leaf=lambda x: is_scan_container(x),
         )
         params_sharding_ = hax.partitioning.infer_resource_partitions(params)
         params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
@@ -677,11 +678,11 @@ def scale_by_soap(
         scanned_layers_ = jax.tree.map(
             lambda x: (
                 jax.tree.map(lambda _: True, x, is_leaf=lambda x: isinstance(x, jax.Array))
-                if isinstance(x, hax.nn.Stacked)
+                if is_scan_container(x)
                 else jax.tree.map(lambda _: False, x, is_leaf=lambda x: isinstance(x, jax.Array))
             ),
             params,
-            is_leaf=lambda x: isinstance(x, hax.nn.Stacked),
+            is_leaf=lambda x: is_scan_container(x),
         )
 
         updates, new_state = jax.lax.cond(
