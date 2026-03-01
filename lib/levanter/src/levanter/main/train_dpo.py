@@ -9,6 +9,7 @@ from typing import Any, Optional, Union, cast
 
 import equinox as eqx
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
@@ -48,24 +49,24 @@ def _policy_model_for_hf_save(model: DpoModel | LmHeadModel) -> LmHeadModel:
 
 
 def dpo_loss_from_logps(
-    delta_pi: hax.NamedArray,
-    delta_ref: hax.NamedArray,
+    delta_pi: jnp.ndarray,
+    delta_ref: jnp.ndarray,
     *,
     beta: float,
 ) -> tuple[jnp.ndarray, dict[str, Metric]]:
     logits = (delta_pi - delta_ref) * beta
-    loss = hax.mean(hax.nn.softplus(-logits)).scalar()
+    loss = jnp.mean(jax.nn.softplus(-logits))
     metrics = {
         "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
-        "dpo_margin_policy": Metric.from_value(hax.mean(delta_pi).scalar(), ReductionType.MEAN),
-        "dpo_margin_ref": Metric.from_value(hax.mean(delta_ref).scalar(), ReductionType.MEAN),
-        "dpo_accuracy": Metric.from_value(hax.mean(logits > 0).scalar(), ReductionType.MEAN),
+        "dpo_margin_policy": Metric.from_value(jnp.mean(delta_pi), ReductionType.MEAN),
+        "dpo_margin_ref": Metric.from_value(jnp.mean(delta_ref), ReductionType.MEAN),
+        "dpo_accuracy": Metric.from_value(jnp.mean(logits > 0), ReductionType.MEAN),
     }
     return loss, metrics
 
 
-def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
-    nll = model.compute_next_token_loss(example, reduction=hax.sum, reduction_axis="position", key=key)
+def _logp_sum(model: LmHeadModel, example, *, key=None) -> jnp.ndarray:
+    nll = model.compute_next_token_loss_array(example, reduction=hax.sum, reduction_axis="position", key=key)
     return -nll
 
 
@@ -288,8 +289,8 @@ def main(config: TrainDpoConfig):
         loss, metrics = dpo_loss_from_logps(delta_pi, delta_ref, beta=config.beta)
         chosen_reward = (logp_pi_chosen - logp_ref_chosen) * config.beta
         rejected_reward = (logp_pi_rejected - logp_ref_rejected) * config.beta
-        metrics["dpo_chosen_reward"] = Metric.from_value(hax.mean(chosen_reward).scalar(), ReductionType.MEAN)
-        metrics["dpo_rejected_reward"] = Metric.from_value(hax.mean(rejected_reward).scalar(), ReductionType.MEAN)
+        metrics["dpo_chosen_reward"] = Metric.from_value(jnp.mean(chosen_reward), ReductionType.MEAN)
+        metrics["dpo_rejected_reward"] = Metric.from_value(jnp.mean(rejected_reward), ReductionType.MEAN)
         return loss, metrics
 
     with Trainer(config.trainer, optimizer, loss_function) as trainer:
