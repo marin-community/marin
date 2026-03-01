@@ -79,7 +79,7 @@ from levanter.callbacks import StepInfo
 from levanter.checkpoint import load_checkpoint
 from levanter.data import batched
 from levanter.data.loader import stack_batches
-from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import ArrayLmHarnessModel, ArrayLmHeadModel, LmConfig, LmExample
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
@@ -1235,7 +1235,7 @@ class EvalHarnessMainConfig:
 
 def run_lm_eval_harness(
     config: LmEvalHarnessConfig,
-    model,
+    model: ArrayLmHarnessModel,
     tokenizer,
     EvalBatch: haliax.Axis | int,
     axis_resources: ResourceMapping,
@@ -1271,7 +1271,7 @@ def run_lm_eval_harness(
 
 def _actually_run_eval_harness(
     config: LmEvalHarnessConfig,
-    model: LmHeadModel,
+    model: ArrayLmHarnessModel,
     tasks_to_run: dict,
     tokenizer: HfTokenizer,
     EvalBatch: haliax.Axis | int,
@@ -1441,7 +1441,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
-        model: LmHeadModel
+        model: ArrayLmHarnessModel
 
         # initialize the model
         if config.checkpoint_is_hf:
@@ -1465,7 +1465,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
                 )
             model = hax.shard(model, parameter_axis_mapping)
 
-        model = typing.cast(LmHeadModel, inference_mode(model, True))
+        model = typing.cast(ArrayLmHarnessModel, inference_mode(model, True))
 
         # Set up profiler configuration if enabled
         profiler_config = None
