@@ -14,7 +14,7 @@ from typing import Protocol
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.scheduler import (
@@ -31,7 +31,6 @@ from iris.cluster.controller.state import (
     ControllerWorker,
     HeartbeatSnapshot,
 )
-from iris.cluster.controller.autoscaler import DemandEntry
 from iris.cluster.types import (
     DeviceType,
     JobName,
@@ -64,7 +63,7 @@ def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
     )
 
 
-def compute_demand_entries(state: ControllerState) -> list:
+def compute_demand_entries(state: ControllerState) -> list[DemandEntry]:
     """Compute demand entries from controller state."""
     demand_entries: list[DemandEntry] = []
 

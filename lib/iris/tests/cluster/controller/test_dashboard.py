@@ -23,7 +23,7 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Timestamp
 
 
@@ -376,8 +376,6 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     Jobs no longer track individual attempts - tasks do. The RPC returns
     aggregate retry information for the job.
     """
-    from iris.time_utils import Timestamp
-
     job_id = submit_job(state, "test-job", job_request)
     job = state.get_job(job_id)
     job.state = cluster_pb2.JOB_STATE_RUNNING
@@ -480,9 +478,6 @@ def test_get_autoscaler_status_returns_disabled_when_no_autoscaler(client):
 @pytest.fixture
 def mock_autoscaler():
     """Create a mock autoscaler that returns a status proto."""
-    from iris.rpc import config_pb2, vm_pb2
-    from iris.time_utils import Timestamp
-
     autoscaler = Mock()
     autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
         groups=[
