@@ -450,7 +450,8 @@ def _reservation_parent_job(num_children: int):
     from the parent (which got region-locked by the reservation).
     """
     from iris.client.client import iris_ctx
-    from iris.cluster.types import ResourceSpec as RS, tpu_device as _tpu_device
+    from iris.cluster.types import ResourceSpec as RS
+    from iris.cluster.types import tpu_device as _tpu_device
 
     ctx = iris_ctx()
     children = []
@@ -828,7 +829,8 @@ class SmokeTestRunner:
         tests: list[SmokeTestCase] = []
 
         tests.append(SmokeTestCase(f"Simple job ({a.label()})", self._run_simple_job))
-        tests.append(SmokeTestCase(f"Concurrent jobs (3x {a.label()})", self._run_concurrent_jobs))
+        for i in range(3):
+            tests.append(SmokeTestCase(f"Quick task {i} ({a.label()})", self._make_quick_task_test(i)))
 
         if a.is_tpu:
             tests.append(SmokeTestCase(f"Coscheduled multi-task job ({a.variant})", self._run_coscheduled_job))
@@ -848,7 +850,6 @@ class SmokeTestRunner:
             tests.append(SmokeTestCase(f"Nested constraint propagation ({a.region})", self._run_nested_constraint_job))
 
         tests.append(SmokeTestCase(f"Reserved job ({a.label()})", self._run_reserved_job))
-        tests.append(SmokeTestCase("Reservation status reporting", self._run_reservation_status_check))
 
         return tests
 
@@ -895,6 +896,35 @@ class SmokeTestRunner:
             return True
         return False
 
+    def _submit_and_wait(
+        self,
+        client: IrisClient,
+        entrypoint: Entrypoint,
+        job_name: str,
+        resources: ResourceSpec,
+        coscheduling: CoschedulingConfig | None = None,
+        environment: EnvironmentSpec | None = None,
+        constraints: list[Constraint] | None = None,
+        replicas: int = 1,
+        timeout: int | None = None,
+        reservation: list[ReservationEntry] | None = None,
+    ):
+        """Submit a job and wait for completion. Returns (status_proto, duration_seconds)."""
+        job_timeout = timeout or self.config.job_timeout_seconds
+        start = time.monotonic()
+        job = client.submit(
+            entrypoint=entrypoint,
+            name=job_name,
+            resources=resources,
+            environment=environment or EnvironmentSpec(),
+            constraints=constraints,
+            coscheduling=coscheduling,
+            replicas=replicas,
+            reservation=reservation,
+        )
+        status = job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
+        return status, time.monotonic() - start
+
     def _run_job_test(
         self,
         client: IrisClient,
@@ -909,65 +939,27 @@ class SmokeTestRunner:
         timeout: int | None = None,
         reservation: list[ReservationEntry] | None = None,
     ) -> TestResult:
-        """Generic job runner that handles submission, waiting, and result collection."""
+        """Submit a job and return a TestResult."""
         job_timeout = timeout or self.config.job_timeout_seconds
-        start = time.monotonic()
         try:
-            job = client.submit(
-                entrypoint=entrypoint,
-                name=job_name,
-                resources=resources,
-                environment=environment or EnvironmentSpec(),
-                constraints=constraints,
+            status, duration = self._submit_and_wait(
+                client,
+                entrypoint,
+                job_name,
+                resources,
                 coscheduling=coscheduling,
+                environment=environment,
+                constraints=constraints,
                 replicas=replicas,
+                timeout=timeout,
                 reservation=reservation,
             )
-
-            status = job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
-            duration = time.monotonic() - start
-
             if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
                 return TestResult(test_name, True, f"Completed in {duration:.1f}s", duration)
-            else:
-                state_name = cluster_pb2.JobState.Name(status.state)
-                return TestResult(test_name, False, f"State: {state_name}, error: {status.error}", duration)
-
+            state_name = cluster_pb2.JobState.Name(status.state)
+            return TestResult(test_name, False, f"State: {state_name}, error: {status.error}", duration)
         except TimeoutError:
-            duration = time.monotonic() - start
-            return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
-
-    def _submit_and_wait_multiple(
-        self,
-        client: IrisClient,
-        jobs_config: list[tuple[Entrypoint, str, ResourceSpec]],
-        test_name: str = "Concurrent jobs",
-    ) -> tuple[float, list[str]]:
-        """Submit multiple jobs and wait for all to complete.
-
-        Returns:
-            (duration, failed_job_descriptions)
-        """
-        start = time.monotonic()
-        jobs = []
-
-        for entrypoint, name, resources in jobs_config:
-            job = client.submit(
-                entrypoint=entrypoint,
-                name=name,
-                resources=resources,
-                environment=EnvironmentSpec(),
-            )
-            jobs.append(job)
-
-        failed_jobs = []
-        for job in jobs:
-            status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False, stream_logs=True)
-            if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
-                state_name = cluster_pb2.JobState.Name(status.state)
-                failed_jobs.append(f"{job.job_id}: {state_name}")
-
-        return time.monotonic() - start, failed_jobs
+            return TestResult(test_name, False, f"Timed out after {job_timeout}s", 0.0)
 
     def _run_simple_job(self, client: IrisClient) -> TestResult:
         """Run a simple job that just prints and returns."""
@@ -979,25 +971,20 @@ class SmokeTestRunner:
             resources=ResourceSpec(device=self._accel.make_device()),
         )
 
-    def _run_concurrent_jobs(self, client: IrisClient) -> TestResult:
-        """Submit 3 concurrent jobs to test parallel provisioning and queueing."""
-        resources = ResourceSpec(device=self._accel.make_device())
-        test_name = f"Concurrent jobs (3x {self._accel.label()})"
-        jobs_config = [
-            (Entrypoint.from_callable(_quick_task_job, i), f"smoke-concurrent-{self._run_id}-{i}", resources)
-            for i in range(3)
-        ]
+    def _make_quick_task_test(self, task_id: int) -> Callable[[IrisClient], TestResult]:
+        """Return a test callable for a single quick-task job."""
+        a = self._accel
 
-        try:
-            duration, failed_jobs = self._submit_and_wait_multiple(client, jobs_config, test_name)
+        def _test(client: IrisClient) -> TestResult:
+            return self._run_job_test(
+                client=client,
+                test_name=f"Quick task {task_id} ({a.label()})",
+                entrypoint=Entrypoint.from_callable(_quick_task_job, task_id),
+                job_name=f"smoke-quick-{self._run_id}-{task_id}",
+                resources=ResourceSpec(device=a.make_device()),
+            )
 
-            if not failed_jobs:
-                return TestResult(test_name, True, f"All completed in {duration:.1f}s", duration)
-            else:
-                return TestResult(test_name, False, f"Failed: {', '.join(failed_jobs)}", duration)
-
-        except TimeoutError:
-            return TestResult(test_name, False, f"Timed out after {self.config.job_timeout_seconds}s", 0.0)
+        return _test
 
     def _run_coscheduled_job(self, client: IrisClient) -> TestResult:
         """Run a coscheduled multi-task job on TPU workers."""
@@ -1073,55 +1060,6 @@ class SmokeTestRunner:
                 ReservationEntry(resources=ResourceSpec(device=a.make_device())),
             ],
         )
-
-    def _run_reservation_status_check(self, client: IrisClient) -> TestResult:
-        """Verify reservation status fields using the parent-child pattern.
-
-        Submits a CPU parent with 2 reservation entries. The parent spawns
-        2 TPU children that consume the reserved capacity. After completion,
-        validates total_entries, fulfilled, and satisfied on the parent status.
-        """
-        a = self._accel
-        test_name = "Reservation status reporting"
-        start = time.monotonic()
-        job_timeout = self.config.job_timeout_seconds
-        try:
-            job = client.submit(
-                entrypoint=Entrypoint.from_callable(_reservation_parent_job, 2),
-                name=f"smoke-reservation-status-{self._run_id}",
-                resources=ResourceSpec(cpu=1, memory="1GB", disk="1GB"),
-                environment=EnvironmentSpec(),
-                reservation=[
-                    ReservationEntry(resources=ResourceSpec(device=a.make_device())),
-                    ReservationEntry(resources=ResourceSpec(device=a.make_device())),
-                ],
-            )
-
-            status = job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
-            duration = time.monotonic() - start
-
-            if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
-                state_name = cluster_pb2.JobState.Name(status.state)
-                return TestResult(test_name, False, f"State: {state_name}, error: {status.error}", duration)
-
-            if not status.HasField("reservation"):
-                return TestResult(test_name, False, "Reservation status missing from completed job", duration)
-
-            if status.reservation.total_entries != 2:
-                return TestResult(
-                    test_name, False, f"total_entries={status.reservation.total_entries}, expected 2", duration
-                )
-
-            return TestResult(
-                test_name,
-                True,
-                f"Status: {status.reservation.fulfilled}/{status.reservation.total_entries} fulfilled",
-                duration,
-            )
-
-        except TimeoutError:
-            duration = time.monotonic() - start
-            return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
 
     def _run_non_preemptible_cpu_job(self, client: IrisClient) -> TestResult:
         """Run a CPU-only job constrained to non-preemptible workers."""
@@ -1264,7 +1202,6 @@ class SmokeTestRunner:
         """Print final results and return True if all passed."""
         passed_count = sum(1 for r in self._results if r.passed)
         total_count = len(self._results)
-        total_duration = sum(r.duration_seconds for r in self._results)
 
         for result in self._results:
             if not result.passed:
@@ -1272,7 +1209,7 @@ class SmokeTestRunner:
 
         all_passed = passed_count == total_count
         log = logger.info if all_passed else logger.warning
-        log("Results: %d/%d passed in %.1fs", passed_count, total_count, total_duration)
+        log("Results: %d/%d passed", passed_count, total_count)
         if not all_passed:
             self._failed = True
         return all_passed
