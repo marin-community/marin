@@ -12,7 +12,7 @@ import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
 import haliax as hax
-from haliax import Axis, NamedArray, NamedOrNumeric
+from haliax import Axis, NamedOrNumeric
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.loss import maybe_fused_next_token_loss
@@ -66,7 +66,7 @@ def _to_plain_jax_array(value: Any) -> jax.Array:
 class LmExample(eqx.Module):
     tokens: hax.NamedArray
     loss_weight: hax.NamedArray
-    attn_mask: AttentionMask | NamedArray = AttentionMask.causal()
+    attn_mask: AttentionMask | hax.NamedArray = AttentionMask.causal()
 
     @staticmethod
     def causal(
@@ -146,7 +146,7 @@ class LmExample(eqx.Module):
         return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
     @staticmethod
-    def causal_loss_mask(Pos: Axis, prompt_length: Optional[int] = None) -> NamedArray:
+    def causal_loss_mask(Pos: Axis, prompt_length: Optional[int] = None) -> hax.NamedArray:
         loss_weight = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
 
         if prompt_length is not None:
