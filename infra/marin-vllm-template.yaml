@@ -14,10 +14,10 @@ provider:
   type: gcp
   region: {{REGION}}
   availability_zone: {{ZONE}}
-  project_id: hai-gcp-models
+  project_id: {{PROJECT_ID}}
 
 docker:
-    image: "{{REGION}}-docker.pkg.dev/hai-gcp-models/marin/{{ IMAGE_NAME | default('marin_cluster') }}:{{DOCKER_TAG}}"
+    image: "{{DOCKER_IMAGE}}"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -63,7 +63,9 @@ docker:
 
 initialization_commands:
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
-  - yes | gcloud auth configure-docker {{REGION}}-docker.pkg.dev
+{% if DOCKER_AUTH_REGISTRY %}
+  - yes | gcloud auth configure-docker {{DOCKER_AUTH_REGISTRY}}
+{% endif %}
   # always run this because ray doesn't run with sudo
   - sudo usermod -aG docker $USER
   # we want to launch docker containers from inside docker, which means we need to loosen the permissions on the docker
@@ -72,15 +74,21 @@ initialization_commands:
 
 setup_commands:
   # set the GCP project because it's not injected by default
-  - gcloud config set project hai-gcp-models
+  - gcloud config set project {{PROJECT_ID}}
   - gcloud config set compute/region {{REGION}}
   - gcloud config set compute/zone {{ZONE}}
   - mkdir $HOME/.cache/huggingface -p
   - mkdir $HOME/.cache/openai -p
   - mkdir -p $HOME/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > $HOME/.ssh/authorized_keys && chmod 600 $HOME/.ssh/authorized_keys
-  - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > $HOME/.ssh/marin_ray_cluster.pub
-  - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
-  - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
+{% if CLUSTER_SSH_PUBLIC_KEY_SECRET %}
+  - if gcloud secrets describe {{CLUSTER_SSH_PUBLIC_KEY_SECRET}} >/dev/null 2>&1; then gcloud secrets versions access latest --secret={{CLUSTER_SSH_PUBLIC_KEY_SECRET}} > $HOME/.ssh/marin_ray_cluster.pub; fi
+{% endif %}
+{% if HF_TOKEN_SECRET %}
+  - if gcloud secrets describe {{HF_TOKEN_SECRET}} >/dev/null 2>&1; then gcloud secrets versions access latest --secret={{HF_TOKEN_SECRET}} > $HOME/.cache/huggingface/token; fi
+{% endif %}
+{% if OPENAI_API_KEY_SECRET %}
+  - if gcloud secrets describe {{OPENAI_API_KEY_SECRET}} >/dev/null 2>&1; then gcloud secrets versions access latest --secret={{OPENAI_API_KEY_SECRET}} > $HOME/.cache/openai/token; fi
+{% endif %}
 {% if RAY_AUTH_MODE == "token" %}
   - mkdir -p $HOME/.ray
   - gcloud secrets versions access latest --secret={{ RAY_AUTH_SECRET }} > $HOME/.ray/auth_token

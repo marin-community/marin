@@ -35,6 +35,13 @@ jobs:
           echo "DATE_TAG=`date -u +"%Y%m%d"`" >> "$GITHUB_OUTPUT"
           echo "HASH_TAG=`git rev-parse --short HEAD`" >> "$GITHUB_OUTPUT"
 
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
       - name: Authenticate to Google Cloud
         id: auth
         uses: google-github-actions/auth@v2
@@ -126,6 +133,15 @@ jobs:
               docker tag marin_cluster:local ${registry}-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${tag}
               docker push ${registry}-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${tag}
             done
+          done
+
+      - name: Push Marin cluster image to GHCR
+        run: |
+          TAGS="latest ${{ steps.set-tags.outputs.DATE_TAG }} ${{ steps.set-tags.outputs.HASH_TAG }}"
+
+          for tag in $TAGS; do
+            docker tag marin_cluster:local ghcr.io/marin-community/marin-cluster:${tag}
+            docker push ghcr.io/marin-community/marin-cluster:${tag}
           done
 
       - name: Install uv
