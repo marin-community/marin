@@ -1507,18 +1507,19 @@ def _build_controller_deployment(
 # ============================================================================
 
 
-@contextmanager
-def _coreweave_tunnel(
+def _try_port_forward(
     kubectl: Kubectl,
     service_name: str,
     remote_port: int,
-    local_port: int | None = None,
-    timeout: float = 30.0,
-) -> Iterator[str]:
-    """kubectl port-forward to a K8s Service, yielding the local URL."""
-    if local_port is None:
-        local_port = find_free_port(start=10000)
+    local_port: int,
+    timeout: float,
+) -> subprocess.Popen:
+    """Start kubectl port-forward and wait for the local socket to accept.
 
+    Returns the running subprocess on success.  Raises RuntimeError if the
+    port-forward process exits or the timeout expires before the local port
+    becomes connectable.
+    """
     proc = kubectl.popen(
         ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
         namespaced=True,
@@ -1528,20 +1529,62 @@ def _coreweave_tunnel(
         start_new_session=True,
     )
 
-    try:
-        deadline = Deadline.from_seconds(timeout)
-        while not deadline.expired():
-            try:
-                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
-                    break
-            except OSError:
-                time.sleep(0.5)
-        else:
+    deadline = Deadline.from_seconds(timeout)
+    while not deadline.expired():
+        if proc.poll() is not None:
             stderr = proc.stderr.read() if proc.stderr else ""
-            proc.terminate()
-            proc.wait()
-            raise RuntimeError(f"kubectl port-forward failed to establish: {stderr}")
+            raise RuntimeError(f"kubectl port-forward exited: {stderr.strip()}")
+        try:
+            with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                return proc
+        except OSError:
+            time.sleep(0.5)
 
+    stderr = proc.stderr.read() if proc.stderr else ""
+    proc.terminate()
+    proc.wait()
+    raise RuntimeError(f"kubectl port-forward timed out: {stderr.strip()}")
+
+
+@contextmanager
+def _coreweave_tunnel(
+    kubectl: Kubectl,
+    service_name: str,
+    remote_port: int,
+    local_port: int | None = None,
+    timeout: float = 30.0,
+    max_retries: int = 3,
+    retry_delay: float = 10.0,
+) -> Iterator[str]:
+    """kubectl port-forward to a K8s Service, yielding the local URL.
+
+    Retries on failure to handle freshly provisioned nodes whose
+    konnectivity agent may not be ready when the pod first passes
+    its readiness probe.
+    """
+    if local_port is None:
+        local_port = find_free_port(start=10000)
+
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            proc = _try_port_forward(kubectl, service_name, remote_port, local_port, timeout)
+            break
+        except RuntimeError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                logger.warning(
+                    "Port-forward attempt %d/%d failed, retrying in %.0fs: %s",
+                    attempt + 1,
+                    max_retries,
+                    retry_delay,
+                    e,
+                )
+                time.sleep(retry_delay)
+    else:
+        raise RuntimeError(f"kubectl port-forward failed after {max_retries} attempts: {last_error}")
+
+    try:
         logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
         yield f"http://127.0.0.1:{local_port}"
     finally:
