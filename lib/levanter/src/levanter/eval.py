@@ -25,8 +25,12 @@ import haliax as hax
 import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
-from levanter.data.text.examples import GrugLmExample
-from levanter.models.lm_model import ArrayLmHeadModel, LmExample
+from levanter.data.text.examples import (
+    LmLikeExample,
+    loss_weight_array_from_lm_example,
+    target_token_ids_array_from_lm_example,
+)
+from levanter.models.lm_model import ArrayLmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -42,7 +46,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 M = TypeVar("M")
 Ex = TypeVar("Ex")
-LmEvalExample = LmExample | GrugLmExample
+LmEvalExample = LmLikeExample
 LossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
@@ -173,7 +177,7 @@ def _join_prefix(prefix: str, tag: str) -> str:
 
 def _default_lm_eval_loss_fn(
     model: ArrayLmHeadModel,
-    batch: LmEvalExample,
+    batch: LmLikeExample,
     *,
     EvalBatch: hax.Axis,
     mp: jmp.Policy | None,
@@ -189,12 +193,8 @@ def _default_lm_eval_loss_fn(
         reduction_axis=(),
     )
 
-    if isinstance(batch, LmExample):
-        per_pos_weight = batch.loss_weight.array
-        per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
-    else:
-        per_pos_weight = batch.loss_weight
-        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+    per_pos_weight = loss_weight_array_from_lm_example(batch)
+    per_pos_token_id = target_token_ids_array_from_lm_example(batch)
     return per_pos_loss, per_pos_weight, per_pos_token_id
 
 

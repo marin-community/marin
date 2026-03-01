@@ -7,7 +7,6 @@ from typing import Optional
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 import jmp
 
 import haliax as hax
@@ -18,10 +17,15 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
 from levanter.data.text import LmDataConfig
-from levanter.data.text.examples import GrugLmExample
+from levanter.data.text.examples import (
+    LmLikeExample,
+    loss_weight_array_from_lm_example,
+    target_token_ids_array_from_lm_example,
+    token_ids_array_from_lm_example,
+)
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmExample
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
@@ -31,7 +35,7 @@ from levanter.utils.tree_utils import inference_mode
 logger = logging.getLogger(__name__)
 
 
-LmEvalExample = LmExample | GrugLmExample
+LmEvalExample = LmLikeExample
 
 
 @dataclass
@@ -104,12 +108,8 @@ def main(config: EvalLmConfig):
                 reduction_axis=(),
             )
 
-            if isinstance(batch, LmExample):
-                per_pos_weight = batch.loss_weight.array
-                per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
-            else:
-                per_pos_weight = batch.loss_weight
-                per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+            per_pos_weight = loss_weight_array_from_lm_example(batch)
+            per_pos_token_id = target_token_ids_array_from_lm_example(batch)
             return per_pos_loss, per_pos_weight, per_pos_token_id
 
         evaluator = TaggedEvaluator(
@@ -125,7 +125,7 @@ def main(config: EvalLmConfig):
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: ArrayLmHeadModel, example: LmEvalExample):
             model = mp.cast_to_compute(model)
-            token_ids = example.tokens.array if isinstance(example, LmExample) else example.tokens
+            token_ids = token_ids_array_from_lm_example(example)
             logits_array = model.logits_from_token_ids_array(token_ids, batch_axis=Batch, key=None)
             if logits_array.ndim == 2:
                 return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), Vocab))

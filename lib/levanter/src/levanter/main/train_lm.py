@@ -21,9 +21,9 @@ from levanter import callbacks
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
-from levanter.data.text.examples import GrugLmExample
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
+from levanter.data.text.examples import GrugLmExample, LmLikeExample, token_ids_array_from_lm_example
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
@@ -294,9 +294,9 @@ def main(config: TrainLmConfig):
             )
 
         @named_jit(axis_resources=compute_axis_mapping)
-        def compute_logits(model: ArrayLmHeadModel, example: LmExample | GrugLmExample):
+        def compute_logits(model: ArrayLmHeadModel, example: LmLikeExample):
             model = trainer.mp.cast_to_compute(model)
-            token_ids = example.tokens.array if isinstance(example, LmExample) else example.tokens
+            token_ids = token_ids_array_from_lm_example(example)
             logits_array = model.logits_from_token_ids_array(token_ids, batch_axis=EvalBatch, key=None)
             if logits_array.ndim == 2:
                 return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), Vocab))
