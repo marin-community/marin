@@ -20,7 +20,6 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import BlockSeq, ScanCheckpointPolicy
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -30,7 +29,7 @@ from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddin
 from levanter.models.llama import LlamaMlp
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.models.olmo import Olmo2Embedding
-from levanter.models.scan_layers import init_scan_foldable
+from levanter.models.scan_layers import init_blockseq_from_blocks, init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -314,7 +313,11 @@ class Olmo3Transformer(ModuleWithStateDictSerialization, eqx.Module):
             # to avoid JAX tracing issues during eval_shape
             keys = shaped_rng_split(key, config.num_layers)
             blocks = [Olmo3DecoderLayer.init(config, layer_idx=i, key=keys[i]) for i in range(config.num_layers)]
-            layers = BlockSeq(blocks, config.Layers, ScanCheckpointPolicy._mk(config.gradient_checkpointing))
+            layers = init_blockseq_from_blocks(
+                blocks,
+                config.Layers,
+                gradient_checkpointing=config.gradient_checkpointing,
+            )
 
         ln_f = config.mk_LayerNorm(config.Embed)
         return Olmo3Transformer(config, layers, ln_f)
