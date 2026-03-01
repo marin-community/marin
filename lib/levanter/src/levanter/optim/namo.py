@@ -41,7 +41,6 @@ By default, NAMO/NAMO-D use the reference Newton-Schulz triplet via
 for experimentation.
 """
 
-import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, NamedTuple, Optional, Protocol, TypeAlias
@@ -53,7 +52,6 @@ from optax import tree_utils as otu
 from jaxtyping import Array, Float
 
 import haliax
-from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
 from levanter.optim.util import (
@@ -61,6 +59,8 @@ from levanter.optim.util import (
     flatten_linear_layers,
     is_linear_like_module,
     label_linear_like_module,
+    linear_like_weight_array,
+    replace_linear_like_weight_array,
     unflatten_linear_layers,
     zeropower_via_newtonschulz5,
 )
@@ -315,8 +315,8 @@ def scale_with_namo(
         momentum_buffer = otu.tree_zeros_like(flat_params)
 
         def init_v(node: Any) -> Optional[jax.Array]:
-            if isinstance(node, Linear):
-                return jnp.zeros(node.weight.array.shape[:-2], dtype=jnp.float32)
+            if is_linear_like_module(node):
+                return jnp.zeros(linear_like_weight_array(node).shape[:-2], dtype=jnp.float32)
             return None
 
         v_squared = jax.tree_util.tree_map(init_v, flat_params, is_leaf=_is_linear_or_none)
@@ -365,15 +365,15 @@ def scale_with_namo(
         ) -> tuple[Any, Optional[jax.Array]]:
             if m_node is None:
                 return grad_node, v_prev
-            if not isinstance(m_node, Linear):
+            if not is_linear_like_module(m_node):
                 return grad_node, v_prev
 
             if v_prev is None:
-                v_prev = jnp.zeros(m_node.weight.array.shape[:-2], dtype=jnp.float32)
+                v_prev = jnp.zeros(linear_like_weight_array(m_node).shape[:-2], dtype=jnp.float32)
 
-            grad_arr = grad_node.weight.array
-            m_arr = m_node.weight.array
-            param_arr = param_node.weight.array
+            grad_arr = linear_like_weight_array(grad_node)
+            m_arr = linear_like_weight_array(m_node)
+            param_arr = linear_like_weight_array(param_node)
 
             grad_norm = jnp.linalg.norm(grad_arr, axis=(-2, -1))
             momentum_norm = jnp.linalg.norm(m_arr, axis=(-2, -1))
@@ -395,7 +395,7 @@ def scale_with_namo(
             )
             delta = -(weight_decay * adaptive_lr[..., None, None]) * param_arr - shaped_lr[..., None, None] * orth_dir
 
-            return dataclasses.replace(grad_node, weight=dataclasses.replace(grad_node.weight, array=delta)), v_new
+            return replace_linear_like_weight_array(grad_node, delta), v_new
 
         new_flat_updates = jax.tree_util.tree_map(
             lambda p, g, m, v: transform(p, g, m, v)[0],
@@ -446,8 +446,8 @@ def scale_with_namod(
         momentum_buffer = otu.tree_zeros_like(flat_params)
 
         def init_v(node: Any) -> Optional[jax.Array]:
-            if isinstance(node, Linear):
-                shape = node.weight.array.shape
+            if is_linear_like_module(node):
+                shape = linear_like_weight_array(node).shape
                 return jnp.zeros(shape[:-2] + (shape[-1],), dtype=jnp.float32)
             return None
 
@@ -497,12 +497,12 @@ def scale_with_namod(
         ) -> tuple[Any, Optional[jax.Array]]:
             if m_node is None:
                 return grad_node, v_prev
-            if not isinstance(m_node, Linear):
+            if not is_linear_like_module(m_node):
                 return grad_node, v_prev
 
-            grad_arr = grad_node.weight.array
-            m_arr = m_node.weight.array
-            param_arr = param_node.weight.array
+            grad_arr = linear_like_weight_array(grad_node)
+            m_arr = linear_like_weight_array(m_node)
+            param_arr = linear_like_weight_array(param_node)
 
             if v_prev is None:
                 v_prev = jnp.zeros(m_arr.shape[:-2] + (m_arr.shape[-1],), dtype=jnp.float32)
@@ -532,7 +532,7 @@ def scale_with_namod(
             delta = param_arr * (jnp.expand_dims(decay, axis=-2) - 1.0) - orth_dir * jnp.expand_dims(
                 col_lr_up, axis=-2
             )
-            return dataclasses.replace(grad_node, weight=dataclasses.replace(grad_node.weight, array=delta)), v_new
+            return replace_linear_like_weight_array(grad_node, delta), v_new
 
         new_flat_updates = jax.tree_util.tree_map(
             lambda p, g, m, v: transform(p, g, m, v)[0],

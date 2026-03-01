@@ -11,6 +11,9 @@ from levanter.models.linear import LinearLikeModule
 from levanter.optim.util import (
     is_linear_like_module,
     label_linear_like_module,
+    linear_like_weight_array,
+    map_flattened_linear_layers,
+    replace_linear_like_weight_array,
 )
 
 
@@ -47,3 +50,16 @@ def test_label_linear_like_module_labels_weight_and_bias():
     assert masked_haliax.bias == "adamw"
     assert masked_eqx.weight == "namo"
     assert masked_eqx.bias == "adamw"
+
+
+def test_map_flattened_linear_layers_updates_eqx_linear_weight():
+    class _Module(eqx.Module):
+        linear: eqx.nn.Linear
+
+    module = _Module(linear=eqx.nn.Linear(4, 3, key=jax.random.PRNGKey(4)))
+
+    def _set_unit_weight(linear):
+        return replace_linear_like_weight_array(linear, jnp.ones_like(linear_like_weight_array(linear)))
+
+    updated = map_flattened_linear_layers(_set_unit_weight, module)
+    assert jnp.all(updated.linear.weight == 1.0)
