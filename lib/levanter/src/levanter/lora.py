@@ -72,6 +72,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, uploa
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.jax_utils import join_key, key_iterator, leaf_key_paths
 from levanter.utils.logging import silence_transformer_nag
+from levanter.utils.partitioning import named_jit
 
 
 silence_transformer_nag()
@@ -294,7 +295,7 @@ def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str,
     )
 
 
-@hax.named_jit  # needs to be inside (named) jit s.t. it works with sharded parameters
+@named_jit  # needs to be inside (named) jit s.t. it works with sharded parameters
 def merge_lora_modules(module: M) -> M:
     """
     Merges LoRA modules into their wrapped modules. That is, it adds the LoRA parameters to the wrapped weights,
