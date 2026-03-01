@@ -6,7 +6,14 @@ from __future__ import annotations
 from typing import Any
 
 from haliax import Axis
-from haliax.nn.scan import Stacked
+
+
+def _scan_stack_cls(scan_layers: bool):
+    from haliax.nn.scan import BlockSeq, Stacked
+
+    if scan_layers:
+        return Stacked
+    return BlockSeq
 
 
 def init_scan_foldable(
@@ -24,11 +31,7 @@ def init_scan_foldable(
     This keeps stack selection (`Stacked` vs `BlockSeq`) centralized so models
     can migrate off Haliax scan containers in one place.
     """
-    stack_cls = Stacked
-    if not scan_layers:
-        from haliax.nn.scan import BlockSeq
-
-        stack_cls = BlockSeq
+    stack_cls = _scan_stack_cls(scan_layers)
 
     return stack_cls.init(
         Layers,
@@ -39,3 +42,15 @@ def init_scan_foldable(
         key=key,
         **init_kwargs,
     )
+
+
+def init_blockseq_from_blocks(
+    blocks: list[Any],
+    Layers: Axis,
+    *,
+    gradient_checkpointing: bool | str,
+):
+    """Construct a `BlockSeq` with centralized checkpoint-policy resolution."""
+    from haliax.nn.scan import BlockSeq, ScanCheckpointPolicy
+
+    return BlockSeq(blocks, Layers, ScanCheckpointPolicy._mk(gradient_checkpointing))
