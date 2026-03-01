@@ -5,14 +5,17 @@
 
 Provides ContainerRuntime protocol and implementations:
 - DockerRuntime: runs containers via Docker CLI
+- KubernetesRuntime: runs containers as Kubernetes Pods
 - ProcessRuntime: runs commands as subprocesses (for local/testing use)
 """
 
 from iris.cluster.runtime.docker import DockerImageBuilder, DockerRuntime
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint, runtime_entrypoint_to_bash_script
+from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerHandle,
+    ContainerPhase,
     ContainerResult,
     ContainerRuntime,
     ContainerStats,
@@ -24,6 +27,7 @@ from iris.cluster.runtime.types import (
 __all__ = [
     "ContainerConfig",
     "ContainerHandle",
+    "ContainerPhase",
     "ContainerResult",
     "ContainerRuntime",
     "ContainerStats",
@@ -32,6 +36,7 @@ __all__ = [
     "DockerRuntime",
     "ImageBuilder",
     "ImageInfo",
+    "KubernetesRuntime",
     "build_runtime_entrypoint",
     "runtime_entrypoint_to_bash_script",
 ]

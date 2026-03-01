@@ -1,9 +1,9 @@
 {
   "errors": [
     {
-      "line": 328,
+      "line": 327,
       "column": 12,
-      "stop_line": 328,
+      "stop_line": 327,
       "stop_column": 22,
       "path": "lib/haliax/src/haliax/_src/parsing.py",
       "code": -2,
@@ -13,9 +13,9 @@
       "severity": "error"
     },
     {
-      "line": 22,
+      "line": 21,
       "column": 82,
-      "stop_line": 22,
+      "stop_line": 21,
       "stop_column": 92,
       "path": "lib/haliax/src/haliax/_src/rearrange.py",
       "code": -2,
@@ -25,9 +25,9 @@
       "severity": "error"
     },
     {
-      "line": 27,
+      "line": 26,
       "column": 86,
-      "stop_line": 27,
+      "stop_line": 26,
       "stop_column": 96,
       "path": "lib/haliax/src/haliax/_src/rearrange.py",
       "code": -2,
@@ -37,9 +37,9 @@
       "severity": "error"
     },
     {
-      "line": 225,
+      "line": 224,
       "column": 9,
-      "stop_line": 239,
+      "stop_line": 238,
       "stop_column": 37,
       "path": "lib/haliax/src/haliax/_src/rearrange.py",
       "code": -2,
@@ -49,14 +49,14 @@
       "severity": "error"
     },
     {
-      "line": 252,
+      "line": 251,
       "column": 42,
-      "stop_line": 252,
+      "stop_line": 251,
       "stop_column": 52,
       "path": "lib/haliax/src/haliax/_src/rearrange.py",
       "code": -2,
       "name": "unsupported-operation",
-      "description": "Cannot set item in `dict[Axis, Axis]`\n  Argument `Axis | str` is not assignable to parameter `key` with type `Axis` in function `dict.__setitem__`",
+      "description": "Cannot set item in `dict[Axis, Axis]`\n  Argument `str` is not assignable to parameter `key` with type `Axis` in function `dict.__setitem__`",
       "concise_description": "Cannot set item in `dict[Axis, Axis]`",
       "severity": "error"
     },
@@ -73,9 +73,9 @@
       "severity": "error"
     },
     {
-      "line": 54,
+      "line": 53,
       "column": 12,
-      "stop_line": 54,
+      "stop_line": 53,
       "stop_column": 13,
       "path": "lib/haliax/src/haliax/_src/state_dict.py",
       "code": -2,
@@ -85,9 +85,9 @@
       "severity": "error"
     },
     {
-      "line": 236,
+      "line": 235,
       "column": 16,
-      "stop_line": 236,
+      "stop_line": 235,
       "stop_column": 44,
       "path": "lib/haliax/src/haliax/_src/state_dict.py",
       "code": -2,
@@ -97,9 +97,9 @@
       "severity": "error"
     },
     {
-      "line": 180,
+      "line": 179,
       "column": 49,
-      "stop_line": 180,
+      "stop_line": 179,
       "stop_column": 58,
       "path": "lib/haliax/src/haliax/axis.py",
       "code": -2,
@@ -109,9 +109,9 @@
       "severity": "error"
     },
     {
-      "line": 185,
+      "line": 184,
       "column": 54,
-      "stop_line": 185,
+      "stop_line": 184,
       "stop_column": 70,
       "path": "lib/haliax/src/haliax/axis.py",
       "code": -2,
@@ -121,9 +121,9 @@
       "severity": "error"
     },
     {
-      "line": 190,
+      "line": 189,
       "column": 48,
-      "stop_line": 190,
+      "stop_line": 189,
       "stop_column": 56,
       "path": "lib/haliax/src/haliax/axis.py",
       "code": -2,
@@ -133,9 +133,9 @@
       "severity": "error"
     },
     {
-      "line": 195,
+      "line": 194,
       "column": 58,
-      "stop_line": 195,
+      "stop_line": 194,
       "stop_column": 71,
       "path": "lib/haliax/src/haliax/axis.py",
       "code": -2,
@@ -145,9 +145,9 @@
       "severity": "error"
     },
     {
-      "line": 377,
+      "line": 376,
       "column": 9,
-      "stop_line": 377,
+      "stop_line": 376,
       "stop_column": 21,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -157,9 +157,9 @@
       "severity": "error"
     },
     {
-      "line": 380,
+      "line": 379,
       "column": 9,
-      "stop_line": 380,
+      "stop_line": 379,
       "stop_column": 21,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -169,9 +169,9 @@
       "severity": "error"
     },
     {
-      "line": 383,
+      "line": 382,
       "column": 9,
-      "stop_line": 383,
+      "stop_line": 382,
       "stop_column": 21,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -181,9 +181,9 @@
       "severity": "error"
     },
     {
-      "line": 780,
+      "line": 779,
       "column": 9,
-      "stop_line": 780,
+      "stop_line": 779,
       "stop_column": 15,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -193,9 +193,9 @@
       "severity": "error"
     },
     {
-      "line": 791,
+      "line": 790,
       "column": 9,
-      "stop_line": 791,
+      "stop_line": 790,
       "stop_column": 15,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -205,9 +205,9 @@
       "severity": "error"
     },
     {
-      "line": 977,
+      "line": 976,
       "column": 6,
-      "stop_line": 977,
+      "stop_line": 976,
       "stop_column": 16,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -217,9 +217,9 @@
       "severity": "error"
     },
     {
-      "line": 1463,
+      "line": 1462,
       "column": 73,
-      "stop_line": 1463,
+      "stop_line": 1462,
       "stop_column": 77,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -229,9 +229,9 @@
       "severity": "error"
     },
     {
-      "line": 1468,
+      "line": 1467,
       "column": 61,
-      "stop_line": 1468,
+      "stop_line": 1467,
       "stop_column": 65,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -241,9 +241,9 @@
       "severity": "error"
     },
     {
-      "line": 1473,
+      "line": 1472,
       "column": 86,
-      "stop_line": 1473,
+      "stop_line": 1472,
       "stop_column": 94,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -253,9 +253,9 @@
       "severity": "error"
     },
     {
-      "line": 1478,
+      "line": 1477,
       "column": 89,
-      "stop_line": 1478,
+      "stop_line": 1477,
       "stop_column": 99,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -265,9 +265,9 @@
       "severity": "error"
     },
     {
-      "line": 1759,
+      "line": 1758,
       "column": 23,
-      "stop_line": 1759,
+      "stop_line": 1758,
       "stop_column": 38,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -277,9 +277,9 @@
       "severity": "warn"
     },
     {
-      "line": 361,
+      "line": 360,
       "column": 35,
-      "stop_line": 361,
+      "stop_line": 360,
       "stop_column": 47,
       "path": "lib/haliax/src/haliax/jax_utils.py",
       "code": -2,
@@ -289,9 +289,9 @@
       "severity": "error"
     },
     {
-      "line": 180,
+      "line": 179,
       "column": 12,
-      "stop_line": 180,
+      "stop_line": 179,
       "stop_column": 51,
       "path": "lib/haliax/src/haliax/nn/attention.py",
       "code": -2,
@@ -301,9 +301,9 @@
       "severity": "error"
     },
     {
-      "line": 31,
+      "line": 30,
       "column": 9,
-      "stop_line": 31,
+      "stop_line": 30,
       "stop_column": 16,
       "path": "lib/haliax/src/haliax/nn/embedding.py",
       "code": -2,
@@ -313,9 +313,9 @@
       "severity": "error"
     },
     {
-      "line": 51,
+      "line": 50,
       "column": 9,
-      "stop_line": 51,
+      "stop_line": 50,
       "stop_column": 16,
       "path": "lib/haliax/src/haliax/nn/linear.py",
       "code": -2,
@@ -565,9 +565,9 @@
       "severity": "error"
     },
     {
-      "line": 108,
+      "line": 107,
       "column": 9,
-      "stop_line": 108,
+      "stop_line": 107,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -577,9 +577,9 @@
       "severity": "error"
     },
     {
-      "line": 113,
+      "line": 112,
       "column": 9,
-      "stop_line": 113,
+      "stop_line": 112,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -589,9 +589,9 @@
       "severity": "error"
     },
     {
-      "line": 122,
+      "line": 121,
       "column": 9,
-      "stop_line": 122,
+      "stop_line": 121,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -601,9 +601,9 @@
       "severity": "error"
     },
     {
-      "line": 122,
+      "line": 121,
       "column": 9,
-      "stop_line": 122,
+      "stop_line": 121,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -613,9 +613,9 @@
       "severity": "error"
     },
     {
-      "line": 127,
+      "line": 126,
       "column": 9,
-      "stop_line": 127,
+      "stop_line": 126,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -625,9 +625,9 @@
       "severity": "error"
     },
     {
-      "line": 139,
+      "line": 138,
       "column": 9,
-      "stop_line": 139,
+      "stop_line": 138,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -637,9 +637,9 @@
       "severity": "error"
     },
     {
-      "line": 139,
+      "line": 138,
       "column": 9,
-      "stop_line": 139,
+      "stop_line": 138,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -649,21 +649,21 @@
       "severity": "error"
     },
     {
-      "line": 214,
+      "line": 213,
       "column": 16,
-      "stop_line": 214,
+      "stop_line": 213,
       "stop_column": 18,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
       "name": "bad-return",
-      "description": "Returned type `_Wrapped[[*args: Any, **kwds: Any], Any, [*args: Unknown, **kwargs: Unknown], BlockSeq[Unknown]]` is not assignable to declared return type `ModuleInit[S]`\n  `_Wrapped[[*args: Any, **kwds: Any], Any, [*args: Unknown, **kwargs: Unknown], BlockSeq[Unknown]].__call__` has type `BoundMethod[_Wrapped[[*args: Any, **kwds: Any], Any, [*args: Unknown, **kwargs: Unknown], BlockSeq[Unknown]], (_Wrapped[[*args: Any, **kwds: Any], Any, [*args: Unknown, **kwargs: Unknown], BlockSeq[Unknown]], *args: Unknown, **kwargs: Unknown) -> BlockSeq[Unknown]]`, which is not assignable to `BoundMethod[_Wrapped[[*args: Any, **kwds: Any], Any, [*args: Unknown, **kwargs: Unknown], BlockSeq[Unknown]], (self: _Wrapped[[*args: Any, **kwds: Any], Any, [*args: Unknown, **kwargs: Unknown], BlockSeq[Unknown]], *args: Unknown, **kwargs: Unknown) -> S]`, the type of `ModuleInit.__call__`",
-      "concise_description": "Returned type `_Wrapped[[*args: Any, **kwds: Any], Any, [*args: Unknown, **kwargs: Unknown], BlockSeq[Unknown]]` is not assignable to declared return type `ModuleInit[S]`",
+      "description": "Returned type `(*args: Unknown, **kwargs: Unknown) -> BlockSeq[Unknown]` is not assignable to declared return type `ModuleInit[S]`",
+      "concise_description": "Returned type `(*args: Unknown, **kwargs: Unknown) -> BlockSeq[Unknown]` is not assignable to declared return type `ModuleInit[S]`",
       "severity": "error"
     },
     {
-      "line": 260,
+      "line": 259,
       "column": 9,
-      "stop_line": 260,
+      "stop_line": 259,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -673,9 +673,9 @@
       "severity": "error"
     },
     {
-      "line": 260,
+      "line": 259,
       "column": 9,
-      "stop_line": 260,
+      "stop_line": 259,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -685,9 +685,9 @@
       "severity": "error"
     },
     {
-      "line": 265,
+      "line": 264,
       "column": 9,
-      "stop_line": 265,
+      "stop_line": 264,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -697,9 +697,9 @@
       "severity": "error"
     },
     {
-      "line": 286,
+      "line": 285,
       "column": 9,
-      "stop_line": 286,
+      "stop_line": 285,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -709,9 +709,9 @@
       "severity": "error"
     },
     {
-      "line": 286,
+      "line": 285,
       "column": 9,
-      "stop_line": 286,
+      "stop_line": 285,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -721,9 +721,9 @@
       "severity": "error"
     },
     {
-      "line": 291,
+      "line": 290,
       "column": 9,
-      "stop_line": 291,
+      "stop_line": 290,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -733,9 +733,9 @@
       "severity": "error"
     },
     {
-      "line": 320,
+      "line": 319,
       "column": 9,
-      "stop_line": 320,
+      "stop_line": 319,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -745,9 +745,9 @@
       "severity": "error"
     },
     {
-      "line": 320,
+      "line": 319,
       "column": 9,
-      "stop_line": 320,
+      "stop_line": 319,
       "stop_column": 17,
       "path": "lib/haliax/src/haliax/nn/scan.py",
       "code": -2,
@@ -877,9 +877,9 @@
       "severity": "warn"
     },
     {
-      "line": 397,
+      "line": 405,
       "column": 23,
-      "stop_line": 405,
+      "stop_line": 413,
       "stop_column": 6,
       "path": "lib/haliax/src/haliax/ops.py",
       "code": -2,
@@ -889,9 +889,9 @@
       "severity": "warn"
     },
     {
-      "line": 417,
+      "line": 425,
       "column": 33,
-      "stop_line": 426,
+      "stop_line": 434,
       "stop_column": 6,
       "path": "lib/haliax/src/haliax/ops.py",
       "code": -2,
@@ -901,9 +901,9 @@
       "severity": "warn"
     },
     {
-      "line": 439,
+      "line": 447,
       "column": 34,
-      "stop_line": 448,
+      "stop_line": 456,
       "stop_column": 6,
       "path": "lib/haliax/src/haliax/ops.py",
       "code": -2,
@@ -949,9 +949,9 @@
       "severity": "error"
     },
     {
-      "line": 876,
+      "line": 877,
       "column": 20,
-      "stop_line": 876,
+      "stop_line": 877,
       "stop_column": 21,
       "path": "lib/haliax/src/haliax/partitioning.py",
       "code": -2,
@@ -961,9 +961,9 @@
       "severity": "error"
     },
     {
-      "line": 32,
+      "line": 31,
       "column": 29,
-      "stop_line": 32,
+      "stop_line": 31,
       "stop_column": 40,
       "path": "lib/haliax/src/haliax/tree_util.py",
       "code": -2,
@@ -973,9 +973,9 @@
       "severity": "error"
     },
     {
-      "line": 48,
+      "line": 47,
       "column": 29,
-      "stop_line": 48,
+      "stop_line": 47,
       "stop_column": 40,
       "path": "lib/haliax/src/haliax/tree_util.py",
       "code": -2,
@@ -985,21 +985,21 @@
       "severity": "error"
     },
     {
-      "line": 49,
-      "column": 9,
-      "stop_line": 49,
+      "line": 38,
+      "column": 16,
+      "stop_line": 38,
       "stop_column": 20,
       "path": "lib/haliax/src/haliax/util.py",
       "code": -2,
-      "name": "no-access",
-      "description": "Instance-only attribute `members` of class `StringHolderEnum` is not visible on the class",
-      "concise_description": "Instance-only attribute `members` of class `StringHolderEnum` is not visible on the class",
+      "name": "bad-return",
+      "description": "Returned type `object` is not assignable to declared return type `Sequence[T] | T`",
+      "concise_description": "Returned type `object` is not assignable to declared return type `Sequence[T] | T`",
       "severity": "error"
     },
     {
-      "line": 26,
+      "line": 140,
       "column": 50,
-      "stop_line": 26,
+      "stop_line": 140,
       "stop_column": 112,
       "path": "lib/levanter/src/levanter/callbacks/watch.py",
       "code": -2,
@@ -1009,9 +1009,9 @@
       "severity": "error"
     },
     {
-      "line": 305,
+      "line": 311,
       "column": 46,
-      "stop_line": 305,
+      "stop_line": 311,
       "stop_column": 56,
       "path": "lib/levanter/src/levanter/checkpoint.py",
       "code": -2,
@@ -1021,9 +1021,9 @@
       "severity": "error"
     },
     {
-      "line": 526,
+      "line": 494,
       "column": 29,
-      "stop_line": 526,
+      "stop_line": 494,
       "stop_column": 46,
       "path": "lib/levanter/src/levanter/checkpoint.py",
       "code": -2,
@@ -1033,9 +1033,9 @@
       "severity": "error"
     },
     {
-      "line": 563,
+      "line": 531,
       "column": 12,
-      "stop_line": 563,
+      "stop_line": 531,
       "stop_column": 24,
       "path": "lib/levanter/src/levanter/checkpoint.py",
       "code": -2,
@@ -1045,9 +1045,9 @@
       "severity": "error"
     },
     {
-      "line": 518,
+      "line": 565,
       "column": 16,
-      "stop_line": 518,
+      "stop_line": 565,
       "stop_column": 22,
       "path": "lib/levanter/src/levanter/compat/hf_checkpoints.py",
       "code": -2,
@@ -1069,27 +1069,15 @@
       "severity": "error"
     },
     {
-      "line": 464,
+      "line": 332,
       "column": 14,
-      "stop_line": 464,
+      "stop_line": 332,
       "stop_column": 21,
       "path": "lib/levanter/src/levanter/data/dataset.py",
       "code": -2,
       "name": "invalid-type-var",
       "description": "Attribute `dataset` cannot depend on type variable `T`, which is not in the scope of class `BatchMappedAsyncDataset`",
       "concise_description": "Attribute `dataset` cannot depend on type variable `T`, which is not in the scope of class `BatchMappedAsyncDataset`",
-      "severity": "error"
-    },
-    {
-      "line": 309,
-      "column": 17,
-      "stop_line": 311,
-      "stop_column": 32,
-      "path": "lib/levanter/src/levanter/data/loader.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`_Batch[Ex] | Ex` is not assignable to `_Batch[Ex]` (caused by inconsistent types when breaking cycles)",
-      "concise_description": "`_Batch[Ex] | Ex` is not assignable to `_Batch[Ex]` (caused by inconsistent types when breaking cycles)",
       "severity": "error"
     },
     {
@@ -1117,21 +1105,21 @@
       "severity": "error"
     },
     {
-      "line": 149,
+      "line": 153,
       "column": 16,
-      "stop_line": 149,
+      "stop_line": 153,
       "stop_column": 21,
       "path": "lib/levanter/src/levanter/eval.py",
       "code": -2,
       "name": "bad-return",
-      "description": "Returned type `list[list[Unknown]]` is not assignable to declared return type `Sequence[tuple[T, NamedArray]]`",
-      "concise_description": "Returned type `list[list[Unknown]]` is not assignable to declared return type `Sequence[tuple[T, NamedArray]]`",
+      "description": "Returned type `list[list[Unknown]]` is not assignable to declared return type `Sequence[tuple[T, Unknown]]`",
+      "concise_description": "Returned type `list[list[Unknown]]` is not assignable to declared return type `Sequence[tuple[T, Unknown]]`",
       "severity": "error"
     },
     {
-      "line": 335,
+      "line": 414,
       "column": 25,
-      "stop_line": 335,
+      "stop_line": 414,
       "stop_column": 35,
       "path": "lib/levanter/src/levanter/eval_harness.py",
       "code": -2,
@@ -1141,9 +1129,9 @@
       "severity": "error"
     },
     {
-      "line": 615,
+      "line": 694,
       "column": 55,
-      "stop_line": 615,
+      "stop_line": 694,
       "stop_column": 69,
       "path": "lib/levanter/src/levanter/eval_harness.py",
       "code": -2,
@@ -1153,9 +1141,9 @@
       "severity": "error"
     },
     {
-      "line": 646,
+      "line": 725,
       "column": 27,
-      "stop_line": 646,
+      "stop_line": 725,
       "stop_column": 48,
       "path": "lib/levanter/src/levanter/eval_harness.py",
       "code": -2,
@@ -1165,39 +1153,15 @@
       "severity": "error"
     },
     {
-      "line": 830,
+      "line": 909,
       "column": 24,
-      "stop_line": 830,
+      "stop_line": 909,
       "stop_column": 50,
       "path": "lib/levanter/src/levanter/eval_harness.py",
       "code": -2,
       "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 1243,
-      "column": 24,
-      "stop_line": 1243,
-      "stop_column": 55,
-      "path": "lib/levanter/src/levanter/eval_harness.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`Mapping[Unknown, Unknown] | dict[Unknown, Unknown]` is not assignable to variable `tasks_to_run` with type `dict[Unknown, Unknown]`",
-      "concise_description": "`Mapping[Unknown, Unknown] | dict[Unknown, Unknown]` is not assignable to variable `tasks_to_run` with type `dict[Unknown, Unknown]`",
-      "severity": "error"
-    },
-    {
-      "line": 1534,
-      "column": 13,
-      "stop_line": 1534,
-      "stop_column": 42,
-      "path": "lib/levanter/src/levanter/eval_harness.py",
-      "code": -2,
-      "name": "unsupported-operation",
-      "description": "Cannot set item in `Mapping[Unknown, Unknown]`\n  Object of class `Mapping` has no attribute `__setitem__`",
-      "concise_description": "Cannot set item in `Mapping[Unknown, Unknown]`",
       "severity": "error"
     },
     {
@@ -1220,8 +1184,20 @@
       "path": "lib/levanter/src/levanter/grad_accum.py",
       "code": -2,
       "name": "bad-return",
-      "description": "Returned type `_Wrapped[Args, R, [*args: Unknown, **kwargs: Unknown], Unknown]` is not assignable to declared return type `(ParamSpec(Args)) -> R`",
-      "concise_description": "Returned type `_Wrapped[Args, R, [*args: Unknown, **kwargs: Unknown], Unknown]` is not assignable to declared return type `(ParamSpec(Args)) -> R`",
+      "description": "Returned type `(*args: Unknown, **kwargs: Unknown) -> Unknown` is not assignable to declared return type `(ParamSpec(Args)) -> R`",
+      "concise_description": "Returned type `(*args: Unknown, **kwargs: Unknown) -> Unknown` is not assignable to declared return type `(ParamSpec(Args)) -> R`",
+      "severity": "error"
+    },
+    {
+      "line": 960,
+      "column": 17,
+      "stop_line": 985,
+      "stop_column": 35,
+      "path": "lib/levanter/src/levanter/inference/engine.py",
+      "code": -2,
+      "name": "bad-assignment",
+      "description": "`int` is not assignable to `int` (caused by inconsistent types when breaking cycles)",
+      "concise_description": "`int` is not assignable to `int` (caused by inconsistent types when breaking cycles)",
       "severity": "error"
     },
     {
@@ -1261,9 +1237,9 @@
       "severity": "error"
     },
     {
-      "line": 158,
+      "line": 151,
       "column": 7,
-      "stop_line": 158,
+      "stop_line": 151,
       "stop_column": 18,
       "path": "lib/levanter/src/levanter/models/lm_model.py",
       "code": -2,
@@ -1393,9 +1369,9 @@
       "severity": "error"
     },
     {
-      "line": 238,
+      "line": 233,
       "column": 14,
-      "stop_line": 238,
+      "stop_line": 233,
       "stop_column": 23,
       "path": "lib/levanter/src/levanter/store/cache.py",
       "code": -2,
@@ -1405,9 +1381,9 @@
       "severity": "error"
     },
     {
-      "line": 211,
+      "line": 237,
       "column": 25,
-      "stop_line": 211,
+      "stop_line": 237,
       "stop_column": 59,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1417,9 +1393,9 @@
       "severity": "error"
     },
     {
-      "line": 236,
+      "line": 262,
       "column": 25,
-      "stop_line": 236,
+      "stop_line": 262,
       "stop_column": 50,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1429,9 +1405,9 @@
       "severity": "error"
     },
     {
-      "line": 282,
+      "line": 308,
       "column": 32,
-      "stop_line": 282,
+      "stop_line": 308,
       "stop_column": 76,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1441,9 +1417,9 @@
       "severity": "error"
     },
     {
-      "line": 318,
+      "line": 344,
       "column": 32,
-      "stop_line": 318,
+      "stop_line": 344,
       "stop_column": 76,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1453,9 +1429,9 @@
       "severity": "error"
     },
     {
-      "line": 364,
+      "line": 390,
       "column": 55,
-      "stop_line": 364,
+      "stop_line": 390,
       "stop_column": 78,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1465,9 +1441,9 @@
       "severity": "error"
     },
     {
-      "line": 376,
+      "line": 402,
       "column": 39,
-      "stop_line": 376,
+      "stop_line": 402,
       "stop_column": 56,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1477,9 +1453,9 @@
       "severity": "error"
     },
     {
-      "line": 393,
+      "line": 419,
       "column": 32,
-      "stop_line": 393,
+      "stop_line": 419,
       "stop_column": 46,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1489,9 +1465,9 @@
       "severity": "error"
     },
     {
-      "line": 416,
+      "line": 442,
       "column": 32,
-      "stop_line": 416,
+      "stop_line": 442,
       "stop_column": 46,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1501,9 +1477,9 @@
       "severity": "error"
     },
     {
-      "line": 451,
+      "line": 477,
       "column": 39,
-      "stop_line": 451,
+      "stop_line": 477,
       "stop_column": 56,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1513,9 +1489,9 @@
       "severity": "error"
     },
     {
-      "line": 495,
+      "line": 521,
       "column": 13,
-      "stop_line": 495,
+      "stop_line": 521,
       "stop_column": 30,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1525,9 +1501,9 @@
       "severity": "error"
     },
     {
-      "line": 519,
+      "line": 545,
       "column": 13,
-      "stop_line": 519,
+      "stop_line": 545,
       "stop_column": 30,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1537,21 +1513,9 @@
       "severity": "error"
     },
     {
-      "line": 620,
-      "column": 28,
-      "stop_line": 634,
-      "stop_column": 10,
-      "path": "lib/levanter/src/levanter/store/jagged_array.py",
-      "code": -2,
-      "name": "unsupported-operation",
-      "description": "Cannot set item in `dict[str, str]`\n  Argument `dict[str, dict[str, dict[str, list[int | Unknown]] | str] | list[dict[str, dict[str, list[int | Unknown] | list[dict[str, dict[str, int] | str]]] | str]]]` is not assignable to parameter `value` with type `str` in function `dict.__setitem__`",
-      "concise_description": "Cannot set item in `dict[str, str]`",
-      "severity": "error"
-    },
-    {
-      "line": 118,
+      "line": 160,
       "column": 12,
-      "stop_line": 118,
+      "stop_line": 160,
       "stop_column": 15,
       "path": "lib/levanter/src/levanter/utils/jax_utils.py",
       "code": -2,
@@ -1561,9 +1525,9 @@
       "severity": "error"
     },
     {
-      "line": 301,
+      "line": 343,
       "column": 9,
-      "stop_line": 305,
+      "stop_line": 347,
       "stop_column": 65,
       "path": "lib/levanter/src/levanter/utils/jax_utils.py",
       "code": -2,
@@ -1585,9 +1549,21 @@
       "severity": "error"
     },
     {
-      "line": 171,
+      "line": 43,
+      "column": 13,
+      "stop_line": 58,
+      "stop_column": 29,
+      "path": "lib/marin/src/marin/download/nemotron_cc/utils.py",
+      "code": -2,
+      "name": "bad-assignment",
+      "description": "`bytes` is not assignable to `bytes` (caused by inconsistent types when breaking cycles)",
+      "concise_description": "`bytes` is not assignable to `bytes` (caused by inconsistent types when breaking cycles)",
+      "severity": "error"
+    },
+    {
+      "line": 149,
       "column": 52,
-      "stop_line": 171,
+      "stop_line": 149,
       "stop_column": 61,
       "path": "lib/marin/src/marin/execution/executor.py",
       "code": -2,
@@ -1597,9 +1573,9 @@
       "severity": "error"
     },
     {
-      "line": 247,
+      "line": 155,
       "column": 37,
-      "stop_line": 247,
+      "stop_line": 155,
       "stop_column": 46,
       "path": "lib/marin/src/marin/execution/executor.py",
       "code": -2,
@@ -1609,9 +1585,9 @@
       "severity": "error"
     },
     {
-      "line": 491,
+      "line": 457,
       "column": 13,
-      "stop_line": 491,
+      "stop_line": 457,
       "stop_column": 22,
       "path": "lib/marin/src/marin/execution/executor.py",
       "code": -2,
@@ -1621,9 +1597,9 @@
       "severity": "error"
     },
     {
-      "line": 620,
+      "line": 586,
       "column": 13,
-      "stop_line": 620,
+      "stop_line": 586,
       "stop_column": 22,
       "path": "lib/marin/src/marin/execution/executor.py",
       "code": -2,
@@ -1633,9 +1609,9 @@
       "severity": "error"
     },
     {
-      "line": 621,
+      "line": 587,
       "column": 6,
-      "stop_line": 621,
+      "stop_line": 587,
       "stop_column": 15,
       "path": "lib/marin/src/marin/execution/executor.py",
       "code": -2,
@@ -1645,9 +1621,9 @@
       "severity": "error"
     },
     {
-      "line": 686,
+      "line": 651,
       "column": 42,
-      "stop_line": 686,
+      "stop_line": 651,
       "stop_column": 51,
       "path": "lib/marin/src/marin/execution/executor.py",
       "code": -2,
@@ -1657,21 +1633,9 @@
       "severity": "error"
     },
     {
-      "line": 728,
-      "column": 9,
-      "stop_line": 732,
-      "stop_column": 64,
-      "path": "lib/marin/src/marin/execution/executor.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`ExecutorStep[Unknown] | InputName | None` is not assignable to `ExecutorStep[Unknown] | InputName` (caused by inconsistent types when breaking cycles)",
-      "concise_description": "`ExecutorStep[Unknown] | InputName | None` is not assignable to `ExecutorStep[Unknown] | InputName` (caused by inconsistent types when breaking cycles)",
-      "severity": "error"
-    },
-    {
-      "line": 137,
+      "line": 126,
       "column": 35,
-      "stop_line": 137,
+      "stop_line": 126,
       "stop_column": 40,
       "path": "lib/marin/src/marin/processing/classification/autoscaler.py",
       "code": -2,
@@ -1681,9 +1645,9 @@
       "severity": "error"
     },
     {
-      "line": 141,
+      "line": 130,
       "column": 36,
-      "stop_line": 141,
+      "stop_line": 130,
       "stop_column": 41,
       "path": "lib/marin/src/marin/processing/classification/autoscaler.py",
       "code": -2,
@@ -1693,9 +1657,9 @@
       "severity": "error"
     },
     {
-      "line": 145,
+      "line": 134,
       "column": 34,
-      "stop_line": 145,
+      "stop_line": 134,
       "stop_column": 39,
       "path": "lib/marin/src/marin/processing/classification/autoscaler.py",
       "code": -2,
@@ -1705,9 +1669,9 @@
       "severity": "error"
     },
     {
-      "line": 23,
+      "line": 12,
       "column": 12,
-      "stop_line": 23,
+      "stop_line": 12,
       "stop_column": 15,
       "path": "lib/marin/src/marin/processing/classification/checkpoint_utils.py",
       "code": -2,
@@ -1717,9 +1681,9 @@
       "severity": "error"
     },
     {
-      "line": 60,
+      "line": 49,
       "column": 41,
-      "stop_line": 60,
+      "stop_line": 49,
       "stop_column": 121,
       "path": "lib/marin/src/marin/processing/classification/classifier.py",
       "code": -2,
@@ -1729,9 +1693,9 @@
       "severity": "error"
     },
     {
-      "line": 186,
+      "line": 175,
       "column": 68,
-      "stop_line": 189,
+      "stop_line": 178,
       "stop_column": 6,
       "path": "lib/marin/src/marin/processing/classification/classifier.py",
       "code": -2,
@@ -1741,9 +1705,9 @@
       "severity": "error"
     },
     {
-      "line": 150,
+      "line": 139,
       "column": 39,
-      "stop_line": 150,
+      "stop_line": 139,
       "stop_column": 49,
       "path": "lib/marin/src/marin/processing/classification/dataset_utils.py",
       "code": -2,
@@ -1753,9 +1717,129 @@
       "severity": "error"
     },
     {
-      "line": 100,
+      "line": 244,
+      "column": 20,
+      "stop_line": 244,
+      "stop_column": 62,
+      "path": "lib/marin/src/marin/profiling/schema.py",
+      "code": -2,
+      "name": "redundant-cast",
+      "description": "Redundant cast: `dict[str, Any]` is the same type as `dict[str, Any]`",
+      "concise_description": "Redundant cast: `dict[str, Any]` is the same type as `dict[str, Any]`",
+      "severity": "warn"
+    },
+    {
+      "line": 299,
+      "column": 34,
+      "stop_line": 299,
+      "stop_column": 57,
+      "path": "lib/marin/src/marin/profiling/schema.py",
+      "code": -2,
+      "name": "redundant-cast",
+      "description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "concise_description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "severity": "warn"
+    },
+    {
+      "line": 301,
+      "column": 46,
+      "stop_line": 301,
+      "stop_column": 73,
+      "path": "lib/marin/src/marin/profiling/schema.py",
+      "code": -2,
+      "name": "redundant-cast",
+      "description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "concise_description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "severity": "warn"
+    },
+    {
+      "line": 305,
+      "column": 37,
+      "stop_line": 305,
+      "stop_column": 60,
+      "path": "lib/marin/src/marin/profiling/schema.py",
+      "code": -2,
+      "name": "redundant-cast",
+      "description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "concise_description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "severity": "warn"
+    },
+    {
+      "line": 309,
+      "column": 34,
+      "stop_line": 309,
+      "stop_column": 57,
+      "path": "lib/marin/src/marin/profiling/schema.py",
+      "code": -2,
+      "name": "redundant-cast",
+      "description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "concise_description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "severity": "warn"
+    },
+    {
+      "line": 312,
+      "column": 37,
+      "stop_line": 312,
+      "stop_column": 64,
+      "path": "lib/marin/src/marin/profiling/schema.py",
+      "code": -2,
+      "name": "redundant-cast",
+      "description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "concise_description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "severity": "warn"
+    },
+    {
+      "line": 316,
+      "column": 39,
+      "stop_line": 316,
+      "stop_column": 67,
+      "path": "lib/marin/src/marin/profiling/schema.py",
+      "code": -2,
+      "name": "redundant-cast",
+      "description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "concise_description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "severity": "warn"
+    },
+    {
+      "line": 320,
+      "column": 43,
+      "stop_line": 320,
+      "stop_column": 73,
+      "path": "lib/marin/src/marin/profiling/schema.py",
+      "code": -2,
+      "name": "redundant-cast",
+      "description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "concise_description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "severity": "warn"
+    },
+    {
+      "line": 397,
+      "column": 43,
+      "stop_line": 397,
+      "stop_column": 74,
+      "path": "lib/marin/src/marin/profiling/schema.py",
+      "code": -2,
+      "name": "redundant-cast",
+      "description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "concise_description": "Redundant cast: `Mapping[str, Any]` is the same type as `Mapping[str, Any]`",
+      "severity": "warn"
+    },
+    {
+      "line": 76,
+      "column": 9,
+      "stop_line": 103,
+      "stop_column": 22,
+      "path": "lib/marin/src/marin/rl/math_utils.py",
+      "code": -2,
+      "name": "bad-assignment",
+      "description": "`int` is not assignable to `int` (caused by inconsistent types when breaking cycles)",
+      "concise_description": "`int` is not assignable to `int` (caused by inconsistent types when breaking cycles)",
+      "severity": "error"
+    },
+    {
+      "line": 89,
       "column": 25,
-      "stop_line": 100,
+      "stop_line": 89,
       "stop_column": 57,
       "path": "lib/marin/src/marin/rl/math_utils.py",
       "code": -2,
@@ -1765,9 +1849,9 @@
       "severity": "error"
     },
     {
-      "line": 561,
+      "line": 550,
       "column": 13,
-      "stop_line": 561,
+      "stop_line": 550,
       "stop_column": 21,
       "path": "lib/marin/src/marin/rl/math_utils.py",
       "code": -2,
@@ -1777,9 +1861,9 @@
       "severity": "error"
     },
     {
-      "line": 597,
+      "line": 586,
       "column": 16,
-      "stop_line": 597,
+      "stop_line": 586,
       "stop_column": 20,
       "path": "lib/marin/src/marin/rl/math_utils.py",
       "code": -2,
@@ -1789,9 +1873,9 @@
       "severity": "error"
     },
     {
-      "line": 210,
+      "line": 199,
       "column": 15,
-      "stop_line": 210,
+      "stop_line": 199,
       "stop_column": 49,
       "path": "lib/marin/src/marin/rl/rollout_storage.py",
       "code": -2,
@@ -1801,9 +1885,9 @@
       "severity": "error"
     },
     {
-      "line": 197,
+      "line": 186,
       "column": 6,
-      "stop_line": 197,
+      "stop_line": 186,
       "stop_column": 20,
       "path": "lib/marin/src/marin/rl/scripts/replay_completions.py",
       "code": -2,
@@ -1813,9 +1897,9 @@
       "severity": "error"
     },
     {
-      "line": 69,
+      "line": 58,
       "column": 16,
-      "stop_line": 69,
+      "stop_line": 58,
       "stop_column": 33,
       "path": "lib/marin/src/marin/rl/weight_transfer/__init__.py",
       "code": -2,
@@ -1825,9 +1909,9 @@
       "severity": "error"
     },
     {
-      "line": 98,
+      "line": 87,
       "column": 16,
-      "stop_line": 98,
+      "stop_line": 87,
       "stop_column": 33,
       "path": "lib/marin/src/marin/rl/weight_transfer/__init__.py",
       "code": -2,
@@ -1837,9 +1921,9 @@
       "severity": "error"
     },
     {
-      "line": 182,
+      "line": 171,
       "column": 5,
-      "stop_line": 188,
+      "stop_line": 177,
       "stop_column": 53,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1849,9 +1933,9 @@
       "severity": "error"
     },
     {
-      "line": 236,
+      "line": 225,
       "column": 16,
-      "stop_line": 236,
+      "stop_line": 225,
       "stop_column": 19,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1861,9 +1945,9 @@
       "severity": "error"
     },
     {
-      "line": 239,
+      "line": 228,
       "column": 16,
-      "stop_line": 239,
+      "stop_line": 228,
       "stop_column": 33,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1873,9 +1957,9 @@
       "severity": "error"
     },
     {
-      "line": 480,
+      "line": 469,
       "column": 9,
-      "stop_line": 480,
+      "stop_line": 469,
       "stop_column": 20,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1885,9 +1969,9 @@
       "severity": "error"
     },
     {
-      "line": 138,
+      "line": 127,
       "column": 40,
-      "stop_line": 138,
+      "stop_line": 127,
       "stop_column": 63,
       "path": "lib/marin/src/marin/rl/weight_transfer/jax.py",
       "code": -2,
@@ -1897,9 +1981,9 @@
       "severity": "error"
     },
     {
-      "line": 63,
+      "line": 52,
       "column": 5,
-      "stop_line": 63,
+      "stop_line": 52,
       "stop_column": 29,
       "path": "lib/marin/src/marin/transform/conversation/adapters.py",
       "code": -2,
@@ -1909,9 +1993,9 @@
       "severity": "error"
     },
     {
-      "line": 64,
+      "line": 53,
       "column": 5,
-      "stop_line": 64,
+      "stop_line": 53,
       "stop_column": 25,
       "path": "lib/marin/src/marin/transform/conversation/adapters.py",
       "code": -2,
@@ -1921,9 +2005,9 @@
       "severity": "error"
     },
     {
-      "line": 65,
+      "line": 54,
       "column": 5,
-      "stop_line": 65,
+      "stop_line": 54,
       "stop_column": 29,
       "path": "lib/marin/src/marin/transform/conversation/adapters.py",
       "code": -2,
@@ -1933,9 +2017,9 @@
       "severity": "error"
     },
     {
-      "line": 66,
+      "line": 55,
       "column": 5,
-      "stop_line": 66,
+      "stop_line": 55,
       "stop_column": 26,
       "path": "lib/marin/src/marin/transform/conversation/adapters.py",
       "code": -2,
@@ -1945,9 +2029,9 @@
       "severity": "error"
     },
     {
-      "line": 112,
+      "line": 101,
       "column": 24,
-      "stop_line": 112,
+      "stop_line": 101,
       "stop_column": 28,
       "path": "lib/marin/src/marin/transform/conversation/adapters.py",
       "code": -2,
@@ -1957,9 +2041,9 @@
       "severity": "error"
     },
     {
-      "line": 121,
+      "line": 110,
       "column": 28,
-      "stop_line": 121,
+      "stop_line": 110,
       "stop_column": 61,
       "path": "lib/marin/src/marin/transform/conversation/adapters.py",
       "code": -2,
@@ -1969,15 +2053,27 @@
       "severity": "error"
     },
     {
-      "line": 321,
+      "line": 310,
       "column": 50,
-      "stop_line": 321,
+      "stop_line": 310,
       "stop_column": 54,
       "path": "lib/marin/src/marin/transform/huggingface/dataset_to_eval.py",
       "code": -2,
       "name": "bad-return",
       "description": "Function declared to return `list[Unknown]`, but one or more paths are missing an explicit `return`",
       "concise_description": "Function declared to return `list[Unknown]`, but one or more paths are missing an explicit `return`",
+      "severity": "error"
+    },
+    {
+      "line": 191,
+      "column": 16,
+      "stop_line": 191,
+      "stop_column": 20,
+      "path": "lib/marin/src/marin/transform/wikipedia/transform_wikipedia.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `None` is not assignable to declared return type `str`",
+      "concise_description": "Returned type `None` is not assignable to declared return type `str`",
       "severity": "error"
     },
     {
@@ -1993,21 +2089,9 @@
       "severity": "error"
     },
     {
-      "line": 213,
-      "column": 16,
-      "stop_line": 213,
-      "stop_column": 20,
-      "path": "lib/marin/src/marin/transform/wikipedia/transform_wikipedia.py",
-      "code": -2,
-      "name": "bad-return",
-      "description": "Returned type `None` is not assignable to declared return type `str`",
-      "concise_description": "Returned type `None` is not assignable to declared return type `str`",
-      "severity": "error"
-    },
-    {
-      "line": 27,
+      "line": 16,
       "column": 9,
-      "stop_line": 27,
+      "stop_line": 16,
       "stop_column": 16,
       "path": "lib/marin/src/marin/utilities/json_encoder.py",
       "code": -2,
@@ -2017,9 +2101,9 @@
       "severity": "error"
     },
     {
-      "line": 411,
+      "line": 413,
       "column": 24,
-      "stop_line": 411,
+      "stop_line": 413,
       "stop_column": 26,
       "path": "lib/marin/src/marin/utils.py",
       "code": -2,
@@ -2029,9 +2113,9 @@
       "severity": "error"
     },
     {
-      "line": 103,
+      "line": 92,
       "column": 12,
-      "stop_line": 103,
+      "stop_line": 92,
       "stop_column": 15,
       "path": "lib/marin/src/marin/web/convert.py",
       "code": -2,

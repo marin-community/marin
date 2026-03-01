@@ -76,7 +76,7 @@ def job_request():
         return cluster_pb2.Controller.LaunchJobRequest(
             name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
@@ -124,6 +124,7 @@ class MockSchedulerWake:
         self.kill_tasks_on_workers = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value="")
+        self.autoscaler = None
         self.stub_factory = Mock()
 
 
@@ -250,7 +251,7 @@ def test_launch_job_rejects_empty_name(service, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
 
@@ -552,11 +553,17 @@ def test_get_process_logs():
     log_buffer = LogRingBuffer(maxlen=100)
 
     # Add some test log records
-    log_buffer.append(BufferedLogRecord(timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1"))
     log_buffer.append(
-        BufferedLogRecord(timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log")
+        BufferedLogRecord(seq=1, timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1")
     )
-    log_buffer.append(BufferedLogRecord(timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2"))
+    log_buffer.append(
+        BufferedLogRecord(
+            seq=2, timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log"
+        )
+    )
+    log_buffer.append(
+        BufferedLogRecord(seq=3, timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2")
+    )
 
     service = ControllerServiceImpl(
         state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=log_buffer

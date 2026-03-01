@@ -16,7 +16,7 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
@@ -65,17 +65,17 @@ from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
     AutoModel,
     AutoModelForCausalLM,
-    AutoProcessor,
     AutoTokenizer,
-    FeatureExtractionMixin,
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
-    ProcessorMixin,
 )
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
+
+if TYPE_CHECKING:
+    from transformers import FeatureExtractionMixin, ProcessorMixin
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
@@ -340,7 +340,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
     tokenizer: PreTrainedTokenizerFast | PreTrainedTokenizer
     "The tokenizer to use. If None, will be inferred from the reference_checkpoint"
 
-    feature_extractor: Optional[FeatureExtractionMixin] = None
+    feature_extractor: Optional["FeatureExtractionMixin"] = None
     "The non-text preprocessor to use for multi-modality."
 
     config_overrides: Optional[dict] = None
@@ -359,7 +359,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         reference_checkpoint: Optional[Union[RepoRef, str]] = None,
         HfConfigClass: Optional[Union[str, Type]] = None,
         tokenizer: Optional[Union[str, PreTrainedTokenizer, PreTrainedTokenizerFast]] = None,
-        feature_extractor: Optional[FeatureExtractionMixin] = None,
+        feature_extractor: Optional["FeatureExtractionMixin"] = None,
         config_overrides: Optional[dict] = None,
         trust_remote_code: bool = False,
         ignore_prefix: Optional[str] = None,
@@ -410,7 +410,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         self,
         reference_checkpoint: Optional[Union[RepoRef, str]] = None,
         tokenizer: Optional[Union[str, PreTrainedTokenizerBase]] = None,
-        feature_extractor: Optional[FeatureExtractionMixin] = None,
+        feature_extractor: Optional["FeatureExtractionMixin"] = None,
         trust_remote_code: Optional[bool] = None,
     ) -> "HFCheckpointConverter":
         replacements: dict = {}
@@ -1235,8 +1235,12 @@ def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trus
         )
 
 
-def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> ProcessorMixin:
+def load_processor(
+    model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True
+) -> "ProcessorMixin":
     """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec"""
+    from transformers import AutoProcessor
+
     with _patch_hf_hub_download():
         return _hf_hub_retry(
             lambda: AutoProcessor.from_pretrained(

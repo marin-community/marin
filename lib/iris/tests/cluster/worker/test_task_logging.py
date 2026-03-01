@@ -309,8 +309,8 @@ def test_log_sink_sync_retries_failed_batch():
         assert [e.data for e in logs] == ["line 1"]
 
 
-def test_log_sink_falls_back_when_append_not_supported():
-    """sync should fall back to rewrite when append mode is unsupported."""
+def test_log_reader_incremental_read_after_append():
+    """LogReader sees new data after FsspecLogSink syncs a second batch."""
     with tempfile.TemporaryDirectory() as tmpdir:
         config = LogSinkConfig(
             prefix=f"file://{tmpdir}",
@@ -319,17 +319,40 @@ def test_log_sink_falls_back_when_append_not_supported():
             attempt_id=0,
         )
         log_sink = FsspecLogSink(config)
-        log_sink.append(source="stdout", data="line 1")
+        reader = LogReader.from_attempt(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
 
-        original_open = log_sink._fs.open
-
-        def fail_append(path: str, mode: str = "rb", *args, **kwargs):
-            if mode == "a":
-                raise OSError("append unsupported")
-            return original_open(path, mode, *args, **kwargs)
-
-        log_sink._fs.open = fail_append  # type: ignore[method-assign]
+        # First batch: write and read
+        log_sink.append(source="stdout", data="batch-1")
         log_sink.sync()
+        first = reader.read_logs(flush_partial_line=True)
+        assert [e.data for e in first] == ["batch-1"]
+
+        # Second batch: write more data, same reader should see it
+        log_sink.append(source="stdout", data="batch-2")
+        log_sink.sync()
+        second = reader.read_logs(flush_partial_line=True)
+        assert [e.data for e in second] == ["batch-2"]
+
+
+def test_append_lines_no_duplicates():
+    """Three sequential syncs must produce exactly three entries."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config = LogSinkConfig(
+            prefix=f"file://{tmpdir}",
+            worker_id="worker-1",
+            task_id=TASK_ID,
+            attempt_id=0,
+        )
+        log_sink = FsspecLogSink(config)
+
+        for i in range(3):
+            log_sink.append(source="stdout", data=f"entry-{i}")
+            log_sink.sync()
 
         reader = LogReader.from_attempt(
             prefix=f"file://{tmpdir}",
@@ -337,8 +360,8 @@ def test_log_sink_falls_back_when_append_not_supported():
             task_id=TASK_ID,
             attempt_id=0,
         )
-        logs = reader.read_logs(source="stdout", flush_partial_line=True)
-        assert [e.data for e in logs] == ["line 1"]
+        logs = reader.read_logs(flush_partial_line=True)
+        assert [e.data for e in logs] == ["entry-0", "entry-1", "entry-2"]
 
 
 def test_log_reader_from_log_directory_for_attempt_custom_prefix():

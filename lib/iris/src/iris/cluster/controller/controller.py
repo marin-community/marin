@@ -4,9 +4,9 @@
 """Iris Controller logic for connecting state, scheduler and managing workers."""
 
 import logging
+import queue
 import threading
 from collections import defaultdict
-from concurrent.futures import Future, as_completed
 from dataclasses import dataclass, field
 from time import sleep
 from typing import Protocol
@@ -44,9 +44,12 @@ from iris.logging import get_global_buffer
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from iris.time_utils import Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
+
+_SLOW_HEARTBEAT_MS = 5000
+_HEALTH_SUMMARY_INTERVAL = 6  # every ~30s at 5s heartbeat interval
 
 
 def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
@@ -84,11 +87,13 @@ def compute_demand_entries(state: ControllerState) -> list:
         device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
         preemptible_pref: bool | None = None
         required_regions: frozenset[str] | None = None
+        required_zones: frozenset[str] | None = None
         invalid_reason: str | None = None
         try:
             normalized = normalize_constraints(job.request.constraints)
             preemptible_pref = normalized.preemptible
             required_regions = normalized.required_regions
+            required_zones = normalized.required_zones
         except ValueError as e:
             invalid_reason = f"invalid_constraints: {e}"
 
@@ -103,6 +108,7 @@ def compute_demand_entries(state: ControllerState) -> list:
                 resources=job.request.resources,
                 preemptible=preemptible_pref,
                 required_regions=required_regions,
+                required_zones=required_zones,
                 invalid_reason=invalid_reason,
             )
             demand_entries.append(entry)
@@ -118,6 +124,7 @@ def compute_demand_entries(state: ControllerState) -> list:
                 resources=job.request.resources,
                 preemptible=preemptible_pref,
                 required_regions=required_regions,
+                required_zones=required_zones,
                 invalid_reason=invalid_reason,
             )
             demand_entries.append(entry)
@@ -136,7 +143,7 @@ class RpcWorkerStubFactory:
     """Caches WorkerServiceClientSync stubs by address so each worker gets
     one persistent httpx.Client instead of a new one per RPC."""
 
-    def __init__(self, timeout: Duration = Duration.from_seconds(10.0)) -> None:
+    def __init__(self, timeout: Duration = Duration.from_seconds(5.0)) -> None:
         self._timeout = timeout
         self._stubs: dict[str, WorkerServiceClientSync] = {}
         self._lock = threading.Lock()
@@ -270,6 +277,8 @@ class Controller:
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
 
+        self._heartbeat_iteration = 0
+
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
 
@@ -294,7 +303,7 @@ class Controller:
             self._dashboard._app,
             host=self._config.host,
             port=self._config.port,
-            log_level="error",
+            log_level="warning",
             timeout_keep_alive=120,
         )
         self._server = uvicorn.Server(server_config)
@@ -377,8 +386,10 @@ class Controller:
         No lock is needed since only one scheduling thread exists. All state
         reads and writes go through ControllerState which has its own lock.
         """
+        timer = Timer()
         pending_tasks = self._state.peek_pending_tasks()
         workers = self._state.get_available_workers()
+        state_read_ms = timer.elapsed_ms()
 
         if not pending_tasks:
             return
@@ -414,6 +425,12 @@ class Controller:
         # Buffer assignments for heartbeat delivery (commits resources via TaskAssignedEvent)
         if result.assignments:
             self._buffer_assignments(result.assignments)
+            logger.debug(
+                "Scheduling cycle: %d assignments, %dms (state read: %dms)",
+                len(result.assignments),
+                timer.elapsed_ms(),
+                state_read_ms,
+            )
 
     def _buffer_assignments(
         self,
@@ -539,43 +556,84 @@ class Controller:
         _on_worker_failed prunes it from state. We detect this (worker no longer
         in state) and evict the cached stub + notify the autoscaler.
         """
-        # Phase 1: create snapshots for all healthy workers
+        round_timer = Timer()
+
+        # Phase 1: create snapshots for all healthy workers (lock-acquiring).
+        # Timing this phase separately gives a lock-contention signal.
+        snapshot_timer = Timer()
         snapshots: list[HeartbeatSnapshot] = []
         for w in self._state.get_available_workers():
             snapshot = self._state.begin_heartbeat(w.worker_id)
             if snapshot:
                 snapshots.append(snapshot)
+        snapshot_ms = snapshot_timer.elapsed_ms()
 
-        # Phase 2: send RPCs in parallel (no lock held)
-        futures: dict[Future, HeartbeatSnapshot] = {}
+        if not snapshots:
+            return
+
+        # Phase 2: stream heartbeats through a bounded worker queue.
+        work_queue: queue.Queue[HeartbeatSnapshot] = queue.Queue()
+        result_queue: queue.Queue[tuple[HeartbeatSnapshot, cluster_pb2.HeartbeatResponse | None, str | None]] = (
+            queue.Queue()
+        )
         for snapshot in snapshots:
-            future = self._dispatch_executor.submit(self._do_heartbeat_rpc, snapshot)
-            futures[future] = snapshot
+            work_queue.put(snapshot)
 
-        # Phase 3: process results via state transitions
-        try:
-            for future in as_completed(futures, timeout=10):
-                snapshot = futures.pop(future)
+        worker_count = min(self._config.max_dispatch_parallelism, len(snapshots))
+
+        def _dispatch_worker() -> None:
+            while True:
                 try:
-                    response = future.result()
-                    self._state.complete_heartbeat(snapshot, response)
+                    snapshot = work_queue.get_nowait()
+                except queue.Empty:
+                    return
+                try:
+                    response = self._do_heartbeat_rpc(snapshot)
+                    result_queue.put((snapshot, response, None))
                 except Exception as e:
-                    logger.warning(f"Heartbeat error for {snapshot.worker_id}: {e}")
-                    self._handle_heartbeat_failure(snapshot, str(e))
-        except TimeoutError:
-            # Process any futures that completed before timeout
-            for future, snapshot in futures.items():
-                if future.done():
-                    try:
-                        response = future.result()
-                        self._state.complete_heartbeat(snapshot, response)
-                    except Exception as e:
-                        logger.warning(f"Heartbeat error for {snapshot.worker_id}: {e}")
-                        self._handle_heartbeat_failure(snapshot, str(e))
-                else:
-                    logger.warning(f"Heartbeat timed out for {snapshot.worker_id}")
-                    self._handle_heartbeat_failure(snapshot, "Heartbeat timed out")
-                    future.cancel()
+                    result_queue.put((snapshot, None, str(e)))
+
+        worker_futures = [self._dispatch_executor.submit(_dispatch_worker) for _ in range(worker_count)]
+
+        # Phase 3: consume all responses; per-worker RPC timeout determines failures.
+        fail_count = 0
+        failed_workers: list[str] = []
+        for _ in snapshots:
+            snapshot, response, error = result_queue.get()
+            if error is not None:
+                fail_count += 1
+                failed_workers.append(snapshot.worker_id)
+                logger.debug("Heartbeat error for %s: %s", snapshot.worker_id, error)
+                self._handle_heartbeat_failure(snapshot, error)
+                continue
+            if response is not None:
+                self._state.complete_heartbeat(snapshot, response)
+
+        for future in worker_futures:
+            future.cancel()
+
+        elapsed = round_timer.elapsed_ms()
+        level = logging.WARNING if elapsed > _SLOW_HEARTBEAT_MS else logging.DEBUG
+        fmt = "Heartbeat round: %d workers, %d failed, %dms (snapshot: %dms)"
+        args: list[object] = [len(snapshots), fail_count, elapsed, snapshot_ms]
+        if failed_workers:
+            fmt += " failed=[%s]"
+            args.append(", ".join(failed_workers))
+        logger.log(level, fmt, *args)
+
+        self._heartbeat_iteration += 1
+        if self._heartbeat_iteration % _HEALTH_SUMMARY_INTERVAL == 0:
+            workers = self._state.get_available_workers()
+            jobs = self._state.list_all_jobs()
+            active = sum(1 for j in jobs if j.state == cluster_pb2.JOB_STATE_RUNNING)
+            pending = len(self._state.peek_pending_tasks())
+            logger.info(
+                "Controller status: %d workers (%d failed), %d active jobs, %d pending tasks",
+                len(workers),
+                fail_count,
+                active,
+                pending,
+            )
 
     def _handle_heartbeat_failure(self, snapshot: HeartbeatSnapshot, error: str) -> None:
         """Process a heartbeat failure: update state, evict stub + notify autoscaler if worker died.
@@ -612,7 +670,7 @@ class Controller:
             if rule := chaos("controller.heartbeat.iteration"):
                 sleep(rule.delay_seconds)
             expected_tasks.append(
-                cluster_pb2.Controller.RunningTaskEntry(
+                cluster_pb2.Controller.WorkerTaskStatus(
                     task_id=entry.task_id.to_wire(),
                     attempt_id=entry.attempt_id,
                 )
@@ -641,17 +699,19 @@ class Controller:
         """Build a map of VM address to worker status for autoscaler.
 
         The autoscaler needs to look up worker status by VM address (not worker_id)
-        because RemoteWorkerHandle only exposes the VM's IP address, not the worker's self-assigned ID.
-        Workers include their vm_address (from IRIS_VM_ADDRESS env var) in metadata.
+        because RemoteWorkerHandle only exposes the VM's IP address, not the worker's
+        self-assigned ID. Workers self-discover their vm_address at startup via
+        socket probe (env_probe.py).
         """
         result: VmWorkerStatusMap = {}
         for worker in self._state.list_all_workers():
             vm_addr = worker.metadata.vm_address
             if not vm_addr:
-                raise ValueError(
-                    f"Worker {worker.worker_id} has no vm_address in metadata. "
-                    "Workers must report IRIS_VM_ADDRESS in their metadata."
+                logger.warning(
+                    "Worker %s has no vm_address in metadata, skipping for autoscaler",
+                    worker.worker_id,
                 )
+                continue
 
             result[vm_addr] = VmWorkerStatus(
                 vm_address=vm_addr,
@@ -692,11 +752,12 @@ class Controller:
     @property
     def port(self) -> int:
         """Actual bound port (may differ from config if port=0 was specified)."""
-        if self._server and self._server.servers:
-            # Get actual port from the first server socket
-            sockets = self._server.servers[0].sockets
-            if sockets:
-                return sockets[0].getsockname()[1]
+        # uvicorn 0.40+ sets .servers dynamically during startup(), not in __init__.
+        # Use getattr since this is an unstable internal API at a system boundary.
+        if self._server and self._server.started:
+            servers = getattr(self._server, "servers", [])
+            if servers and servers[0].sockets:
+                return servers[0].sockets[0].getsockname()[1]
         return self._config.port
 
     @property

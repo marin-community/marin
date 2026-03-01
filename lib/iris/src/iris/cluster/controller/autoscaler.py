@@ -13,15 +13,16 @@ Key design principles:
 - Bootstrap is handled internally by each Platform implementation, not by the autoscaler
 
 The run_once() flow splits into two phases:
-- refresh(): I/O phase — poll slice states, scale down idle slices
+- refresh(): state-read phase — scale down idle slices from tracked state
 - update(): CPU phase — evaluate demand and execute scale-up decisions
 """
 
 from __future__ import annotations
 
-import json
+import difflib
 import logging
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -31,24 +32,14 @@ from iris.cluster.platform.base import (
     Platform,
     QuotaExhaustedError,
     RemoteWorkerHandle,
-    SliceHandle,
 )
-from iris.cluster.platform.bootstrap import rewrite_artifact_registry_region
-from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap
+from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap, ZONE_ATTRIBUTE_KEY
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
-
-
-def _zone_to_region(group: ScalingGroup) -> str | None:
-    """Extract the cloud region from a scale group's GCP zone (e.g. 'europe-west4-b' -> 'europe-west4')."""
-    template = group.config.slice_template
-    if template.HasField("gcp") and template.gcp.zone:
-        return template.gcp.zone.rsplit("-", 1)[0]
-    return None
 
 
 @dataclass
@@ -101,6 +92,7 @@ class DemandEntry:
     resources: cluster_pb2.ResourceSpecProto
     preemptible: bool | None = None  # None = no preference
     required_regions: frozenset[str] | None = None
+    required_zones: frozenset[str] | None = None
     invalid_reason: str | None = None
 
 
@@ -125,6 +117,59 @@ class RoutingDecision:
     routed_entries: dict[str, list[DemandEntry]]
     unmet_entries: list[UnmetDemand]
     group_reasons: dict[str, str]
+    group_statuses: list[GroupRoutingStatus]
+
+
+@dataclass
+class GroupRoutingStatus:
+    group: str
+    priority: int
+    assigned: int
+    launch: int
+    decision: str
+    reason: str
+
+
+def _diagnose_no_matching_group(
+    entry: DemandEntry,
+    groups: list[ScalingGroup],
+    group_region: Callable[[ScalingGroup], str | None],
+    group_zone: Callable[[ScalingGroup], str | None],
+) -> str:
+    """Produce a concise, actionable reason when no group matches a demand entry.
+
+    Checks filters in order (device → preemptible → zone → region) and reports
+    the first mismatch with enough context to fix the issue.
+    """
+    device_matches = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
+
+    if not device_matches:
+        return f"no_matching_group: no groups with device {entry.device_type.value}:{entry.device_variant or '*'}"
+
+    if entry.preemptible is not None:
+        preempt_matches = [g for g in device_matches if g.config.slice_template.preemptible == entry.preemptible]
+        if not preempt_matches:
+            want = "preemptible" if entry.preemptible else "non-preemptible"
+            return (
+                f"no_matching_group: no {want} groups for device {entry.device_type.value}:{entry.device_variant or '*'}"
+            )
+        device_matches = preempt_matches
+
+    if entry.required_zones:
+        available_zones = {group_zone(g) for g in device_matches} - {None}
+        requested = sorted(entry.required_zones)
+        msg = f"no_matching_group: no groups in zone {', '.join(requested)}"
+        for req_zone in requested:
+            close = difflib.get_close_matches(req_zone, available_zones, n=1, cutoff=0.7)
+            if close:
+                msg += f" (did you mean {close[0]}?)"
+        return msg
+
+    if entry.required_regions:
+        requested = sorted(entry.required_regions)
+        return f"no_matching_group: no groups in region {', '.join(requested)}"
+
+    return f"no_matching_group: no groups match device={entry.device_type.value}:{entry.device_variant or '*'}"
 
 
 def route_demand(
@@ -154,6 +199,18 @@ def route_demand(
             return template.coreweave.region
         return None
 
+    def group_zone(group: ScalingGroup) -> str | None:
+        if group.config.HasField("worker"):
+            zone = group.config.worker.attributes.get(ZONE_ATTRIBUTE_KEY, "").strip()
+            if zone:
+                return zone
+        template = group.config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
+
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
         if not group.matches_device_requirement(entry.device_type, entry.device_variant):
             return False
@@ -162,6 +219,10 @@ def route_demand(
         if entry.required_regions:
             region = group_region(group)
             if region not in entry.required_regions:
+                return False
+        if entry.required_zones:
+            zone = group_zone(group)
+            if zone not in entry.required_zones:
                 return False
         if entry.invalid_reason:
             return False
@@ -185,17 +246,36 @@ def route_demand(
 
     def make_pending(group: ScalingGroup) -> PendingGroup:
         counts = group.slice_state_counts()
-        pending_slices = (
+        inflight = (
             counts.get(SliceLifecycleState.REQUESTING, 0)
             + counts.get(SliceLifecycleState.BOOTING, 0)
             + counts.get(SliceLifecycleState.INITIALIZING, 0)
         )
+        ready = counts.get(SliceLifecycleState.READY, 0)
         current = sum(counts.values())
         headroom = group.max_slices - current
+
+        if headroom > 0:
+            # Group can still create new slices. Only count in-flight
+            # slices as pending capacity; headroom determines how many
+            # new demand entries can trigger scale-ups.
+            return PendingGroup(
+                name=group.name,
+                pending_slices=inflight,
+                remaining_slices=inflight + headroom,
+                assigned_entries=[],
+                reason="demand-routed",
+            )
+
+        # Group is at max_slices (AT_CAPACITY). Include ready slices so
+        # demand can still be routed here for demand tracking. Without
+        # this, current_demand drops to 0 when a group hits max_slices,
+        # causing immediate scale-down of newly ready slices.
+        existing_capacity = inflight + ready
         return PendingGroup(
             name=group.name,
-            pending_slices=pending_slices,
-            remaining_slices=pending_slices + headroom,
+            pending_slices=existing_capacity,
+            remaining_slices=existing_capacity,
             assigned_entries=[],
             reason="demand-routed",
         )
@@ -215,13 +295,10 @@ def route_demand(
             if g.matches_device_requirement(entry.device_type, entry.device_variant)
             and (entry.preemptible is None or g.config.slice_template.preemptible == entry.preemptible)
             and (not entry.required_regions or group_region(g) in entry.required_regions)
+            and (not entry.required_zones or group_zone(g) in entry.required_zones)
         ]
         if not matching_groups:
-            reason = (
-                f"no_matching_group: need device={entry.device_type}:{entry.device_variant}"
-                f", required_regions={sorted(entry.required_regions) if entry.required_regions else []}"
-                f", available groups={[g.name for g in sorted_groups]}"
-            )
+            reason = _diagnose_no_matching_group(entry, sorted_groups, group_region, group_zone)
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
@@ -234,8 +311,10 @@ def route_demand(
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
-        if not any(g.can_fit_resources(entry.resources) for g in matching_groups):
-            reason = f"insufficient_resources: task needs {entry.resources}" f" but no matching group can fit it"
+        fit_reasons = [g.check_resource_fit(entry.resources) for g in matching_groups]
+        if all(r is not None for r in fit_reasons):
+            details = "; ".join(r for r in fit_reasons if r is not None)
+            reason = f"insufficient_resources: {details}"
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
@@ -274,11 +353,46 @@ def route_demand(
         needed = max(0, len(pg.assigned_entries) - pg.pending_slices)
         group_to_launch[name] = needed
 
+    group_statuses: list[GroupRoutingStatus] = []
+    for group in sorted_groups:
+        name = group.name
+        availability = group.availability(ts)
+        assigned = len(routed.get(name, []))
+        launch = group_to_launch.get(name, 0)
+
+        if assigned > 0:
+            decision = "selected"
+            reason = group_reasons.get(name, "demand-routed")
+        elif availability.status in {GroupAvailability.BACKOFF, GroupAvailability.QUOTA_EXCEEDED}:
+            decision = "blocked"
+            reason = availability.reason
+        elif availability.status == GroupAvailability.REQUESTING:
+            decision = "requesting"
+            reason = availability.reason
+        elif availability.status == GroupAvailability.AT_CAPACITY:
+            decision = "at_capacity"
+            reason = "at max_slices"
+        else:
+            decision = "idle"
+            reason = ""
+
+        group_statuses.append(
+            GroupRoutingStatus(
+                group=name,
+                priority=group.config.priority or 100,
+                assigned=assigned,
+                launch=launch,
+                decision=decision,
+                reason=reason,
+            )
+        )
+
     return RoutingDecision(
         group_to_launch=group_to_launch,
         routed_entries=routed,
         unmet_entries=unmet,
         group_reasons=group_reasons,
+        group_statuses=group_statuses,
     )
 
 
@@ -301,7 +415,7 @@ class Autoscaler:
         evaluation_interval: Duration,
         platform: Platform,
         threads: ThreadContainer | None = None,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        base_worker_config: config_pb2.WorkerConfig | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -310,13 +424,13 @@ class Autoscaler:
             evaluation_interval: How often to evaluate scaling decisions
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
-            bootstrap_config: Worker bootstrap settings passed to platform.create_slice().
-                None disables bootstrap (test/local mode).
+            base_worker_config: Base worker config merged with per-group overrides
+                and passed to platform.create_slice(). None disables bootstrap (test/local mode).
         """
         self._groups = scale_groups
         self._platform = platform
         self.evaluation_interval = evaluation_interval
-        self._bootstrap_config = bootstrap_config
+        self._base_worker_config = base_worker_config
 
         # Centralized per-worker state indexed by worker_id
         self._workers: dict[str, TrackedWorker] = {}
@@ -326,6 +440,7 @@ class Autoscaler:
 
         # Most recent routing decision (for status API)
         self._last_routing_decision: RoutingDecision | None = None
+        self._last_evaluation: Timestamp = Timestamp.from_ms(0)
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
@@ -337,7 +452,7 @@ class Autoscaler:
         config: config_pb2.AutoscalerConfig,
         platform: Platform,
         threads: ThreadContainer | None = None,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        base_worker_config: config_pb2.WorkerConfig | None = None,
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
@@ -346,7 +461,7 @@ class Autoscaler:
             config: Autoscaler configuration proto (with defaults already applied)
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
-            bootstrap_config: Worker bootstrap settings passed to platform.create_slice()
+            base_worker_config: Base worker config merged with per-group overrides
 
         Returns:
             Configured Autoscaler instance
@@ -356,7 +471,7 @@ class Autoscaler:
             evaluation_interval=Duration.from_proto(config.evaluation_interval),
             platform=platform,
             threads=threads,
-            bootstrap_config=bootstrap_config,
+            base_worker_config=base_worker_config,
         )
 
     def _wait_for_inflight(self) -> None:
@@ -364,7 +479,6 @@ class Autoscaler:
 
         Test-only: Waits for all scale-up threads to complete.
         """
-        # Wait for all threads in the container to finish
         self._threads.wait()
 
     def shutdown(self) -> None:
@@ -458,6 +572,16 @@ class Autoscaler:
                 "CAPACITY INSUFFICIENT: %d demand entries cannot be satisfied by any group",
                 len(result.unmet_entries),
             )
+            for unmet in result.unmet_entries[:10]:
+                entry = unmet.entry
+                logger.warning(
+                    "Unmet demand: reason=%s device=%s:%s resources=%s tasks=%s",
+                    unmet.reason,
+                    entry.device_type,
+                    entry.device_variant,
+                    entry.resources,
+                    entry.task_ids,
+                )
 
         decisions = []
         for name, group in self._groups.items():
@@ -554,7 +678,7 @@ class Autoscaler:
         thread for the actual scale-up work. The counter is included in
         slice_count(), preventing double scale-up.
         """
-        group.begin_scale_up()
+        group.begin_scale_up(timestamp=ts)
 
         def _scale_up_wrapper(stop_event):
             self._do_scale_up(group, ts, reason)
@@ -578,13 +702,12 @@ class Autoscaler:
 
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
-            bc = self._per_group_bootstrap_config(group)
-            slice_obj = group.scale_up(bootstrap_config=bc, timestamp=ts)
+            wc = self._per_group_worker_config(group)
+            slice_obj = group.scale_up(worker_config=wc, timestamp=ts)
             group.complete_scale_up(slice_obj, ts)
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
             action.slice_id = slice_obj.slice_id
             action.status = "completed"
-            self._register_slice_workers(slice_obj, group.name)
             return True
         except QuotaExhaustedError as e:
             group.cancel_scale_up()
@@ -596,65 +719,49 @@ class Autoscaler:
             return False
         except Exception as e:
             group.cancel_scale_up()
-            logger.error("Failed to create slice for %s: %s", group.name, e)
+            logger.exception("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)
             return False
 
-    def _per_group_bootstrap_config(self, group: ScalingGroup) -> config_pb2.BootstrapConfig | None:
-        """Build a per-group BootstrapConfig by merging worker attributes and rewriting docker image region.
-
-        Copies the base bootstrap config and:
-        1. Rewrites docker_image's AR region to match the group's GCP zone
-        2. Injects IRIS_WORKER_ATTRIBUTES, IRIS_TASK_DEFAULT_ENV_JSON, and
-           IRIS_SCALE_GROUP from the group's worker settings into env_vars.
-        """
-        if not self._bootstrap_config:
+    def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
+        """Build per-group WorkerConfig by merging base config with scale group overrides."""
+        if not self._base_worker_config:
             return None
 
-        # Determine target region from the group's GCP zone
-        target_region = _zone_to_region(group)
+        wc = config_pb2.WorkerConfig()
+        wc.CopyFrom(self._base_worker_config)
 
-        has_worker = group.config.HasField("worker")
-        needs_image_rewrite = (
-            target_region is not None
-            and self._bootstrap_config.docker_image
-            and rewrite_artifact_registry_region(self._bootstrap_config.docker_image, target_region)
-            != self._bootstrap_config.docker_image
-        )
+        # Accelerator config from scale group
+        wc.accelerator_type = group.config.accelerator_type
+        if group.config.accelerator_variant:
+            wc.accelerator_variant = group.config.accelerator_variant
+        if (
+            group.config.accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU
+            and group.config.HasField("resources")
+            and group.config.resources.gpu_count > 0
+        ):
+            wc.gpu_count = group.config.resources.gpu_count
 
-        if not has_worker and not needs_image_rewrite:
-            return self._bootstrap_config
-
-        bc = config_pb2.BootstrapConfig()
-        bc.CopyFrom(self._bootstrap_config)
-
-        if needs_image_rewrite:
-            bc.docker_image = rewrite_artifact_registry_region(bc.docker_image, target_region)
-
-        if has_worker:
-            attributes = dict(group.config.worker.attributes)
-            if attributes:
-                bc.env_vars["IRIS_WORKER_ATTRIBUTES"] = json.dumps(attributes, sort_keys=True)
-            if group.config.worker.env:
-                bc.env_vars["IRIS_TASK_DEFAULT_ENV_JSON"] = json.dumps(dict(group.config.worker.env))
+        # Worker settings from scale group
+        if group.config.HasField("worker"):
+            for k, v in group.config.worker.attributes.items():
+                wc.worker_attributes[k] = v
+            for k, v in group.config.worker.env.items():
+                wc.default_task_env[k] = v
 
         if group.config.name:
-            bc.env_vars["IRIS_SCALE_GROUP"] = group.config.name
+            wc.worker_attributes["scale-group"] = group.config.name
 
-        return bc
+        return wc
 
-    def _register_slice_workers(
-        self,
-        handle: SliceHandle,
-        scale_group: str,
-    ) -> None:
-        """Register all workers from a slice handle into the worker registry."""
-        for worker in handle.describe().workers:
+    def _register_slice_workers(self, workers: list[RemoteWorkerHandle], slice_id: str, scale_group: str) -> None:
+        """Register all workers from a slice into the worker registry."""
+        for worker in workers:
             self._workers[worker.worker_id] = TrackedWorker(
                 worker_id=worker.worker_id,
-                slice_id=handle.slice_id,
+                slice_id=slice_id,
                 scale_group=scale_group,
                 handle=worker,
                 bootstrap_log=worker.bootstrap_log,
@@ -667,10 +774,40 @@ class Autoscaler:
             del self._workers[wid]
 
     def refresh(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp | None = None) -> None:
-        """I/O phase: poll non-READY slices for state transitions, then scale down idle slices."""
+        """State-read phase: scale down idle slices from currently tracked state."""
         timestamp = timestamp or Timestamp.now()
 
-        self._poll_slice_states()
+        for group in self._groups.values():
+            for slice_id, handle in group.non_ready_slice_handles():
+                try:
+                    status = handle.describe()
+                except Exception as e:
+                    logger.warning("Failed to poll slice %s: %s", slice_id, e)
+                    continue
+
+                if status.state == CloudSliceState.READY:
+                    addrs = [w.internal_address for w in status.workers]
+                    group.mark_slice_ready(slice_id, addrs)
+                    self._register_slice_workers(status.workers, slice_id, group.name)
+                    self._log_action(
+                        "slice_ready",
+                        group.name,
+                        slice_id,
+                        reason=f"bootstrap completed ({len(addrs)} workers)",
+                    )
+                elif status.state == CloudSliceState.FAILED:
+                    group.mark_slice_failed(slice_id, error_message=status.error_message)
+                    group.scale_down(slice_id)
+                    self._unregister_slice_workers(slice_id)
+                    group.record_failure()
+                    reason = status.error_message if status.error_message else "bootstrap failed"
+                    self._log_action(
+                        "slice_failed",
+                        group.name,
+                        slice_id,
+                        reason=reason,
+                        status="failed",
+                    )
 
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
@@ -684,45 +821,6 @@ class Autoscaler:
                     reason=f"idle slice (target={target_capacity}, ready={group.ready_slice_count() + 1})",
                 )
 
-    def _poll_slice_states(self) -> None:
-        """Poll describe() on non-READY slices to detect state transitions.
-
-        When a platform's internal bootstrap completes, describe() will return
-        READY. This method detects that transition and updates the ScalingGroup.
-        """
-        for group in self._groups.values():
-            with group._slices_lock:
-                snapshot = list(group._slices.items())
-            for slice_id, slice_state in snapshot:
-                if slice_state.lifecycle in (SliceLifecycleState.BOOTING, SliceLifecycleState.INITIALIZING):
-                    try:
-                        status = slice_state.handle.describe()
-                    except Exception as e:
-                        logger.warning("Failed to poll slice %s: %s", slice_id, e)
-                        continue
-                    if status.state == CloudSliceState.READY:
-                        addrs = [w.internal_address for w in status.workers]
-                        group.mark_slice_ready(slice_id, addrs)
-                        self._register_slice_workers(slice_state.handle, group.name)
-                        self._log_action(
-                            "slice_ready",
-                            group.name,
-                            slice_id,
-                            reason=f"bootstrap completed ({len(addrs)} workers)",
-                        )
-                    elif status.state == CloudSliceState.FAILED:
-                        group.mark_slice_failed(slice_id)
-                        group.scale_down(slice_id)
-                        self._unregister_slice_workers(slice_id)
-                        group.record_failure()
-                        self._log_action(
-                            "slice_failed",
-                            group.name,
-                            slice_id,
-                            reason="bootstrap failed",
-                            status="failed",
-                        )
-
     def update(
         self,
         demand_entries: list[DemandEntry],
@@ -730,6 +828,7 @@ class Autoscaler:
     ) -> list[ScalingDecision]:
         """CPU phase: evaluate demand and execute scale-up decisions."""
         timestamp = timestamp or Timestamp.now()
+        self._last_evaluation = timestamp
 
         decisions = self.evaluate(demand_entries, timestamp)
         if decisions:
@@ -786,12 +885,10 @@ class Autoscaler:
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
-        from iris.rpc import time_pb2
-
         status = vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation=time_pb2.Timestamp(epoch_ms=0),  # Controlled by controller now
+            last_evaluation=self._last_evaluation.to_proto(),
             recent_actions=list(self._action_log),
         )
         if self._last_routing_decision is not None:
@@ -815,7 +912,7 @@ class Autoscaler:
                 if resources.device.HasField("tpu"):
                     tpu_count = resources.device.tpu.count or 0
             return vm_pb2.ResourceSpec(
-                cpu=resources.cpu,
+                cpu_millicores=resources.cpu_millicores,
                 memory_bytes=resources.memory_bytes,
                 disk_bytes=resources.disk_bytes,
                 gpu_count=gpu_count,
@@ -845,6 +942,17 @@ class Autoscaler:
             group_reasons=decision.group_reasons,
             routed_entries=routed_entries,
             unmet_entries=unmet_entries,
+            group_statuses=[
+                vm_pb2.GroupRoutingStatus(
+                    group=s.group,
+                    priority=s.priority,
+                    assigned=s.assigned,
+                    launch=s.launch,
+                    decision=s.decision,
+                    reason=s.reason,
+                )
+                for s in decision.group_statuses
+            ],
         )
 
     def get_group(self, name: str) -> ScalingGroup | None:

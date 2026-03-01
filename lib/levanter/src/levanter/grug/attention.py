@@ -1,18 +1,23 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 import functools
+import inspect
 import math
 from dataclasses import dataclass
 
+import equinox as eqx
 import jax
 from jax import numpy as jnp
-from jax.experimental.shard_map import shard_map
+from jax import shard_map
 from jax.sharding import NamedSharding, PartitionSpec as P
-from jax.tree_util import register_dataclass
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
+
+
+_SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
+_SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
 
 
 @dataclass(frozen=True)
@@ -23,9 +28,7 @@ class RotaryConfig:
     scaling_factor: float | None = None
 
 
-@functools.partial(register_dataclass, data_fields=["segment_ids"], meta_fields=["is_causal", "sliding_window"])
-@dataclass(frozen=True)
-class AttentionMask:
+class AttentionMask(eqx.Module):
     """Grug attention mask spec.
 
     This is deliberately simpler than `levanter.layers.attention.AttentionMask`:
@@ -33,9 +36,9 @@ class AttentionMask:
     - Supports causal masking, sliding windows, and segment IDs.
     """
 
-    is_causal: bool = False
+    is_causal: bool = eqx.field(default=False, static=True)
     segment_ids: tuple[jax.Array, jax.Array] | None = None
-    sliding_window: int | None = None
+    sliding_window: int | None = eqx.field(default=None, static=True)
 
     @classmethod
     def causal(cls, *, sliding_window: int | None = None) -> "AttentionMask":
@@ -367,7 +370,7 @@ def _tpu_splash_attention(
         mesh=mesh,
         in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, kernel_specs),
         out_specs=q_pspec,
-        check_rep=False,
+        **_SHARD_MAP_CHECK_KWARGS,
     )
     def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
         return jax.vmap(kernel, in_axes=(0, 0, 0, segment_batch_axis))(q_bhsd, k_bhsd, v_bhsd, seg_ids)

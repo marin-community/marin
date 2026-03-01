@@ -15,7 +15,6 @@ dependencies = [
     "ddsketch",
     "deepdiff",
     "draccus>=0.11.5",
-    "dupekit",
     "fasteners>=0.19",
     "flask",
     "floret",
@@ -44,8 +43,6 @@ dependencies = [
     "resiliparse>=0.17.2",
     "s3fs>=2024",
     "toml",
-    "torch>=2.7.0",
-    "torchvision==0.24.0",
     "tqdm",
     "tqdm-loggable",
     "wandb",
@@ -174,6 +171,10 @@ vllm =[
 
 harbor = [
     "harbor>=0.1.42",
+]
+
+dedup = [
+    "dupekit",
 ]
 
 math = ["pylatexenc", "sympy"]

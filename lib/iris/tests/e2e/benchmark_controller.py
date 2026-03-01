@@ -4,15 +4,25 @@
 
 """Benchmark Iris controller performance under realistic load.
 
-Simulates a cluster with 25 TPU slices of varying sizes and 100 training jobs,
-measuring scheduler performance, job scheduling latency, and resource utilization.
+Two benchmark modes:
+
+1. ``benchmark`` (default): Simulates a cluster with 25 TPU slices of varying
+   sizes and 100 training jobs, measuring scheduler performance, job scheduling
+   latency, and resource utilization.
+
+2. ``single-worker``: Submits many jobs to a single CPU worker as fast as
+   possible while streaming logs from every job.  This exercises the controller
+   hot-path that was overwhelmed in #3062 (125+ simultaneous task pods on one
+   worker caused DEADLINE_EXCEEDED RPC timeouts).
 
 Usage:
     uv run python lib/iris/tests/e2e/benchmark_controller.py
     uv run python lib/iris/tests/e2e/benchmark_controller.py --num-jobs 200 --num-slices 50
     uv run python lib/iris/tests/e2e/benchmark_controller.py --profile --profile-output ./profiles
+    uv run python lib/iris/tests/e2e/benchmark_controller.py single-worker --num-jobs 100
 
-This benchmark helps detect performance regressions like #2802 (SSL context overhead).
+This benchmark helps detect performance regressions like #2802 (SSL context overhead)
+and #3062 (single-worker burst overwhelms controller).
 """
 
 import json
@@ -27,11 +37,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
+import humanfriendly
 import psutil
 from iris.client.client import IrisClient, Job, ResourceSpec
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
-from iris.cluster.types import get_tpu_topology, tpu_device
+from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
@@ -117,7 +128,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         sg.num_vms = num_vms
         sg.min_slices = count
         sg.max_slices = count
-        sg.resources.cpu = int(cpu)
+        sg.resources.cpu_millicores = int(float(cpu) * 1000)
         sg.resources.memory_bytes = _parse_size(memory)
         sg.resources.disk_bytes = _parse_size(disk)
         sg.resources.tpu_count = tpu_count
@@ -132,8 +143,6 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
 
 def _parse_size(size_str: str) -> int:
     """Parse human-readable size string to bytes."""
-    import humanfriendly
-
     return humanfriendly.parse_size(size_str)
 
 
@@ -155,8 +164,6 @@ def _submit_job_mix(client: IrisClient, num_jobs: int, workspace: Path) -> tuple
     Returns:
         (schedulable_jobs, unschedulable_jobs) tuple
     """
-    from iris.cluster.types import Entrypoint, EnvironmentSpec
-
     num_small = int(num_jobs * 0.60)
     num_medium = int(num_jobs * 0.25)
     num_large = int(num_jobs * 0.10)
@@ -345,12 +352,191 @@ def run_benchmark(num_jobs: int, num_slices: int) -> BenchmarkMetrics:
             controller_client.close()
 
 
-@click.group(invoke_without_command=True)
-@click.pass_context
-def cli(ctx: click.Context) -> None:
+def _make_single_worker_config() -> config_pb2.IrisClusterConfig:
+    """Build a local cluster config with a single CPU worker.
+
+    This deliberately funnels all work onto one worker so we can observe how the
+    controller handles a burst of task creation, scheduling, log streaming, and
+    completion RPCs from a single source — the scenario that triggered #3062.
+    """
+    config = load_config(TEST_ROOT / "examples" / "demo.yaml")
+    config.scale_groups.clear()
+
+    sg = config.scale_groups["local-cpu"]
+    sg.name = "local-cpu"
+    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.num_vms = 1
+    sg.min_slices = 1
+    sg.max_slices = 1
+    sg.resources.cpu_millicores = 128 * 1000
+    sg.resources.memory_bytes = 256 * 1024**3
+    sg.resources.disk_bytes = 500 * 1024**3
+    sg.slice_template.local.SetInParent()
+
+    return make_local_config(config)
+
+
+def _cpu_burn_task(seconds: float = 1.0):
+    """CPU-bound task that burns cycles in a tight loop.
+
+    Generates enough work to keep the subprocess busy for approximately
+    *seconds*, giving the controller realistic scheduling and log-streaming
+    pressure.
+    """
+    print(f"burning cpu for {seconds}s")
+    deadline = time.monotonic() + seconds
+    total = 0
+    while time.monotonic() < deadline:
+        for _ in range(10_000):
+            total += 1
+    print(f"done ({total} iterations)")
+    return total
+
+
+def run_single_worker_benchmark(num_jobs: int) -> BenchmarkMetrics:
+    """Submit *num_jobs* to one worker as fast as possible, streaming logs.
+
+    Every job is waited on concurrently with ``stream_logs=True`` and
+    ``include_children=True``, mirroring how Marin's ferry driver monitors a
+    batch of download tasks.  The goal is to stress the controller's RPC
+    handling and task-dispatch path when a single worker is hit with many
+    concurrent requests.
+    """
+    print("\n" + "=" * 70)
+    print("Iris Controller Benchmark — single-worker burst")
+    print("=" * 70)
+    print("Configuration:")
+    print(f"  Jobs:    {num_jobs}")
+    print("  Workers: 1  (all jobs target the same worker)")
+    print("  Log streaming: ON")
+    print("=" * 70 + "\n")
+
+    config = _make_single_worker_config()
+
+    print("Starting local cluster with 1 CPU worker...")
+    with connect_cluster(config) as url:
+        client = IrisClient.remote(url, workspace=TEST_ROOT)
+        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+
+        try:
+            print("Waiting for worker to register...")
+            _wait_for_workers(controller_client, 1, timeout=60.0)
+
+            controller_proc = psutil.Process(os.getpid())
+            mem_before = controller_proc.memory_info().rss
+
+            # Submit all jobs as fast as possible — this is the burst.
+            print(f"Submitting {num_jobs} jobs...")
+            submit_start = time.time()
+            jobs: list[Job] = []
+            for i in range(num_jobs):
+                job = client.submit(
+                    entrypoint=Entrypoint.from_callable(_cpu_burn_task, 1.0),
+                    name=f"burst-{i:04d}",
+                    resources=ResourceSpec(cpu=0, memory="64m"),
+                    environment=EnvironmentSpec(),
+                )
+                jobs.append(job)
+            submission_time = time.time() - submit_start
+            logger.info("Submitted %d jobs in %.3fs", num_jobs, submission_time)
+
+            # Wait for every job with log streaming enabled, concurrently.
+            print(f"Waiting for {num_jobs} jobs (streaming logs)...")
+            wait_start = time.monotonic()
+            results = _wait_all_jobs_threaded(jobs, timeout=300.0)
+            time_to_complete = time.monotonic() - wait_start
+
+            for r in results:
+                if r.error is not None:
+                    logger.warning("Job %s errored during wait: %s", r.job.job_id, r.error)
+
+            mem_after = controller_proc.memory_info().rss
+            memory_delta_mb = (mem_after - mem_before) / (1024 * 1024)
+
+            final_counts: dict[str, int] = defaultdict(int)
+            for r in results:
+                final_counts[r.state_name] += 1
+            final_counts = dict(final_counts)
+
+            metrics = BenchmarkMetrics(
+                num_jobs=num_jobs,
+                num_slices=1,
+                submission_time_seconds=submission_time,
+                time_to_complete=time_to_complete,
+                controller_memory_mb=memory_delta_mb,
+                jobs_by_state=final_counts,
+            )
+
+            print("\n" + "=" * 70)
+            print("Benchmark Results (single-worker burst):")
+            print("-" * 70)
+            print(f"  Job submission time:       {metrics.submission_time_seconds:>10.2f}s")
+            print(f"  Time to complete:          {metrics.time_to_complete:>10.2f}s")
+            print(f"  Controller memory delta:   {metrics.controller_memory_mb:>10.1f} MB")
+            print(f"  Throughput:                {num_jobs / metrics.time_to_complete:>10.1f} jobs/s")
+            print("\nFinal job states:")
+            for state, count in sorted(metrics.jobs_by_state.items()):
+                print(f"  {state:<30} {count:>5}")
+            print("=" * 70 + "\n")
+
+            return metrics
+
+        finally:
+            controller_client.close()
+
+
+@click.group()
+def cli() -> None:
     """Benchmark Iris controller performance."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(benchmark)
+    pass
+
+
+def _run_with_pyspy(
+    subcommand: str,
+    cli_args: list[str],
+    profile_output: Path,
+    speedscope_name: str,
+) -> None:
+    """Re-launch this script under py-spy for CPU profiling.
+
+    Constructs a py-spy command that invokes ``__file__ <subcommand> <cli_args>``
+    and writes the speedscope profile to *profile_output / speedscope_name*.
+    """
+    print(f"\nProfiling enabled: output will be saved to {profile_output}")
+    print("Note: py-spy requires sudo permissions\n")
+
+    profile_output.mkdir(parents=True, exist_ok=True)
+    speedscope_file = profile_output / speedscope_name
+
+    pyspy_cmd = [
+        "sudo",
+        "py-spy",
+        "record",
+        "--format",
+        "speedscope",
+        "--output",
+        str(speedscope_file),
+        "--rate",
+        "100",
+        "--subprocesses",
+        "--gil",
+        "--idle",
+        "--",
+        sys.executable,
+        __file__,
+        subcommand,
+        *cli_args,
+    ]
+
+    print(f"Running: {' '.join(pyspy_cmd)}\n")
+    result = subprocess.run(pyspy_cmd)
+
+    if result.returncode == 0:
+        _print_profile_table(speedscope_file)
+        print(f"Speedscope profile saved to {speedscope_file}")
+        print("To view: https://www.speedscope.app/")
+    else:
+        print(f"\npy-spy failed with return code {result.returncode}")
 
 
 def _print_profile_table(speedscope_path: Path, top_n: int = 30) -> None:
@@ -404,7 +590,7 @@ def _print_profile_table(speedscope_path: Path, top_n: int = 30) -> None:
     default=Path("/tmp/profiles"),
     help="Directory for profile output (default: /tmp/profiles/)",
 )
-def benchmark(
+def multi_tpu(
     num_jobs: int,
     num_slices: int,
     profile: bool = False,
@@ -412,49 +598,46 @@ def benchmark(
 ) -> None:
     """Run controller benchmark."""
     if profile:
-        print(f"\nProfiling enabled: output will be saved to {profile_output}")
-        print("Note: py-spy requires sudo permissions\n")
-
-        profile_output.mkdir(parents=True, exist_ok=True)
-        speedscope_file = profile_output / "controller_benchmark.speedscope"
-
-        pyspy_cmd = [
-            "sudo",
-            "py-spy",
-            "record",
-            "--format",
-            "speedscope",
-            "--output",
-            str(speedscope_file),
-            "--rate",
-            "100",
-            "--subprocesses",
-            "--gil",
-            "--idle",
-            "--",
-            sys.executable,
-            __file__,
-            "benchmark",
-            "--num-jobs",
-            str(num_jobs),
-            "--num-slices",
-            str(num_slices),
-        ]
-
-        print(f"Running: {' '.join(pyspy_cmd)}\n")
-        result = subprocess.run(pyspy_cmd)
-
-        if result.returncode == 0:
-            _print_profile_table(speedscope_file)
-            print(f"Speedscope profile saved to {speedscope_file}")
-            print("To view: https://www.speedscope.app/")
-        else:
-            print(f"\npy-spy failed with return code {result.returncode}")
-
+        _run_with_pyspy(
+            "multi_tpu",
+            ["--num-jobs", str(num_jobs), "--num-slices", str(num_slices)],
+            profile_output,
+            "controller_benchmark.speedscope",
+        )
         return
 
-    # Normal benchmark mode
     run_benchmark(num_jobs=num_jobs, num_slices=num_slices)
+
+
+@cli.command("single-worker")
+@click.option("--num-jobs", type=int, default=100, help="Number of jobs to burst-submit to a single worker")
+@click.option("--profile", is_flag=True, help="Profile with py-spy (requires sudo)")
+@click.option(
+    "--profile-output",
+    type=click.Path(path_type=Path),
+    default=Path("/tmp/profiles"),
+    help="Directory for profile output (default: /tmp/profiles/)",
+)
+def single_worker(
+    num_jobs: int,
+    profile: bool = False,
+    profile_output: Path | None = None,
+) -> None:
+    """Burst-submit jobs to a single worker with log streaming.
+
+    Exercises the controller hot-path from #3062: many concurrent task
+    creations, log-stream RPCs, and completions funneled through one worker.
+    """
+    if profile:
+        _run_with_pyspy(
+            "single-worker",
+            ["--num-jobs", str(num_jobs)],
+            profile_output,
+            "single_worker_benchmark.speedscope",
+        )
+        return
+
+    run_single_worker_benchmark(num_jobs=num_jobs)
 
 
 if __name__ == "__main__":

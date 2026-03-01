@@ -7,36 +7,35 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import click
+from google.protobuf.json_format import ParseDict
 
-from iris.cluster.config import load_config
 from iris.cluster.platform.factory import create_platform
-from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.kubernetes import KubernetesRuntime
+from iris.cluster.worker.env_probe import detect_gcp_zone
+from iris.cluster.worker.worker import Worker, worker_config_from_proto
 from iris.logging import configure_logging
+from iris.rpc import config_pb2
 
 
-def _load_task_default_env() -> dict[str, str]:
-    """Load default task environment injected by bootstrap."""
-    raw = os.environ.get("IRIS_TASK_DEFAULT_ENV_JSON", "")
-    if not raw:
-        return {}
-    parsed = json.loads(raw)
-    if not isinstance(parsed, dict):
-        raise ValueError("IRIS_TASK_DEFAULT_ENV_JSON must decode to a dictionary")
-    return {str(k): str(v) for k, v in parsed.items()}
-
-
-def _load_worker_attributes() -> dict[str, str]:
-    """Parse IRIS_WORKER_ATTRIBUTES JSON into a map."""
-    raw = os.environ.get("IRIS_WORKER_ATTRIBUTES", "")
-    if not raw:
-        return {}
-    parsed = json.loads(raw)
-    if not isinstance(parsed, dict):
-        raise ValueError("IRIS_WORKER_ATTRIBUTES must decode to a dictionary")
-    return {str(k): str(v) for k, v in parsed.items()}
+def _configure_docker_ar_auth(ar_host: str) -> None:
+    """Configure Docker to authenticate with the given Artifact Registry host."""
+    logger = logging.getLogger(__name__)
+    logger.info("Configuring Docker auth for %s", ar_host)
+    result = subprocess.run(
+        ["gcloud", "auth", "configure-docker", ar_host, "-q"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        logger.warning("gcloud auth configure-docker failed: %s", result.stderr)
+    else:
+        logger.info("Docker AR auth configured for %s", ar_host)
 
 
 @click.group()
@@ -46,63 +45,42 @@ def cli():
 
 
 @cli.command()
-@click.option("--host", default="0.0.0.0", help="Bind host")
-@click.option("--port", default=8080, type=int, help="Bind port")
-@click.option("--cache-dir", required=True, help="Cache directory (must be a host-visible path for Docker mounts)")
-@click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
-@click.option("--worker-id", default=None, help="Worker ID (auto-generated if not provided)")
-@click.option(
-    "--config",
-    "config_file",
-    type=click.Path(exists=True),
-    required=False,
-    help="Cluster config for platform-based controller discovery",
-)
-@click.option("--controller-address", default=None, help="Controller address host:port (overrides --config discovery)")
-def serve(
-    host: str,
-    port: int,
-    cache_dir: str,
-    port_range: str,
-    worker_id: str | None,
-    config_file: str | None,
-    controller_address: str | None,
-):
+@click.option("--worker-config", type=click.Path(exists=True), required=True, help="Path to WorkerConfig JSON file")
+def serve(worker_config: str):
     """Start the Iris worker service."""
     configure_logging(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.info("Iris worker starting (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
 
-    if controller_address:
-        resolved_controller_address = f"http://{controller_address}"
+    with open(worker_config) as f:
+        wc_proto = ParseDict(json.load(f), config_pb2.WorkerConfig())
+
+    platform = create_platform(platform_config=wc_proto.platform, ssh_config=config_pb2.SshConfig())
+    zone = detect_gcp_zone()
+
+    def resolve_image(image: str) -> str:
+        return platform.resolve_image(image, zone=zone)
+
+    if wc_proto.default_task_image:
+        resolved = resolve_image(wc_proto.default_task_image)
+        if resolved != wc_proto.default_task_image and "-docker.pkg.dev/" in resolved:
+            _configure_docker_ar_auth(resolved.split("/")[0])
+
+    config = worker_config_from_proto(wc_proto, resolve_image=resolve_image)
+
+    if wc_proto.runtime == "kubernetes":
+        container_runtime = KubernetesRuntime()
     else:
-        if not config_file:
-            raise click.ClickException("Either --controller-address or --config must be provided")
-        cluster_config = load_config(Path(config_file))
-        platform = create_platform(
-            platform_config=cluster_config.platform,
-            ssh_config=cluster_config.defaults.ssh,
-        )
-        resolved_controller_address = f"http://{platform.discover_controller(cluster_config.controller)}"
+        container_runtime = DockerRuntime()
 
-    port_start, port_end = map(int, port_range.split("-"))
+    worker = Worker(config, container_runtime=container_runtime)
 
-    config = WorkerConfig(
-        host=host,
-        port=port,
-        cache_dir=Path(cache_dir).expanduser(),
-        port_range=(port_start, port_end),
-        controller_address=resolved_controller_address,
-        worker_id=worker_id,
-        worker_attributes=_load_worker_attributes(),
-        default_task_env=_load_task_default_env(),
-    )
-
-    worker = Worker(config)
-
-    click.echo(f"Starting Iris worker on {host}:{port}")
+    click.echo(f"Starting Iris worker on {config.host}:{config.port}")
     click.echo(f"  Cache dir: {config.cache_dir}")
-    click.echo(f"  Controller: {resolved_controller_address}")
+    click.echo(f"  Controller: {config.controller_address}")
+    click.echo(f"  Runtime: {wc_proto.runtime or 'docker'}")
     worker.start()
-    worker.wait()  # Block until worker is stopped
+    worker.wait()
 
 
 @cli.command()
