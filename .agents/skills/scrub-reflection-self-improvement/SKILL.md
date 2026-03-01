@@ -25,9 +25,12 @@ Use this skill on scheduled scrub turns to identify and land high-leverage impro
 
 - Pick the highest-leverage change with the lowest coordination overhead.
 - De-duplicate against existing issues/PRs before opening new work.
+- When an improvement changes recurring workflow guidance, codify it in durable repo instructions:
+  `AGENTS.md` for cross-cutting agent behavior, or `docs/recipes/*.md` for repeatable task workflows.
 - If no justified improvement exists now, choose a no-op outcome.
 
 ## Output
 
 - Keep rationale explicit: observed gap, change made (or plan), and expected impact.
+- Prefer durable artifacts over transient notes: land guidance updates in `AGENTS.md` and/or recipe docs when that is the primary improvement.
 - Always end with the required `HARNESS_SCRUB_LOOP` footer (provided by the base scrub contract).
