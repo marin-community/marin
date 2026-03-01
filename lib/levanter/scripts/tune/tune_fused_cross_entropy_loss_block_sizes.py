@@ -1,12 +1,14 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import atexit
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
 import itertools
 import json
 import os
+import sys
 import time
 
 import jax
@@ -30,6 +32,58 @@ _FWD_LSE_FORI_LOOP_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_FORI_LOOP_BENCH"
 _FWD_LSE_FORI_V_MULT_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_FORI_V_MULT_BENCH"
 _FWD_LSE_STORE_PATH_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_STORE_PATH_BENCH"
 _MAX_ERROR_CHARS = 600
+
+
+class _TeeStream:
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self._streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
+
+
+def _append_xla_flag(flag: str) -> None:
+    current = os.environ.get("XLA_FLAGS", "")
+    parts = current.split()
+    if flag in parts:
+        return
+    os.environ["XLA_FLAGS"] = (current + " " + flag).strip()
+
+
+def _configure_xla_dump_dir(xla_dump_dir: str | None) -> str | None:
+    if xla_dump_dir is None:
+        return None
+    resolved = os.path.abspath(xla_dump_dir)
+    os.makedirs(resolved, exist_ok=True)
+    _append_xla_flag(f"--xla_dump_to={resolved}")
+    _append_xla_flag("--xla_dump_hlo_as_text")
+    return resolved
+
+
+@contextmanager
+def _tee_stdio(log_path: str | None):
+    if log_path is None:
+        yield
+        return
+    resolved = os.path.abspath(log_path)
+    parent = os.path.dirname(resolved)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(resolved, "a", encoding="utf-8") as handle:
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout = _TeeStream(old_stdout, handle)
+        sys.stderr = _TeeStream(old_stderr, handle)
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +264,18 @@ def _parse_args() -> argparse.Namespace:
         "--compare-fwd-lse-store-path",
         action="store_true",
         help="When --variant-sweep is set for pallas, also benchmark one-pass LSE store path mode.",
+    )
+    parser.add_argument(
+        "--xla-dump-dir",
+        type=str,
+        default=None,
+        help="Optional directory for XLA HLO dumps (sets XLA_FLAGS dump flags before backend init).",
+    )
+    parser.add_argument(
+        "--compiler-log-path",
+        type=str,
+        default=None,
+        help="Optional path to tee stdout/stderr so TPU/XLA compiler diagnostics are preserved.",
     )
     return parser.parse_args()
 
@@ -518,7 +584,20 @@ def main() -> None:
     if args.fwd_lse_fori_loop and not args.fwd_split_label_dot:
         raise ValueError("--fwd-lse-fori-loop currently requires --fwd-split-label-dot.")
 
+    resolved_xla_dump_dir = _configure_xla_dump_dir(args.xla_dump_dir)
+    resolved_compiler_log_path = os.path.abspath(args.compiler_log_path) if args.compiler_log_path else None
+    if resolved_compiler_log_path is not None:
+        log_capture = _tee_stdio(resolved_compiler_log_path)
+        log_capture.__enter__()
+        atexit.register(log_capture.__exit__, None, None, None)
+
     print("devices:", jax.devices())
+    print("xla_flags", os.environ.get("XLA_FLAGS", ""))
+    print("libtpu_init_args", os.environ.get("LIBTPU_INIT_ARGS", ""))
+    if resolved_xla_dump_dir is not None:
+        print("xla_dump_dir", resolved_xla_dump_dir)
+    if resolved_compiler_log_path is not None:
+        print("compiler_log_path", resolved_compiler_log_path)
 
     tokens = args.batch * args.seq_len
     if tokens % args.data_shards != 0:
@@ -624,6 +703,10 @@ def main() -> None:
                     "fwd_lse_fori_loop": int(variant.fwd_lse_fori_loop),
                     "fwd_lse_fori_v_mult": int(variant.fwd_lse_fori_v_mult),
                     "fwd_lse_store_path": int(variant.fwd_lse_store_path),
+                    "xla_dump_dir": resolved_xla_dump_dir or "",
+                    "compiler_log_path": resolved_compiler_log_path or "",
+                    "xla_flags": os.environ.get("XLA_FLAGS", ""),
+                    "libtpu_init_args": os.environ.get("LIBTPU_INIT_ARGS", ""),
                     "status": "failed",
                 }
                 try:

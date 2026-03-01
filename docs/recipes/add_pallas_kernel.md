@@ -326,6 +326,45 @@ Always report at least:
 - time-to-first-step (includes compilation) vs steady-state step time (after warmup)
 - the exact TPU type and shape/dtype grid tested
 
+##### Capturing compiler diagnostics early (recommended)
+
+For Pallas TPU work, capture compiler diagnostics on every serious benchmark/tuning run:
+
+1. Enable HLO text dumps with `--xla-dump-dir`.
+2. Tee stdout/stderr to a file with `--compiler-log-path`.
+3. Record the exact `XLA_FLAGS` and `LIBTPU_INIT_ARGS` used (the benchmark/tuning scripts print these now).
+
+These hooks are available in:
+- `lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py`
+- `lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py`
+
+Example (bench):
+
+```sh
+uv run --package levanter --extra tpu \
+  python lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py \
+  --implementation pallas_tpu \
+  --batch 64 --pos 1024 --embed 1024 --vocab 128256 \
+  --xla-dump-dir /tmp/ce_hlo_dumps \
+  --compiler-log-path /tmp/ce_compile.log
+```
+
+Example (tune):
+
+```sh
+uv run --package levanter --extra tpu \
+  python lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py \
+  --implementation pallas_tpu \
+  --batch 64 --seq-len 1024 --embed 1024 --vocab 128256 \
+  --xla-dump-dir /tmp/ce_tune_hlo_dumps \
+  --compiler-log-path /tmp/ce_tune_compile.log
+```
+
+When a kernel unexpectedly underperforms, this is the first triage loop:
+- compare Pallas vs XLA HLO dumps on the same shape,
+- scan compiler logs for VMEM pressure / verifier errors / lowering warnings,
+- then run the microbench ladder (`matmul-only`, `streaming-lse-only`, `fused matmul+lse`) before retuning blocks.
+
 ##### Tokamax comparison (optional)
 
 If a similar Tokamax op exists, it can be a useful performance reference.
