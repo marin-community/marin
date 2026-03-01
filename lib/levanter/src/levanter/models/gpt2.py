@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type, Union
+from typing import Callable, Dict, Optional, Type, Union, cast
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -15,7 +15,6 @@ import haliax.jax_utils
 import haliax.nn as hnn
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig, LmWithHfSerializationMixin
@@ -25,6 +24,7 @@ from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
+from levanter.utils.types import BlockFoldable
 
 
 silence_transformer_nag()
@@ -252,7 +252,7 @@ class Gpt2Block(eqx.Module):
 
 class Gpt2Transformer(ModuleWithStateDictSerialization):
     config: Gpt2Config = eqx.field(static=True)
-    blocks: Stacked[Gpt2Block]
+    blocks: BlockFoldable[Gpt2Block]
     ln_f: hnn.LayerNorm
 
     @staticmethod
@@ -272,7 +272,7 @@ class Gpt2Transformer(ModuleWithStateDictSerialization):
     @named_call
     def __call__(self, x: NamedArray, attn_mask: Optional[AttentionMask | NamedArray], *, key=None) -> NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), key=keys)
+        x = cast(NamedArray, self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), key=keys))
         x = self.ln_f(x)
 
         return x
