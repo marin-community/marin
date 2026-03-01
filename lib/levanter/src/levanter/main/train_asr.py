@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Union, cast
 
 import jax
+import jax.numpy as jnp
 import jax.random as jrandom
 
 import haliax as hax
@@ -114,7 +115,6 @@ def main(config: TrainASRConfig):
 
         # some axes we need
         Batch = config.trainer.TrainBatch
-        EvalBatch = config.trainer.EvalBatch
         Pos = config.model.max_Pos
         KeyPos = config.model.KeyPos
 
@@ -195,10 +195,9 @@ def main(config: TrainASRConfig):
         )
         def compute_log_probs(model, example):
             model = trainer.mp.cast_to_compute(model)
-            logprobs = model.compute_loss(example, key=None, reduction=None)
+            logprobs = model.compute_loss_array(example, key=None, reduction=None)
             # roll forward to get the loss for each predicted token
-            logprobs = hax.roll(logprobs, 1, Pos)
-            return logprobs.rearrange((EvalBatch, Pos)).array
+            return jnp.roll(logprobs, 1, axis=-1)
 
         train_loader = trainer.data_loader(train_dataset, Batch).iter_from_step(state.step)
 
