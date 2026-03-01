@@ -15,6 +15,8 @@ from jax.experimental import multihost_utils
 
 from levanter.callbacks import StepInfo
 from levanter.data import DataLoader
+from levanter.data.text.examples import GrugLmExample
+from levanter.models.lm_model import LmExample
 from levanter.utils.hf_utils import HfTokenizer
 
 
@@ -113,7 +115,7 @@ def compute_and_visualize_log_probs(path: str, model, tokenizer, log_prob_fn, te
         if len(targets) * b_logprobs.shape[0] >= max_docs:
             break
     log_probs = _concatenate(log_probs)
-    targets = _concatenate([t.tokens.array for t in targets])
+    targets = _concatenate([_tokens_from_batch(t) for t in targets])
     if argmaxes:
         argmaxes_array = _concatenate(argmaxes)
     else:
@@ -292,7 +294,7 @@ def compute_and_diff_log_probs(path: str, model, comparison_model, tokenizer, lo
     log_probs_a = np.array(log_probs_a[:max_docs])
     log_probs_b = np.array(log_probs_b[:max_docs])
 
-    targets = _concatenate([t.tokens.array for t in targets])
+    targets = _concatenate([_tokens_from_batch(t) for t in targets])
     tokens = [_decode_tokens_pretty(tokenizer, t) for t in targets]
     visualize_log_prob_diff(tokens, log_probs_a, log_probs_b, path)
 
@@ -311,6 +313,12 @@ def _decode_tokens_pretty(tok, ids):
         return [str(t) for t in tok.convert_ids_to_tokens(ids)]
     else:
         return [str(t) for t in tok.decode(ids)]
+
+
+def _tokens_from_batch(batch: LmExample | GrugLmExample) -> jax.Array:
+    if isinstance(batch, LmExample):
+        return batch.tokens.array
+    return batch.tokens
 
 
 def cb_compute_and_visualize_log_probs(
