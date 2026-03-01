@@ -26,6 +26,7 @@ from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_em
 from levanter.grug.grug_moe import MoeActivation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pvocab, unshard
+from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
@@ -169,6 +170,59 @@ def _shared_dense_mlp(
     return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
 
 
+def _routing_stats_from_selected_experts(
+    selected_experts: Int[Array, "T K"],
+    *,
+    num_experts: int,
+) -> dict[str, jax.Array]:
+    expert_counts = jnp.sum(jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32), axis=(0, 1))
+    total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
+    expert_loads = expert_counts / total_assignments
+    routing_entropy = -jnp.sum(expert_loads * jnp.log(expert_loads + 1e-6))
+    return {
+        "routing_counts": expert_counts,
+        "routing_entropy": routing_entropy,
+    }
+
+
+def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | Histogram]:
+    routing_entropy = router_metrics["routing_entropy_per_layer"]
+    routing_counts = router_metrics["routing_counts_per_layer"]
+    num_layers = int(routing_entropy.shape[0])
+
+    out: dict[str, jax.Array | Histogram] = {
+        "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
+    }
+    for i in range(num_layers):
+        out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
+        out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
+    return out
+
+
+def _histogram_from_expert_counts(expert_counts: jax.Array) -> Histogram:
+    counts = jnp.asarray(expert_counts, dtype=jnp.float32)
+    num_experts = counts.shape[0]
+    expert_ids = jnp.arange(num_experts, dtype=jnp.float32)
+    num = jnp.sum(counts)
+    sum_values = jnp.sum(counts * expert_ids)
+    sum_squares = jnp.sum(counts * expert_ids * expert_ids)
+    nonzero = counts > 0
+    min_value = jnp.where(nonzero, expert_ids, jnp.inf).min()
+    max_value = jnp.where(nonzero, expert_ids, -jnp.inf).max()
+    min_value = jnp.where(num > 0, min_value, 0.0)
+    max_value = jnp.where(num > 0, max_value, 0.0)
+    bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
+    return Histogram(
+        min=min_value,
+        max=max_value,
+        num=num,
+        sum=sum_values,
+        sum_squares=sum_squares,
+        bucket_limits=bucket_limits,
+        bucket_counts=counts,
+    )
+
+
 class MoEMLP(eqx.Module):
     router: jax.Array
     w_up_gate: jax.Array
@@ -214,12 +268,22 @@ class MoEMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        *,
+        return_router_stats: bool = False,
+    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        router_logits = jnp.einsum("td,de->te", x_flat, self.router)
+        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None)))
         topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
         combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
+        router_stats = (
+            _routing_stats_from_selected_experts(selected_experts.astype(jnp.int32), num_experts=self.cfg.num_experts)
+            if return_router_stats
+            else None
+        )
 
         routed_flat = moe_mlp(
             x_flat,
@@ -234,18 +298,23 @@ class MoEMLP(eqx.Module):
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec(get_abstract_mesh()))
 
+        out = routed
         if self.shared_w_up_gate is None:
             assert self.shared_w_down is None
-            return routed
-        assert self.shared_w_down is not None
+        else:
+            assert self.shared_w_down is not None
+            shared_out = _shared_dense_mlp(
+                x,
+                self.shared_w_up_gate,
+                self.shared_w_down,
+                activation=ActivationFunctionEnum.silu,
+            )
+            out = routed + shared_out
 
-        shared_out = _shared_dense_mlp(
-            x,
-            self.shared_w_up_gate,
-            self.shared_w_down,
-            activation=ActivationFunctionEnum.silu,
-        )
-        return routed + shared_out
+        if return_router_stats:
+            assert router_stats is not None
+            return out, router_stats
+        return out
 
 
 class Block(eqx.Module):
@@ -265,8 +334,19 @@ class Block(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        *,
+        return_router_stats: bool = False,
+    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x = x + self.attn(self.rms_attn(x), mask)
+        if return_router_stats:
+            mlp_out, router_stats = self.mlp(self.rms_mlp(x), return_router_stats=True)
+            x = x + mlp_out
+            return x, router_stats
+
         x = x + self.mlp(self.rms_mlp(x))
         return x
 
@@ -299,12 +379,26 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> Float[Array, "B S D"]:
+        *,
+        return_router_stats: bool = False,
+    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
 
         batch_spec = _batch_spec(get_abstract_mesh())
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        if return_router_stats:
+            all_router_stats: list[dict[str, jax.Array]] = []
+            for block in self.blocks:
+                hidden, router_stats = eqx.filter_checkpoint(block)(hidden, mask, return_router_stats=True)
+                all_router_stats.append(router_stats)
+
+            router_metrics = {
+                "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in all_router_stats], axis=0),
+                "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in all_router_stats], axis=0),
+            }
+            return self.final_norm(hidden), router_metrics
+
         for block in self.blocks:
             hidden = eqx.filter_checkpoint(block)(hidden, mask)
         return self.final_norm(hidden)
@@ -319,6 +413,40 @@ class Transformer(eqx.Module):
         hidden = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
+    def compute_loss(
+        self,
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+        return_router_metrics: bool = False,
+    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
+        """Compute next-token cross-entropy loss for a batch."""
+        router_metrics: dict[str, jax.Array] | None = None
+        if return_router_metrics:
+            hidden, router_metrics = self(token_ids, mask=mask, return_router_stats=True)
+        else:
+            hidden = self(token_ids, mask=mask)
+        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        loss_weight = loss_weight.astype(loss_dtype)
+
+        loss = fused_linear_softmax_cross_entropy_loss(
+            hidden,
+            self.output_proj,
+            labels,
+            weight=loss_weight,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            dtype=loss_dtype,
+        )
+        if return_router_metrics:
+            assert router_metrics is not None
+            return loss, _summarize_router_metrics(router_metrics)
+        return loss
+
     def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
@@ -328,20 +456,16 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-    ) -> jax.Array:
-        """Compute next-token cross-entropy loss for a batch."""
-        hidden = self(token_ids, mask=mask)
-        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
-        loss_weight = loss_weight.astype(loss_dtype)
-
-        return fused_linear_softmax_cross_entropy_loss(
-            hidden,
-            self.output_proj,
-            labels,
-            weight=loss_weight,
+        return_router_metrics: bool = False,
+    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
+        return self.compute_loss(
+            token_ids,
+            loss_weight,
+            mask=mask,
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
-            dtype=loss_dtype,
+            loss_dtype=loss_dtype,
+            return_router_metrics=return_router_metrics,
         )
 
 

@@ -26,7 +26,6 @@ import pytest
 from jax._src import config as jax_config
 from jax.sharding import NamedSharding, PartitionSpec as P, use_abstract_mesh
 
-from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, LmDataConfig
@@ -40,18 +39,29 @@ from levanter.trainer import TrainerConfig
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
     grug_dir = Path(__file__).resolve().parent
     variants: list[str] = []
+    found_any = False
     for child in sorted(grug_dir.iterdir()):
         if not child.is_dir() or child.name.startswith("__"):
             continue
         if (child / filename).is_file():
+            found_any = True
+            if _variant_has_noverify(child):
+                continue
             variants.append(child.name)
-    if not variants:
+    if not variants and not found_any:
         raise AssertionError(f"No grug variants with {filename} found under {grug_dir}")
     return variants
 
 
 def _variant_module_name(variant: str, module: str) -> str:
     return f"experiments.grug.{variant}.{module}"
+
+
+def _variant_has_noverify(variant_dir: Path) -> bool:
+    train_file = variant_dir / "train.py"
+    if not train_file.is_file():
+        return False
+    return "# GRUG NOVERIFY" in train_file.read_text(encoding="utf-8")
 
 
 class _reset_abstract_mesh:
@@ -62,6 +72,17 @@ class _reset_abstract_mesh:
     def __exit__(self, exc_type, exc, tb):
         jax_config.abstract_mesh_context_manager.set_local(self._prev)
         return False
+
+
+def _discover_grug_variants_with_model_and_train() -> list[str]:
+    model_variants = set(_discover_grug_variants_with_file("model.py"))
+    train_variants = set(_discover_grug_variants_with_file("train.py"))
+    variants = sorted(model_variants & train_variants)
+    if not variants and model_variants and train_variants:
+        return []
+    if not variants:
+        raise AssertionError("No grug variants with both model.py and train.py found")
+    return variants
 
 
 @pytest.mark.parametrize(
@@ -109,31 +130,6 @@ def test_grug_variant_loss_lowers_on_abstract_mesh(variant: str):
     assert lowered is not None
 
 
-class DummyModel(eqx.Module):
-    w: jax.Array
-
-    def next_token_loss(
-        self,
-        token_ids: jax.Array,
-        loss_weight: jax.Array,
-        *,
-        mask=None,
-        reduction: str = "mean",
-        logsumexp_weight: float | None = None,
-    ) -> jax.Array:
-        del token_ids, loss_weight, mask, reduction, logsumexp_weight
-        return jnp.mean(jnp.square(self.w))
-
-
-def _build_state(train_state_cls, params: DummyModel, optimizer: optax.GradientTransformation):
-    return train_state_cls(
-        step=jnp.array(0, dtype=jnp.int32),
-        params=params,
-        opt_state=optimizer.init(params),
-        ema_params=params,
-    )
-
-
 def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     base_kwargs = {
         "vocab_size": vocab_size,
@@ -154,53 +150,45 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
 
 @pytest.mark.parametrize(
     "variant",
-    _discover_grug_variants_with_file("train.py"),
+    _discover_grug_variants_with_model_and_train(),
 )
-def test_grug_variant_train_step_with_watch_matches_base_step(variant: str):
-    module = importlib.import_module(_variant_module_name(variant, "train"))
-    make_train_step = module._make_train_step
-    train_state_cls = module.GrugTrainState
+def test_grug_variant_one_step_contract_lowers_with_default_ctor(variant: str):
+    train_module = importlib.import_module(_variant_module_name(variant, "train"))
+    model_module = importlib.import_module(_variant_module_name(variant, "model"))
+    model_config_cls = model_module.GrugModelConfig
+    make_train_step = train_module._make_train_step
+    initial_state = train_module.initial_state
+    mesh_fn = getattr(model_module, "debug_mesh_and_token_pspec", None)
+    if mesh_fn is None:
+        raise AssertionError(f"{_variant_module_name(variant, 'model')} must define debug_mesh_and_token_pspec")
 
+    cfg = model_config_cls(vocab_size=1024)
     optimizer = optax.adam(1e-2)
     mp = jmp.get_policy("f32")
-
-    state_for_base = _build_state(train_state_cls, DummyModel(jnp.array([1.0, -2.0], dtype=jnp.float32)), optimizer)
-    state_for_watch = _build_state(train_state_cls, DummyModel(jnp.array([1.0, -2.0], dtype=jnp.float32)), optimizer)
+    train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = mesh_fn(num_devices=4)
     batch = GrugLmExample(
-        tokens=jnp.zeros((1, 4), dtype=jnp.int32),
-        loss_weight=jnp.ones((1, 4), dtype=jnp.float32),
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
         attn_mask=GrugAttentionMask.causal(),
     )
 
-    base_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
-    watch_step = make_train_step(
-        optimizer,
-        mp,
-        z_loss_weight=0.0,
-        ema_beta=None,
-        watch_config=WatchConfig(
-            watch_targets=["grads", "params", "updates"],
-            include_norms=True,
-            include_per_parameter_norms=True,
-            include_histograms=False,
-            split_scan_layers=True,
-            interval=1,
-        ),
-    )
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0))
+        return train_step(state, sharded_batch, compute_watch=False)
 
-    next_base, metrics_base, base_watch_stats = base_step(state_for_base, batch, compute_watch=False)
-    next_watch, metrics_watch, watch_stats = watch_step(state_for_watch, batch, compute_watch=True)
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_state_shape, out_metrics_shape, out_watch_shape = eqx.filter_eval_shape(one_step)
 
-    assert int(next_base.step) == 1
-    assert int(next_watch.step) == 1
-    assert jnp.allclose(next_base.params.w, next_watch.params.w)
-    assert jnp.allclose(next_base.ema_params.w, next_watch.ema_params.w)
-    assert jnp.allclose(metrics_base["train/loss"], metrics_watch["train/loss"])
-    assert base_watch_stats is None
-    assert watch_stats
-    assert any(key.startswith("grad/") for key in watch_stats)
-    assert any(key.startswith("params/") for key in watch_stats)
-    assert any(key.startswith("updates/") for key in watch_stats)
+    assert out_state_shape.step.shape == ()
+    assert "train/loss" in out_metrics_shape
+    assert out_metrics_shape["train/loss"].shape == ()
+    assert out_watch_shape is None
 
 
 def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):

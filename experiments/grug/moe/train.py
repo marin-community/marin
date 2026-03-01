@@ -231,6 +231,22 @@ class GrugTrainState:
     ema_params: Transformer
 
 
+def initial_state(
+    model_config: GrugModelConfig,
+    *,
+    optimizer: optax.GradientTransformation,
+    mp: jmp.Policy,
+    key: PRNGKeyArray,
+) -> GrugTrainState:
+    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    return GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        opt_state=optimizer.init(params),
+        ema_params=params,
+    )
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -259,9 +275,11 @@ def _make_train_step(
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
+                return_router_metrics=True,
             )
 
-        loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        metrics = {"train/loss": loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
 
@@ -297,7 +315,7 @@ def _make_train_step(
             ema_params=ema_params,
         )
 
-        return next_state, {"train/loss": loss}, watch_stats
+        return next_state, metrics, watch_stats
 
     return train_step
 
@@ -346,12 +364,11 @@ def run_grug(config: GrugRunConfig) -> None:
 
         @jax.jit
         def _init_state(model_rng):
-            params = trainer.mp.cast_to_param(Transformer.init(config.model, key=model_rng))
-            return GrugTrainState(
-                step=jnp.array(0, dtype=jnp.int32),
-                params=params,
-                opt_state=optimizer.init(params),
-                ema_params=params,
+            return initial_state(
+                config.model,
+                optimizer=optimizer,
+                mp=trainer.mp,
+                key=model_rng,
             )
 
         state = _init_state(model_key)
@@ -461,6 +478,9 @@ def run_grug(config: GrugRunConfig) -> None:
                 last_step_duration = duration
                 levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                 levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                router_metrics = {key: value for key, value in metrics.items() if key.startswith("train/router/")}
+                if router_metrics:
+                    levanter.tracker.log(router_metrics, step=step)
 
                 if watch_stats is not None:
                     levanter.tracker.log(watch_stats, step=step)
@@ -482,5 +502,6 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "initial_state",
     "run_grug",
 ]
