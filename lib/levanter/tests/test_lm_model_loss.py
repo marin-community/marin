@@ -9,12 +9,14 @@ from typing import Optional, Type
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 from haliax import Axis, NamedArray
 
+from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 
@@ -126,3 +128,19 @@ def test_compute_next_token_loss_includes_aux_loss():
     with_aux = model_with_aux.compute_next_token_loss(example)
 
     assert pytest.approx(float(base) + 0.25, rel=1e-6, abs=1e-6) == float(with_aux)
+
+
+def test_compute_next_token_loss_array_matches_named_for_grug_example():
+    Vocab = Axis("vocab", 32)
+    cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
+    model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
+
+    Batch = Axis("batch", 4)
+    Pos = cfg.max_Pos.resize(8)
+    example = _toy_example(Batch, Pos, Vocab, key=jax.random.PRNGKey(1))
+    grug_example = grug_lm_example_from_named(example)
+
+    named_loss = model.compute_next_token_loss(example, reduction=None, reduction_axis=()).array
+    grug_loss = model.compute_next_token_loss_array(grug_example, batch_axis=Batch, reduction=None, reduction_axis=())
+
+    np.testing.assert_allclose(grug_loss, named_loss, rtol=1e-5, atol=1e-6)
