@@ -31,7 +31,9 @@ from iris.cluster.controller.state import (
     ControllerWorker,
     HeartbeatSnapshot,
 )
+from iris.cluster.controller.autoscaler import DemandEntry
 from iris.cluster.types import (
+    DeviceType,
     JobName,
     VmWorkerStatus,
     VmWorkerStatusMap,
@@ -64,9 +66,6 @@ def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
 
 def compute_demand_entries(state: ControllerState) -> list:
     """Compute demand entries from controller state."""
-    from iris.cluster.controller.autoscaler import DemandEntry
-    from iris.cluster.types import DeviceType
-
     demand_entries: list[DemandEntry] = []
 
     tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
@@ -300,7 +299,7 @@ class Controller:
         # intervals of the same length, causing TCP resets on idle connections. Use 120s
         # to safely cover long polling gaps during job waits.
         server_config = uvicorn.Config(
-            self._dashboard._app,
+            self._dashboard.app,
             host=self._config.host,
             port=self._config.port,
             log_level="warning",
@@ -752,12 +751,9 @@ class Controller:
     @property
     def port(self) -> int:
         """Actual bound port (may differ from config if port=0 was specified)."""
-        # uvicorn 0.40+ sets .servers dynamically during startup(), not in __init__.
-        # Use getattr since this is an unstable internal API at a system boundary.
         if self._server and self._server.started:
-            servers = getattr(self._server, "servers", [])
-            if servers and servers[0].sockets:
-                return servers[0].sockets[0].getsockname()[1]
+            if self._server.servers and self._server.servers[0].sockets:
+                return self._server.servers[0].sockets[0].getsockname()[1]
         return self._config.port
 
     @property

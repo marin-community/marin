@@ -3,53 +3,42 @@
 
 """Protobuf enum utilities."""
 
+from google.protobuf.descriptor import EnumDescriptor
+
 from iris.rpc import vm_pb2, cluster_pb2, config_pb2
 
 _VM_STATE = vm_pb2.DESCRIPTOR.enum_types_by_name["VmState"]
-_SCALING_ACTION = vm_pb2.DESCRIPTOR.enum_types_by_name["ScalingAction"]
 _JOB_STATE = cluster_pb2.DESCRIPTOR.enum_types_by_name["JobState"]
 _TASK_STATE = cluster_pb2.DESCRIPTOR.enum_types_by_name["TaskState"]
 _ACCELERATOR_TYPE = config_pb2.DESCRIPTOR.enum_types_by_name["AcceleratorType"]
 
 
+def _enum_name(descriptor: EnumDescriptor, value: int) -> str:
+    """Look up the name of a protobuf enum value, returning UNKNOWN(value) for missing entries."""
+    try:
+        return descriptor.values_by_number[value].name
+    except KeyError:
+        return f"UNKNOWN({value})"
+
+
 def vm_state_name(state: int) -> str:
     """Return enum name like 'VM_STATE_READY'."""
-    try:
-        return _VM_STATE.values_by_number[state].name
-    except KeyError:
-        return f"UNKNOWN({state})"
-
-
-def scaling_action_name(action: int) -> str:
-    """Return enum name like 'SCALING_ACTION_SCALE_UP'."""
-    try:
-        return _SCALING_ACTION.values_by_number[action].name
-    except KeyError:
-        return f"UNKNOWN({action})"
+    return _enum_name(_VM_STATE, state)
 
 
 def job_state_name(state: int) -> str:
     """Return enum name like 'JOB_STATE_RUNNING'."""
-    try:
-        return _JOB_STATE.values_by_number[state].name
-    except KeyError:
-        return f"UNKNOWN({state})"
+    return _enum_name(_JOB_STATE, state)
 
 
 def task_state_name(state: int) -> str:
     """Return enum name like 'TASK_STATE_RUNNING'."""
-    try:
-        return _TASK_STATE.values_by_number[state].name
-    except KeyError:
-        return f"UNKNOWN({state})"
+    return _enum_name(_TASK_STATE, state)
 
 
 def accelerator_type_name(accel_type: int) -> str:
     """Return enum name like 'ACCELERATOR_TYPE_TPU'."""
-    try:
-        return _ACCELERATOR_TYPE.values_by_number[accel_type].name
-    except KeyError:
-        return f"UNKNOWN({accel_type})"
+    return _enum_name(_ACCELERATOR_TYPE, accel_type)
 
 
 def accelerator_type_friendly(accel_type: int) -> str:

@@ -8,12 +8,11 @@ instead of Docker containers, ensuring local execution follows the same code pat
 as production cluster execution.
 """
 
-from typing import Self
+from typing import Any, Self
 
-from iris.cluster.client.remote_client import RemoteClusterClient, TaskStateLogger
+from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.config import make_local_config
 from iris.cluster.controller.local import LocalController
-from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration, ExponentialBackoff
@@ -55,6 +54,9 @@ class LocalClusterClient:
 
     Provides the same execution path as production clusters. Workers run in-process,
     but tasks execute in subprocesses (not Docker containers) for isolation.
+
+    All ClusterClient methods are delegated to the underlying RemoteClusterClient
+    via __getattr__. Only lifecycle methods (create, shutdown) are defined here.
 
     Use the create() classmethod to instantiate:
         client = LocalClusterClient.create()
@@ -103,114 +105,6 @@ class LocalClusterClient:
         self._remote_client.shutdown()
         self._controller.stop()
 
-    def submit_job(
-        self,
-        job_id: JobName,
-        entrypoint: Entrypoint,
-        resources: cluster_pb2.ResourceSpecProto,
-        environment: cluster_pb2.EnvironmentConfig | None = None,
-        ports: list[str] | None = None,
-        scheduling_timeout: Duration | None = None,
-        constraints: list[cluster_pb2.Constraint] | None = None,
-        coscheduling: cluster_pb2.CoschedulingConfig | None = None,
-        replicas: int = 1,
-        max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
-        timeout: Duration | None = None,
-    ) -> None:
-        self._remote_client.submit_job(
-            job_id=job_id,
-            entrypoint=entrypoint,
-            resources=resources,
-            environment=environment,
-            ports=ports,
-            scheduling_timeout=scheduling_timeout,
-            constraints=constraints,
-            coscheduling=coscheduling,
-            replicas=replicas,
-            max_retries_failure=max_retries_failure,
-            max_retries_preemption=max_retries_preemption,
-            timeout=timeout,
-        )
-
-    def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
-        return self._remote_client.get_job_status(job_id)
-
-    def wait_for_job(
-        self,
-        job_id: JobName,
-        timeout: float = 300.0,
-        poll_interval: float = 2.0,
-    ) -> cluster_pb2.JobStatus:
-        return self._remote_client.wait_for_job(job_id, timeout=timeout, poll_interval=poll_interval)
-
-    def terminate_job(self, job_id: JobName) -> None:
-        self._remote_client.terminate_job(job_id)
-
-    def register_endpoint(
-        self,
-        name: str,
-        address: str,
-        job_id: JobName,
-        metadata: dict[str, str] | None = None,
-    ) -> str:
-        return self._remote_client.register_endpoint(name=name, address=address, job_id=job_id, metadata=metadata)
-
-    def unregister_endpoint(self, endpoint_id: str) -> None:
-        self._remote_client.unregister_endpoint(endpoint_id)
-
-    def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]:
-        return self._remote_client.list_endpoints(prefix)
-
-    def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]:
-        return self._remote_client.list_workers()
-
-    def list_jobs(self) -> list[cluster_pb2.JobStatus]:
-        return self._remote_client.list_jobs()
-
-    def get_task_status(self, task_name: JobName) -> cluster_pb2.TaskStatus:
-        return self._remote_client.get_task_status(task_name)
-
-    def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
-        return self._remote_client.list_tasks(job_id)
-
-    def fetch_task_logs(
-        self,
-        target: JobName,
-        *,
-        include_children: bool = False,
-        since_ms: int = 0,
-        max_total_lines: int = 0,
-        regex: str | None = None,
-        attempt_id: int = -1,
-    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        return self._remote_client.fetch_task_logs(
-            target,
-            include_children=include_children,
-            since_ms=since_ms,
-            max_total_lines=max_total_lines,
-            regex=regex,
-            attempt_id=attempt_id,
-        )
-
-    def wait_for_job_with_streaming(
-        self,
-        job_id: JobName,
-        *,
-        timeout: float,
-        poll_interval: float,
-        include_children: bool,
-        since_ms: int = 0,
-        state_logger: TaskStateLogger | None = None,
-    ) -> cluster_pb2.JobStatus:
-        return self._remote_client.wait_for_job_with_streaming(
-            job_id,
-            timeout=timeout,
-            poll_interval=poll_interval,
-            include_children=include_children,
-            since_ms=since_ms,
-            state_logger=state_logger,
-        )
-
-    def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
-        return self._remote_client.get_autoscaler_status()
+    def __getattr__(self, name: str) -> Any:
+        """Delegate all other attribute access to the underlying RemoteClusterClient."""
+        return getattr(self._remote_client, name)

@@ -31,6 +31,7 @@ from connectrpc.errors import ConnectError
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
     BundleCreator,
+    ClusterClient,
     JobInfo,
     LocalClusterClient,
     RemoteClusterClient,
@@ -364,7 +365,7 @@ class NamespacedEndpointRegistry:
 
     def __init__(
         self,
-        cluster: LocalClusterClient | RemoteClusterClient,
+        cluster: ClusterClient,
         namespace: Namespace,
         job_id: JobName,
     ):
@@ -412,7 +413,7 @@ class NamespacedEndpointRegistry:
 class NamespacedResolver:
     """Resolver that auto-prefixes names with namespace."""
 
-    def __init__(self, cluster: LocalClusterClient | RemoteClusterClient, namespace: Namespace | None = None):
+    def __init__(self, cluster: ClusterClient, namespace: Namespace | None = None):
         self._cluster = cluster
         self._namespace = namespace
 
@@ -485,7 +486,7 @@ class IrisClient:
                 print(entry.data)
     """
 
-    def __init__(self, cluster: LocalClusterClient | RemoteClusterClient, namespace: Namespace = Namespace("")):
+    def __init__(self, cluster: ClusterClient, namespace: Namespace = Namespace("")):
         """Initialize IrisClient with a cluster client.
 
         Prefer using factory methods (local(), remote()) over direct construction.

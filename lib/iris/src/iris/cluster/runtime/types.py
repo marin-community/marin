@@ -256,6 +256,10 @@ class ContainerRuntime(Protocol):
         """List all managed containers."""
         ...
 
+    def list_iris_containers(self, all_states: bool = True) -> list[str]:
+        """List IDs of all iris-managed containers/sandboxes."""
+        ...
+
     def remove_all_iris_containers(self) -> int:
         """Force remove all iris-managed containers/sandboxes. Returns count removed."""
         ...

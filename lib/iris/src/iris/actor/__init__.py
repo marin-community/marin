@@ -7,14 +7,10 @@ For ClusterResolver (namespace-aware controller-based resolution),
 see iris.client.resolver.
 """
 
-from iris.actor.client import ActorClient
+from iris.actor.client import ActorClient, RetryConfig
 from iris.actor.pool import ActorPool, BroadcastFuture, CallResult
 from iris.actor.resolver import (
     FixedResolver,
-    GcsApi,
-    GcsResolver,
-    MockGcsApi,
-    RealGcsApi,
     ResolvedEndpoint,
     ResolveResult,
     Resolver,
@@ -29,11 +25,8 @@ __all__ = [
     "BroadcastFuture",
     "CallResult",
     "FixedResolver",
-    "GcsApi",
-    "GcsResolver",
-    "MockGcsApi",
-    "RealGcsApi",
     "ResolveResult",
     "ResolvedEndpoint",
     "Resolver",
+    "RetryConfig",
 ]

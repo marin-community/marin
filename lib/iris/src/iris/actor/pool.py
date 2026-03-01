@@ -5,6 +5,7 @@
 
 import logging
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 
+from iris.actor.client import unwrap_actor_response
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult, Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
@@ -95,6 +97,7 @@ class ActorPool(Generic[T]):
         max_call_attempts: int = 5,
         initial_backoff: float = 0.1,
         max_backoff: float = 10.0,
+        resolve_ttl: float = 5.0,
     ):
         """Initialize actor pool.
 
@@ -106,6 +109,7 @@ class ActorPool(Generic[T]):
                 On each retry, a new endpoint is selected via round-robin re-resolution.
             initial_backoff: Initial retry delay in seconds
             max_backoff: Maximum delay between retries in seconds
+            resolve_ttl: Seconds to cache resolve results before re-querying the resolver
         """
         self._resolver = resolver
         self._name = name
@@ -113,16 +117,45 @@ class ActorPool(Generic[T]):
         self._max_call_attempts = max_call_attempts
         self._initial_backoff = initial_backoff
         self._max_backoff = max_backoff
+        self._resolve_ttl = resolve_ttl
         self._endpoint_index = 0
         self._cached_result: ResolveResult | None = None
+        self._last_resolve_time: float = 0.0
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=32)
+        self._clients: dict[str, ActorServiceClientSync] = {}
+
+    def _get_client(self, endpoint: ResolvedEndpoint) -> ActorServiceClientSync:
+        """Return a cached client for the endpoint, creating one if needed."""
+        url = endpoint.url
+        with self._lock:
+            client = self._clients.get(url)
+            if client is not None:
+                return client
+            client = ActorServiceClientSync(
+                address=url,
+                timeout_ms=int(self._timeout * 1000),
+            )
+            self._clients[url] = client
+            return client
 
     def _resolve(self) -> ResolveResult:
+        now = time.monotonic()
+        with self._lock:
+            if self._cached_result is not None and (now - self._last_resolve_time) < self._resolve_ttl:
+                return self._cached_result
+
         result = self._resolver.resolve(self._name)
         with self._lock:
             self._cached_result = result
+            self._last_resolve_time = time.monotonic()
         return result
+
+    def _invalidate_resolve_cache(self) -> None:
+        """Force the next _resolve() call to re-query the resolver."""
+        with self._lock:
+            self._last_resolve_time = 0.0
+            self._cached_result = None
 
     def _get_next_endpoint(self) -> ResolvedEndpoint:
         """Get the next endpoint in round-robin order.
@@ -161,10 +194,7 @@ class ActorPool(Generic[T]):
         args: tuple,
         kwargs: dict,
     ) -> Any:
-        client = ActorServiceClientSync(
-            address=endpoint.url,
-            timeout_ms=int(self._timeout * 1000),
-        )
+        client = self._get_client(endpoint)
 
         call = actor_pb2.ActorCall(
             method_name=method_name,
@@ -174,13 +204,7 @@ class ActorPool(Generic[T]):
         )
 
         resp = client.call(call)
-
-        if resp.HasField("error"):
-            if resp.error.serialized_exception:
-                raise cloudpickle.loads(resp.error.serialized_exception)
-            raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
-
-        return cloudpickle.loads(resp.serialized_value)
+        return unwrap_actor_response(resp)
 
     def call(self) -> "_PoolCallProxy[T]":
         return _PoolCallProxy(self)
@@ -202,6 +226,7 @@ class _PoolCallProxy(Generic[T]):
             return call_with_retry(
                 f"{self._pool._name}.{method_name}",
                 do_call,
+                on_retry=lambda _exc: self._pool._invalidate_resolve_cache(),
                 max_attempts=self._pool._max_call_attempts,
                 initial_backoff=self._pool._initial_backoff,
                 max_backoff=self._pool._max_backoff,

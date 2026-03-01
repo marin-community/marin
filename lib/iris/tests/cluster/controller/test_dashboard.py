@@ -131,7 +131,7 @@ def service(state, scheduler):
 @pytest.fixture
 def client(service):
     dashboard = ControllerDashboard(service)
-    return TestClient(dashboard._app)
+    return TestClient(dashboard.app)
 
 
 @pytest.fixture
@@ -537,7 +537,7 @@ def mock_autoscaler():
 def client_with_autoscaler(service_with_autoscaler):
     """Dashboard test client with autoscaler enabled."""
     dashboard = ControllerDashboard(service_with_autoscaler)
-    return TestClient(dashboard._app)
+    return TestClient(dashboard.app)
 
 
 def test_get_autoscaler_status_returns_status_when_enabled(client_with_autoscaler):

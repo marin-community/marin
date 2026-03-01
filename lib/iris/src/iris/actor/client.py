@@ -16,12 +16,13 @@ Example:
 Custom backoff behavior:
     client = ActorClient(
         resolver, "my-actor",
-        initial_backoff=0.2, max_backoff=5.0,
+        retry_config=RetryConfig(initial_backoff=0.2, max_backoff=5.0),
     )
 """
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import cloudpickle
@@ -35,6 +36,26 @@ from iris.time_utils import ExponentialBackoff
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class RetryConfig:
+    """Configuration for retry behavior on transient RPC errors."""
+
+    initial_backoff: float = 0.1
+    max_backoff: float = 10.0
+    backoff_factor: float = 2.0
+    backoff_jitter: float = 0.25
+    max_call_attempts: int = 5
+
+
+def unwrap_actor_response(resp: actor_pb2.ActorResponse) -> Any:
+    """Unwrap an ActorResponse, raising the embedded exception on error."""
+    if resp.HasField("error"):
+        if resp.error.serialized_exception:
+            raise cloudpickle.loads(resp.error.serialized_exception)
+        raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
+    return cloudpickle.loads(resp.serialized_value)
+
+
 class ActorClient:
     """Actor client with resolver-based discovery."""
 
@@ -44,11 +65,14 @@ class ActorClient:
         name: str,
         resolve_timeout: float = 3600.0,
         call_timeout: float | None = None,
-        initial_backoff: float = 0.1,
-        max_backoff: float = 10.0,
-        backoff_factor: float = 2.0,
-        backoff_jitter: float = 0.25,
-        max_call_attempts: int = 5,
+        retry_config: RetryConfig = RetryConfig(),
+        # Legacy keyword arguments forwarded to RetryConfig for backward compat-free migration.
+        # These are here so existing call sites keep working until they are updated.
+        initial_backoff: float | None = None,
+        max_backoff: float | None = None,
+        backoff_factor: float | None = None,
+        backoff_jitter: float | None = None,
+        max_call_attempts: int | None = None,
     ):
         """Initialize the actor client.
 
@@ -56,24 +80,33 @@ class ActorClient:
             resolver: Resolver instance for endpoint discovery
             name: Name of the actor to invoke
             resolve_timeout: Total timeout in seconds for initial worker resolution.
-            call_timeout: Timeout in seconds for RPC calls. Defaults to `timeout`
+            call_timeout: Timeout in seconds for RPC calls. Defaults to `resolve_timeout`
                 when not specified.
-            initial_backoff: Initial retry delay in seconds
-            max_backoff: Maximum delay between retries in seconds
-            backoff_factor: Multiplier for exponential backoff
-            backoff_jitter: Random jitter as fraction of delay (e.g., 0.25 = ±25%)
-            max_call_attempts: Maximum number of RPC call attempts on transient errors.
-                On each retry, the cached connection is cleared and re-resolved.
+            retry_config: Configuration for retry behavior on transient errors.
+            initial_backoff: Deprecated individual field, use retry_config instead.
+            max_backoff: Deprecated individual field, use retry_config instead.
+            backoff_factor: Deprecated individual field, use retry_config instead.
+            backoff_jitter: Deprecated individual field, use retry_config instead.
+            max_call_attempts: Deprecated individual field, use retry_config instead.
         """
         self._resolver = resolver
         self._name = name
         self._resolve_timeout = resolve_timeout
         self._call_timeout = resolve_timeout if call_timeout is None else call_timeout
-        self._initial_backoff = initial_backoff
-        self._max_backoff = max_backoff
-        self._backoff_factor = backoff_factor
-        self._backoff_jitter = backoff_jitter
-        self._max_call_attempts = max_call_attempts
+
+        # If any individual backoff kwargs are passed, build a RetryConfig from them,
+        # using the provided retry_config as defaults for unspecified fields.
+        if any(v is not None for v in (initial_backoff, max_backoff, backoff_factor, backoff_jitter, max_call_attempts)):
+            self.retry_config = RetryConfig(
+                initial_backoff=initial_backoff if initial_backoff is not None else retry_config.initial_backoff,
+                max_backoff=max_backoff if max_backoff is not None else retry_config.max_backoff,
+                backoff_factor=backoff_factor if backoff_factor is not None else retry_config.backoff_factor,
+                backoff_jitter=backoff_jitter if backoff_jitter is not None else retry_config.backoff_jitter,
+                max_call_attempts=max_call_attempts if max_call_attempts is not None else retry_config.max_call_attempts,
+            )
+        else:
+            self.retry_config = retry_config
+
         self._rpc_client: ActorServiceClientSync | None = None
 
     def rpc_client(self) -> ActorServiceClientSync:
@@ -89,10 +122,10 @@ class ActorClient:
             return self._rpc_client
 
         backoff = ExponentialBackoff(
-            initial=self._initial_backoff,
-            maximum=self._max_backoff,
-            factor=self._backoff_factor,
-            jitter=self._backoff_jitter,
+            initial=self.retry_config.initial_backoff,
+            maximum=self.retry_config.max_backoff,
+            factor=self.retry_config.backoff_factor,
+            jitter=self.retry_config.backoff_jitter,
         )
         start_time = time.monotonic()
         attempt = 0
@@ -153,11 +186,7 @@ class _RpcMethod:
         def do_call():
             client = self._client.rpc_client()
             resp = client.call(call)
-            if resp.HasField("error"):
-                if resp.error.serialized_exception:
-                    raise cloudpickle.loads(resp.error.serialized_exception)
-                raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
-            return cloudpickle.loads(resp.serialized_value)
+            return unwrap_actor_response(resp)
 
         def clear_connection(_exc):
             self._client._rpc_client = None
@@ -166,8 +195,8 @@ class _RpcMethod:
             f"{self._client._name}.{self._method_name}",
             do_call,
             on_retry=clear_connection,
-            max_attempts=self._client._max_call_attempts,
-            initial_backoff=self._client._initial_backoff,
-            max_backoff=self._client._max_backoff,
-            backoff_factor=self._client._backoff_factor,
+            max_attempts=self._client.retry_config.max_call_attempts,
+            initial_backoff=self._client.retry_config.initial_backoff,
+            max_backoff=self._client.retry_config.max_backoff,
+            backoff_factor=self._client.retry_config.backoff_factor,
         )

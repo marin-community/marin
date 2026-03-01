@@ -34,6 +34,10 @@ class WorkerDashboard:
     def port(self) -> int:
         return self._port
 
+    @property
+    def app(self) -> Starlette:
+        return self._app
+
     def _create_app(self) -> Starlette:
         rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)

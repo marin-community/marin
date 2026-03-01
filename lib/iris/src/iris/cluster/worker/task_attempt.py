@@ -307,6 +307,28 @@ class TaskAttempt:
         if self._container_handle:
             self._container_handle.stop(force=force)
 
+    @property
+    def has_container(self) -> bool:
+        """Whether this attempt has an active container handle."""
+        return self._container_handle is not None
+
+    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+        """Profile the running container process.
+
+        Args:
+            duration_seconds: How long to sample
+            profile_type: ProfileType message with oneof cpu/memory profiler config
+
+        Returns:
+            Raw profile output
+
+        Raises:
+            ValueError: If no container handle is available
+        """
+        if not self._container_handle:
+            raise ValueError(f"Task {self.task_id} has no container handle")
+        return self._container_handle.profile(duration_seconds, profile_type)
+
     def transition_to(
         self,
         state: TaskState,

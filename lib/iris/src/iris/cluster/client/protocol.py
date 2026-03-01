@@ -1,0 +1,92 @@
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""ClusterClient protocol defining the interface for cluster client implementations."""
+
+from typing import Protocol
+
+from iris.cluster.client.remote_client import TaskStateLogger
+from iris.cluster.types import Entrypoint, JobName
+from iris.rpc import cluster_pb2
+from iris.time_utils import Duration
+
+
+class ClusterClient(Protocol):
+    """Protocol for cluster client implementations.
+
+    Both RemoteClusterClient and LocalClusterClient satisfy this protocol,
+    enabling callers to depend on the interface rather than concrete types.
+    """
+
+    def submit_job(
+        self,
+        job_id: JobName,
+        entrypoint: Entrypoint,
+        resources: cluster_pb2.ResourceSpecProto,
+        environment: cluster_pb2.EnvironmentConfig | None = None,
+        ports: list[str] | None = None,
+        scheduling_timeout: Duration | None = None,
+        constraints: list[cluster_pb2.Constraint] | None = None,
+        coscheduling: cluster_pb2.CoschedulingConfig | None = None,
+        replicas: int = 1,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 100,
+        timeout: Duration | None = None,
+    ) -> None: ...
+
+    def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus: ...
+
+    def wait_for_job(
+        self,
+        job_id: JobName,
+        timeout: float = 300.0,
+        poll_interval: float = 2.0,
+    ) -> cluster_pb2.JobStatus: ...
+
+    def wait_for_job_with_streaming(
+        self,
+        job_id: JobName,
+        *,
+        timeout: float,
+        poll_interval: float,
+        include_children: bool,
+        since_ms: int = 0,
+        state_logger: TaskStateLogger | None = None,
+    ) -> cluster_pb2.JobStatus: ...
+
+    def terminate_job(self, job_id: JobName) -> None: ...
+
+    def register_endpoint(
+        self,
+        name: str,
+        address: str,
+        job_id: JobName,
+        metadata: dict[str, str] | None = None,
+    ) -> str: ...
+
+    def unregister_endpoint(self, endpoint_id: str) -> None: ...
+
+    def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]: ...
+
+    def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]: ...
+
+    def list_jobs(self) -> list[cluster_pb2.JobStatus]: ...
+
+    def get_task_status(self, task_name: JobName) -> cluster_pb2.TaskStatus: ...
+
+    def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]: ...
+
+    def fetch_task_logs(
+        self,
+        target: JobName,
+        *,
+        include_children: bool = False,
+        since_ms: int = 0,
+        max_total_lines: int = 0,
+        regex: str | None = None,
+        attempt_id: int = -1,
+    ) -> cluster_pb2.Controller.GetTaskLogsResponse: ...
+
+    def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse: ...
+
+    def shutdown(self, wait: bool = True) -> None: ...

@@ -314,11 +314,9 @@ def _merge_proto_fields(target, source) -> None:
 
         value = getattr(source, field_name)
 
-        # For message types (Duration, nested messages), use CopyFrom
-        if hasattr(value, "CopyFrom"):
+        if field_desc.message_type is not None:
             target_field = getattr(target, field_name)
             target_field.CopyFrom(value)
-        # For scalar types (int, string, bool, enum), use direct assignment
         else:
             setattr(target, field_name, value)
 
