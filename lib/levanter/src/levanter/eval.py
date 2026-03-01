@@ -196,7 +196,7 @@ def _default_lm_eval_loss_fn(
 
 
 def cb_tagged_lm_evaluate(
-    EvalBatch: hax.Axis,
+    EvalBatch: hax.Axis | int,
     tagged_eval_sets: Sequence[tuple[AsyncDataset[LmEvalExample], Sequence[str]]],
     tokenizer: Optional[HfTokenizer] = None,
     device_mesh: Optional[Mesh] = None,
@@ -236,6 +236,9 @@ def cb_tagged_lm_evaluate(
         eval_ema: Whether to evaluate the EMA model (or other model averaged model)
         checkpoint_path: If provided, write eval metrics to a JSONL file in this directory
     """
+
+    if isinstance(EvalBatch, int):
+        EvalBatch = hax.Axis("batch", EvalBatch)
 
     if loss_fn is None:
 
