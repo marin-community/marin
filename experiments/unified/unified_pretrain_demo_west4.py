@@ -163,6 +163,30 @@ def _make_visual_weight_transform(new_w_visual: float) -> Callable[[np.ndarray],
     return transform
 
 
+def _zero_fractional_transform(weights: np.ndarray) -> np.ndarray:
+    """Zero out fractional weights, keeping only the primary modality (weight=1.0 tokens).
+
+    In understanding caches this removes visual tokens; in generation caches this removes text tokens.
+    """
+    mask = (weights > 0) & (weights < 1.0)
+    if not mask.any():
+        return weights
+    result = weights.copy()
+    result[mask] = 0.0
+    return result
+
+
+def _only_fractional_transform(weights: np.ndarray) -> np.ndarray:
+    """Keep only the secondary modality: fractional → 1.0, primary (1.0) → 0.
+
+    In understanding caches this keeps only visual tokens; in generation caches only text tokens.
+    """
+    result = np.zeros_like(weights)
+    mask = (weights > 0) & (weights < 1.0)
+    result[mask] = 1.0
+    return result
+
+
 def unified_data_config(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
@@ -250,6 +274,47 @@ def unified_data_config(
         tags=["multimodal", "generation"],
     )
     weights["val_generation"] = 0.0
+
+    # Per-modality val loss breakdown (text-only and visual-only).
+    # In understanding cache: fractional=visual, 1.0=text.
+    # In generation cache: fractional=text, 1.0=visual.
+    fmt_primary_only = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_zero_fractional_transform,
+    )
+    fmt_secondary_only = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_only_fractional_transform,
+    )
+
+    und_val_cache = f"{multimodal_cache_path}/understanding/val_understanding"
+    gen_val_cache = f"{multimodal_cache_path}/generation/val_generation"
+
+    # Understanding: primary=text, secondary=visual
+    components["val_understanding_text_only"] = DatasetComponent(
+        cache_dir=und_val_cache, format=fmt_primary_only, pack=True,
+        tags=["multimodal", "understanding"],
+    )
+    components["val_understanding_visual_only"] = DatasetComponent(
+        cache_dir=und_val_cache, format=fmt_secondary_only, pack=True,
+        tags=["multimodal", "understanding"],
+    )
+    weights["val_understanding_text_only"] = 0.0
+    weights["val_understanding_visual_only"] = 0.0
+
+    # Generation: primary=visual, secondary=text
+    components["val_generation_text_only"] = DatasetComponent(
+        cache_dir=gen_val_cache, format=fmt_secondary_only, pack=True,
+        tags=["multimodal", "generation"],
+    )
+    components["val_generation_visual_only"] = DatasetComponent(
+        cache_dir=gen_val_cache, format=fmt_primary_only, pack=True,
+        tags=["multimodal", "generation"],
+    )
+    weights["val_generation_text_only"] = 0.0
+    weights["val_generation_visual_only"] = 0.0
 
     # Eval benchmarks: weight 0.0 → eval-only (not used in training data).
     # Levanter's validation_sets() loads these for periodic eval during training.
