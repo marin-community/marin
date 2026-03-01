@@ -277,7 +277,12 @@ def main(config: TrainLmConfig):
             eval_harness = config.eval_harness
             trainer.add_hook(
                 levanter.eval_harness.lm_eval_harness(
-                    eval_harness, tokenizer, EvalBatch, compute_axis_mapping, trainer.mp
+                    eval_harness,
+                    tokenizer,
+                    EvalBatch,
+                    axis_resources=compute_axis_mapping,
+                    mp=trainer.mp,
+                    batch_axis_resource=levanter.eval.resolve_batch_axis_resource(EvalBatch, compute_axis_mapping),
                 ),
                 every=config.eval_harness_steps,
             )
