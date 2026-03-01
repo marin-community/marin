@@ -208,7 +208,7 @@ def cb_tagged_lm_evaluate(
     tagged_eval_sets: Sequence[tuple[AsyncDataset[LmEvalExample], Sequence[str]]],
     tokenizer: Optional[HfTokenizer] = None,
     device_mesh: Optional[Mesh] = None,
-    axis_mapping: ResourceMapping | None = None,
+    compute_axis_mapping: ResourceMapping | None = None,
     batch_axis_resource=None,
     max_examples_per_dataset: Optional[int] = None,
     eval_current: bool = True,
@@ -236,7 +236,7 @@ def cb_tagged_lm_evaluate(
         tagged_eval_sets: A list of datasets, each with its own domain tag
         tokenizer: The tokenizer to use for bits-per-byte evaluation (optional)
         device_mesh: The mesh to use for evaluation
-        axis_mapping: The axis mapping to use for evaluation
+        compute_axis_mapping: The axis mapping to use for evaluation
         batch_axis_resource: The explicit mesh resource to shard the eval batch axis onto.
         max_examples_per_dataset: The maximum number of examples to use from each dataset
         prefix: The prefix to use for logging the losses
@@ -254,7 +254,7 @@ def cb_tagged_lm_evaluate(
             return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp)
 
     if batch_axis_resource is None:
-        batch_axis_resource = resolve_batch_axis_resource(EvalBatch, axis_mapping)
+        batch_axis_resource = resolve_batch_axis_resource(EvalBatch, compute_axis_mapping)
 
     evaluator = TaggedEvaluator(
         EvalBatch=EvalBatch,
@@ -262,7 +262,7 @@ def cb_tagged_lm_evaluate(
         loss_fn=loss_fn,
         tokenizer=tokenizer,
         device_mesh=device_mesh,
-        axis_mapping=axis_mapping,
+        compute_axis_mapping=compute_axis_mapping,
         batch_axis_resource=batch_axis_resource,
         max_examples_per_dataset=max_examples_per_dataset,
     )
@@ -410,15 +410,15 @@ class TaggedEvaluator(Generic[Ex, M]):
         loss_fn: Callable[[M, Ex], LossFnOutput],
         tokenizer: Optional[HfTokenizer] = None,
         device_mesh=None,
-        axis_mapping=None,
+        compute_axis_mapping=None,
         batch_axis_resource=None,
         max_examples_per_dataset=None,
     ):
         if isinstance(EvalBatch, int):
             EvalBatch = hax.Axis("batch", EvalBatch)
         if batch_axis_resource is None:
-            batch_axis_resource = resolve_batch_axis_resource(EvalBatch, axis_mapping)
-        loader_axis_resources = axis_mapping
+            batch_axis_resource = resolve_batch_axis_resource(EvalBatch, compute_axis_mapping)
+        loader_axis_resources = compute_axis_mapping
         if batch_axis_resource is not None:
             loader_axis_resources = {EvalBatch.name: batch_axis_resource}
         self.loss_fn = loss_fn
@@ -432,7 +432,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         )
         self.device_mesh = device_mesh
         self.tokenizer = tokenizer
-        self.axis_mapping = axis_mapping
+        self.compute_axis_mapping = compute_axis_mapping
         self.per_pos_out_sharding = None
         if device_mesh is not None and batch_axis_resource is not None:
             if axis_resource_is_explicit(device_mesh, batch_axis_resource):

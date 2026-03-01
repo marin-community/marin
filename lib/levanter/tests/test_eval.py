@@ -105,7 +105,7 @@ def test_tagged_evaluator_accepts_mixed_lm_example_types():
             loss_fn=loss_fn,
             tokenizer=None,
             device_mesh=mesh,
-            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+            compute_axis_mapping={EvalBatch.name: ResourceAxis.DATA},
         )
         result = evaluator.evaluate(model)
 
@@ -163,7 +163,7 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
             loss_fn=loss_fn,
             tokenizer=None,
             device_mesh=mesh,
-            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+            compute_axis_mapping={EvalBatch.name: ResourceAxis.DATA},
         )
         result = evaluator.evaluate(jnp.zeros((), dtype=jnp.float32))
 
