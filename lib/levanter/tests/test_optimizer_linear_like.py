@@ -3,10 +3,15 @@
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 
 import haliax as hax
 
-from levanter.optim.util import is_linear_like_module, label_linear_like_module
+from levanter.models.linear import LinearLikeModule
+from levanter.optim.util import (
+    is_linear_like_module,
+    label_linear_like_module,
+)
 
 
 def test_is_linear_like_module_detects_haliax_and_eqx_linears():
@@ -18,6 +23,15 @@ def test_is_linear_like_module_detects_haliax_and_eqx_linears():
     assert is_linear_like_module(haliax_linear)
     assert is_linear_like_module(eqx_linear)
     assert not is_linear_like_module(jax.numpy.ones((2, 2)))
+
+
+def test_is_linear_like_module_detects_marker_modules():
+    class _MarkedLinear(LinearLikeModule):
+        weight: jax.Array
+        bias: jax.Array | None
+
+    marked = _MarkedLinear(weight=jnp.ones((4, 3)), bias=jnp.zeros((3,)))
+    assert is_linear_like_module(marked)
 
 
 def test_label_linear_like_module_labels_weight_and_bias():

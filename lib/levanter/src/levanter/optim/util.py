@@ -17,6 +17,7 @@ from optax._src.base import init_empty_state
 import haliax as hax
 from haliax.tree_util import scan_aware_tree_map
 
+from levanter.models.linear import has_linear_like_marker
 import levanter.tracker
 from levanter.utils.jax_utils import is_inexact_arrayish
 
@@ -26,7 +27,7 @@ T = TypeVar("T")
 
 def is_linear_like_module(node: Any) -> bool:
     """Return True for linear-like modules used by optimizer mask routing."""
-    return isinstance(node, (hax.nn.Linear, eqx.nn.Linear)) or bool(getattr(node, "__levanter_linear_like__", False))
+    return isinstance(node, (hax.nn.Linear, eqx.nn.Linear)) or has_linear_like_marker(node)
 
 
 def label_linear_like_module(module: Any, *, weight_label: str, bias_label: str) -> Any:
