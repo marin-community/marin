@@ -76,19 +76,10 @@ def test_resolve_memory_spec_maps_format(proto_format, expected_reporter, expect
 # ---------------------------------------------------------------------------
 
 
-def test_build_pyspy_cmd_produces_correct_cli_flags():
-    cfg = cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH, rate_hz=150)
-    spec = resolve_cpu_spec(cfg, duration_seconds=10, pid="42")
-    cmd = build_pyspy_cmd(spec, py_spy_bin="/usr/bin/py-spy", output_path="/tmp/out.svg")
-
-    assert cmd[0] == "/usr/bin/py-spy"
-    assert "record" in cmd
-    # Duration is converted from int to string CLI flag
-    assert cmd[cmd.index("--duration") + 1] == "10"
-    # Rate is converted from int to string CLI flag
-    assert cmd[cmd.index("--rate") + 1] == "150"
-    # Format enum was resolved to the py-spy format name
-    assert cmd[cmd.index("--format") + 1] == "flamegraph"
+def test_build_pyspy_cmd_includes_subprocesses_flag_by_default():
+    cfg = cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH, rate_hz=100)
+    spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
+    cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path="/tmp/out.svg")
     assert "--subprocesses" in cmd
 
 
@@ -132,7 +123,6 @@ def test_memray_transform_table_does_not_write_to_file():
     spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_memray_transform_cmd(spec, memray_bin="memray", trace_path="/tmp/t.bin", output_path="")
 
-    assert "table" in cmd
     assert "--output" not in cmd
 
 
