@@ -138,12 +138,15 @@ def main(config: LoraLmConfig):
             logger.warning("No evaluation datasets provided.")
         else:
             cb = levanter.eval.cb_tagged_lm_evaluate(
-                trainer.EvalBatch,
-                tagged_eval_datasets,
-                tokenizer,
-                trainer.device_mesh,
-                trainer.compute_axis_mapping,
-                max_eval_examples_per_ds,
+                EvalBatch=trainer.EvalBatch,
+                tagged_eval_sets=tagged_eval_datasets,
+                tokenizer=tokenizer,
+                device_mesh=trainer.device_mesh,
+                axis_mapping=trainer.compute_axis_mapping,
+                batch_axis_resource=trainer.compute_axis_mapping.get(
+                    trainer.EvalBatch.name, trainer.compute_axis_mapping.get("batch")
+                ),
+                max_examples_per_dataset=max_eval_examples_per_ds,
                 mp=config.trainer.mp,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
