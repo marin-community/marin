@@ -183,8 +183,7 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.parametrize("implementation", ["pallas_tpu"])
-def test_fused_cross_entropy_pallas_requires_tpu(implementation: str):
+def test_fused_cross_entropy_pallas_requires_tpu():
     if jax.default_backend() == "tpu":
         pytest.skip("requires non-TPU backend")
 
@@ -198,7 +197,7 @@ def test_fused_cross_entropy_pallas_requires_tpu(implementation: str):
             y,
             w,
             reduction=None,
-            implementation=implementation,
+            implementation="pallas_tpu",
         )
 
 
