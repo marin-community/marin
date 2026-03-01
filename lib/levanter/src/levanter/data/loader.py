@@ -36,6 +36,7 @@ from levanter.schedule import BatchSchedule, IntSchedule
 from levanter.shapes import NamedShapeSpec, ShapeSpec, to_raw_shape
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import local_cpu_mesh
+from levanter.utils.mesh import activate_mesh
 from levanter.utils.py_utils import index_where
 from levanter.utils.thread_utils import AsyncIteratorWrapper, blocking_wait
 from levanter.utils.types import ResourceMapping
@@ -120,7 +121,7 @@ class DataLoader(Iterable[Ex]):
             self.scheduler = BatchSchedule(batch_size)
 
         self._batch_sharding = hax.partitioning.sharding_for_axis(self.batch_axis_name, axis_resources, mesh)
-        with haliax.partitioning.set_mesh(mesh):
+        with activate_mesh(mesh):
             self._data_axis_size = hax.partitioning.physical_axis_size(self.batch_axis_name, axis_resources)
 
         assert self._data_axis_size is not None, "Data axis size must be known. Make sure you're passing in a mesh"
