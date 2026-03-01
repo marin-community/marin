@@ -47,12 +47,12 @@ TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
 
 
-def resolve_batch_axis_resource(EvalBatch: hax.Axis | int, axis_mapping: ResourceMapping | None):
-    if axis_mapping is None:
+def resolve_batch_axis_resource(EvalBatch: hax.Axis | int, compute_axis_mapping: ResourceMapping | None):
+    if compute_axis_mapping is None:
         return None
     if isinstance(EvalBatch, int):
-        return axis_mapping.get("batch")
-    return axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
+        return compute_axis_mapping.get("batch")
+    return compute_axis_mapping.get(EvalBatch.name, compute_axis_mapping.get("batch"))
 
 
 @dataclasses.dataclass
