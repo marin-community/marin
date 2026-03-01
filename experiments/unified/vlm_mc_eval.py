@@ -1214,6 +1214,45 @@ def find_benchmark_parquets(benchmark: str, base_path: str = DEFAULT_EVAL_PARQUE
 # ---------------------------------------------------------------------------
 
 
+def _infer_wandb_info(checkpoint_path: str) -> tuple[str | None, int | None]:
+    """Infer WandB run ID and training step from a checkpoint path.
+
+    Handles two path layouts:
+
+    1. Levanter standalone: ``{base_path}/{run_id}/step-{N}/``
+    2. Marin executor: ``{bucket}/checkpoints/{run_id}/checkpoints/step-{N}/``
+       or ``{bucket}/checkpoints/{run_id}/hf/step-{N}/``
+
+    In both cases the WandB run ID equals the Marin executor step name (set by
+    ``impute_run_id_from_output_path`` in ``TrainLmOnPodConfig``).  When the
+    immediate parent of ``step-{N}`` is a known internal directory (``checkpoints``
+    or ``hf``), we look one level higher for the actual run ID.
+    """
+    import re
+
+    parts = checkpoint_path.rstrip("/").split("/")
+
+    step = None
+    step_idx = None
+    for i, part in enumerate(parts):
+        m = re.match(r"step[-_](\d+)$", part)
+        if m:
+            step = int(m.group(1))
+            step_idx = i
+            break
+
+    run_id = None
+    if step_idx is not None and step_idx > 0:
+        candidate = parts[step_idx - 1]
+        # Skip known Marin/Levanter internal subdirectory names
+        if candidate in ("checkpoints", "hf") and step_idx > 1:
+            run_id = parts[step_idx - 2]
+        else:
+            run_id = candidate
+
+    return run_id, step
+
+
 def main():
     parser = argparse.ArgumentParser(description="VLM benchmark evaluation using log-likelihood comparison.")
     parser.add_argument("--checkpoint_path", type=str, required=True, help="Path to model checkpoint")
@@ -1225,7 +1264,8 @@ def main():
         help=f"Benchmarks to evaluate (default: {VLM_EVAL_BENCHMARKS})",
     )
     parser.add_argument("--eval_parquet_path", type=str, default=DEFAULT_EVAL_PARQUET_PATH)
-    parser.add_argument("--eval_batch_size", type=int, default=16)
+    parser.add_argument("--eval_batch_size", type=int, default=None,
+                        help="Eval batch size (default: 1 per device = data_axis_size)")
     parser.add_argument("--max_length", type=int, default=4096, help="Maximum sequence length")
     parser.add_argument("--output_json", type=str, default=None, help="Path to write results JSON")
     parser.add_argument(
@@ -1234,6 +1274,15 @@ def main():
         default=None,
         help="Tokenizer path (default: inferred from checkpoint or unified tokenizer)",
     )
+    parser.add_argument("--wandb_project", type=str, default="marin",
+                        help="WandB project name (default: marin, same as training)")
+    parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity/team")
+    parser.add_argument("--wandb_run_id", type=str, default=None,
+                        help="WandB run ID (default: inferred from checkpoint path)")
+    parser.add_argument("--train_step", type=int, default=None,
+                        help="Training step (default: inferred from checkpoint path)")
+    parser.add_argument("--no_wandb", action="store_true",
+                        help="Disable WandB logging even if run_id can be inferred")
     args = parser.parse_args()
 
     import typing
@@ -1255,13 +1304,36 @@ def main():
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    trainer_config = TrainerConfig()
+    import jmp
+
+    # Match text eval harness: per_device_eval_parallelism=1 keeps memory safe.
+    trainer_config = TrainerConfig(
+        mp=jmp.get_policy("p=f32,c=bfloat16,o=bfloat16"),
+        per_device_eval_parallelism=1,
+    )
     trainer_config.initialize()
 
     compute_axis_mapping = trainer_config.compute_axis_mapping
     parameter_axis_mapping = trainer_config.parameter_axis_mapping
 
-    EvalBatch = hax.Axis("batch", args.eval_batch_size)
+    # Default: 1 per device (matching text eval harness).
+    # --eval_batch_size overrides, but must be >= data_axis_size and evenly divisible.
+    data_axis_size = trainer_config.data_axis_size
+    if args.eval_batch_size is not None:
+        requested = args.eval_batch_size
+        adjusted = max(requested, data_axis_size)
+        adjusted = (adjusted // data_axis_size) * data_axis_size
+        effective_eval_batch_size = adjusted
+        if adjusted != requested:
+            logger.info(
+                "Adjusted eval_batch_size from %d to %d (must be multiple of data_axis_size=%d)",
+                requested,
+                adjusted,
+                data_axis_size,
+            )
+    else:
+        effective_eval_batch_size = trainer_config.eval_batch_size  # = 1 * data_axis_size
+    EvalBatch = hax.Axis("batch", effective_eval_batch_size)
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
         from levanter.utils.hf_utils import round_axis_for_partitioning
@@ -1286,13 +1358,23 @@ def main():
         else:
             from experiments.qwen3 import Qwen3Config as ModelConfig
 
+            # Default Qwen3Config() uses LlamaConfig defaults (4096 hidden, 32 layers).
+            # For non-default model sizes, use --checkpoint_is_hf with an HF checkpoint
+            # which reads the correct config from config.json.
             model_config = ModelConfig()
+            logger.warning(
+                "Using default Qwen3Config (hidden_dim=%d, num_layers=%d). "
+                "If this doesn't match your model, use --checkpoint_is_hf instead.",
+                model_config.hidden_dim,
+                model_config.num_layers,
+            )
             with use_cpu_device():
                 model = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
                 model = load_checkpoint(model, args.checkpoint_path, subpath="model")
             model = hax.shard(model, parameter_axis_mapping)
 
         model = typing.cast(LmHeadModel, inference_mode(model, True))
+        model = _force_vanilla_attention_backend_for_vlm_eval(model)
 
         EvalPos = model.Pos if args.max_length is None else model.Pos.resize(args.max_length)
 
@@ -1316,7 +1398,7 @@ def main():
                 logger.warning("Unsupported task_type=%s for %s, skipping", task_type, bench_name)
 
         max_packed_segments = 64
-        jit_fn = _make_vlm_eval_jit(compute_axis_mapping, trainer_config.mp)
+        jit_fn = _make_vlm_eval_jit(compute_axis_mapping, trainer_config.mp, EvalPos, EvalBatch, max_packed_segments)
 
         results = evaluate_all_vlm_benchmarks(
             jit_fn,
@@ -1359,6 +1441,36 @@ def main():
                 with open(args.output_json, "w") as f:
                     json.dump(compact, f, indent=2)
                 logger.info("Results written to %s", args.output_json)
+
+            # Log to the training WandB run
+            inferred_run_id, inferred_step = _infer_wandb_info(args.checkpoint_path)
+            wandb_run_id = args.wandb_run_id or inferred_run_id
+            train_step = args.train_step if args.train_step is not None else inferred_step
+
+            if wandb_run_id and not args.no_wandb:
+                import wandb
+
+                wandb.init(
+                    project=args.wandb_project,
+                    entity=args.wandb_entity,
+                    id=wandb_run_id,
+                    resume="must",
+                )
+
+                metrics = {}
+                for bench, res in results.items():
+                    if "accuracy" in res:
+                        metrics[f"eval/{bench}/accuracy"] = res["accuracy"]
+                        metrics[f"eval/{bench}/loss"] = res["loss"]
+                    elif "mean_ll" in res:
+                        metrics[f"eval/{bench}/mean_ll"] = res["mean_ll"]
+                    metrics[f"eval/{bench}/num_questions"] = res["num_questions"]
+
+                wandb.log(metrics, step=train_step)
+                wandb.finish()
+                logger.info("Logged eval results to WandB run %s (step=%s)", wandb_run_id, train_step)
+            elif not args.no_wandb:
+                logger.info("Could not infer WandB run ID from checkpoint path. Use --wandb_run_id to log to WandB.")
 
         logger.info("Done.")
 
