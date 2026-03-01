@@ -16,7 +16,6 @@ import numpy as np
 from haliax import is_named_array
 from haliax.jax_utils import is_jax_array_like
 from jax import numpy as jnp
-from jax._src.mesh import get_concrete_mesh
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
@@ -28,6 +27,7 @@ from levanter.utils.mesh import (
     REPLICA_AXIS,
     activate_mesh,
     create_mesh_from_axis_specs,
+    get_active_mesh,
 )
 from levanter.utils.partitioning import current_thread_local_mapping, pspec_for
 from levanter.utils.py_utils import index_where
@@ -336,9 +336,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
 
     if mesh is None:
         # TODO: we shouldn't be getting a concrete mesh here. Need to fix/remove this whole function
-        mesh = get_concrete_mesh()
-        if mesh is not None and mesh.shape == ():
-            mesh = None
+        mesh = get_active_mesh()
 
     if mesh is None:
         device_shape = (len(devices),)
@@ -448,7 +446,7 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
      2. Then, inside jit, we select the source'th element of the array, then reshard with the out_axis_specs
 
     """
-    current_mesh = get_concrete_mesh()
+    current_mesh = get_active_mesh()
     if current_mesh is None:
         raise ValueError("broadcast_shard requires an active concrete mesh")
 
