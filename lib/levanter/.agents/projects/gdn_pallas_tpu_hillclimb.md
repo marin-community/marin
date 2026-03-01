@@ -3169,3 +3169,94 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / regression**. The recurrent-scaffold full-sequence Macro-I fusion reduced measured train closed-call shard-map time, but the new `while` overhead dominated and regressed end-to-end throughput.
 - Next bold hypothesis:
   - Move to **Macro Move J** next with required `Ct={64,96,128}` x `Seg={8,16,32}` compact sweep table, then use the best operating point to launch a stronger structural pivot (likely Macro E if `while` overhead persists).
+
+### Iteration 54 - Macro Move J / non-padded full-sequence chunk decomposition sweep (compile-blocked, reverted)
+
+- Coverage slot: J (2/5)
+- Covered set so far: {I, J}
+- Date: 2026-03-01T07:51:04Z
+- Commit: none (failed attempt)
+- Starting commit: `cbc910a9da1f3190aba546cfe70827920b4fa7e5`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` remained dominant:
+    - `shard_map` bucket: `78.098 ms`
+    - forward closed-call source: `gated_deltanet.py:2486` = `41.324 ms`
+    - backward closed-call source: `gated_deltanet.py:3972` = `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move J**: remove chunk-axis padding and sweep `Ct in {64,96,128}` x `Seg in {8,16,32}` with explicit tail decomposition to reduce wasted inner-kernel work (`+10-18%`, high TPU lowering risk).
+  2. **Macro Move E**: V-tiling with shared-K precompute in train recurrent/bwd kernels (`+15-30%`, high decomposition risk).
+  3. **Macro Move I**: another train forward prepare+recurrent fusion variant without scan while-overhead (`+10-20%`, high repeat-regression risk).
+
+- Selected macro-move category: **J) Sweep `Ct`/`Seg` for new kernels with compact benchmark table**.
+- Selected hypothesis: implement a structural no-padding decomposition in train full-sequence flash path so the sweep can evaluate true work scaling (full segments + explicit tail segment) instead of always paying padded chunk overhead.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Reworked full-sequence chunk decomposition to avoid `n_chunks_pad` in forward and split backward into `full segments + tail segment` instead of mandatory pad-to-multiple execution.
+  - This materially changed launch/dataflow structure for the train chunk path (Macro J candidate kernel scaffold).
+  - TPU profiling hit deterministic Mosaic lowering failures (`dot_general` RHS non-contracting dims must be vector-like).
+  - Per policy, speculative kernel edits were fully reverted.
+
+- Correctness checks:
+  - Local smoke before TPU profile attempts:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (`tests=both`, dev TPU path):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - first run failed with known borderline signature `test_gdn_layer_backward_matches_hf[False]` (`max_abs=2.124533e-05`, `atol=1e-05`).
+    - one allowed identical-command retry: `87 passed, 2 skipped`.
+
+- Profile runs:
+  - Macro-J attempt A (failed; then one allowed identical retry):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --chunk-size 96 --segment-size 32 --no-sync`
+    - retry same command produced the same dominant signature:
+      - `Not implemented ... rhs non contracting dims ... rhs must be vector-like [B, K] or [B, 1, K]`.
+  - Macro-J sweep follow-ups (same deterministic lowering family):
+    - `... --chunk-size 96 --segment-size 16 --no-sync` -> same compile failure signature.
+    - `... --chunk-size 128 --segment-size 16 --no-sync` -> same compile failure signature.
+  - Post-revert required completed profile evidence run:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_iter7_revert_baseline --marin-prefix gs://marin-us-east5 --no-sync`
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_iter7_revert_baseline_130m_ch128_seg16_20steps-1cd9da`
+    - Downloaded profiler artifact: `run-gdn_iter7_revert_baseline_130m_ch128_seg16_20steps-1cd9da-profiler:v0`
+    - Downloaded trace: `.profiles/wandb/gdn_iter7_revert_baseline/plugins/profile/2026_03_01_07_46_35/perfetto_trace.json.gz`
+    - Throughput source: W&B history-window median (`global_step in [10,18]`) from the above run.
+
+- Macro J sweep table (`Ct`/`Seg`):
+
+| Ct | Seg | Kernel state | Compile status | Profile status | `throughput/mfu` (10..18 median) | `tokens/s` (10..18 median) | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 96 | 32 | Macro-J no-pad + tail decomposition | Failed | Not run | N/A | N/A | Mosaic lowering error on `dot_general` RHS non-contracting dims (vector-like constraint). |
+| 96 | 16 | Macro-J no-pad + tail decomposition | Failed | Not run | N/A | N/A | Same deterministic lowering signature. |
+| 128 | 16 | Macro-J no-pad + tail decomposition | Failed | Not run | N/A | N/A | Same deterministic lowering signature. |
+| 128 | 16 | Reverted baseline control | Success | Success | `5.397429` | `174605.787` | Required completion run after rollback (`gdn_iter7_revert_baseline...`). |
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, baseline vs completed revert run):
+  - Bucket deltas:
+    - `shard_map`: `78.098 ms -> 39.014 ms` (`-50.05%`)
+    - `fusion`: `45.618 ms -> 35.037 ms` (`-23.19%`)
+    - `all-gather`: `20.158 ms -> 10.090 ms` (`-49.95%`)
+    - `while`: `0.000 ms -> 31.653 ms` (new dominant overhead bucket)
+  - Train closed-call shard-map source deltas:
+    - forward source `gated_deltanet.py:2486 -> 2504`: `41.324 ms -> 20.661 ms` (`-50.00%`)
+    - backward source `gated_deltanet.py:3972 -> 3992`: `26.266 ms -> 13.130 ms` (`-50.02%`)
+
+- MFU/throughput delta (history-window median, steps `10..18`, vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.830017 -> 5.397429` (`-7.42%`)
+  - `throughput/tokens_per_second`: `188599.934 -> 174605.787` (`-7.42%`)
+  - `throughput/duration`: `0.173743s -> 0.187668s` (`+8.01%`)
+  - final-step reference (step `19`): `throughput/mfu=5.374576`, `tokens/s=173866.521`, `duration=0.188466s`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + final result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped` (after one allowed retry).
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call` source: `41.324 ms -> 20.661 ms` (`-50.00%`).
+    - Backward closed-call `shard_map/pallas_call` source: `26.266 ms -> 13.130 ms` (`-50.02%`).
+    - `throughput/mfu -7.42%`, `throughput/tokens_per_second -7.42%`, `throughput/duration +8.01%`.
+  - Governance:
+    - MFU gain `<3%` and dominant hotspot class remained train-path `shard_map/custom-call` with large `while` overhead.
+    - Attempt marked **low-impact/regressive**. Speculative Macro-J kernel edits were reverted.
+
+- Assessment: **failed attempt / compile-blocked and regressive control outcome**. The intended Macro-J structural candidate could not be profiled due deterministic TPU lowering failures; the completed post-revert control run remained below carry-in baseline.
+- Next bold hypothesis:
+  - Pivot to **Macro Move E** next: introduce V-tiling with shared-K precompute in train chunk kernels while enforcing TPU-friendly BF16-input/FP32-accumulation matmul policy and avoiding last-two-axis transpose cliffs.
