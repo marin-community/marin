@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Callable, Optional, Protocol, Tuple, TypeVar, Union, cast
+from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, Tuple, TypeAlias, TypeVar, Union, cast
 
 from jaxtyping import PyTree
 
@@ -26,10 +26,8 @@ except ImportError:
         pass
 
 
-try:
-    from haliax.partitioning import ResourceMapping
-except ImportError:
-    ResourceMapping = dict[str, Any]  # type: ignore[assignment]
+PhysicalAxisSpec: TypeAlias = str | Sequence[str]
+ResourceMapping: TypeAlias = Mapping[str, PhysicalAxisSpec]
 
 
 class ValAndGradFn(Protocol[M, X]):
