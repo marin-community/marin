@@ -9,6 +9,9 @@ import haliax as hax
 
 from levanter.models.linear import LinearLikeModule
 from levanter.optim.muon import MuonConfig
+from levanter.optim.muonh import MuonHConfig
+from levanter.optim.namo import _create_namo_mask
+from levanter.optim.scion import ScionConfig
 from levanter.optim.util import (
     is_linear_like_module,
     label_linear_like_module,
@@ -50,12 +53,45 @@ def test_label_linear_like_module_labels_weight_and_bias():
     assert masked_eqx.bias == "adamw"
 
 
-def test_muon_mask_supports_eqx_linear_without_out_first_attr():
+def test_muon_mask_routes_eqx_linear_to_adamw_fallback():
     class _Module(eqx.Module):
         linear: eqx.nn.Linear
 
     params = _Module(linear=eqx.nn.Linear(4, 3, key=jax.random.PRNGKey(4)))
     mask = MuonConfig(use_kimi_scaling=False).create_mask(params, use_kimi_scaling=False)
 
-    assert mask.linear.weight == "muon"
+    assert mask.linear.weight == "adamw"
+    assert mask.linear.bias == "adamw"
+
+
+def test_muonh_mask_routes_eqx_linear_to_adam_fallback():
+    class _Module(eqx.Module):
+        linear: eqx.nn.Linear
+
+    params = _Module(linear=eqx.nn.Linear(4, 3, key=jax.random.PRNGKey(5)))
+    mask = MuonHConfig().create_mask(params)
+
+    assert mask.linear.weight == "adam"
+    assert mask.linear.bias == "adam"
+
+
+def test_scion_mask_routes_eqx_linear_to_signum_fallback():
+    class _Module(eqx.Module):
+        linear: eqx.nn.Linear
+
+    params = _Module(linear=eqx.nn.Linear(4, 3, key=jax.random.PRNGKey(6)))
+    mask = ScionConfig().create_mask(params)
+
+    assert mask.linear.weight == "signum"
+    assert mask.linear.bias == "signum"
+
+
+def test_namo_mask_routes_eqx_linear_to_adamw_fallback():
+    class _Module(eqx.Module):
+        linear: eqx.nn.Linear
+
+    params = _Module(linear=eqx.nn.Linear(4, 3, key=jax.random.PRNGKey(7)))
+    mask = _create_namo_mask(params)
+
+    assert mask.linear.weight == "adamw"
     assert mask.linear.bias == "adamw"

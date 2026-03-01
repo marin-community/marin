@@ -15,7 +15,6 @@ import haliax
 from levanter.optim.config import OptimizerConfig
 from levanter.optim.util import (
     CoefficientType,
-    is_linear_like_module,
     label_linear_like_module,
     map_flattened_linear_layers,
     zeropower_via_newtonschulz5,
@@ -119,13 +118,13 @@ class MuonHConfig(OptimizerConfig):
                 return "adam"
             elif "lm_head" in path_str:
                 return "adamh"
-            elif is_linear_like_module(param):
+            elif isinstance(param, haliax.nn.Linear):
                 # muonh for linear layers
                 return label_linear_like_module(param, weight_label="muonh", bias_label="adam")
             else:
                 return "adam"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, haliax.nn.Linear))
 
 
 class ScaleByMuonHState(NamedTuple):

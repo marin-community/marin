@@ -16,7 +16,6 @@ import haliax
 from levanter.optim.config import OptimizerConfig
 from levanter.optim.util import (
     CoefficientType,
-    is_linear_like_module,
     label_linear_like_module,
     map_flattened_linear_layers,
     zeropower_via_newtonschulz5,
@@ -110,17 +109,16 @@ class MuonConfig(OptimizerConfig):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             if "Embedding" in path_str or "lm_head" in path_str:
                 return "adamw"
-            elif is_linear_like_module(param):
+            elif isinstance(param, haliax.nn.Linear):
                 # muon for linear layers
-                if isinstance(param, haliax.nn.Linear):
-                    assert (
-                        param._out_first or use_kimi_scaling
-                    )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
+                assert (
+                    param._out_first or use_kimi_scaling
+                )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
                 return label_linear_like_module(param, weight_label="muon", bias_label="adamw")
             else:
                 return "adamw"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, haliax.nn.Linear))
 
 
 class ScaleByMuonState(NamedTuple):
