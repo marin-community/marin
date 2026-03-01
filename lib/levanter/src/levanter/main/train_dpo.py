@@ -66,7 +66,7 @@ def dpo_loss_from_logps(
 
 
 def _logp_sum(model: LmHeadModel, example, *, key=None) -> jnp.ndarray:
-    nll = model.compute_next_token_loss_array(example, reduction=hax.sum, reduction_axis="position", key=key)
+    nll = model.compute_next_token_loss_array(example, reduction="sum", reduction_axis="position", key=key)
     return -nll
 
 
