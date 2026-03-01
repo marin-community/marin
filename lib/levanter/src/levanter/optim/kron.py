@@ -24,6 +24,7 @@ from optax._src.utils import canonicalize_dtype
 from levanter.models.scan_layers import is_scan_container
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.mesh import DATA_AXIS
+from levanter.utils.partitioning import infer_resource_partitions
 
 # Define type variables for the pytree structure
 T = TypeVar("T")
@@ -290,7 +291,7 @@ def scale_by_kron(
                         is_leaf=lambda x: is_scan_container(x),
                     )
                 if params_sharding_ is None:
-                    params_sharding_ = hax.partitioning.infer_resource_partitions(params)
+                    params_sharding_ = infer_resource_partitions(params)
                     params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
                 params, params_struct = jax.tree.flatten(params)
                 scanned_layers_ = jax.tree.leaves(scanned_layers_)
@@ -507,7 +508,7 @@ def scale_by_kron(
                         is_leaf=lambda x: is_scan_container(x),
                     )
                 if params_sharding_ is None:
-                    params_sharding_ = hax.partitioning.infer_resource_partitions(updates)
+                    params_sharding_ = infer_resource_partitions(updates)
                     params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
                 updates, updates_struct = jax.tree.flatten(updates)
                 scanned_layers_ = jax.tree.leaves(scanned_layers_)

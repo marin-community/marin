@@ -18,6 +18,7 @@ from levanter.metrics import Metric
 from levanter.metrics import fold as fold_metric
 from levanter.utils.jax_utils import zeros_like_tree
 from levanter.utils.mesh import DATA_AXIS
+from levanter.utils.partitioning import physical_axis_name, physical_axis_size
 
 Args = ParamSpec("Args")
 R = TypeVar("R")
@@ -70,11 +71,11 @@ def microbatched(
         accumulates the results.
     """
     batch_size = Batch.size
-    data_axis_size = hax.partitioning.physical_axis_size(Batch, compute_axis_mapping)
+    data_axis_size = physical_axis_size(Batch, compute_axis_mapping)
     if data_axis_size is None:
         raise ValueError(f"{Batch} axis must be sharded")
-    physical_axis_name = hax.partitioning.physical_axis_name(Batch, compute_axis_mapping)
-    assert physical_axis_name is not None
+    axis_name = physical_axis_name(Batch, compute_axis_mapping)
+    assert axis_name is not None
 
     if microbatch_size <= 0:
         raise ValueError(f"Bad value for {microbatch_size=}")

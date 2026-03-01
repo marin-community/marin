@@ -7,7 +7,6 @@ from functools import partial
 from itertools import chain
 from typing import List, Optional, Tuple, Union
 
-import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
@@ -25,6 +24,7 @@ from optax._src.utils import canonicalize_dtype
 from levanter.models.scan_layers import is_scan_container
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.mesh import DATA_AXIS
+from levanter.utils.partitioning import infer_resource_partitions
 
 
 @OptimizerConfig.register_subclass("soap")
@@ -157,7 +157,7 @@ def scale_by_soap(
             params,
             is_leaf=lambda x: is_scan_container(x),
         )
-        params_sharding_ = hax.partitioning.infer_resource_partitions(params)
+        params_sharding_ = infer_resource_partitions(params)
         params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
         shapes = jax.tree.map(lambda p, s: p.shape[int(s) :], params, scanned_layers_)
 

@@ -11,7 +11,6 @@ from typing import Any, Callable, Optional, TypeVar
 
 import equinox as eqx
 import haliax as hax
-import haliax.partitioning
 import jax
 import numpy as np
 from haliax import is_named_array
@@ -30,6 +29,7 @@ from levanter.utils.mesh import (
     activate_mesh,
     create_mesh_from_axis_specs,
 )
+from levanter.utils.partitioning import current_thread_local_mapping, pspec_for
 from levanter.utils.py_utils import index_where
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
 from levanter.utils.types import ResourceMapping
@@ -570,7 +570,7 @@ def sync_global_devices(name: str):
 
 
 def sharded_tree_size(
-    tree, mesh: Optional[haliax.partitioning.MeshLike] | None = None, mapping: ResourceMapping | None = None
+    tree, mesh: Optional[Mesh | jax.sharding.AbstractMesh] = None, mapping: ResourceMapping | None = None
 ) -> int:
     """
     Returns the size of a sharded tree, in bytes. If the tree is sharded, this returns the size of a per-device shard.
@@ -591,7 +591,7 @@ def sharded_tree_size(
         mesh = jax.sharding.get_abstract_mesh()
 
     if mapping is None:
-        mapping = haliax.partitioning.current_thread_local_mapping()
+        mapping = current_thread_local_mapping()
 
     def _mesh_axis_size(axis_name) -> int:
         if mesh is None:
@@ -615,7 +615,7 @@ def sharded_tree_size(
 
     def _size(x):
         if isinstance(x, hax.NamedArray):
-            pspec = haliax.partitioning.pspec_for(x, mapping)
+            pspec = pspec_for(x, mapping)
             num_shards = _shards_for_pspec(pspec)
             x_a = x.array
             if hasattr(x_a, "nbytes"):
