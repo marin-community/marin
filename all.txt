@@ -1,425 +1,363 @@
-2026-03-01T08:10:32 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=309 valid_points=43 batch_tokens=32768
-2026-03-01T08:10:32 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=310 leader_num_batches=497
-vlm_eval:  63%|█████████████████████▎            | 10190848/16273408 [01:37<00:52, 115920.59tok/s]2026-03-01T08:10:32 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=310 valid_points=44 batch_tokens=32768
-2026-03-01T08:10:32 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=311 leader_num_batches=497
-vlm_eval:  63%|█████████████████████▎            | 10223616/16273408 [01:37<00:52, 115729.20tok/s]2026-03-01T08:10:32 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=311 valid_points=45 batch_tokens=32768
-2026-03-01T08:10:32 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=312 leader_num_batches=497
-vlm_eval:  63%|█████████████████████▍            | 10256384/16273408 [01:37<00:51, 115905.08tok/s]2026-03-01T08:10:33 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=312 valid_points=44 batch_tokens=32768
-2026-03-01T08:10:33 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=313 leader_num_batches=497
-vlm_eval:  63%|█████████████████████▍            | 10289152/16273408 [01:38<00:51, 115677.71tok/s]2026-03-01T08:10:33 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=313 valid_points=34 batch_tokens=32768
-2026-03-01T08:10:33 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=314 leader_num_batches=497
-vlm_eval:  63%|█████████████████████▌            | 10321920/16273408 [01:38<00:51, 115625.47tok/s]2026-03-01T08:10:33 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=314 valid_points=42 batch_tokens=32768
-2026-03-01T08:10:33 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=315 leader_num_batches=497
-vlm_eval:  64%|█████████████████████▋            | 10354688/16273408 [01:38<00:51, 115761.51tok/s]2026-03-01T08:10:34 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=315 valid_points=34 batch_tokens=32768
-2026-03-01T08:10:34 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=316 leader_num_batches=497
-vlm_eval:  64%|█████████████████████▋            | 10387456/16273408 [01:38<00:50, 115915.39tok/s]2026-03-01T08:10:34 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=316 valid_points=32 batch_tokens=32768
-2026-03-01T08:10:34 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=317 leader_num_batches=497
-vlm_eval:  64%|█████████████████████▊            | 10420224/16273408 [01:39<00:50, 116260.51tok/s]2026-03-01T08:10:34 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=317 valid_points=40 batch_tokens=32768
-2026-03-01T08:10:34 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=318 leader_num_batches=497
-vlm_eval:  64%|█████████████████████▊            | 10452992/16273408 [01:39<00:50, 116402.94tok/s]2026-03-01T08:10:34 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=318 valid_points=35 batch_tokens=32768
-2026-03-01T08:10:34 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=319 leader_num_batches=497
-vlm_eval:  64%|█████████████████████▉            | 10485760/16273408 [01:39<00:49, 116056.02tok/s]2026-03-01T08:10:35 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=319 valid_points=43 batch_tokens=32768
-2026-03-01T08:10:35 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=320 leader_num_batches=497
-vlm_eval:  65%|█████████████████████▉            | 10518528/16273408 [01:40<00:49, 115942.76tok/s]2026-03-01T08:10:35 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=320 valid_points=39 batch_tokens=32768
-2026-03-01T08:10:35 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=321 leader_num_batches=497
-vlm_eval:  65%|██████████████████████            | 10551296/16273408 [01:40<00:49, 116153.89tok/s]2026-03-01T08:10:35 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=321 valid_points=38 batch_tokens=32768
-2026-03-01T08:10:35 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=322 leader_num_batches=497
-vlm_eval:  65%|██████████████████████            | 10584064/16273408 [01:40<00:48, 116167.58tok/s]2026-03-01T08:10:36 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=322 valid_points=34 batch_tokens=32768
-2026-03-01T08:10:36 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=323 leader_num_batches=497
-vlm_eval:  65%|██████████████████████▏           | 10616832/16273408 [01:40<00:48, 116114.95tok/s]2026-03-01T08:10:36 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=323 valid_points=29 batch_tokens=32768
-2026-03-01T08:10:36 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=324 leader_num_batches=497
-vlm_eval:  65%|██████████████████████▎           | 10649600/16273408 [01:41<00:48, 116068.22tok/s]2026-03-01T08:10:36 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=324 valid_points=39 batch_tokens=32768
-2026-03-01T08:10:36 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=325 leader_num_batches=497
-vlm_eval:  66%|██████████████████████▎           | 10682368/16273408 [01:41<00:48, 116039.77tok/s]2026-03-01T08:10:36 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=325 valid_points=44 batch_tokens=32768
-2026-03-01T08:10:36 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=326 leader_num_batches=497
-vlm_eval:  66%|██████████████████████▍           | 10715136/16273408 [01:41<00:47, 115993.69tok/s]2026-03-01T08:10:37 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=326 valid_points=39 batch_tokens=32768
-2026-03-01T08:10:37 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=327 leader_num_batches=497
-vlm_eval:  66%|██████████████████████▍           | 10747904/16273408 [01:42<00:47, 115946.34tok/s]2026-03-01T08:10:37 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=327 valid_points=43 batch_tokens=32768
-2026-03-01T08:10:37 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=328 leader_num_batches=497
-vlm_eval:  66%|██████████████████████▌           | 10780672/16273408 [01:42<00:47, 116026.65tok/s]2026-03-01T08:10:37 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=328 valid_points=44 batch_tokens=32768
-2026-03-01T08:10:37 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=329 leader_num_batches=497
-vlm_eval:  66%|██████████████████████▌           | 10813440/16273408 [01:42<00:46, 116282.99tok/s]2026-03-01T08:10:37 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=329 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:38 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=330 leader_num_batches=497
-vlm_eval:  67%|██████████████████████▋           | 10846208/16273408 [01:42<00:46, 116327.11tok/s]2026-03-01T08:10:38 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=330 valid_points=24 batch_tokens=32768
-2026-03-01T08:10:38 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=331 leader_num_batches=497
-vlm_eval:  67%|██████████████████████▋           | 10878976/16273408 [01:43<00:46, 116128.22tok/s]2026-03-01T08:10:38 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=331 valid_points=39 batch_tokens=32768
-2026-03-01T08:10:38 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=332 leader_num_batches=497
-vlm_eval:  67%|██████████████████████▊           | 10911744/16273408 [01:43<00:46, 115988.37tok/s]2026-03-01T08:10:38 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=332 valid_points=21 batch_tokens=32768
-2026-03-01T08:10:38 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=333 leader_num_batches=497
-vlm_eval:  67%|██████████████████████▊           | 10944512/16273408 [01:43<00:45, 116109.70tok/s]2026-03-01T08:10:39 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=333 valid_points=29 batch_tokens=32768
-2026-03-01T08:10:39 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=334 leader_num_batches=497
-vlm_eval:  67%|██████████████████████▉           | 10977280/16273408 [01:44<00:45, 116188.95tok/s]2026-03-01T08:10:39 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=334 valid_points=18 batch_tokens=32768
-2026-03-01T08:10:39 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=335 leader_num_batches=497
-vlm_eval:  68%|███████████████████████           | 11010048/16273408 [01:44<00:45, 116228.50tok/s]2026-03-01T08:10:39 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=335 valid_points=43 batch_tokens=32768
-2026-03-01T08:10:39 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=336 leader_num_batches=497
-vlm_eval:  68%|███████████████████████           | 11042816/16273408 [01:44<00:44, 116237.53tok/s]2026-03-01T08:10:39 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=336 valid_points=43 batch_tokens=32768
-2026-03-01T08:10:40 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=337 leader_num_batches=497
-vlm_eval:  68%|███████████████████████▏          | 11075584/16273408 [01:44<00:44, 116311.35tok/s]2026-03-01T08:10:40 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=337 valid_points=43 batch_tokens=32768
-2026-03-01T08:10:40 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=338 leader_num_batches=497
-vlm_eval:  68%|███████████████████████▏          | 11108352/16273408 [01:45<00:44, 116516.23tok/s]2026-03-01T08:10:40 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=338 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:40 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=339 leader_num_batches=497
-vlm_eval:  68%|███████████████████████▎          | 11141120/16273408 [01:45<00:44, 116598.17tok/s]2026-03-01T08:10:40 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=339 valid_points=47 batch_tokens=32768
-2026-03-01T08:10:40 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=340 leader_num_batches=497
-vlm_eval:  69%|███████████████████████▎          | 11173888/16273408 [01:45<00:43, 116642.29tok/s]2026-03-01T08:10:41 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=340 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:41 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=341 leader_num_batches=497
-vlm_eval:  69%|███████████████████████▍          | 11206656/16273408 [01:45<00:43, 116767.14tok/s]2026-03-01T08:10:41 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=341 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:41 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=342 leader_num_batches=497
-vlm_eval:  69%|███████████████████████▍          | 11239424/16273408 [01:46<00:43, 116607.58tok/s]2026-03-01T08:10:41 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=342 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:41 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=343 leader_num_batches=497
-vlm_eval:  69%|███████████████████████▌          | 11272192/16273408 [01:46<00:42, 116448.18tok/s]2026-03-01T08:10:41 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=343 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:41 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=344 leader_num_batches=497
-vlm_eval:  69%|███████████████████████▌          | 11304960/16273408 [01:46<00:42, 116486.42tok/s]2026-03-01T08:10:42 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=344 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:42 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=345 leader_num_batches=497
-vlm_eval:  70%|███████████████████████▋          | 11337728/16273408 [01:47<00:42, 116435.50tok/s]2026-03-01T08:10:42 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=345 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:42 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=346 leader_num_batches=497
-vlm_eval:  70%|███████████████████████▊          | 11370496/16273408 [01:47<00:42, 116241.31tok/s]2026-03-01T08:10:42 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=346 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:42 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=347 leader_num_batches=497
-vlm_eval:  70%|███████████████████████▊          | 11403264/16273408 [01:47<00:41, 116279.37tok/s]2026-03-01T08:10:43 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=347 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:43 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=348 leader_num_batches=497
-vlm_eval:  70%|███████████████████████▉          | 11436032/16273408 [01:47<00:41, 116318.07tok/s]2026-03-01T08:10:43 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=348 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:43 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=349 leader_num_batches=497
-vlm_eval:  70%|███████████████████████▉          | 11468800/16273408 [01:48<00:41, 116258.29tok/s]2026-03-01T08:10:43 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=349 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:43 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=350 leader_num_batches=497
-vlm_eval:  71%|████████████████████████          | 11501568/16273408 [01:48<00:41, 116100.56tok/s]2026-03-01T08:10:43 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=350 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:43 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=351 leader_num_batches=497
-vlm_eval:  71%|████████████████████████          | 11534336/16273408 [01:48<00:40, 115732.60tok/s]2026-03-01T08:10:44 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=351 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:44 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=352 leader_num_batches=497
-vlm_eval:  71%|████████████████████████▏         | 11567104/16273408 [01:49<00:40, 115682.25tok/s]2026-03-01T08:10:44 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=352 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:44 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=353 leader_num_batches=497
-vlm_eval:  71%|████████████████████████▏         | 11599872/16273408 [01:49<00:40, 115776.01tok/s]2026-03-01T08:10:44 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=353 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:44 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=354 leader_num_batches=497
-vlm_eval:  71%|████████████████████████▎         | 11632640/16273408 [01:49<00:40, 115519.89tok/s]2026-03-01T08:10:45 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=354 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:45 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=355 leader_num_batches=497
-vlm_eval:  72%|████████████████████████▎         | 11665408/16273408 [01:49<00:39, 115882.15tok/s]2026-03-01T08:10:45 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=355 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:45 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=356 leader_num_batches=497
-vlm_eval:  72%|████████████████████████▍         | 11698176/16273408 [01:50<00:39, 115752.78tok/s]2026-03-01T08:10:45 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=356 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:45 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=357 leader_num_batches=497
-vlm_eval:  72%|████████████████████████▌         | 11730944/16273408 [01:50<00:39, 115921.58tok/s]2026-03-01T08:10:45 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=357 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:45 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=358 leader_num_batches=497
-vlm_eval:  72%|████████████████████████▌         | 11763712/16273408 [01:50<00:38, 115964.66tok/s]2026-03-01T08:10:46 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=358 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:46 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=359 leader_num_batches=497
-vlm_eval:  72%|████████████████████████▋         | 11796480/16273408 [01:51<00:38, 115751.23tok/s]2026-03-01T08:10:46 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=359 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:46 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=360 leader_num_batches=497
-vlm_eval:  73%|████████████████████████▋         | 11829248/16273408 [01:51<00:38, 115876.77tok/s]2026-03-01T08:10:46 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=360 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:46 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=361 leader_num_batches=497
-vlm_eval:  73%|████████████████████████▊         | 11862016/16273408 [01:51<00:37, 116134.46tok/s]2026-03-01T08:10:47 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=361 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:47 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=362 leader_num_batches=497
-vlm_eval:  73%|████████████████████████▊         | 11894784/16273408 [01:51<00:37, 116266.79tok/s]2026-03-01T08:10:47 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=362 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:47 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=363 leader_num_batches=497
-vlm_eval:  73%|████████████████████████▉         | 11927552/16273408 [01:52<00:37, 116148.40tok/s]2026-03-01T08:10:47 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=363 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:47 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=364 leader_num_batches=497
-vlm_eval:  73%|████████████████████████▉         | 11960320/16273408 [01:52<00:37, 116105.57tok/s]2026-03-01T08:10:47 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=364 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:47 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=365 leader_num_batches=497
-vlm_eval:  74%|█████████████████████████         | 11993088/16273408 [01:52<00:36, 116190.47tok/s]2026-03-01T08:10:48 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=365 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:48 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=366 leader_num_batches=497
-vlm_eval:  74%|█████████████████████████▏        | 12025856/16273408 [01:53<00:36, 116150.39tok/s]2026-03-01T08:10:48 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=366 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:48 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=367 leader_num_batches=497
-vlm_eval:  74%|█████████████████████████▏        | 12058624/16273408 [01:53<00:36, 116390.87tok/s]2026-03-01T08:10:48 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=367 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:48 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=368 leader_num_batches=497
-vlm_eval:  74%|█████████████████████████▎        | 12091392/16273408 [01:53<00:36, 115654.93tok/s]2026-03-01T08:10:48 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=368 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:49 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=369 leader_num_batches=497
-vlm_eval:  75%|█████████████████████████▎        | 12124160/16273408 [01:53<00:35, 115725.77tok/s]2026-03-01T08:10:49 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=369 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:49 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=370 leader_num_batches=497
-vlm_eval:  75%|█████████████████████████▍        | 12156928/16273408 [01:54<00:35, 115974.73tok/s]2026-03-01T08:10:49 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=370 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:49 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=371 leader_num_batches=497
-vlm_eval:  75%|█████████████████████████▍        | 12189696/16273408 [01:54<00:35, 116158.21tok/s]2026-03-01T08:10:49 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=371 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:49 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=372 leader_num_batches=497
-vlm_eval:  75%|█████████████████████████▌        | 12222464/16273408 [01:54<00:34, 116233.95tok/s]2026-03-01T08:10:50 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=372 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:50 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=373 leader_num_batches=497
-vlm_eval:  75%|█████████████████████████▌        | 12255232/16273408 [01:55<00:34, 116421.65tok/s]2026-03-01T08:10:50 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=373 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:50 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=374 leader_num_batches=497
-vlm_eval:  76%|█████████████████████████▋        | 12288000/16273408 [01:55<00:34, 116087.19tok/s]2026-03-01T08:10:50 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=374 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:50 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=375 leader_num_batches=497
-vlm_eval:  76%|█████████████████████████▋        | 12320768/16273408 [01:55<00:34, 116111.81tok/s]2026-03-01T08:10:50 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=375 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:51 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=376 leader_num_batches=497
-vlm_eval:  76%|█████████████████████████▊        | 12353536/16273408 [01:55<00:33, 116189.92tok/s]2026-03-01T08:10:51 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=376 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:51 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=377 leader_num_batches=497
-vlm_eval:  76%|█████████████████████████▉        | 12386304/16273408 [01:56<00:33, 116247.32tok/s]2026-03-01T08:10:51 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=377 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:51 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=378 leader_num_batches=497
-vlm_eval:  76%|█████████████████████████▉        | 12419072/16273408 [01:56<00:33, 116296.54tok/s]2026-03-01T08:10:51 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=378 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:51 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=379 leader_num_batches=497
-vlm_eval:  77%|██████████████████████████        | 12451840/16273408 [01:56<00:32, 116147.19tok/s]2026-03-01T08:10:52 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=379 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:52 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=380 leader_num_batches=497
-vlm_eval:  77%|██████████████████████████        | 12484608/16273408 [01:56<00:32, 115733.39tok/s]2026-03-01T08:10:52 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=380 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:52 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=381 leader_num_batches=497
-vlm_eval:  77%|██████████████████████████▏       | 12517376/16273408 [01:57<00:32, 115665.28tok/s]2026-03-01T08:10:52 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=381 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:52 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=382 leader_num_batches=497
-vlm_eval:  77%|██████████████████████████▏       | 12550144/16273408 [01:57<00:32, 115881.79tok/s]2026-03-01T08:10:52 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=382 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:52 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=383 leader_num_batches=497
-vlm_eval:  77%|██████████████████████████▎       | 12582912/16273408 [01:57<00:31, 115852.61tok/s]2026-03-01T08:10:53 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=383 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:53 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=384 leader_num_batches=497
-vlm_eval:  78%|██████████████████████████▎       | 12615680/16273408 [01:58<00:31, 115703.79tok/s]2026-03-01T08:10:53 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=384 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:53 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=385 leader_num_batches=497
-vlm_eval:  78%|██████████████████████████▍       | 12648448/16273408 [01:58<00:31, 115896.12tok/s]2026-03-01T08:10:53 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=385 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:53 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=386 leader_num_batches=497
-vlm_eval:  78%|██████████████████████████▍       | 12681216/16273408 [01:58<00:30, 115935.82tok/s]2026-03-01T08:10:54 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=386 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:54 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=387 leader_num_batches=497
-vlm_eval:  78%|██████████████████████████▌       | 12713984/16273408 [01:58<00:30, 116108.52tok/s]2026-03-01T08:10:54 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=387 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:54 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=388 leader_num_batches=497
-vlm_eval:  78%|██████████████████████████▋       | 12746752/16273408 [01:59<00:30, 116264.28tok/s]2026-03-01T08:10:54 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=388 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:54 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=389 leader_num_batches=497
-vlm_eval:  79%|██████████████████████████▋       | 12779520/16273408 [01:59<00:30, 116437.48tok/s]2026-03-01T08:10:54 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=389 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:54 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=390 leader_num_batches=497
-vlm_eval:  79%|██████████████████████████▊       | 12812288/16273408 [01:59<00:29, 116182.97tok/s]2026-03-01T08:10:55 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=390 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:55 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=391 leader_num_batches=497
-vlm_eval:  79%|██████████████████████████▊       | 12845056/16273408 [02:00<00:29, 115573.41tok/s]2026-03-01T08:10:55 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=391 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:55 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=392 leader_num_batches=497
-vlm_eval:  79%|██████████████████████████▉       | 12877824/16273408 [02:00<00:29, 115367.66tok/s]2026-03-01T08:10:55 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=392 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:55 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=393 leader_num_batches=497
-vlm_eval:  79%|██████████████████████████▉       | 12910592/16273408 [02:00<00:29, 115536.40tok/s]2026-03-01T08:10:56 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=393 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:56 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=394 leader_num_batches=497
-vlm_eval:  80%|███████████████████████████       | 12943360/16273408 [02:00<00:28, 115324.81tok/s]2026-03-01T08:10:56 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=394 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:56 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=395 leader_num_batches=497
-vlm_eval:  80%|███████████████████████████       | 12976128/16273408 [02:01<00:28, 115554.36tok/s]2026-03-01T08:10:56 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=395 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:56 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=396 leader_num_batches=497
-vlm_eval:  80%|███████████████████████████▏      | 13008896/16273408 [02:01<00:28, 115858.89tok/s]2026-03-01T08:10:56 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=396 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:56 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=397 leader_num_batches=497
-vlm_eval:  80%|███████████████████████████▏      | 13041664/16273408 [02:01<00:27, 115843.47tok/s]2026-03-01T08:10:57 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=397 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:57 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=398 leader_num_batches=497
-vlm_eval:  80%|███████████████████████████▎      | 13074432/16273408 [02:02<00:27, 116047.66tok/s]2026-03-01T08:10:57 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=398 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:57 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=399 leader_num_batches=497
-vlm_eval:  81%|███████████████████████████▍      | 13107200/16273408 [02:02<00:27, 116275.51tok/s]2026-03-01T08:10:57 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=399 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:57 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=400 leader_num_batches=497
-vlm_eval:  81%|███████████████████████████▍      | 13139968/16273408 [02:02<00:27, 115378.82tok/s]2026-03-01T08:10:58 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=400 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:58 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=401 leader_num_batches=497
-vlm_eval:  81%|███████████████████████████▌      | 13172736/16273408 [02:02<00:26, 115475.18tok/s]2026-03-01T08:10:58 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=401 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:58 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=402 leader_num_batches=497
-vlm_eval:  81%|███████████████████████████▌      | 13205504/16273408 [02:03<00:26, 115372.36tok/s]2026-03-01T08:10:58 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=402 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:58 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=403 leader_num_batches=497
-vlm_eval:  81%|███████████████████████████▋      | 13238272/16273408 [02:03<00:26, 115464.19tok/s]2026-03-01T08:10:58 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=403 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:58 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=404 leader_num_batches=497
-vlm_eval:  82%|███████████████████████████▋      | 13271040/16273408 [02:03<00:25, 115555.02tok/s]2026-03-01T08:10:59 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=404 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:59 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=405 leader_num_batches=497
-vlm_eval:  82%|███████████████████████████▊      | 13303808/16273408 [02:04<00:25, 115592.05tok/s]2026-03-01T08:10:59 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=405 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:59 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=406 leader_num_batches=497
-vlm_eval:  82%|███████████████████████████▊      | 13336576/16273408 [02:04<00:25, 115580.07tok/s]2026-03-01T08:10:59 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=406 valid_points=48 batch_tokens=32768
-2026-03-01T08:10:59 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=407 leader_num_batches=497
-vlm_eval:  82%|███████████████████████████▉      | 13369344/16273408 [02:04<00:25, 115758.08tok/s]2026-03-01T08:11:00 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=407 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:00 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=408 leader_num_batches=497
-vlm_eval:  82%|████████████████████████████      | 13402112/16273408 [02:04<00:24, 115951.49tok/s]2026-03-01T08:11:00 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=408 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:00 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=409 leader_num_batches=497
-vlm_eval:  83%|████████████████████████████      | 13434880/16273408 [02:05<00:24, 115900.28tok/s]2026-03-01T08:11:00 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=409 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:00 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=410 leader_num_batches=497
-vlm_eval:  83%|████████████████████████████▏     | 13467648/16273408 [02:05<00:24, 115872.70tok/s]2026-03-01T08:11:00 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=410 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:00 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=411 leader_num_batches=497
-vlm_eval:  83%|████████████████████████████▏     | 13500416/16273408 [02:05<00:23, 116121.35tok/s]2026-03-01T08:11:01 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=411 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:01 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=412 leader_num_batches=497
-vlm_eval:  83%|████████████████████████████▎     | 13533184/16273408 [02:06<00:23, 115945.88tok/s]2026-03-01T08:11:01 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=412 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:01 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=413 leader_num_batches=497
-vlm_eval:  83%|████████████████████████████▎     | 13565952/16273408 [02:06<00:23, 115833.88tok/s]2026-03-01T08:11:01 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=413 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:01 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=414 leader_num_batches=497
-vlm_eval:  84%|████████████████████████████▍     | 13598720/16273408 [02:06<00:23, 115466.52tok/s]2026-03-01T08:11:02 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=414 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:02 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=415 leader_num_batches=497
-vlm_eval:  84%|████████████████████████████▍     | 13631488/16273408 [02:06<00:22, 115471.66tok/s]2026-03-01T08:11:02 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=415 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:02 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=416 leader_num_batches=497
-vlm_eval:  84%|████████████████████████████▌     | 13664256/16273408 [02:07<00:22, 115754.13tok/s]2026-03-01T08:11:02 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=416 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:02 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=417 leader_num_batches=497
-vlm_eval:  84%|████████████████████████████▌     | 13697024/16273408 [02:07<00:22, 115569.56tok/s]2026-03-01T08:11:02 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=417 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:02 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=418 leader_num_batches=497
-vlm_eval:  84%|████████████████████████████▋     | 13729792/16273408 [02:07<00:22, 115498.07tok/s]2026-03-01T08:11:03 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=418 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:03 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=419 leader_num_batches=497
-vlm_eval:  85%|████████████████████████████▊     | 13762560/16273408 [02:08<00:21, 115586.67tok/s]2026-03-01T08:11:03 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=419 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:03 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=420 leader_num_batches=497
-vlm_eval:  85%|████████████████████████████▊     | 13795328/16273408 [02:08<00:21, 115500.02tok/s]2026-03-01T08:11:03 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=420 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:03 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=421 leader_num_batches=497
-vlm_eval:  85%|████████████████████████████▉     | 13828096/16273408 [02:08<00:21, 115525.75tok/s]2026-03-01T08:11:03 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=421 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:04 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=422 leader_num_batches=497
-vlm_eval:  85%|████████████████████████████▉     | 13860864/16273408 [02:08<00:20, 115683.23tok/s]2026-03-01T08:11:04 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=422 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:04 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=423 leader_num_batches=497
-vlm_eval:  85%|█████████████████████████████     | 13893632/16273408 [02:09<00:20, 115976.05tok/s]2026-03-01T08:11:04 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=423 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:04 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=424 leader_num_batches=497
-vlm_eval:  86%|█████████████████████████████     | 13926400/16273408 [02:09<00:20, 115782.96tok/s]2026-03-01T08:11:04 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=424 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:04 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=425 leader_num_batches=497
-vlm_eval:  86%|█████████████████████████████▏    | 13959168/16273408 [02:09<00:20, 115582.59tok/s]2026-03-01T08:11:05 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=425 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:05 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=426 leader_num_batches=497
-vlm_eval:  86%|█████████████████████████████▏    | 13991936/16273408 [02:10<00:19, 115322.23tok/s]2026-03-01T08:11:05 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=426 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:05 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=427 leader_num_batches=497
-vlm_eval:  86%|█████████████████████████████▎    | 14024704/16273408 [02:10<00:19, 115584.64tok/s]2026-03-01T08:11:05 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=427 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:05 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=428 leader_num_batches=497
-vlm_eval:  86%|█████████████████████████████▎    | 14057472/16273408 [02:10<00:19, 115715.64tok/s]2026-03-01T08:11:05 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=428 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:06 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=429 leader_num_batches=497
-vlm_eval:  87%|█████████████████████████████▍    | 14090240/16273408 [02:10<00:18, 115607.49tok/s]2026-03-01T08:11:06 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=429 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:06 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=430 leader_num_batches=497
-vlm_eval:  87%|█████████████████████████████▌    | 14123008/16273408 [02:11<00:18, 115645.00tok/s]2026-03-01T08:11:06 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=430 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:06 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=431 leader_num_batches=497
-vlm_eval:  87%|█████████████████████████████▌    | 14155776/16273408 [02:11<00:18, 115693.32tok/s]2026-03-01T08:11:06 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=431 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:06 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=432 leader_num_batches=497
-vlm_eval:  87%|█████████████████████████████▋    | 14188544/16273408 [02:11<00:18, 114938.57tok/s]2026-03-01T08:11:07 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=432 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:07 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=433 leader_num_batches=497
-vlm_eval:  87%|█████████████████████████████▋    | 14221312/16273408 [02:12<00:17, 115097.59tok/s]2026-03-01T08:11:07 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=433 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:07 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=434 leader_num_batches=497
-vlm_eval:  88%|█████████████████████████████▊    | 14254080/16273408 [02:12<00:17, 115140.14tok/s]2026-03-01T08:11:07 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=434 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:07 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=435 leader_num_batches=497
-vlm_eval:  88%|█████████████████████████████▊    | 14286848/16273408 [02:12<00:17, 115286.51tok/s]2026-03-01T08:11:07 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=435 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:08 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=436 leader_num_batches=497
-vlm_eval:  88%|█████████████████████████████▉    | 14319616/16273408 [02:12<00:16, 115436.79tok/s]2026-03-01T08:11:08 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=436 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:08 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=437 leader_num_batches=497
-vlm_eval:  88%|█████████████████████████████▉    | 14352384/16273408 [02:13<00:16, 115384.52tok/s]2026-03-01T08:11:08 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=437 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:08 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=438 leader_num_batches=497
-vlm_eval:  88%|██████████████████████████████    | 14385152/16273408 [02:13<00:16, 115516.74tok/s]2026-03-01T08:11:08 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=438 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:08 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=439 leader_num_batches=497
-vlm_eval:  89%|██████████████████████████████    | 14417920/16273408 [02:13<00:16, 115528.66tok/s]2026-03-01T08:11:09 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=439 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:09 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=440 leader_num_batches=497
-vlm_eval:  89%|██████████████████████████████▏   | 14450688/16273408 [02:13<00:15, 115586.39tok/s]2026-03-01T08:11:09 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=440 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:09 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=441 leader_num_batches=497
-vlm_eval:  89%|██████████████████████████████▎   | 14483456/16273408 [02:14<00:15, 115720.11tok/s]2026-03-01T08:11:09 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=441 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:09 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=442 leader_num_batches=497
-vlm_eval:  89%|██████████████████████████████▎   | 14516224/16273408 [02:14<00:15, 115656.23tok/s]2026-03-01T08:11:09 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=442 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:09 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=443 leader_num_batches=497
-vlm_eval:  89%|██████████████████████████████▍   | 14548992/16273408 [02:14<00:14, 115582.47tok/s]2026-03-01T08:11:10 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=443 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:10 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=444 leader_num_batches=497
-vlm_eval:  90%|██████████████████████████████▍   | 14581760/16273408 [02:15<00:14, 115488.38tok/s]2026-03-01T08:11:10 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=444 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:10 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=445 leader_num_batches=497
-vlm_eval:  90%|██████████████████████████████▌   | 14614528/16273408 [02:15<00:14, 115497.24tok/s]2026-03-01T08:11:10 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=445 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:10 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=446 leader_num_batches=497
-vlm_eval:  90%|██████████████████████████████▌   | 14647296/16273408 [02:15<00:14, 115677.94tok/s]2026-03-01T08:11:11 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=446 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:11 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=447 leader_num_batches=497
-vlm_eval:  90%|██████████████████████████████▋   | 14680064/16273408 [02:15<00:13, 115837.53tok/s]2026-03-01T08:11:11 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=447 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:11 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=448 leader_num_batches=497
-vlm_eval:  90%|██████████████████████████████▋   | 14712832/16273408 [02:16<00:13, 114908.52tok/s]2026-03-01T08:11:11 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=448 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:11 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=449 leader_num_batches=497
-vlm_eval:  91%|██████████████████████████████▊   | 14745600/16273408 [02:16<00:13, 114837.28tok/s]2026-03-01T08:11:11 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=449 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:11 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=450 leader_num_batches=497
-vlm_eval:  91%|██████████████████████████████▉   | 14778368/16273408 [02:16<00:12, 115164.38tok/s]2026-03-01T08:11:12 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=450 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:12 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=451 leader_num_batches=497
-vlm_eval:  91%|██████████████████████████████▉   | 14811136/16273408 [02:17<00:12, 115483.52tok/s]2026-03-01T08:11:12 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=451 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:12 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=452 leader_num_batches=497
-vlm_eval:  91%|███████████████████████████████   | 14843904/16273408 [02:17<00:12, 115534.12tok/s]2026-03-01T08:11:12 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=452 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:12 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=453 leader_num_batches=497
-vlm_eval:  91%|███████████████████████████████   | 14876672/16273408 [02:17<00:12, 114986.56tok/s]2026-03-01T08:11:13 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=453 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:13 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=454 leader_num_batches=497
-vlm_eval:  92%|███████████████████████████████▏  | 14909440/16273408 [02:17<00:11, 114394.55tok/s]2026-03-01T08:11:13 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=454 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:13 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=455 leader_num_batches=497
-vlm_eval:  92%|███████████████████████████████▏  | 14942208/16273408 [02:18<00:11, 114284.27tok/s]2026-03-01T08:11:13 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=455 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:13 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=456 leader_num_batches=497
-vlm_eval:  92%|███████████████████████████████▎  | 14974976/16273408 [02:18<00:11, 114047.17tok/s]2026-03-01T08:11:13 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=456 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:13 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=457 leader_num_batches=497
-vlm_eval:  92%|███████████████████████████████▎  | 15007744/16273408 [02:18<00:11, 114083.24tok/s]2026-03-01T08:11:14 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=457 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:14 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=458 leader_num_batches=497
-vlm_eval:  92%|███████████████████████████████▍  | 15040512/16273408 [02:19<00:10, 114066.94tok/s]2026-03-01T08:11:14 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=458 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:14 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=459 leader_num_batches=497
-vlm_eval:  93%|███████████████████████████████▍  | 15073280/16273408 [02:19<00:10, 114103.66tok/s]2026-03-01T08:11:14 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=459 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:14 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=460 leader_num_batches=497
-vlm_eval:  93%|███████████████████████████████▌  | 15106048/16273408 [02:19<00:10, 114060.30tok/s]2026-03-01T08:11:15 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=460 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:15 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=461 leader_num_batches=497
-vlm_eval:  93%|███████████████████████████████▋  | 15138816/16273408 [02:19<00:09, 114065.05tok/s]2026-03-01T08:11:15 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=461 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:15 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=462 leader_num_batches=497
-vlm_eval:  93%|███████████████████████████████▋  | 15171584/16273408 [02:20<00:09, 114296.76tok/s]2026-03-01T08:11:15 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=462 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:15 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=463 leader_num_batches=497
-vlm_eval:  93%|███████████████████████████████▊  | 15204352/16273408 [02:20<00:09, 113698.85tok/s]2026-03-01T08:11:15 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=463 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:16 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=464 leader_num_batches=497
-vlm_eval:  94%|███████████████████████████████▊  | 15237120/16273408 [02:20<00:09, 113188.46tok/s]2026-03-01T08:11:16 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=464 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:16 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=465 leader_num_batches=497
-vlm_eval:  94%|███████████████████████████████▉  | 15269888/16273408 [02:21<00:08, 113192.76tok/s]2026-03-01T08:11:16 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=465 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:16 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=466 leader_num_batches=497
-vlm_eval:  94%|███████████████████████████████▉  | 15302656/16273408 [02:21<00:08, 113156.10tok/s]2026-03-01T08:11:16 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=466 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:16 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=467 leader_num_batches=497
-vlm_eval:  94%|████████████████████████████████  | 15335424/16273408 [02:21<00:08, 113235.93tok/s]2026-03-01T08:11:17 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=467 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:17 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=468 leader_num_batches=497
-vlm_eval:  94%|████████████████████████████████  | 15368192/16273408 [02:22<00:08, 113044.86tok/s]2026-03-01T08:11:17 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=468 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:17 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=469 leader_num_batches=497
-vlm_eval:  95%|████████████████████████████████▏ | 15400960/16273408 [02:22<00:07, 113203.72tok/s]2026-03-01T08:11:17 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=469 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:17 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=470 leader_num_batches=497
-vlm_eval:  95%|████████████████████████████████▏ | 15433728/16273408 [02:22<00:07, 113371.19tok/s]2026-03-01T08:11:17 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=470 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:18 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=471 leader_num_batches=497
-vlm_eval:  95%|████████████████████████████████▎ | 15466496/16273408 [02:22<00:07, 113285.96tok/s]2026-03-01T08:11:18 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=471 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:18 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=472 leader_num_batches=497
-vlm_eval:  95%|████████████████████████████████▍ | 15499264/16273408 [02:23<00:06, 113392.22tok/s]2026-03-01T08:11:18 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=472 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:18 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=473 leader_num_batches=497
-vlm_eval:  95%|████████████████████████████████▍ | 15532032/16273408 [02:23<00:06, 113390.45tok/s]2026-03-01T08:11:18 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=473 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:18 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=474 leader_num_batches=497
-vlm_eval:  96%|████████████████████████████████▌ | 15564800/16273408 [02:23<00:06, 113418.57tok/s]2026-03-01T08:11:19 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=474 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:19 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=475 leader_num_batches=497
-vlm_eval:  96%|████████████████████████████████▌ | 15597568/16273408 [02:24<00:05, 113480.44tok/s]2026-03-01T08:11:19 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=475 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:19 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=476 leader_num_batches=497
-vlm_eval:  96%|████████████████████████████████▋ | 15630336/16273408 [02:24<00:05, 113487.43tok/s]2026-03-01T08:11:19 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=476 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:19 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=477 leader_num_batches=497
-vlm_eval:  96%|████████████████████████████████▋ | 15663104/16273408 [02:24<00:05, 113497.89tok/s]2026-03-01T08:11:19 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=477 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:20 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=478 leader_num_batches=497
-vlm_eval:  96%|████████████████████████████████▊ | 15695872/16273408 [02:24<00:05, 113586.71tok/s]2026-03-01T08:11:20 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=478 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:20 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=479 leader_num_batches=497
-vlm_eval:  97%|████████████████████████████████▊ | 15728640/16273408 [02:25<00:04, 113528.49tok/s]2026-03-01T08:11:20 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=479 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:20 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=480 leader_num_batches=497
-vlm_eval:  97%|████████████████████████████████▉ | 15761408/16273408 [02:25<00:04, 113694.10tok/s]2026-03-01T08:11:20 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=480 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:20 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=481 leader_num_batches=497
-vlm_eval:  97%|████████████████████████████████▉ | 15794176/16273408 [02:25<00:04, 113602.18tok/s]2026-03-01T08:11:21 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=481 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:21 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=482 leader_num_batches=497
-vlm_eval:  97%|█████████████████████████████████ | 15826944/16273408 [02:26<00:03, 113721.26tok/s]2026-03-01T08:11:21 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=482 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:21 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=483 leader_num_batches=497
-vlm_eval:  97%|█████████████████████████████████▏| 15859712/16273408 [02:26<00:03, 113766.41tok/s]2026-03-01T08:11:21 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=483 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:21 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=484 leader_num_batches=497
-vlm_eval:  98%|█████████████████████████████████▏| 15892480/16273408 [02:26<00:03, 113482.30tok/s]2026-03-01T08:11:22 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=484 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:22 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=485 leader_num_batches=497
-vlm_eval:  98%|█████████████████████████████████▎| 15925248/16273408 [02:26<00:03, 113655.89tok/s]2026-03-01T08:11:22 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=485 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:22 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=486 leader_num_batches=497
-vlm_eval:  98%|█████████████████████████████████▎| 15958016/16273408 [02:27<00:02, 113460.74tok/s]2026-03-01T08:11:22 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=486 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:22 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=487 leader_num_batches=497
-vlm_eval:  98%|█████████████████████████████████▍| 15990784/16273408 [02:27<00:02, 113129.17tok/s]2026-03-01T08:11:22 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=487 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:22 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=488 leader_num_batches=497
-vlm_eval:  98%|█████████████████████████████████▍| 16023552/16273408 [02:27<00:02, 113334.82tok/s]2026-03-01T08:11:23 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=488 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:23 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=489 leader_num_batches=497
-vlm_eval:  99%|█████████████████████████████████▌| 16056320/16273408 [02:28<00:01, 113395.07tok/s]2026-03-01T08:11:23 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=489 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:23 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=490 leader_num_batches=497
-vlm_eval:  99%|█████████████████████████████████▌| 16089088/16273408 [02:28<00:01, 113551.13tok/s]2026-03-01T08:11:23 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=490 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:23 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=491 leader_num_batches=497
-vlm_eval:  99%|█████████████████████████████████▋| 16121856/16273408 [02:28<00:01, 113443.20tok/s]2026-03-01T08:11:24 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=491 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:24 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=492 leader_num_batches=497
-vlm_eval:  99%|█████████████████████████████████▊| 16154624/16273408 [02:28<00:01, 112825.97tok/s]2026-03-01T08:11:24 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=492 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:24 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=493 leader_num_batches=497
-vlm_eval:  99%|█████████████████████████████████▊| 16187392/16273408 [02:29<00:00, 112936.19tok/s]2026-03-01T08:11:24 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=493 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:24 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=494 leader_num_batches=497
-vlm_eval: 100%|█████████████████████████████████▉| 16220160/16273408 [02:29<00:00, 112759.43tok/s]2026-03-01T08:11:24 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=494 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:24 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=495 leader_num_batches=497
-vlm_eval: 100%|█████████████████████████████████▉| 16252928/16273408 [02:29<00:00, 113052.79tok/s]2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=495 valid_points=48 batch_tokens=32768
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:392 - WARNING :: VLM_EVAL_BATCH_ENTER eval_run_uuid=n/a host=0 batch_idx=496 leader_num_batches=497
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:451 - WARNING :: VLM_EVAL_LAST_BATCH_PRE_BROADCAST eval_run_uuid=n/a host=0 batch_idx=496
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:501 - WARNING :: VLM_EVAL_LAST_BATCH_POST_JIT eval_run_uuid=n/a host=0 batch_idx=496
-vlm_eval: 16285696tok [02:30, 113142.89tok/s]                                                     2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:534 - WARNING :: VLM_EVAL_BATCH_EXIT eval_run_uuid=n/a host=0 batch_idx=496 valid_points=25 batch_tokens=32768
-vlm_eval: 16285696tok [02:30, 108452.24tok/s]
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:554 - INFO :: [n/a][host=0] vlm_eval batch loop complete
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:612 - INFO :: MC accuracy: 819/3088 = 0.2652, loss (mean norm LL): -3.8978
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:612 - INFO :: MC accuracy: 224/847 = 0.2645, loss (mean norm LL): -2.6302
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:661 - INFO :: Open-ended mean normalized LL: -10.4387 (5000 questions)
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:661 - INFO :: Open-ended mean normalized LL: -9.0466 (2500 questions)
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:1408 - INFO :: ============================================================
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:1409 - INFO :: VLM Evaluation Results:
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:1412 - INFO ::   ai2d [MC]: 26.52% (819/3088), loss=-3.8978
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:1412 - INFO ::   mmmu [MC]: 26.45% (224/847), loss=-2.6302
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:1421 - INFO ::   textvqa [open-ended]: mean_ll=-10.4387 (5000 questions)
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:1421 - INFO ::   chartqa [open-ended]: mean_ll=-9.0466 (2500 questions)
-wandb: ERROR Cannot resume a run while another run is active. You must either finish it using run.finish(), or use reinit='create_new' when calling wandb.init().
-Traceback (most recent call last):
-  File "/home/ruili/marin_scaling/experiments/unified/vlm_mc_eval.py", line 1748, in <module>
-    main()
-  File "/home/ruili/marin_scaling/experiments/unified/vlm_mc_eval.py", line 1444, in main
-    wandb.init(
-  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 1597, in init
-    get_sentry().reraise(e)
-  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/wandb/analytics/sentry.py", line 190, in reraise
-    raise exc.with_traceback(tb)
-  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 1580, in init
-    run = wi.init(run_settings, run_config, run_printer)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 874, in init
-    raise wandb.Error(
-wandb.errors.errors.Error: Cannot resume a run while another run is active. You must either finish it using run.finish(), or use reinit='create_new' when calling wandb.init().
-Traceback (most recent call last):
-  File "/home/ruili/marin_scaling/experiments/unified/vlm_mc_eval.py", line 1748, in <module>
-    main()
-  File "/home/ruili/marin_scaling/experiments/unified/vlm_mc_eval.py", line 1444, in main
-    wandb.init(
-  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 1597, in init
-    get_sentry().reraise(e)
-  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/wandb/analytics/sentry.py", line 190, in reraise
-    raise exc.with_traceback(tb)
-  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 1580, in init
-    run = wi.init(run_settings, run_config, run_printer)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 874, in init
-    raise wandb.Error(
-wandb.errors.errors.Error: Cannot resume a run while another run is active. You must either finish it using run.finish(), or use reinit='create_new' when calling wandb.init().
-wandb: 
-wandb: 🚀 View run lyric-wind-338 at: https://wandb.ai/rui_li/levanter/runs/k0uu2yjg
-wandb: Find logs at: wandb/run-20260301_080722-k0uu2yjg/logs
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ 2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:612 - INFO :: MC accuracy: 819/3088 = 0.2652, loss (mean norm LL): -3.8978
-2026-03-01T08:11:25 - 0 - __main__ - vlm_mc_eval.py:612 - INFO :: MC accuracy: 224/847 = 0.2645, loss (mean norm LL): -2.6302
+2026-03-01 12:44:06,517 - INFO - Submitting 6 job(s) to cluster infra/marin-us-central2.yaml
+2026-03-01 12:44:09,165 - INFO - Creating SSH proxy chain through marin-us-central2
+2026-03-01 12:44:09,166 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8270, gcs_port=6384, api_port=10006)}
+2026-03-01 12:44:09,171 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
+2026-03-01 12:44:10,407 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-03-01 12:44:10,558 - INFO - ==== [1/6] unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2 ======
+2026-03-01 12:44:10,558 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2
+2026-03-01 12:44:13,968 - INFO - Creating SSH proxy chain through marin-us-central2
+2026-03-01 12:44:13,969 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
+2026-03-01 12:44:13,973 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
+2026-03-01 12:44:15,048 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-03-01 12:44:15,209 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:44:15,209 - INFO - Extras: 
+2026-03-01 12:44:15,209 - INFO - env_vars: {
+    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
+    "TPU_TYPE": "v4-64",
+    "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2",
+    "TEXT_WEIGHT": "1.0",
+    "MULTIMODAL_WEIGHT": "2.0",
+    "W_VISUAL": "0.1",
+    "UND_GEN_RATIO": "1",
+    "LEARNING_RATE": "3e-4",
+    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
+    "FRAY_CLUSTER_SPEC": "ray"
+}
+Resolved 535 packages in 23ms
+2026-03-01 12:44:15,326 - INFO - Terminal command: 
+ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2", "TEXT_WEIGHT": "1.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.1", "UND_GEN_RATIO": "1", "LEARNING_RATE": "3e-4", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124411  --  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:44:15,334	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:44:15,396	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:44:15,455	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:44:15,455	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:44:15,462	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:44:15,624	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:44:15,624	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:44:15,701	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:44:15,709	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:44:15,715	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:44:15,776	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:44:15,834	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:44:15,834	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:44:15,840	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:44:16,002	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:44:16,003	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:44:16,078	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:44:16,085	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:44:16,166	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_5154e0973f1a4c35.zip.
+2026-03-01 12:44:16,167	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
+2026-03-01 12:44:16,168	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:44:16,255	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:44:16,345	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:44:16,345	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:44:16,353	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:44:16,583	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:44:16,584	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:44:16,758	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:44:16,774	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:44:17,918 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124411
+2026-03-01 12:44:17,918 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124411
+2026-03-01 12:44:18,014 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124411 ...
+2026-03-01 12:44:18,109 - INFO -   unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2 status: PENDING (0s)
+2026-03-01 12:44:28,193 - INFO -   unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2 status: RUNNING (10s)
+2026-03-01 12:44:28,193 - INFO -   Job unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2 is RUNNING.
+2026-03-01 12:44:28,193 - INFO - ==== [2/6] unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2 ======
+2026-03-01 12:44:28,194 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2
+2026-03-01 12:44:31,693 - INFO - Creating SSH proxy chain through marin-us-central2
+2026-03-01 12:44:31,693 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
+2026-03-01 12:44:31,698 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
+2026-03-01 12:44:32,773 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-03-01 12:44:32,933 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:44:32,933 - INFO - Extras: 
+2026-03-01 12:44:32,933 - INFO - env_vars: {
+    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
+    "TPU_TYPE": "v4-64",
+    "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2",
+    "TEXT_WEIGHT": "1.0",
+    "MULTIMODAL_WEIGHT": "2.0",
+    "W_VISUAL": "0.2",
+    "UND_GEN_RATIO": "1",
+    "LEARNING_RATE": "3e-4",
+    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
+    "FRAY_CLUSTER_SPEC": "ray"
+}
+Resolved 535 packages in 23ms
+2026-03-01 12:44:33,049 - INFO - Terminal command: 
+ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2", "TEXT_WEIGHT": "1.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.2", "UND_GEN_RATIO": "1", "LEARNING_RATE": "3e-4", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124428  --  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:44:33,056	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:44:33,117	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:44:33,176	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:44:33,176	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:44:33,183	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:44:33,344	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:44:33,345	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:44:33,422	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:44:33,429	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:44:33,435	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:44:33,497	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:44:33,555	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:44:33,555	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:44:33,561	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:44:33,723	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:44:33,724	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:44:33,798	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:44:33,805	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:44:33,886	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_6b134bffc2679ec0.zip.
+2026-03-01 12:44:33,887	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
+2026-03-01 12:44:33,888	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:44:33,975	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:44:34,064	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:44:34,065	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:44:34,073	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:44:34,303	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:44:34,304	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:44:34,468	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:44:34,483	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:44:35,608 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124428
+2026-03-01 12:44:35,608 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124428
+2026-03-01 12:44:35,706 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124428 ...
+2026-03-01 12:44:35,789 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2 status: PENDING (0s)
+2026-03-01 12:44:45,874 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2 status: RUNNING (10s)
+2026-03-01 12:44:45,874 - INFO -   Job unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2 is RUNNING.
+2026-03-01 12:44:45,874 - INFO - ==== [3/6] unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2 ======
+2026-03-01 12:44:45,874 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2
+2026-03-01 12:44:49,193 - INFO - Creating SSH proxy chain through marin-us-central2
+2026-03-01 12:44:49,193 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
+2026-03-01 12:44:49,197 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
+2026-03-01 12:44:50,271 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-03-01 12:44:50,430 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:44:50,431 - INFO - Extras: 
+2026-03-01 12:44:50,431 - INFO - env_vars: {
+    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
+    "TPU_TYPE": "v4-64",
+    "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2",
+    "TEXT_WEIGHT": "1.0",
+    "MULTIMODAL_WEIGHT": "2.0",
+    "W_VISUAL": "0.3",
+    "UND_GEN_RATIO": "1",
+    "LEARNING_RATE": "3e-4",
+    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
+    "FRAY_CLUSTER_SPEC": "ray"
+}
+Resolved 535 packages in 23ms
+2026-03-01 12:44:50,547 - INFO - Terminal command: 
+ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2", "TEXT_WEIGHT": "1.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.3", "UND_GEN_RATIO": "1", "LEARNING_RATE": "3e-4", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124446  --  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:44:50,555	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:44:50,617	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:44:50,675	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:44:50,675	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:44:50,682	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:44:50,843	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:44:50,844	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:44:50,921	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:44:50,928	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:44:50,934	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:44:50,995	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:44:51,052	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:44:51,053	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:44:51,059	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:44:51,220	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:44:51,221	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:44:51,294	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:44:51,301	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:44:51,381	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_62b37b435bee5027.zip.
+2026-03-01 12:44:51,381	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
+2026-03-01 12:44:51,382	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:44:51,469	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:44:51,559	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:44:51,560	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:44:51,568	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:44:51,795	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:44:51,796	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:44:51,968	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:44:51,983	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:44:53,121 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124446
+2026-03-01 12:44:53,121 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124446
+2026-03-01 12:44:53,220 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124446 ...
+2026-03-01 12:44:53,314 - INFO -   unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2 status: PENDING (0s)
+2026-03-01 12:45:03,406 - INFO -   unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2 status: RUNNING (10s)
+2026-03-01 12:45:03,406 - INFO -   Job unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2 is RUNNING.
+2026-03-01 12:45:03,406 - INFO - ==== [4/6] unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2 ======
+2026-03-01 12:45:03,406 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2
+2026-03-01 12:45:06,730 - INFO - Creating SSH proxy chain through marin-us-central2
+2026-03-01 12:45:06,730 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
+2026-03-01 12:45:06,735 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
+2026-03-01 12:45:07,809 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-03-01 12:45:07,970 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:45:07,970 - INFO - Extras: 
+2026-03-01 12:45:07,970 - INFO - env_vars: {
+    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
+    "TPU_TYPE": "v4-64",
+    "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2",
+    "TEXT_WEIGHT": "1.0",
+    "MULTIMODAL_WEIGHT": "2.0",
+    "W_VISUAL": "0.2",
+    "UND_GEN_RATIO": "1",
+    "LEARNING_RATE": "1e-3",
+    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
+    "FRAY_CLUSTER_SPEC": "ray"
+}
+Resolved 535 packages in 23ms
+2026-03-01 12:45:08,087 - INFO - Terminal command: 
+ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2", "TEXT_WEIGHT": "1.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.2", "UND_GEN_RATIO": "1", "LEARNING_RATE": "1e-3", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124504  --  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:45:08,094	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:45:08,156	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:45:08,215	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:45:08,215	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:45:08,222	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:45:08,385	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:45:08,386	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:45:08,462	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:45:08,470	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:45:08,476	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:45:08,538	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:45:08,595	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:45:08,596	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:45:08,602	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:45:08,764	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:45:08,764	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:45:08,839	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:45:08,846	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:45:10,242	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_8f9b61d9e0c28dc9.zip.
+2026-03-01 12:45:10,243	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
+2026-03-01 12:45:10,244	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:45:10,331	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:45:10,420	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:45:10,421	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:45:10,429	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:45:10,658	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:45:10,659	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:45:10,826	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:45:10,848	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:45:12,025 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124504
+2026-03-01 12:45:12,025 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124504
+2026-03-01 12:45:12,126 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124504 ...
+2026-03-01 12:45:12,234 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2 status: PENDING (0s)
+2026-03-01 12:45:22,318 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2 status: RUNNING (10s)
+2026-03-01 12:45:22,318 - INFO -   Job unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2 is RUNNING.
+2026-03-01 12:45:22,318 - INFO - ==== [5/6] unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2 ======
+2026-03-01 12:45:22,318 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2
+2026-03-01 12:45:25,684 - INFO - Creating SSH proxy chain through marin-us-central2
+2026-03-01 12:45:25,684 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
+2026-03-01 12:45:25,689 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
+2026-03-01 12:45:26,762 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-03-01 12:45:26,920 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:45:26,921 - INFO - Extras: 
+2026-03-01 12:45:26,921 - INFO - env_vars: {
+    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
+    "TPU_TYPE": "v4-64",
+    "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2",
+    "TEXT_WEIGHT": "1.0",
+    "MULTIMODAL_WEIGHT": "2.0",
+    "W_VISUAL": "0.2",
+    "UND_GEN_RATIO": "1",
+    "LEARNING_RATE": "1e-4",
+    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
+    "FRAY_CLUSTER_SPEC": "ray"
+}
+Resolved 535 packages in 23ms
+2026-03-01 12:45:27,038 - INFO - Terminal command: 
+ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2", "TEXT_WEIGHT": "1.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.2", "UND_GEN_RATIO": "1", "LEARNING_RATE": "1e-4", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124523  --  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:45:27,045	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:45:27,107	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:45:27,165	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:45:27,165	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:45:27,172	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:45:27,333	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:45:27,334	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:45:27,410	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:45:27,417	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:45:27,424	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:45:27,484	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:45:27,541	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:45:27,541	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:45:27,548	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:45:27,708	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:45:27,709	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:45:27,782	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:45:27,789	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:45:27,869	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_2ccb6d402bfe1193.zip.
+2026-03-01 12:45:27,870	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
+2026-03-01 12:45:27,871	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:45:27,957	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:45:28,046	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:45:28,047	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:45:28,055	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:45:28,282	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:45:28,283	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:45:28,447	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:45:28,464	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:45:29,588 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124523
+2026-03-01 12:45:29,589 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124523
+2026-03-01 12:45:29,685 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124523 ...
+2026-03-01 12:45:29,771 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2 status: PENDING (0s)
+2026-03-01 12:45:39,854 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2 status: RUNNING (10s)
+2026-03-01 12:45:39,854 - INFO -   Job unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2 is RUNNING.
+2026-03-01 12:45:39,854 - INFO - ==== [6/6] unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2 ======
+2026-03-01 12:45:39,854 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2
+2026-03-01 12:45:43,294 - INFO - Creating SSH proxy chain through marin-us-central2
+2026-03-01 12:45:43,294 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
+2026-03-01 12:45:43,298 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
+Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
+2026-03-01 12:45:44,372 - INFO - SSH tunnel is ready - all dashboards accessible
+2026-03-01 12:45:44,531 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:45:44,532 - INFO - Extras: 
+2026-03-01 12:45:44,532 - INFO - env_vars: {
+    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
+    "TPU_TYPE": "v4-64",
+    "EXP_NAME": "unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2",
+    "TEXT_WEIGHT": "2.0",
+    "MULTIMODAL_WEIGHT": "2.0",
+    "W_VISUAL": "0.2",
+    "UND_GEN_RATIO": "1",
+    "LEARNING_RATE": "1e-3",
+    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
+    "FRAY_CLUSTER_SPEC": "ray"
+}
+Resolved 535 packages in 23ms
+2026-03-01 12:45:44,649 - INFO - Terminal command: 
+ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2", "TEXT_WEIGHT": "2.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.2", "UND_GEN_RATIO": "1", "LEARNING_RATE": "1e-3", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124540  --  python experiments/unified/unified_pretrain_demo.py
+2026-03-01 12:45:44,657	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:45:44,718	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:45:44,777	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:45:44,777	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:45:44,784	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:45:44,945	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:45:44,946	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:45:45,023	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:45:45,030	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:45:45,036	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:45:45,097	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:45:45,155	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:45:45,155	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:45:45,161	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:45:45,322	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:45:45,323	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:45:45,398	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:45:45,404	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:45:45,484	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_7586921acad48a75.zip.
+2026-03-01 12:45:45,485	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
+2026-03-01 12:45:45,486	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
+2026-03-01 12:45:45,575	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
+2026-03-01 12:45:45,664	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
+2026-03-01 12:45:45,665	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
+2026-03-01 12:45:45,673	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
+2026-03-01 12:45:45,901	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
+2026-03-01 12:45:45,902	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
+2026-03-01 12:45:46,071	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
+2026-03-01 12:45:46,092	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
+2026-03-01 12:45:47,235 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124540
+2026-03-01 12:45:47,235 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124540
+2026-03-01 12:45:47,340 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124540 ...
+2026-03-01 12:45:47,422 - INFO -   unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2 status: PENDING (0s)
+2026-03-01 12:45:57,505 - INFO -   unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2 status: RUNNING (10s)
+2026-03-01 12:45:57,505 - INFO -   Job unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2 is RUNNING.
+2026-03-01 12:45:57,506 - INFO - ==============================================
+2026-03-01 12:45:57,506 - INFO - Results: 6 succeeded, 0 failed out of 6 total
+2026-03-01 12:45:57,507 - INFO -   Succeeded: unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2, unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2, unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2, unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2, unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2, unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2
