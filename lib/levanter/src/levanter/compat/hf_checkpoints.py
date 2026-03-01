@@ -62,6 +62,7 @@ from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, 
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.mesh import get_active_mesh
+from levanter.utils.partitioning import named_jit
 from levanter.utils.py_utils import dataclass_with_default_init
 from levanter.utils.types import ResourceMapping
 
@@ -807,7 +808,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             return lev_model
 
-        load_from_state_dict = haliax.named_jit(
+        load_from_state_dict = named_jit(
             load_from_state_dict, axis_resources=axis_mapping, out_axis_resources=axis_mapping, donate_args=(True,)
         )
         lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
@@ -1307,7 +1308,7 @@ def _patch_missing_buffers_for_deser(lev_model, lm_model_cls, Vocab, config, key
 
     # ok, we now want to re-initialize the buffers by running the constructor for real, getting only the missing
     # arrays. We're relying on jit to do all the work in eliminating the unnecessary computation/memory
-    @haliax.named_jit(axis_resources=axis_mapping)
+    @named_jit(axis_resources=axis_mapping)
     def _init_buffers():
         new_model = lm_model_cls.init(Vocab, config, key=key)
 
