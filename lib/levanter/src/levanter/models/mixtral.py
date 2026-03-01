@@ -11,6 +11,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+from jax._src.mesh import get_concrete_mesh
 from jax import Array
 from jax import shard_map
 
@@ -338,7 +339,7 @@ class MixtralSparseMoeBlock(eqx.Module):
     def _route(self, router_probs: NamedArray, Token: Axis, TopExperts: Axis):
         @partial(
             shard_map,
-            mesh=hax.partitioning._get_mesh(),
+            mesh=get_concrete_mesh(),
             in_specs=hax.partitioning.pspec_for_axis(router_probs.axes),
             out_specs=(
                 hax.partitioning.pspec_for_axis((Token, TopExperts)),
@@ -365,7 +366,7 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         @partial(
             shard_map,
-            mesh=hax.partitioning._get_mesh(),
+            mesh=get_concrete_mesh(),
             in_specs=(
                 hax.partitioning.pspec_for_axis(x_flat.axes),
                 hax.partitioning.pspec_for_axis(topk_idx_flat.axes),
@@ -403,7 +404,7 @@ class MixtralSparseMoeBlock(eqx.Module):
     ):
         @partial(
             shard_map,
-            mesh=hax.partitioning._get_mesh(),
+            mesh=get_concrete_mesh(),
             in_specs=(
                 hax.partitioning.pspec_for_axis(out_repeat_sort.axes),
                 hax.partitioning.pspec_for_axis(sort_idx.axes),

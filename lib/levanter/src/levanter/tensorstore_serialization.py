@@ -161,11 +161,11 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
         # `eqx.filter_eval_shape` can produce `NamedSharding(mesh=AbstractMesh(...))`, but JAX array
         # deserialization requires a concrete device assignment (i.e., a concrete Mesh).
         if isinstance(sharding, jax.sharding.NamedSharding) and isinstance(sharding.mesh, jax.sharding.AbstractMesh):
-            concrete_mesh = mesh or hax.partitioning._get_mesh()
+            from jax._src.mesh import get_concrete_mesh
+
+            concrete_mesh = mesh or get_concrete_mesh()
             if isinstance(concrete_mesh, jax.sharding.AbstractMesh) or concrete_mesh is None or concrete_mesh.empty:
                 # Fall back to JAX's concrete mesh getter when available.
-                from jax._src.mesh import get_concrete_mesh
-
                 concrete_mesh = get_concrete_mesh()
 
             if concrete_mesh is not None and not concrete_mesh.empty:
