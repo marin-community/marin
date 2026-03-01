@@ -74,25 +74,3 @@ scale_groups:
     worker:
       attributes:
         preemptible: "true"
-  tpu_v5e_32:
-    zones: [europe-west4-b, us-west4-a]
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-32
-    num_vms: 8
-    resources:
-      cpu: 128
-      ram: 128GB
-      disk: 1TB
-      tpu_count: 4
-      gpu_count: 0
-    min_slices: 0
-    max_slices: 16
-    priority: 200
-    slice_template:
-      accelerator_variant: v5litepod-32
-      preemptible: true
-      gcp:
-        runtime_version: v2-alpha-tpuv5-lite
-    worker:
-      attributes:
-        preemptible: "true"
