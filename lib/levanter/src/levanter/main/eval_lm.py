@@ -113,13 +113,13 @@ def main(config: EvalLmConfig):
                 model = mp.cast_to_compute(model)
                 return model.compute_next_token_loss(example, key=None)
 
+        @hax.named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = mp.cast_to_compute(model)
-            with hax.axis_mapping(compute_axis_mapping):
-                activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-                head = model.get_lm_head()
-                logits = hax.dot(activations, head, axis=model.Embed)
-                return logits
+            activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
+            head = model.get_lm_head()
+            logits = hax.dot(activations, head, axis=model.Embed)
+            return logits
 
         # initialize the model
         if config.checkpoint_path is not None:
