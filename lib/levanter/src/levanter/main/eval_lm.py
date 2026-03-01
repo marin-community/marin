@@ -97,12 +97,14 @@ def main(config: EvalLmConfig):
             per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
             return per_pos_loss, per_pos_weight, per_pos_token_id
 
+        batch_axis_resource = compute_axis_mapping.get(Batch.name, compute_axis_mapping.get("batch"))
         evaluator = TaggedEvaluator(
             EvalBatch=Batch,
             tagged_eval_sets=datasets,
             loss_fn=eval_loss_fn,
             tokenizer=tokenizer,
-            axis_mapping=compute_axis_mapping,
+            device_mesh=config.trainer.device_mesh,
+            batch_axis_resource=batch_axis_resource,
             max_examples_per_dataset=max_examples,
         )
 
