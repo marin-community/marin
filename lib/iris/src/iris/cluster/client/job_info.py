@@ -125,7 +125,6 @@ def resolve_job_user(explicit_user: str | None = None) -> str:
             raise ValueError("Job user must not be empty")
         return explicit_user
 
-    resolved = explicit_user
     info = get_job_info()
     if info is not None:
         return info.user

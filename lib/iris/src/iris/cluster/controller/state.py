@@ -18,11 +18,10 @@ state and return results indicating what the caller should do.
 import bisect
 import logging
 from collections import Counter, deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock
-from types import MappingProxyType
 from typing import NamedTuple
 
 from iris.cluster.controller.events import (
@@ -597,8 +596,8 @@ class UserStats:
     """Aggregate counts for a single user."""
 
     user: str
-    task_state_counts: dict[str, int] = field(default_factory=dict)
-    job_state_counts: dict[str, int] = field(default_factory=dict)
+    task_state_counts: dict[int, int] = field(default_factory=dict)
+    job_state_counts: dict[int, int] = field(default_factory=dict)
 
 
 # =============================================================================
@@ -1508,42 +1507,21 @@ class ControllerState:
     def list_user_stats(self) -> list[UserStats]:
         """Return aggregated live counts grouped by user."""
         with self._lock:
-            by_user = {}
+            by_user: dict[str, UserStats] = {}
             for job in self._jobs.values():
                 task_ids = self._tasks_by_job.get(job.job_id, [])
-                for task_id in task_ids:
-                    task = self._tasks.get(task_id)
-                    if task is None:
-                        continue
-
-                bucket = by_user.setdefault(
+                user_stats = by_user.setdefault(
                     job.job_id.user,
-                    {
-                        "task_state_counts": {},
-                        "job_state_counts": {},
-                    },
+                    UserStats(user=job.job_id.user),
                 )
-                task_counts = bucket["task_state_counts"]
-                assert isinstance(task_counts, dict)
                 for task_id in task_ids:
                     task = self._tasks.get(task_id)
                     if task is None:
                         continue
-                    task_state_name = cluster_pb2.TaskState.Name(task.state).removeprefix("TASK_STATE_").lower()
-                    task_counts[task_state_name] = task_counts.get(task_state_name, 0) + 1
-                job_counts = bucket["job_state_counts"]
-                assert isinstance(job_counts, dict)
-                state_name = cluster_pb2.JobState.Name(job.state).removeprefix("JOB_STATE_").lower()
-                job_counts[state_name] = job_counts.get(state_name, 0) + 1
+                    user_stats.task_state_counts[task.state] = user_stats.task_state_counts.get(task.state, 0) + 1
+                user_stats.job_state_counts[job.state] = user_stats.job_state_counts.get(job.state, 0) + 1
 
-            return [
-                UserStats(
-                    user=user,
-                    task_state_counts=dict(bucket["task_state_counts"]),
-                    job_state_counts=dict(bucket["job_state_counts"]),
-                )
-                for user, bucket in by_user.items()
-            ]
+            return list(by_user.values())
 
     def get_children(self, job_id: JobName) -> list[ControllerJob]:
         with self._lock:

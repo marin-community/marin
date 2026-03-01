@@ -370,8 +370,6 @@ def test_cluster_summary_includes_total_users(client, state):
     assert resp["totalUsers"] == 2
 
 
-
-
 def test_get_job_status_returns_retry_info(client, state, job_request):
     """GetJobStatus RPC returns retry counts and current state.
 
