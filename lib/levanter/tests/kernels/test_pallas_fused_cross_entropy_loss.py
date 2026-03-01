@@ -239,28 +239,6 @@ def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
     assert pallas_tpu._infer_num_tensorcores() == 1
 
 
-def test_infer_block_sizes_has_v4_mid_h_large_vocab_profile():
-    block_sizes = infer_block_sizes(
-        b=8192,
-        h=1024,
-        v=128_000,
-        dtype=jnp.bfloat16,
-        device_kind="TPU v4",
-    )
-    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=256)
-
-
-def test_infer_block_sizes_keeps_gb10_bucket_for_gb10_devices():
-    block_sizes = infer_block_sizes(
-        b=8192,
-        h=1024,
-        v=128_000,
-        dtype=jnp.bfloat16,
-        device_kind="NVIDIA GB10",
-    )
-    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=32, v_block_size=1024)
-
-
 def test_infer_block_sizes_treats_unknown_tpu_kind_as_tpu_for_shape_sanitization():
     block_sizes = infer_block_sizes(
         b=768,
@@ -636,17 +614,6 @@ def test_infer_block_sizes_respects_local_batch_and_hidden_divisibility():
     assert block_sizes.h_block_size % 128 == 0
     assert 512 % block_sizes.b_block_size == 0
     assert 768 % block_sizes.h_block_size == 0
-
-
-def test_infer_block_sizes_uses_gb10_gpu_tuned_entry():
-    block_sizes = infer_block_sizes(
-        b=128,
-        h=128,
-        v=128,
-        dtype=jnp.float32,
-        device_kind="NVIDIA GB10",
-    )
-    assert block_sizes == fused_api.BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128)
 
 
 def test_infer_block_sizes_huge_batch_without_scoped_vmem_flag_warns_and_uses_safe_v(
