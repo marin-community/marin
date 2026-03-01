@@ -397,8 +397,6 @@ def _build_train_step(
             allow_nondivisible_batch_size=True,
             watch=train_config.watch,
             profiler=train_config.profiler,
-            profiler_start_step=train_config.profiler_start_step,
-            profiler_num_steps=train_config.profiler_num_steps,
             use_explicit_mesh_axes=train_config.explicit_mesh_axes,
         ),
         train_seq_len=train_config.train_seq_len or model_config.max_seq_len,
