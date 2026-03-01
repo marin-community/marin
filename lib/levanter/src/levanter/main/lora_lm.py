@@ -138,7 +138,7 @@ def main(config: LoraLmConfig):
             logger.warning("No evaluation datasets provided.")
         else:
             compute_axis_mapping = trainer.compute_axis_mapping
-            batch_axis_resource = levanter.eval.resolve_batch_axis_resource(trainer.EvalBatch, compute_axis_mapping)
+            batch_axis_resource = trainer.batch_axis_resource
             cb = levanter.eval.cb_tagged_lm_evaluate(
                 EvalBatch=trainer.EvalBatch,
                 tagged_eval_sets=tagged_eval_datasets,

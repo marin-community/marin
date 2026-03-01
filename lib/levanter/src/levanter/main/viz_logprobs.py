@@ -19,7 +19,6 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data import DataLoader
 from levanter.data.text import LmDataConfig
-from levanter.eval import resolve_batch_axis_resource
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
@@ -64,7 +63,7 @@ def main(config: VizLmConfig):
 
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
-    batch_axis_resource = resolve_batch_axis_resource(EvalBatch, compute_axis_mapping)
+    batch_axis_resource = config.trainer.batch_axis_resource
 
     with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)

@@ -135,7 +135,7 @@ def main(config: TrainLmConfig):
 
         # some axes we need
         EvalBatch = config.trainer.EvalBatch
-        batch_axis_resource = levanter.eval.resolve_batch_axis_resource(EvalBatch, compute_axis_mapping)
+        batch_axis_resource = trainer.batch_axis_resource
         model_max_seq_len = config.model.max_seq_len
         train_length = config.train_seq_len
         if train_length is None:
