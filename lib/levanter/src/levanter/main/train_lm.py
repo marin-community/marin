@@ -295,15 +295,24 @@ def main(config: TrainLmConfig):
             )
 
         @named_jit(axis_resources=compute_axis_mapping)
-        def compute_logits(model: LmHeadModel, example: LmExample):
+        def compute_logits(model: LmHeadModel, example: LmExample | GrugLmExample):
             model = trainer.mp.cast_to_compute(model)
-            activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-            head = model.get_lm_head()
-            logits = hax.dot(activations, head, axis=model.Embed)
-            return logits
+            if isinstance(example, LmExample):
+                activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
+                head = model.get_lm_head()
+                return hax.dot(activations, head, axis=model.Embed)
+
+            logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=EvalBatch, key=None)
+            if logits_array.ndim == 2:
+                return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))
+            if logits_array.ndim == 3:
+                batch_axis = Axis(EvalBatch.name, logits_array.shape[0])
+                pos_axis = Pos.resize(logits_array.shape[1])
+                return hax.named(logits_array, (batch_axis, pos_axis, model.Vocab))
+            raise ValueError(f"Unexpected logits rank for analysis callbacks: {logits_array.ndim}")
 
         if config.log_entropy:
-            for name, dataset in config.data.validation_sets(Pos).items():
+            for name, dataset in config.data.validation_grug_sets(seq_len=Pos.size).items():
                 trainer.add_hook(
                     levanter.analysis.cb_compute_entropies(
                         compute_logits,
