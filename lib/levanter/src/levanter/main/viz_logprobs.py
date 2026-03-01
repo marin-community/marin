@@ -21,7 +21,7 @@ from levanter.data import DataLoader
 from levanter.data.text.examples import GrugLmExample
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
@@ -97,7 +97,7 @@ def main(config: VizLmConfig):
             argmaxes = jnp.roll(jnp.argmax(logits, axis=-1), 1, axis=-1)
             return logprobs, argmaxes
 
-        model: LmHeadModel
+        model: ArrayLmHeadModel
 
         # initialize the model
         if config.checkpoint_is_hf:
@@ -116,7 +116,7 @@ def main(config: VizLmConfig):
                 model = load_checkpoint(model, config.checkpoint_path, subpath="model")
             model = hax.shard(model, parameter_axis_mapping)
 
-        model = typing.cast(LmHeadModel, inference_mode(model, True))
+        model = typing.cast(ArrayLmHeadModel, inference_mode(model, True))
 
         if config.comparison_model_path is not None:
             if config.comparison_is_hf:
@@ -134,7 +134,7 @@ def main(config: VizLmConfig):
                     comparison_model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
                     comparison_model = load_checkpoint(comparison_model, config.comparison_model_path, subpath="model")
                 comparison_model = hax.shard(comparison_model, parameter_axis_mapping)
-            comparison_model = typing.cast(LmHeadModel, inference_mode(comparison_model, True))
+            comparison_model = typing.cast(ArrayLmHeadModel, inference_mode(comparison_model, True))
         else:
             comparison_model = None
 
