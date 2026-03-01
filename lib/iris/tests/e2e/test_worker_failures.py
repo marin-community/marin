@@ -73,11 +73,11 @@ def test_task_fails_once_then_succeeds(cluster):
 
 
 def test_worker_health_in_dashboard(cluster, page, screenshot):
-    """Workers tab shows at least one healthy worker."""
+    """Fleet tab shows at least one healthy machine."""
     cluster.wait_for_workers(1)
     dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
-    dashboard_click(page, 'button.tab-btn:has-text("Workers")')
+    dashboard_click(page, 'button.tab-btn:has-text("Fleet")')
 
-    assert_visible(page, "text=healthy")
-    screenshot("workers-healthy")
+    assert_visible(page, "text=ready")
+    screenshot("fleet-healthy")

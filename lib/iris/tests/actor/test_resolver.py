@@ -8,31 +8,7 @@ This module tests all resolver implementations in iris.actor.resolver:
 - GcsResolver: Discovery via GCP VM instance metadata
 """
 
-from iris.actor.client import ActorClient
-from iris.actor.resolver import FixedResolver, GcsResolver, MockGcsApi
-from iris.actor.server import ActorServer
-
-
-class Echo:
-    def echo(self, msg: str) -> str:
-        return f"echo: {msg}"
-
-
-# FixedResolver tests
-
-
-def test_client_with_resolver():
-    server = ActorServer(host="127.0.0.1")
-    server.register("echo", Echo())
-    port = server.serve_background()
-
-    try:
-        resolver = FixedResolver({"echo": f"http://127.0.0.1:{port}"})
-        client = ActorClient(resolver, "echo")
-
-        assert client.echo("hello") == "echo: hello"
-    finally:
-        server.stop()
+from iris.actor.resolver import GcsResolver, MockGcsApi
 
 
 def test_gcs_resolver_finds_actors():

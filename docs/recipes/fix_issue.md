@@ -1,82 +1,73 @@
-You have been assigned an important task. You are to document and fix the Github issue indicated by the user.
+You are to fix the Github issue indicated by the user.
 
-## Backgound
+## Background
 
-For background on the codebase make sure to read:
+Read first:
 
 @AGENTS.md
 @docs/recipes/architecture.md
 
-This will involve multiple steps, and you will update the user or github comment
-as the tasks are completed. You may not proceed to a new task until you have
-successfully completed all prior tasks. If you cannot complete a task, you will
-write a Github comment indicating your last status and why you failed. A task
-list is prepared for you at the end of the document.
+You may not proceed to a new task until you have completed all prior tasks. If
+you cannot complete a task, write a Github comment with your last status and why
+you failed. A task list is at the end of this document.
+
+## Writing Style for All GitHub Comments
+
+**Be terse.** Every sentence must convey information that the reader does not
+already have. Follow these rules in all comments you post:
+
+- No preamble, no filler, no editorializing ("I've thoroughly investigated...",
+  "After careful analysis...", "This is an interesting problem...").
+- No repeating information already in the issue body.
+- No restating what code does when a link suffices.
+- Max 3-4 sentences of prose per comment section. Use links and code, not words.
+- Annotate code links, don't narrate them. Bad: "The transfer happens in
+  arrow_flight.py where the implementation copies data from TPU to CPU".
+  Good: `arrow_flight.py#L384` - TPU→CPU copy.
 
 ## Research
 
-Use the `gh` cli tool to fetch the current state of the issue.  Read the
-codebase to understand the origin of the issue, including _all_ relevant source
-files.  Use the output from your research to add a comment to the issue with the
-appropriate level of detail.
+Use `gh` to fetch the issue. Read the codebase to find all relevant source
+files. Post a single comment combining your research and proposed fix.
 
-* You will write a comment titled "# Agent Research Report"
-* Your comment will start with 1 paragraph (max) recapping the issue.
-* Your comment will follow this with links to the relevant source code related the issue.
-* You may optionally include code snippets, but keep it minimal.
+The comment has two sections: **Research** and **Proposed Fix**.
 
-Example research report:
+### Research section
 
-> TPU-to-CPU weight transfers during training achieve only ~1GB/s, well below
-> hardware capabilities (4-7GB/s expected for TPU v4/v5). This blocks efficient
-> weight synchronization between training and rollout workers, causing large
-> models (8B+ parameters) to take 16+ seconds to transfer when they should take
-> 4-8 seconds. The root cause appears to be inefficient memory layout from
-> jax.device_get() and lack of parallelization, requiring investigation into
-> alternative transfer strategies, memory optimization, and hardware-specific
-> tuning.
+Title: `# Research`
+
+- 2-3 sentences: what's broken/missing and why (root cause, not symptoms).
+- A `**Relevant code**` list: max 5 links, each with a short (<10 word) annotation.
+
+Example:
+
+> `jax.device_get()` produces non-contiguous memory layout, limiting TPU→CPU
+> transfer to ~1GB/s (expect 4-7GB/s). No parallelization across shards.
 >
-> Relevant Code
-> - [arrow_flight.py#L384](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/arrow_flight.py#L384) - TPU-to-CPU copy in Arrow Flight implementation
-> - [jax.py#L394-L402](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/jax.py#L394-L402) - TPU-to-CPU transfer in JAX implementation
-> - [arrow_flight.py#L380-L384](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/arrow_flight.py#L380-L384) - Memory layout context
-> - [jax.py#L228-L283](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/jax.py#L228-L283) - JAX transfer server (bypasses CPU)
-> - [base.py#L32-L35](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/base.py#L32-L35) - Transfer mode definitions
-> - [test_weight_transfer.py#L211-L255](https://github.com/marin-community/marin/blob/main/tests/rl/test_weight_transfer.py#L211-L255) - Performance benchmark test
->
+> **Relevant code**
+> - [`arrow_flight.py#L384`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/arrow_flight.py#L384) - TPU→CPU copy
+> - [`jax.py#L394-L402`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/jax.py#L394-L402) - transfer impl
+> - [`base.py#L32-L35`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/base.py#L32-L35) - transfer mode defs
 
-Use the information you have collected to attempt to fix the behavior (if it's a bug).
-When needed, you write an appropriate reproduction test which minimally validates your fix.
+### Proposed Fix section
 
-## Hypothesizing
+Title: `# Proposed Fix`
 
-You will next write out a hypothesis for how to proceed. There are 2 cases.
+There are 2 cases:
 
-* For a small bug fix, show the static code trace which triggers the error. For instance:
+* **Bug fix**: Show the call chain that triggers the error, then state the fix
+  in one sentence. Include a code snippet only if the fix is non-obvious.
 
-> I've identified the source of the bug. In
->   def foo(a):
->      x.abc()
-> we fail to handle the case where X is a tuple, and assume it's an object.
->
-> This occurs in the RolloutWorker when the environment returns a tuple:
->   env_result = env.run()
->   foo(env_result)
+  > `env.run()` returns a tuple; `foo()` assumes an object and calls `.abc()`.
+  > Fix: unwrap the tuple in `RolloutWorker._step()` before passing to `foo()`.
 
-* For a design request, prepare a design specification and attach it to the issue.
+* **Design change**: The design doc replaces the `# Proposed Fix` section.
+  Write it per @docs/recipes/design_doc.md directly in the issue comment
+  (agents cannot commit files before the PR). The 3-4 sentence prose cap
+  applies to `# Research`; the design doc follows its own length guidelines.
+  Keep everything in one comment.
 
-Read @docs/recipes/design_doc.md for how to write a design doc. Read this only
-if a design doc is warranted.
-
- - Compact summary of the problem and goals
- - Overview of how the current code works, including source files and snippets
- - Proposed plan to fix the issue
- - Review of the plan and any challenges
- - Testing plan
-
-In both cases, you keep things clean, and you don't over-complicate. You search
-for the minimally disruptive fix that leaves the code base in a better state
-than when you started.
+In both cases: find the minimally disruptive fix. Do not over-engineer.
 
 ## Implementation
 
@@ -123,10 +114,8 @@ Key checks to monitor:
 The tasks for this recipe:
 
 - [ ] Fetch issue information
-- [ ] Aggressively research codebase for relevant source files for the issue
-- [ ] Update issue with "Agent Research"
-- [ ] Formulate a design or fix
-- [ ] Update issue with proposed plan
+- [ ] Research codebase for all relevant source files
+- [ ] Formulate fix and post Research + Proposed Fix comment
 - [ ] Create branch for the changes
 - [ ] Write a test case as needed for changes
 - [ ] Implement changes until all tests pass

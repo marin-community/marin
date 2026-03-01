@@ -71,15 +71,62 @@ def test_job_detail_shows_task_logs(cluster, page, screenshot):
     screenshot("job-detail-task-logs")
 
 
-def test_workers_tab(cluster, page, screenshot):
-    """Workers tab shows healthy workers."""
+def test_fleet_tab(cluster, page, screenshot):
+    """Fleet tab shows machines with health status."""
     cluster.wait_for_workers(1)
     dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
-    dashboard_click(page, 'button.tab-btn:has-text("Workers")')
+    dashboard_click(page, 'button.tab-btn:has-text("Fleet")')
 
-    assert_visible(page, "text=healthy")
-    screenshot("workers-tab")
+    assert_visible(page, "text=ready")
+    screenshot("fleet-tab")
+
+
+def test_worker_detail_page(cluster, page, screenshot):
+    """Worker detail page shows worker info, task history, and logs."""
+    # Run a job so the worker has real task history
+    job = cluster.submit(_quick, "worker-detail-ok")
+    cluster.wait(job, timeout=30)
+
+    # Find which worker ran the task and navigate to its detail page
+    task_status = cluster.task_status(job)
+    worker_id = task_status.worker_id
+    assert worker_id, "Expected task to be assigned to a worker"
+
+    dashboard_goto(page, f"{cluster.url}/worker/{worker_id}")
+
+    if not _is_noop_page(page):
+        # Wait for either success or error to render
+        page.wait_for_function(
+            "() => document.querySelector('.worker-detail-grid') !== null"
+            " || document.querySelector('.error-message') !== null",
+            timeout=10000,
+        )
+    screenshot("worker-detail")
+    assert_visible(page, f"text={worker_id}")
+    assert_visible(page, "text=Healthy")
+    assert_visible(page, "text=Task History")
+
+
+def test_worker_detail_metric_cards(cluster, page, screenshot):
+    """Worker detail page renders MetricCard tiles for key stats."""
+    job = cluster.submit(_quick, "worker-metric-cards")
+    cluster.wait(job, timeout=30)
+
+    task_status = cluster.task_status(job)
+    worker_id = task_status.worker_id
+    assert worker_id
+
+    dashboard_goto(page, f"{cluster.url}/worker/{worker_id}")
+
+    if not _is_noop_page(page):
+        page.wait_for_function(
+            "() => document.querySelector('.metric-card') !== null",
+            timeout=10000,
+        )
+    # MetricCard components should be present (running tasks, CPU/memory, accelerator)
+    assert_visible(page, "text=Running Tasks")
+    screenshot("worker-detail-metric-cards")
 
 
 def test_autoscaler_tab(cluster, page, screenshot):

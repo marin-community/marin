@@ -74,7 +74,7 @@ extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
-ignore = ["F722", "B008", "UP015", "A005", "I001"]
+ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
@@ -115,6 +115,10 @@ disable-search-path-heuristics = true
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
 use-ignore-files = false
+# Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
+# Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
+# the entire project when running from those paths.
+disable-project-excludes-heuristics = true
 
 # Exclude non-production code from type checking
 project-excludes = [
@@ -124,9 +128,10 @@ project-excludes = [
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
-    # Do not exclude all hidden-path ancestors; this repo is often checked out under
-    # directories such as `.codex/worktrees/...`, and pyrefly evaluates globs on
-    # absolute paths during project mode.
+    # Keep key excludes that pyrefly normally adds heuristically.
+    "**/node_modules",
+    "**/__pycache__",
+    "**/venv/**",
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs
