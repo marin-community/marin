@@ -341,11 +341,10 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
     def vocab_size(self) -> int:
         return self.Vocab.size
 
-    def compute_next_token_loss(
+    def _compute_next_token_loss_named(
         self,
-        example: Any,
+        example: LmExample,
         *,
-        batch_axis: Axis | str | None = "batch",
         key=None,
         reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
         reduction_axis: Optional[hax.AxisSelection] = None,
@@ -354,14 +353,11 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         logit_soft_cap: Optional[float] = None,
     ) -> jnp.ndarray | LmTensor:
         """
-        Compute next-token cross-entropy for a language modeling example.
+        Compute next-token cross-entropy for a named example.
 
-        If `reduction` is not None, the loss is reduced across `reduction_axis` (`None` means all axes).
-        If `reduction` is None, the loss is returned unreduced as a model-native tensor with axes
-        (*batch axes, sequence_length).
+        Internal helper used by the array-native public surface.
         """
-        named_example = _as_named_lm_example(example, Pos=self.Pos, batch_axis=batch_axis)
-        activations = self.activations(named_example.tokens, named_example.attn_mask, key=key)
+        activations = self.activations(example.tokens, example.attn_mask, key=key)
 
         aux_loss = 0
         if isinstance(activations, tuple):
@@ -373,8 +369,8 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             self.Vocab,
             activations,
             self.get_lm_head(),
-            named_example.tokens,
-            loss_weight=named_example.loss_weight,
+            example.tokens,
+            loss_weight=example.loss_weight,
             reduction=reduction,
             reduction_axis=reduction_axis,
             logsumexp_weight=logsumexp_weight,
@@ -402,9 +398,9 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         This bridges array-native batches (for example `GrugLmExample`) to the legacy
         named-tensor model interface during migration.
         """
-        loss = self.compute_next_token_loss(
-            example,
-            batch_axis=batch_axis,
+        named_example = _as_named_lm_example(example, Pos=self.Pos, batch_axis=batch_axis)
+        loss = self._compute_next_token_loss_named(
+            named_example,
             key=key,
             reduction=reduction,
             reduction_axis=reduction_axis,

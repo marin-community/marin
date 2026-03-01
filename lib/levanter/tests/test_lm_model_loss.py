@@ -85,7 +85,7 @@ def _toy_example(Batch: Axis, Pos: Axis, Vocab: Axis, *, key: PRNGKeyArray) -> L
     return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=AttentionMask.causal())
 
 
-def test_compute_next_token_loss_reduction_returns_scalar():
+def test_compute_next_token_loss_array_reduction_returns_scalar():
     Vocab = Axis("vocab", 32)
     cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
     model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
@@ -94,12 +94,11 @@ def test_compute_next_token_loss_reduction_returns_scalar():
     Pos = cfg.max_Pos.resize(8)
     example = _toy_example(Batch, Pos, Vocab, key=jax.random.PRNGKey(1))
 
-    loss = model.compute_next_token_loss(example)
-    assert loss.axes == ()
-    assert jnp.shape(loss.array) == ()
+    loss = model.compute_next_token_loss_array(example)
+    assert jnp.shape(loss) == ()
 
 
-def test_compute_next_token_loss_unreduced_has_expected_axes():
+def test_compute_next_token_loss_array_unreduced_has_expected_shape():
     Vocab = Axis("vocab", 32)
     cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
     model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
@@ -108,13 +107,11 @@ def test_compute_next_token_loss_unreduced_has_expected_axes():
     Pos = cfg.max_Pos.resize(8)
     example = _toy_example(Batch, Pos, Vocab, key=jax.random.PRNGKey(1))
 
-    loss = model.compute_next_token_loss(example, reduction=None, reduction_axis=())
-    assert isinstance(loss, hax.NamedArray)
-    assert loss.resolve_axis("batch").size == Batch.size
-    assert loss.resolve_axis("position").size == Pos.size
+    loss = model.compute_next_token_loss_array(example, reduction=None, reduction_axis=())
+    assert loss.shape == (Batch.size, Pos.size)
 
 
-def test_compute_next_token_loss_includes_aux_loss():
+def test_compute_next_token_loss_array_includes_aux_loss():
     Vocab = Axis("vocab", 32)
     cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
     model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
@@ -123,9 +120,9 @@ def test_compute_next_token_loss_includes_aux_loss():
     Pos = cfg.max_Pos.resize(8)
     example = _toy_example(Batch, Pos, Vocab, key=jax.random.PRNGKey(1))
 
-    base = model.compute_next_token_loss(example)
+    base = model.compute_next_token_loss_array(example)
     model_with_aux = eqx.tree_at(lambda m: m.aux_loss, model, jnp.array(0.25, dtype=jnp.float32))
-    with_aux = model_with_aux.compute_next_token_loss(example)
+    with_aux = model_with_aux.compute_next_token_loss_array(example)
 
     assert pytest.approx(float(base) + 0.25, rel=1e-6, abs=1e-6) == float(with_aux)
 
@@ -140,7 +137,7 @@ def test_compute_next_token_loss_array_matches_named_for_grug_example():
     example = _toy_example(Batch, Pos, Vocab, key=jax.random.PRNGKey(1))
     grug_example = grug_lm_example_from_named(example)
 
-    named_loss = model.compute_next_token_loss(example, reduction=None, reduction_axis=()).array
+    named_loss = model.compute_next_token_loss_array(example, batch_axis=Batch, reduction=None, reduction_axis=())
     grug_loss = model.compute_next_token_loss_array(grug_example, batch_axis=Batch, reduction=None, reduction_axis=())
 
     np.testing.assert_allclose(grug_loss, named_loss, rtol=1e-5, atol=1e-6)

@@ -13,7 +13,12 @@ from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+from levanter.data.text.examples import (
+    GrugLmExample,
+    LmLikeExample,
+    loss_weight_array_from_lm_example,
+    target_token_ids_array_from_lm_example,
+)
 from levanter.eval import EvalResult, LossFnOutput, TaggedEvaluator, cb_tagged_evaluate
 from levanter.models.lm_model import LmExample
 from levanter.tracker import current_tracker
@@ -41,15 +46,15 @@ def test_tagged_evaluator_accepts_grug_lm_examples():
 
     with use_test_mesh(tensor_parallelism=1) as mesh:
 
-        def loss_fn(model, batch) -> LossFnOutput:
+        def loss_fn(model, batch: LmLikeExample) -> LossFnOutput:
             model = inference_mode(model, True)
-            if isinstance(batch, LmExample):
-                named_batch = batch
-            else:
-                named_batch = named_lm_example_from_grug(batch, Pos=model.Pos, batch_axis=EvalBatch)
             with hax.axis_mapping({EvalBatch.name: ResourceAxis.DATA}):
-                per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
-            return per_pos_loss, named_batch.loss_weight.array, jnp.roll(named_batch.tokens.array, -1, axis=-1)
+                per_pos_loss = model.compute_next_token_loss_array(batch, reduction=None, reduction_axis=())
+            return (
+                per_pos_loss,
+                loss_weight_array_from_lm_example(batch),
+                target_token_ids_array_from_lm_example(batch),
+            )
 
         evaluator = TaggedEvaluator(
             EvalBatch=EvalBatch.size,
@@ -89,15 +94,15 @@ def test_tagged_evaluator_accepts_mixed_lm_example_types():
 
     with use_test_mesh(tensor_parallelism=1) as mesh:
 
-        def loss_fn(model, batch) -> LossFnOutput:
+        def loss_fn(model, batch: LmLikeExample) -> LossFnOutput:
             model = inference_mode(model, True)
-            if isinstance(batch, LmExample):
-                named_batch = batch
-            else:
-                named_batch = named_lm_example_from_grug(batch, Pos=model.Pos, batch_axis=EvalBatch)
             with hax.axis_mapping({EvalBatch.name: ResourceAxis.DATA}):
-                per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
-            return per_pos_loss, named_batch.loss_weight.array, jnp.roll(named_batch.tokens.array, -1, axis=-1)
+                per_pos_loss = model.compute_next_token_loss_array(batch, reduction=None, reduction_axis=())
+            return (
+                per_pos_loss,
+                loss_weight_array_from_lm_example(batch),
+                target_token_ids_array_from_lm_example(batch),
+            )
 
         evaluator = TaggedEvaluator(
             EvalBatch=EvalBatch,
