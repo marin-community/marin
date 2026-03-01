@@ -5,7 +5,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Dict, Optional, Type
+from typing import Dict, Optional, Type, cast
 
 import equinox as eqx
 import jax
@@ -17,7 +17,6 @@ import haliax.jax_utils
 import haliax.nn as hnn
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.layers.attention import AttentionMask
@@ -25,6 +24,7 @@ from levanter.models.gpt2 import Gpt2Embeddings, Gpt2Mlp
 from levanter.models.hyena import HyenaConfig, HyenaOperator
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.models.scan_layers import init_scan_foldable
+from levanter.utils.types import BlockFoldable
 
 
 @LmConfig.register_subclass("gpt2_hyena")
@@ -113,7 +113,7 @@ class Gpt2HyenaBlock(eqx.Module):
 
 class Gpt2HyenaBackbone(ModuleWithStateDictSerialization):
     config: Gpt2HyenaConfig = eqx.field(static=True)
-    blocks: Stacked[Gpt2HyenaBlock]
+    blocks: BlockFoldable[Gpt2HyenaBlock]
     ln_f: hnn.LayerNorm
 
     @staticmethod
@@ -133,7 +133,7 @@ class Gpt2HyenaBackbone(ModuleWithStateDictSerialization):
     @named_call
     def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.blocks.fold(x, key=keys)
+        x = cast(NamedArray, self.blocks.fold(x, key=keys))
         x = self.ln_f(x)
 
         return x
