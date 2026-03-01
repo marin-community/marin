@@ -13,10 +13,16 @@ import jax
 from jax.experimental import mesh_utils
 from jax.sharding import AxisType, Mesh
 
-DEFAULT_DP_AXES = ("replica_dcn", "replica", "data")
-DEFAULT_ICI_AXIS_SPEC = {"data": -1, "replica": 1, "model": 1}
-DEFAULT_DCN_AXIS_SPEC = {"replica_dcn": -1}
-DEFAULT_SHARED_MAPPING: Dict[str, str | Tuple[str, ...]] = {"mlp": "model", "heads": "model"}
+REPLICA_DCN_AXIS = "replica_dcn"
+REPLICA_AXIS = "replica"
+DATA_AXIS = "data"
+MODEL_AXIS = "model"
+CONTEXT_AXIS = "context"
+
+DEFAULT_DP_AXES = (REPLICA_DCN_AXIS, REPLICA_AXIS, DATA_AXIS)
+DEFAULT_ICI_AXIS_SPEC = {DATA_AXIS: -1, REPLICA_AXIS: 1, MODEL_AXIS: 1}
+DEFAULT_DCN_AXIS_SPEC = {REPLICA_DCN_AXIS: -1}
+DEFAULT_SHARED_MAPPING: Dict[str, str | Tuple[str, ...]] = {"mlp": MODEL_AXIS, "heads": MODEL_AXIS}
 
 
 @dataclass(frozen=True)
@@ -37,7 +43,7 @@ class MeshConfig:
     batch_axis_name: str | None = "batch"
     shared_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     compute_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
-    param_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {"embed": "data"})
+    param_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {"embed": DATA_AXIS})
 
     @cached_property
     def resolved_compute_mapping(self) -> ResourceMapping:
@@ -82,22 +88,22 @@ class MeshConfig:
 
         per_slice = num_devices // num_slices
 
-        default_axes = {"data": -1, "replica": 1, "model": 1}
-        default_dcn_axes = {"replica_dcn": -1}
+        default_axes = {DATA_AXIS: -1, REPLICA_AXIS: 1, MODEL_AXIS: 1}
+        default_dcn_axes = {REPLICA_DCN_AXIS: -1}
 
         axes = dict(default_axes)
         axes.update(self.axes)
 
         absorbers = [k for k, v in axes.items() if v == -1]
-        if len(absorbers) > 1 and "data" in axes and "data" not in self.axes:
-            axes["data"] = 1
+        if len(absorbers) > 1 and DATA_AXIS in axes and DATA_AXIS not in self.axes:
+            axes[DATA_AXIS] = 1
 
         dcn_axes = dict(default_dcn_axes)
         dcn_axes.update(self.dcn_axes)
 
         dcn_absorbers = [k for k, v in dcn_axes.items() if v == -1]
-        if len(dcn_absorbers) > 1 and "replica_dcn" in dcn_axes and "replica_dcn" not in self.dcn_axes:
-            dcn_axes["replica_dcn"] = 1
+        if len(dcn_absorbers) > 1 and REPLICA_DCN_AXIS in dcn_axes and REPLICA_DCN_AXIS not in self.dcn_axes:
+            dcn_axes[REPLICA_DCN_AXIS] = 1
 
         if set(axes.keys()) & set(dcn_axes.keys()):
             overlap = set(axes.keys()) & set(dcn_axes.keys())
