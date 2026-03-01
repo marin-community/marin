@@ -1277,6 +1277,7 @@ def main():
 
     from levanter.checkpoint import load_checkpoint
     from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+    from levanter.distributed import RayConfig
     from levanter.main.train_lm import TrainerConfig
     from levanter.models.lm_model import LmHeadModel
     from levanter.utils.jax_utils import use_cpu_device
@@ -1296,6 +1297,7 @@ def main():
     trainer_config = TrainerConfig(
         mp=jmp.get_policy("p=f32,c=bfloat16,o=bfloat16"),
         per_device_eval_parallelism=1,
+        ray=RayConfig(auto_start_cluster=False),
     )
     trainer_config.initialize()
 
@@ -1322,7 +1324,7 @@ def main():
     EvalBatch = hax.Axis("batch", effective_eval_batch_size)
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
-        from levanter.utils.hf_utils import round_axis_for_partitioning
+        from haliax.partitioning import round_axis_for_partitioning
 
         key = jax.random.PRNGKey(0)
         vocab_size = len(tokenizer)
