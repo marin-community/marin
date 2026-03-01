@@ -10,10 +10,8 @@ import jax
 import jax.numpy as jnp
 import jmp
 
-import haliax
 import haliax as hax
 from haliax import Axis
-from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
 from levanter.checkpoint import load_checkpoint
@@ -26,6 +24,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
+from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
 from levanter.utils.tree_utils import inference_mode
 
 
@@ -121,19 +120,28 @@ def main(config: EvalLmConfig):
             max_examples_per_dataset=max_examples,
         )
 
-        @hax.named_jit(axis_resources=compute_axis_mapping)
+        @named_jit(axis_resources=compute_axis_mapping)
         def compute_loss(model: LmHeadModel, example: LmExample):
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
             return model.compute_next_token_loss(example, key=None)
 
-        @hax.named_jit(axis_resources=compute_axis_mapping)
-        def compute_logits(model: LmHeadModel, example: LmExample):
+        def compute_logits(model: LmHeadModel, example: LmEvalExample):
             model = mp.cast_to_compute(model)
-            activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-            head = model.get_lm_head()
-            logits = hax.dot(activations, head, axis=model.Embed)
-            return logits
+            with hax.axis_mapping(compute_axis_mapping):
+                if isinstance(example, LmExample):
+                    activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
+                    head = model.get_lm_head()
+                    return hax.dot(activations, head, axis=model.Embed)
+
+                logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=Batch, key=None)
+                if logits_array.ndim == 2:
+                    return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))
+                if logits_array.ndim == 3:
+                    batch_axis = Axis(Batch.name, logits_array.shape[0])
+                    pos_axis = Pos.resize(logits_array.shape[1])
+                    return hax.named(logits_array, (batch_axis, pos_axis, model.Vocab))
+                raise ValueError(f"Unexpected logits rank for analysis callbacks: {logits_array.ndim}")
 
         # initialize the model
         if config.checkpoint_path is not None:
@@ -169,7 +177,7 @@ def main(config: EvalLmConfig):
 
         if config.log_entropy:
             logger.info("Computing entropy...")
-            for name, dataset in config.data.validation_sets(Pos).items():
+            for name, dataset in config.data.validation_grug_sets(seq_len=Pos.size).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
                 loader = DataLoader(
@@ -191,7 +199,7 @@ def main(config: EvalLmConfig):
 
         if config.log_top2_gap:
             logger.info("Computing top2_gap...")
-            for name, dataset in config.data.validation_sets(Pos).items():
+            for name, dataset in config.data.validation_grug_sets(seq_len=Pos.size).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
                 loader = DataLoader(
@@ -213,7 +221,7 @@ def main(config: EvalLmConfig):
 
         if config.log_param_stats:
             logger.info("Computing param stats...")
-            log_dict = haliax.named_jit(levanter.analysis.summary_statistics_for_tree)(
+            log_dict = named_jit(levanter.analysis.summary_statistics_for_tree, axis_resources=compute_axis_mapping)(
                 "params", model, split_scan_layers=True, include_histogram=True
             )
 
