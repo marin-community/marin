@@ -690,9 +690,8 @@ class Trainer:
 
         hook_infos = None
         if not _no_hooks:
-            with hax.axis_mapping(self.parameter_axis_mapping):
-                jit_info: InsideJitInfo = InsideJitInfo(grads=grads, updates=updates)
-                hook_infos = self.hooks.run_jit_hooks(state, jit_info, force=False)
+            jit_info: InsideJitInfo = InsideJitInfo(grads=grads, updates=updates)
+            hook_infos = self.hooks.run_jit_hooks(state, jit_info, force=False)
 
         # extract plain metrics and prefix their keys
         plain_metrics = unwrap_metrics(wrapped_metrics)
