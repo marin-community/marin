@@ -14,13 +14,16 @@ M_con = TypeVar("M_con", contravariant=True)  # Model
 X = TypeVar("X", contravariant=True)  # Input
 
 try:
-    from haliax.nn.scan import BlockFoldable
+    from haliax.nn.scan import BlockFoldable, ScanCheckpointPolicy
 except ImportError:
 
     class BlockFoldable(Protocol[M]):  # type: ignore
         def fold(self, *args, **kwargs): ...
 
         def scan(self, *args, **kwargs): ...
+
+    class ScanCheckpointPolicy(Protocol):  # type: ignore
+        pass
 
 
 class ValAndGradFn(Protocol[M, X]):
