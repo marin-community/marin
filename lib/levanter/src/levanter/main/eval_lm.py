@@ -79,7 +79,7 @@ def main(config: EvalLmConfig):
     if config.checkpoint_path is not None and config.hf_checkpoint is not None:
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint, not both")
 
-    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
+    with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
@@ -140,7 +140,10 @@ def main(config: EvalLmConfig):
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=config.hf_checkpoint, tokenizer=tokenizer)
             model = converter.load_pretrained(
-                model_config.model_type, ref=config.hf_checkpoint, dtype=mp.compute_dtype
+                model_config.model_type,
+                ref=config.hf_checkpoint,
+                axis_mapping=parameter_axis_mapping,
+                dtype=mp.compute_dtype,
             )
         else:
             assert False, "Should not get here"

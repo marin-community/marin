@@ -64,7 +64,7 @@ def main(config: VizLmConfig):
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
-    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
+    with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
@@ -108,7 +108,10 @@ def main(config: VizLmConfig):
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
             model = converter.load_pretrained(
-                model_config.model_type, ref=config.checkpoint_path, dtype=config.trainer.mp.compute_dtype  # type: ignore
+                model_config.model_type,
+                ref=config.checkpoint_path,
+                axis_mapping=parameter_axis_mapping,
+                dtype=config.trainer.mp.compute_dtype,  # type: ignore
             )
         else:
             with use_cpu_device():
@@ -124,7 +127,10 @@ def main(config: VizLmConfig):
                 converter = model_config.hf_checkpoint_converter()
                 converter = converter.replaced(reference_checkpoint=config.comparison_model_path, tokenizer=tokenizer)
                 comparison_model = converter.load_pretrained(
-                    model_config.model_type, ref=config.comparison_model_path, dtype=config.trainer.mp.compute_dtype  # type: ignore
+                    model_config.model_type,
+                    ref=config.comparison_model_path,
+                    axis_mapping=parameter_axis_mapping,
+                    dtype=config.trainer.mp.compute_dtype,  # type: ignore
                 )
             else:
                 with use_cpu_device():
