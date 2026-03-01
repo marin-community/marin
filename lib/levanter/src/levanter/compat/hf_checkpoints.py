@@ -49,8 +49,8 @@ from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
-from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
+from jax.sharding import PartitionSpec
 from jaxtyping import Array, PRNGKeyArray
 from tqdm_loggable.auto import tqdm
 
