@@ -187,6 +187,24 @@ def create_mesh_from_axis_specs(
     return Mesh(device_mesh, tuple(axis_names), axis_types=axis_types)
 
 
+def activate_mesh(mesh: Mesh):
+    """Activate the process-wide mesh context."""
+    return jax.set_mesh(mesh)
+
+
+def get_active_mesh() -> Mesh | None:
+    """Return the active concrete mesh, or None when no mesh is set."""
+    from jax._src.mesh import get_concrete_mesh
+
+    mesh = get_concrete_mesh()
+    if mesh is None or getattr(mesh, "empty", False):
+        return None
+
+    shape = getattr(mesh, "shape", None)
+    if shape == () or shape == {}:
+        return None
+
+    return mesh
 def _norm(v: Union[str, Sequence[str]]) -> Union[str, Tuple[str, ...]]:
     if isinstance(v, (list, tuple)):
         v = tuple(v)
