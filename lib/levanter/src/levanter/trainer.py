@@ -726,8 +726,8 @@ class Trainer:
                 self.compute_axis_mapping,
             )
 
-        with hax.axis_mapping(self.compute_axis_mapping):
-            (loss, metrics), grads = grad_fn(model, *batch, **batch_kwargs)
+        grad_fn = named_jit(grad_fn, axis_resources=self.compute_axis_mapping)
+        (loss, metrics), grads = grad_fn(model, *batch, **batch_kwargs)
 
         return loss, grads, metrics
 
