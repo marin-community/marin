@@ -8,7 +8,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
-import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
@@ -297,14 +296,7 @@ def main(config: TrainLmConfig):
         def compute_logits(model: ArrayLmHeadModel, example: LmLikeExample):
             model = trainer.mp.cast_to_compute(model)
             token_ids = token_ids_array_from_lm_example(example)
-            logits_array = model.logits_from_token_ids_array(token_ids, batch_axis=EvalBatch, key=None)
-            if logits_array.ndim == 2:
-                return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), Vocab))
-            if logits_array.ndim == 3:
-                batch_axis = Axis(EvalBatch.name, logits_array.shape[0])
-                pos_axis = Pos.resize(logits_array.shape[1])
-                return hax.named(logits_array, (batch_axis, pos_axis, Vocab))
-            raise ValueError(f"Unexpected logits rank for analysis callbacks: {logits_array.ndim}")
+            return model.logits_from_token_ids_array(token_ids, batch_axis=EvalBatch, key=None)
 
         if config.log_entropy:
             for name, dataset in config.data.validation_grug_sets(seq_len=Pos.size).items():
