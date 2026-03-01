@@ -51,6 +51,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -91,6 +92,8 @@ ALL_BENCHMARKS = [
 ]
 
 GENERATION_TASK_TYPES = {"generation"}
+
+MC_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 # --- Sequence building ---
@@ -157,6 +160,59 @@ def build_understanding_sequence(
     return {"input_ids": input_ids, "loss_weights": loss_weights}
 
 
+def _extract_user_text(messages: list[dict]) -> str:
+    """Extract concatenated text from user message content, stripping <image N> placeholders.
+
+    Used for images-first MC sequences where images are placed at the beginning
+    and <image N> placeholders in the question text should be removed.
+    """
+    for msg in messages:
+        if msg["role"] == "user":
+            parts = []
+            for part in msg["content"]:
+                if part["type"] == "text" and part.get("text"):
+                    parts.append(part["text"])
+            text = " ".join(parts)
+            text = re.sub(r"<image\s+\d+>", "", text)
+            text = re.sub(r"\s+", " ", text).strip()
+            return text
+    return ""
+
+
+def build_mc_understanding_sequence(
+    image_token_lists: list[list[int]],
+    question_text: str,
+    answer_text: str,
+    tokenizer: transformers.PreTrainedTokenizer,
+) -> dict[str, np.ndarray] | None:
+    """Build an images-first MC sequence matching the training token distribution.
+
+    Format: <vision_start> V₁..Vₙ <vision_end> [...] question_text answer_text <eos>
+    Loss weights: 0.0 for visual + question, 1.0 for answer + eos.
+    """
+    visual_ids: list[int] = []
+    for raw_tokens in image_token_lists:
+        shifted = [t + VISUAL_TOKEN_OFFSET for t in raw_tokens]
+        visual_ids.append(VISION_START_ID)
+        visual_ids.extend(shifted)
+        visual_ids.append(VISION_END_ID)
+
+    question_ids = tokenizer.encode(question_text, add_special_tokens=False)
+    answer_ids = tokenizer.encode(answer_text, add_special_tokens=False)
+
+    if not answer_ids:
+        return None
+
+    all_ids = visual_ids + question_ids + answer_ids + [ENDOFTEXT_ID]
+    n_prompt = len(visual_ids) + len(question_ids)
+
+    input_ids = np.array(all_ids, dtype=np.int32)
+    loss_weights = np.zeros(len(all_ids), dtype=np.float32)
+    loss_weights[n_prompt:] = 1.0
+
+    return {"input_ids": input_ids, "loss_weights": loss_weights}
+
+
 def build_generation_sequence(
     messages: list[dict],
     image_token_lists: list[list[int]],
@@ -202,10 +258,17 @@ def process_eval_rows(
     """Process rows in a parquet table, yielding token sequences.
 
     Reads `task_type` column to determine understanding vs. generation ordering.
+    For multiple_choice benchmarks with `choices` and `answer` columns, uses
+    images-first layout with Modified MCQ answer format ("B. London").
     """
     messages_col = table.column("messages")
     image_tokens_col = table.column("image_tokens")
     task_type_col = table.column("task_type")
+
+    has_choices = "choices" in table.column_names
+    has_answer = "answer" in table.column_names
+    choices_col = table.column("choices") if has_choices else None
+    answer_col = table.column("answer") if has_answer else None
 
     total = len(table)
     skipped = 0
@@ -217,6 +280,22 @@ def process_eval_rows(
 
         if task_type in GENERATION_TASK_TYPES:
             result = build_generation_sequence(messages, image_token_lists, tokenizer)
+        elif (
+            task_type == "multiple_choice"
+            and choices_col is not None
+            and answer_col is not None
+        ):
+            answer_letter = answer_col[i].as_py()
+            choices = choices_col[i].as_py()
+            answer_idx = MC_LETTERS.index(answer_letter) if answer_letter in MC_LETTERS else -1
+            if 0 <= answer_idx < len(choices):
+                question_text = _extract_user_text(messages)
+                answer_text = f"{answer_letter}. {choices[answer_idx]}"
+                result = build_mc_understanding_sequence(
+                    image_token_lists, question_text, answer_text, tokenizer
+                )
+            else:
+                result = build_understanding_sequence(messages, image_token_lists, tokenizer)
         else:
             result = build_understanding_sequence(messages, image_token_lists, tokenizer)
 
