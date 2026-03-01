@@ -26,7 +26,11 @@ from haliax.partitioning import ResourceMapping
 import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
-from levanter.data.text.examples import GrugLmExample
+from levanter.data.text.examples import (
+    LmLikeExample,
+    loss_weight_array_from_lm_example,
+    target_token_ids_array_from_lm_example,
+)
 from levanter.models.lm_model import ArrayLmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
@@ -41,6 +45,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 M = TypeVar("M")
 Ex = TypeVar("Ex")
+LmEvalExample = LmLikeExample
 LossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
@@ -163,7 +168,7 @@ def _join_prefix(prefix: str, tag: str) -> str:
 
 def _default_lm_eval_loss_fn(
     model: ArrayLmHeadModel,
-    batch: GrugLmExample,
+    batch: LmLikeExample,
     *,
     EvalBatch: hax.Axis,
     mp: jmp.Policy | None,
@@ -189,14 +194,14 @@ def _default_lm_eval_loss_fn(
             reduction_axis=(),
         )
 
-    per_pos_weight = batch.loss_weight
-    per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+    per_pos_weight = loss_weight_array_from_lm_example(batch)
+    per_pos_token_id = target_token_ids_array_from_lm_example(batch)
     return per_pos_loss, per_pos_weight, per_pos_token_id
 
 
 def cb_tagged_lm_evaluate(
     EvalBatch: hax.Axis,
-    tagged_eval_sets: Sequence[tuple[AsyncDataset[GrugLmExample], Sequence[str]]],
+    tagged_eval_sets: Sequence[tuple[AsyncDataset[LmEvalExample], Sequence[str]]],
     tokenizer: Optional[HfTokenizer] = None,
     device_mesh: Optional[Mesh] = None,
     axis_mapping: ResourceMapping | None = None,
@@ -206,7 +211,7 @@ def cb_tagged_lm_evaluate(
     prefix: str = "eval",
     mp: jmp.Policy = None,
     checkpoint_path: Optional[str] = None,
-    loss_fn: Callable[[ArrayLmHeadModel, GrugLmExample], LossFnOutput] | None = None,
+    loss_fn: Callable[[ArrayLmHeadModel, LmEvalExample], LossFnOutput] | None = None,
 ) -> Callable[[StepInfo], None]:
     """
     Evaluates multiple tagged datasets using a given evaluation function.
@@ -236,7 +241,7 @@ def cb_tagged_lm_evaluate(
 
     if loss_fn is None:
 
-        def loss_fn(model: ArrayLmHeadModel, batch: GrugLmExample) -> LossFnOutput:
+        def loss_fn(model: ArrayLmHeadModel, batch: LmEvalExample) -> LossFnOutput:
             return _default_lm_eval_loss_fn(
                 model,
                 batch,

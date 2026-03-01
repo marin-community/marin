@@ -7,7 +7,6 @@ from typing import Optional
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 import jmp
 
 import haliax as hax
@@ -18,7 +17,12 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
 from levanter.data.text import LmDataConfig
-from levanter.data.text.examples import GrugLmExample
+from levanter.data.text.examples import (
+    LmLikeExample,
+    loss_weight_array_from_lm_example,
+    target_token_ids_array_from_lm_example,
+    token_ids_array_from_lm_example,
+)
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
@@ -31,6 +35,7 @@ from levanter.utils.tree_utils import inference_mode
 logger = logging.getLogger(__name__)
 
 
+LmEvalExample = LmLikeExample
 @dataclass
 class EvalLmConfig:
 
@@ -90,7 +95,7 @@ def main(config: EvalLmConfig):
 
         mp: jmp.Policy = config.trainer.mp
 
-        def eval_loss_fn(model: ArrayLmHeadModel, batch: GrugLmExample) -> LossFnOutput:
+        def eval_loss_fn(model: ArrayLmHeadModel, batch: LmEvalExample) -> LossFnOutput:
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
             with hax.axis_mapping(compute_axis_mapping):
@@ -100,8 +105,8 @@ def main(config: EvalLmConfig):
                     reduction=None,
                     reduction_axis=(),
                 )
-            per_pos_weight = batch.loss_weight
-            per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+            per_pos_weight = loss_weight_array_from_lm_example(batch)
+            per_pos_token_id = target_token_ids_array_from_lm_example(batch)
             return per_pos_loss, per_pos_weight, per_pos_token_id
 
         evaluator = TaggedEvaluator(
@@ -113,10 +118,11 @@ def main(config: EvalLmConfig):
             max_examples_per_dataset=max_examples,
         )
 
-        def compute_logits(model: ArrayLmHeadModel, example: GrugLmExample):
+        def compute_logits(model: ArrayLmHeadModel, example: LmEvalExample):
             model = mp.cast_to_compute(model)
             with hax.axis_mapping(compute_axis_mapping):
-                logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=Batch, key=None)
+                token_ids = token_ids_array_from_lm_example(example)
+                logits_array = model.logits_from_token_ids_array(token_ids, batch_axis=Batch, key=None)
                 if logits_array.ndim == 2:
                     return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), Vocab))
                 if logits_array.ndim == 3:
