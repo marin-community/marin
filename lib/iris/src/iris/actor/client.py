@@ -66,13 +66,6 @@ class ActorClient:
         resolve_timeout: float = 3600.0,
         call_timeout: float | None = None,
         retry_config: RetryConfig = RetryConfig(),
-        # Legacy keyword arguments forwarded to RetryConfig for backward compat-free migration.
-        # These are here so existing call sites keep working until they are updated.
-        initial_backoff: float | None = None,
-        max_backoff: float | None = None,
-        backoff_factor: float | None = None,
-        backoff_jitter: float | None = None,
-        max_call_attempts: int | None = None,
     ):
         """Initialize the actor client.
 
@@ -83,29 +76,12 @@ class ActorClient:
             call_timeout: Timeout in seconds for RPC calls. Defaults to `resolve_timeout`
                 when not specified.
             retry_config: Configuration for retry behavior on transient errors.
-            initial_backoff: Deprecated individual field, use retry_config instead.
-            max_backoff: Deprecated individual field, use retry_config instead.
-            backoff_factor: Deprecated individual field, use retry_config instead.
-            backoff_jitter: Deprecated individual field, use retry_config instead.
-            max_call_attempts: Deprecated individual field, use retry_config instead.
         """
         self._resolver = resolver
         self._name = name
         self._resolve_timeout = resolve_timeout
         self._call_timeout = resolve_timeout if call_timeout is None else call_timeout
-
-        # If any individual backoff kwargs are passed, build a RetryConfig from them,
-        # using the provided retry_config as defaults for unspecified fields.
-        if any(v is not None for v in (initial_backoff, max_backoff, backoff_factor, backoff_jitter, max_call_attempts)):
-            self.retry_config = RetryConfig(
-                initial_backoff=initial_backoff if initial_backoff is not None else retry_config.initial_backoff,
-                max_backoff=max_backoff if max_backoff is not None else retry_config.max_backoff,
-                backoff_factor=backoff_factor if backoff_factor is not None else retry_config.backoff_factor,
-                backoff_jitter=backoff_jitter if backoff_jitter is not None else retry_config.backoff_jitter,
-                max_call_attempts=max_call_attempts if max_call_attempts is not None else retry_config.max_call_attempts,
-            )
-        else:
-            self.retry_config = retry_config
+        self.retry_config = retry_config
 
         self._rpc_client: ActorServiceClientSync | None = None
 
