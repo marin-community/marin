@@ -817,7 +817,7 @@ class TrainerConfig:
 
     # config related to partitioning
     mesh: MeshConfig = MeshConfig()
-    use_explicit_mesh_axes: bool = False
+    use_explicit_mesh_axes: bool = True
     """If True, build the device mesh with `AxisType.Explicit` axes.
 
     This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
