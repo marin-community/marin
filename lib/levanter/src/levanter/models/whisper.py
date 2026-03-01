@@ -22,6 +22,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention
 from levanter.models.asr_model import ASRConfig, ASRMixin
 from levanter.models.lm_model import LmConfig
+from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -281,13 +282,16 @@ class WhisperTransformer(ModuleWithStateDictSerialization):
 
     @staticmethod
     def init(Layer: Axis, Heads: Axis, HeadSize: Axis, Mlp: Axis, config: WhisperConfig, has_cross: bool, *, key):
-        # vectorize the blocks
-        layers = Stacked.init(Layer, WhisperLayer, gradient_checkpointing=config.gradient_checkpointing)(
+        layers = init_scan_foldable(
+            Layer,
+            WhisperLayer,
             Heads,
             HeadSize,
             Mlp,
             config,
             has_cross=has_cross,
+            scan_layers=True,
+            gradient_checkpointing=config.gradient_checkpointing,
             key=shaped_rng_split(key, Layer.size),
         )
         layer_norm = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_bias=config.use_bias)
