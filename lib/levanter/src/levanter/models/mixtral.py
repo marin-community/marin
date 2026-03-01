@@ -33,6 +33,7 @@ from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
+from levanter.utils.partitioning import pspec_for_axis
 from levanter.utils.types import BlockFoldable
 
 
@@ -340,10 +341,10 @@ class MixtralSparseMoeBlock(eqx.Module):
         @partial(
             shard_map,
             mesh=get_concrete_mesh(),
-            in_specs=hax.partitioning.pspec_for_axis(router_probs.axes),
+            in_specs=pspec_for_axis(router_probs.axes),
             out_specs=(
-                hax.partitioning.pspec_for_axis((Token, TopExperts)),
-                hax.partitioning.pspec_for_axis((Token, TopExperts)),
+                pspec_for_axis((Token, TopExperts)),
+                pspec_for_axis((Token, TopExperts)),
             ),
             **_SHARD_MAP_CHECK_KWARGS,
         )
@@ -368,13 +369,13 @@ class MixtralSparseMoeBlock(eqx.Module):
             shard_map,
             mesh=get_concrete_mesh(),
             in_specs=(
-                hax.partitioning.pspec_for_axis(x_flat.axes),
-                hax.partitioning.pspec_for_axis(topk_idx_flat.axes),
+                pspec_for_axis(x_flat.axes),
+                pspec_for_axis(topk_idx_flat.axes),
             ),
             out_specs=(
-                hax.partitioning.pspec_for_axis((TokenRepeat, self.config.Embed)),
-                hax.partitioning.pspec_for_axis((Experts,)),
-                hax.partitioning.pspec_for_axis((TokenRepeat,)),
+                pspec_for_axis((TokenRepeat, self.config.Embed)),
+                pspec_for_axis((Experts,)),
+                pspec_for_axis((TokenRepeat,)),
             ),
             **_SHARD_MAP_CHECK_KWARGS,
         )
@@ -406,10 +407,10 @@ class MixtralSparseMoeBlock(eqx.Module):
             shard_map,
             mesh=get_concrete_mesh(),
             in_specs=(
-                hax.partitioning.pspec_for_axis(out_repeat_sort.axes),
-                hax.partitioning.pspec_for_axis(sort_idx.axes),
+                pspec_for_axis(out_repeat_sort.axes),
+                pspec_for_axis(sort_idx.axes),
             ),
-            out_specs=hax.partitioning.pspec_for_axis((Token, TopExperts, self.config.Embed)),
+            out_specs=pspec_for_axis((Token, TopExperts, self.config.Embed)),
             **_SHARD_MAP_CHECK_KWARGS,
         )
         def unpermute_sharded(out_repeat_sort_: Array, sort_idx_: Array):

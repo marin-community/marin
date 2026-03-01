@@ -25,6 +25,7 @@ from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
 from levanter.utils import fsspec_utils, jax_utils
+from levanter.utils.partitioning import sharding_for_axis
 from levanter.utils.types import ResourceMapping
 
 logger = logging.getLogger(__name__)
@@ -175,7 +176,7 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
     if is_named_array(leaf):
         if not is_jax_array_like(leaf.array):
             return None
-        return hax.partitioning.sharding_for_axis(leaf.axes, axis_mapping, mesh)
+        return sharding_for_axis(leaf.axes, axis_mapping, mesh)
     elif hasattr(leaf, "sharding") and getattr(leaf, "sharding") is not None:
         return _concretize_sharding(leaf.sharding)
     elif is_jax_array_like(leaf):
@@ -188,7 +189,7 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
 
 
 def _fully_replicated_sharding(mesh):
-    return hax.partitioning.sharding_for_axis((), {}, mesh)
+    return sharding_for_axis((), {}, mesh)
 
 
 def _restore_ocdbt(

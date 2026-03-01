@@ -12,7 +12,7 @@ from jaxtyping import ArrayLike, Scalar
 import haliax as hax
 from haliax import NamedArray
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
-from levanter.utils.partitioning import shard_map
+from levanter.utils.partitioning import pspec_for_axis, shard_map
 
 
 class Histogram(equinox.Module):
@@ -119,7 +119,7 @@ def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
 
 
 def _shardmap_histogram(a: NamedArray, bins):
-    spec = hax.partitioning.pspec_for_axis(a.axes)
+    spec = pspec_for_axis(a.axes)
     flattened_spec = _flattened_spec(spec)
 
     def _wrapped_hist(arr):
