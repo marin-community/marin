@@ -215,12 +215,13 @@ def main(config: TrainLmConfig):
                 checkpoint_path = config.trainer.checkpointer.expanded_path(trainer.run_id)
 
             cb = levanter.eval.cb_tagged_lm_evaluate(
-                EvalBatch,
-                tagged_eval_datasets,
-                tokenizer,
-                trainer.device_mesh,
-                compute_axis_mapping,
-                max_eval_examples_per_ds,
+                EvalBatch=EvalBatch,
+                tagged_eval_sets=tagged_eval_datasets,
+                tokenizer=tokenizer,
+                device_mesh=trainer.device_mesh,
+                axis_mapping=compute_axis_mapping,
+                batch_axis_resource=compute_axis_mapping.get(EvalBatch.name, compute_axis_mapping.get("batch")),
+                max_examples_per_dataset=max_eval_examples_per_ds,
                 mp=config.trainer.mp,
                 checkpoint_path=checkpoint_path,
             )
