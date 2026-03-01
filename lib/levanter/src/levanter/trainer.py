@@ -675,14 +675,15 @@ class Trainer:
         )
 
         # Some optimizers need to be able to access the loss function
+        jitted_raw_loss = named_jit(self._raw_loss_function, axis_resources=self.compute_axis_mapping)
+
         def obj_fun(trainable_model):
             model = eqx.combine(trainable_model, state.model)
-            with hax.axis_mapping(self.compute_axis_mapping):
-                model = self.mp.cast_to_compute(model)
-                result = self._raw_loss_function(model, *batch, **batch_kwargs, key=key)
-                # result is (loss, metrics) tuple
-                loss_for_opt, _metrics = result
-                return loss_for_opt.scalar()
+            model = self.mp.cast_to_compute(model)
+            result = jitted_raw_loss(model, *batch, **batch_kwargs, key=key)
+            # result is (loss, metrics) tuple
+            loss_for_opt, _metrics = result
+            return loss_for_opt.scalar()
 
         new_state, updates = state.take_step(grads, obj_fun=obj_fun, loss=loss, key=new_key)
         new_state = hax.shard(new_state, self.parameter_axis_mapping)
