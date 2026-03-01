@@ -3,10 +3,11 @@
 
 import abc
 from dataclasses import dataclass
-from typing import Generic, Optional, Type, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, Optional, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
@@ -19,6 +20,9 @@ from levanter.models.loss import maybe_fused_next_token_loss
 
 LmConfigT = TypeVar("LmConfigT", bound="LmConfig")
 LmT = TypeVar("LmT", bound="LmHeadModel")
+
+if TYPE_CHECKING:
+    from levanter.data.text.examples import GrugLmExample
 
 
 class LmExample(eqx.Module):
@@ -295,3 +299,45 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         )
 
         return loss + aux_loss
+
+    def compute_next_token_loss_array(
+        self,
+        example: "LmExample | GrugLmExample",
+        *,
+        batch_axis: Axis | str | None = "batch",
+        key=None,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jax.Array:
+        """
+        Compute next-token cross-entropy and always return a plain JAX array.
+
+        This bridges array-native batches (for example `GrugLmExample`) to the legacy
+        named-tensor model interface during migration.
+        """
+        named_example: LmExample
+        if isinstance(example, LmExample):
+            named_example = example
+        else:
+            from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+
+            if not isinstance(example, GrugLmExample):
+                raise TypeError(f"Unsupported example type: {type(example)}")
+            named_example = named_lm_example_from_grug(example, Pos=self.Pos, batch_axis=batch_axis)
+
+        loss = self.compute_next_token_loss(
+            named_example,
+            key=key,
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
+        )
+
+        if isinstance(loss, hax.NamedArray):
+            return loss.array
+        return jnp.asarray(loss)
