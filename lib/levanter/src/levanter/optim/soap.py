@@ -23,6 +23,7 @@ from optax import GradientTransformation, Updates
 from optax._src.utils import canonicalize_dtype
 
 from levanter.optim.config import OptimizerConfig
+from levanter.utils.mesh import DATA_AXIS
 
 
 @OptimizerConfig.register_subclass("soap")
@@ -842,7 +843,7 @@ def init_conditioner(p_shape, max_precond_dim: int, dtype: Optional[Union[str, j
         mesh = None
     # get fsdp mesh axis
     if mesh is not None:
-        fsdp_axis_name = hax.partitioning.ResourceAxis.DATA
+        fsdp_axis_name = DATA_AXIS
         fsdp_axis = mesh.axis_names.index(fsdp_axis_name)
         fsdp_size = mesh.devices.shape[fsdp_axis]
 

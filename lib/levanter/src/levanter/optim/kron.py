@@ -22,6 +22,7 @@ from optax._src.numerics import safe_int32_increment
 from optax._src.utils import canonicalize_dtype
 
 from levanter.optim.config import OptimizerConfig
+from levanter.utils.mesh import DATA_AXIS
 
 # Define type variables for the pytree structure
 T = TypeVar("T")
@@ -1118,7 +1119,7 @@ def _init_Q_exprs(
                             mesh = None
                         # get fsdp mesh axis
                         if mesh is not None:
-                            fsdp_axis_name = hax.partitioning.ResourceAxis.DATA
+                            fsdp_axis_name = DATA_AXIS
                             fsdp_axis = mesh.axis_names.index(fsdp_axis_name)
                             fsdp_size = mesh.devices.shape[fsdp_axis]
                             if size % fsdp_size == 0:
