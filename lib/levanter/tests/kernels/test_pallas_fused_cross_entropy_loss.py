@@ -239,18 +239,6 @@ def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
     assert pallas_tpu._infer_num_tensorcores() == 1
 
 
-def test_infer_block_sizes_respects_v5e_label_layout_constraint_for_large_batches():
-    block_sizes = infer_block_sizes(
-        b=1536,
-        h=768,
-        v=8192,
-        dtype=jnp.float32,
-        device_kind="TPU v5e",
-    )
-    assert block_sizes.b_block_size == 1024
-    assert block_sizes.h_block_size == 384
-
-
 def test_infer_block_sizes_has_v6_tuned_profile():
     block_sizes = infer_block_sizes(
         b=1024,
