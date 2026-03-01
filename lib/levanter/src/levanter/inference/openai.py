@@ -41,6 +41,7 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.models.lm_model import LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.hf_utils import HfTokenizer
+from levanter.utils.mesh import activate_mesh
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +252,7 @@ class InferenceContext:
 
             start = time.time()
             with (
-                hax.partitioning.set_mesh(self.config.trainer.device_mesh),
+                activate_mesh(self.config.trainer.device_mesh),
                 hax.axis_mapping(self.config.trainer.compute_axis_mapping),
             ):
                 self.model = weight_callback(self.model)
@@ -353,7 +354,7 @@ class InferenceContext:
                 batch = self.batch_queue.get(timeout=1)
                 with (
                     self.model_lock,
-                    hax.partitioning.set_mesh(self.config.trainer.device_mesh),
+                    activate_mesh(self.config.trainer.device_mesh),
                     hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                 ):
                     self._execute_batch(batch)
