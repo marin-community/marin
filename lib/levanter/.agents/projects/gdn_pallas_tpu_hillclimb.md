@@ -3086,3 +3086,77 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / regression**. Static-unrolled segmented fusion again halved train closed-call shard-map buckets, but the same `while`-family overhead appeared and dominated end-to-end runtime.
 - Next bold hypothesis:
   - Move to **Macro Move J** next (required coverage progression): run the explicit `Ct={64,96,128}` x `Seg={8,16,32}` sweep with a compact benchmark table, then launch the next structural macro move from the best point.
+
+### Iteration 53 (Loop 4/10) - Macro Move I / segmented fused train forward with static host+kernel loops (regression, reverted)
+
+- Coverage slot: I (1/5)
+- Covered set so far: {I}
+- Date: 2026-03-01T05:45:33Z
+- Commit: none (failed attempt; speculative kernel edits reverted)
+- Starting commit: `2d8f466d501dc1fc58c6eb9ea6e71359643ec620`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` remained dominant:
+    - forward closed-call source `gated_deltanet.py:2486`: `41.324 ms`
+    - backward closed-call source `gated_deltanet.py:3972`: `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move I**: route train forward (`return_prepare_tape=True`) to segmented fused prepare+recurrent with static host segment unroll and static in-kernel chunk loops (`+10-20%`, high lowering/control-flow risk).
+  2. **Macro Move J**: explicit `Ct in {64,96,128}` x `Seg in {8,16,32}` sweep with compact benchmark table (`+5-12%`, medium risk).
+  3. **Macro Move E**: V-tiling/shared-K precompute for recurrent+bwd state (`+15-30%`, high decomposition/correctness risk).
+
+- Selected macro-move category: **I) Fuse segmented forward prepare + recurrent with reusable heavy intermediates**.
+- Selected hypothesis: for train path only, use segmented fused forward with static host-side segment unroll and force static in-kernel loops (`force_loop`) to avoid prior scan/pipeline control-flow overhead while preserving prepare/recurrent reuse.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `force_loop` plumbing for segmented fused forward kernels and dispatched train path to segmented fused forward with static segment unrolling.
+  - Added TPU layout companion fix in backward to avoid `(Ct, 1)` vector layout (`d_g` accumulation uses `(1, Ct)` row layout).
+  - TPU tests passed (after one allowed retry), but profile showed end-to-end regression; all speculative kernel edits were reverted.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - Required TPU validation (`tests=both`):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+      - first run: failed `test_gdn_layer_backward_matches_hf[True]` with borderline tolerance miss (`max_abs=1.9937754e-05` vs `atol=1e-05`).
+      - one allowed retry (same command): `87 passed, 2 skipped`.
+
+- Profile run:
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter4_macroI_segfused_staticloop --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_loop_iter4_macroI_segfused_staticloop_130m_ch128_se-1c7147`
+  - Trace location:
+    - `.profiles/wandb/gdn_loop_iter4_macroI_segfused_staticloop_130m_ch128_se-1c7147/plugins/profile/2026_03_01_05_41_19/perfetto_trace.json.gz`
+  - Throughput source:
+    - `gs://marin-us-east5/checkpoints/speedrun/gdn_loop_iter4_macroI_segfused_staticloop_130m_ch128_se-1c7147/tracker_metrics.jsonl`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, vs baseline trace above):
+  - Bucket deltas:
+    - `shard_map`: `78.098 ms -> 40.422 ms` (`-48.24%`) (still dominant bucket).
+    - `fusion`: `45.618 ms -> 35.047 ms` (`-23.17%`).
+    - `all-gather`: `20.158 ms -> 10.080 ms` (`-50.00%`).
+    - new `while`: `0.000 ms -> 31.673 ms` (dominant new overhead class).
+  - Train closed-call shard-map source deltas:
+    - forward source `gated_deltanet.py:2486 -> 2507`: `41.324 ms -> 20.661 ms` (`-50.00%`).
+    - backward source `gated_deltanet.py:3972 -> 4042`: `26.266 ms -> 14.539 ms` (`-44.65%`).
+
+- MFU/throughput delta (history-window median, steps `10..18`, vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.830017 -> 5.375160` (`-7.80%`).
+  - `throughput/tokens_per_second`: `188599.93 -> 173885.40` (`-7.80%`).
+  - `throughput/duration`: `0.173743s -> 0.188446s` (`+8.46%`).
+  - final-step reference (step `19`): `throughput/mfu=5.109435`, `tokens/s=165289.24`, `duration=0.198246s`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + final result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped` (after one allowed retry of known borderline tolerance signature).
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call`: `41.324 ms -> 20.661 ms` (`-50.00%`).
+    - Backward closed-call `shard_map/pallas_call`: `26.266 ms -> 14.539 ms` (`-44.65%`).
+    - `throughput/mfu -7.80%`, `throughput/tokens_per_second -7.80%`, `throughput/duration +8.46%`.
+  - Governance:
+    - MFU gain `<3%` and dominant hotspot family remained train-path `shard_map/custom-call`; attempt marked **low-impact/regressive** and speculative kernel edits were reverted.
+
+- Assessment: **failed attempt / regression**. Macro-I static-loop segmentation reduced train closed-call GDN custom-call time significantly, but newly surfaced `while` overhead and remaining train-path shard-map dominance regressed end-to-end throughput.
+- Next bold hypothesis:
+  - Move to **Macro Move J** next (required coverage progression): run the explicit `Ct={64,96,128}` x `Seg={8,16,32}` sweep with a compact benchmark table, then pivot to **Macro Move E** from the best operating point if MFU remains <3% gain.
