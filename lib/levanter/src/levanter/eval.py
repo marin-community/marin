@@ -393,7 +393,7 @@ class TaggedEvaluator(Generic[Ex, M]):
 
     def __init__(
         self,
-        EvalBatch: hax.Axis,
+        EvalBatch: hax.Axis | int,
         tagged_eval_sets: Sequence[tuple[AsyncDataset[Ex], Sequence[str]]],
         loss_fn: Callable[[M, Ex], LossFnOutput],
         tokenizer: Optional[HfTokenizer] = None,
@@ -401,6 +401,8 @@ class TaggedEvaluator(Generic[Ex, M]):
         axis_mapping=None,
         max_examples_per_dataset=None,
     ):
+        if isinstance(EvalBatch, int):
+            EvalBatch = hax.Axis("batch", EvalBatch)
         self.loss_fn = loss_fn
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
         self.loader = DataLoader(

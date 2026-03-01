@@ -200,6 +200,33 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker():
         assert key in summary
 
 
+def test_tagged_eval_grug_sets_returns_grug_examples():
+    seq_len = 16
+    val_examples = [GrugLmExample.causal((jnp.arange(seq_len, dtype=jnp.int32) + i) % 64) for i in range(4)]
+    train_examples = [GrugLmExample.causal((jnp.arange(seq_len, dtype=jnp.int32) + i) % 64) for i in range(4)]
+    data_config = LmDataConfig(
+        components={
+            "direct": DirectDatasetComponent(
+                datasets={
+                    "train": ListAsyncDataset(train_examples),
+                    "validation": ListAsyncDataset(val_examples),
+                }
+            )
+        },
+        vocab_size=64,
+        tokenizer="passthrough",
+    )
+
+    tagged_eval_sets = data_config.tagged_eval_grug_sets(seq_len=seq_len)
+    assert len(tagged_eval_sets) == 1
+
+    eval_dataset, tags = tagged_eval_sets[0]
+    assert tags == ["direct"]
+    first = eval_dataset.as_sync_dataset()[0]
+    assert isinstance(first, GrugLmExample)
+    assert first.tokens.shape == (seq_len,)
+
+
 @pytest.mark.parametrize(("data", "model"), [(4, 1), (2, 2)])
 def test_grug_base_loss_lowers_on_abstract_4_device_mesh(data: int, model: int):
     seq = 256 if jax.default_backend() == "tpu" else 16
