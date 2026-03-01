@@ -2929,3 +2929,81 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **infra-blocked attempt**. Could not obtain required TPU validation/profile evidence due persistent Ray `PENDING` queue contention across multiple clusters and unavailable dev-TPU SSH target.
 - Next bold hypothesis:
   - Re-attempt the same Macro-I training segmented-fusion variant once TPU validation path is healthy; if infra instability persists, resolve cluster capacity/allocator health first before new kernel edits.
+
+### Iteration 51 - Macro Move I / segmented fused train-path reroute with static-loop forward (regression, reverted)
+
+- Coverage slot: I (1/5)
+- Covered set so far: {I}
+- Date: 2026-03-01T02:54:31Z
+- Commit: none (failed attempt)
+- Starting commit: `f79fa79b8d2dbc958863bd1c38f428d368986294`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` remained dominant:
+    - forward closed-call source: `gated_deltanet.py:2486` = `41.324 ms`
+    - backward closed-call source: `gated_deltanet.py:3972` = `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move I**: training-path reroute from full-sequence split prepare+recurrent to segmented fused prepare+recurrent with static in-kernel loops (`+10-20%`, high lowering/control-flow risk).
+  2. **Macro Move J**: explicit `Ct in {64,96,128}` x `Seg in {8,16,32}` sweep after structural changes (`+5-12%`, medium risk).
+  3. **Macro Move E**: V-tiling with shared-K precompute in recurrent/bwd kernels (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **I) Fuse segmented forward prepare + recurrent with reusable heavy intermediates**.
+- Selected hypothesis: for `return_prepare_tape=True` (train path), bypass full-sequence split prepare/recurrent pallas calls and use segmented fused forward calls that reuse chunk-local prep intermediates in-kernel once, with static per-segment loops to avoid the prior full-sequence `while` regime.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `force_loop` threading through `_gdn_chunk_segment_fwd_fused_kernel_tpu`, `_gdn_chunk_segment_fwd_fused_pallas`, and `_gdn_chunk_segment_fwd_pallas`.
+  - Changed `_chunk_gated_delta_rule_flash_pallas_impl` dispatch so full-sequence split prepare/recurrent path is disabled for `return_prepare_tape=True`; train path now executes segmented fused forward with `force_loop` on MXU-sized configs.
+  - Initial companion backward matvec rewrite triggered TPU Mosaic compile failure in profiling; that helper change was removed before final validation/profile.
+  - Final kernel reroute regressed end-to-end throughput; speculative kernel edits were reverted.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (`tests=both`):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+      - first run after rollback: failed `test_gdn_layer_backward_matches_hf[False]` with borderline `max_abs=2.124533e-05` vs `atol=1e-05`.
+      - one allowed retry (same command): `87 passed, 2 skipped`.
+
+- Profile run:
+  - Attempt A (compile-failed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loop_iter1_macroI_segfused_static --marin-prefix gs://marin-us-east5 --no-sync`
+    - failure signature: TPU Mosaic `dot_general` lowering error (`rhs non contracting dims ... vector-like [B,K] or [B,1,K]`).
+  - Attempt B (teardown-failed after artifact generation):
+    - same command with `--run-name-prefix gdn_loop_iter1_macroI_segfused_static_r2`
+    - produced trace + summary but executor status ended `FAILED` during W&B teardown (`HandleAbandonedError`).
+  - Completed profile evidence run (successful command exit):
+    - `uv run scripts/ray/dev_tpu.py --cluster us-east5-a --tpu-name calvinxu-gdn execute --no-sync -e EQX_ON_ERROR=nan -e WANDB_MODE=offline -e GDN_PROFILE_SIZE=130m -e GDN_PROFILE_NUM_STEPS=20 -e GDN_PROFILE_PROFILE_START_STEP=2 -e GDN_PROFILE_PROFILE_NUM_STEPS=6 -e GDN_PROFILE_RUN_NAME_PREFIX=gdn_loop_iter1_macroI_segfused_static_offline -e GDN_PROFILE_TPU_VARIANT=v5p-8 -e GDN_PROFILE_BATCH_SIZE=8 -e MARIN_PREFIX=gs://marin-us-east5 -- "set -e && uv sync --all-packages --extra=tpu --python=3.11 && uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu --force-reinstall torch && (uv pip uninstall --python .venv/bin/python torchvision || true) && .venv/bin/python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile --force_run_failed true"`
+    - output status: `gs://marin-us-east5/checkpoints/speedrun/gdn_loop_iter1_macroI_segfused_static_offline_130m_ch12-95ff0a/.executor_status = SUCCESS`
+    - trace location: `marin/logs/gdn_loop_iter1_macroI_segfused_static_offline_130m_ch12-95ff0a/profiler/plugins/profile/2026_03_01_02_52_43/perfetto_trace.json.gz`
+    - copied local trace: `.profiles/dev_tpu/gdn_loop_iter1_macroI_segfused_static_offline/perfetto_trace.json.gz`
+    - throughput source: `gs://marin-us-east5/checkpoints/speedrun/gdn_loop_iter1_macroI_segfused_static_offline_130m_ch12-95ff0a/tracker_metrics.jsonl`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, vs baseline trace above):
+  - Bucket deltas:
+    - `shard_map`: `78.098 ms -> 39.005 ms` (`-50.06%`)
+    - `fusion`: `45.618 ms -> 35.056 ms` (`-23.15%`)
+    - `all-gather`: `20.158 ms -> 10.114 ms` (`-49.83%`)
+    - `while`: `0.000 ms -> 31.665 ms` (new dominant regression bucket)
+  - Train closed-call shard-map source deltas:
+    - forward source `gated_deltanet.py:2486 -> 2507`: `41.324 ms -> 20.661 ms` (`-50.00%`)
+    - backward source `gated_deltanet.py:3972 -> 4001`: `26.266 ms -> 13.129 ms` (`-50.02%`)
+
+- MFU/throughput delta (vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.830017 -> 5.394733` (`-7.47%`)
+  - `throughput/tokens_per_second`: `188599.93 -> 174518.59` (`-7.47%`)
+  - `throughput/duration`: `0.173743s -> 0.187762s` (`+8.07%`)
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + final result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped` (after one allowed retry of known transient tolerance signature).
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call` source: `41.324 ms -> 20.661 ms` (`-50.00%`).
+    - Backward closed-call `shard_map/pallas_call` source: `26.266 ms -> 13.129 ms` (`-50.02%`).
+    - `throughput/mfu -7.47%`, `throughput/tokens_per_second -7.47%`, `throughput/duration +8.07%`.
+  - Governance:
+    - MFU gain `<3%` (regression) and dominant hotspot class remained train-path `shard_map/custom-call` with large new `while` overhead. Attempt marked **low-impact/regressive** and kernel edits were reverted.
+
+- Assessment: **failed attempt / regression**. Launch-level shard-map costs were reduced, but new `while` control-flow overhead outweighed those wins and regressed end-to-end throughput.
+- Next bold hypothesis:
+  - Move to **Macro Move J** next with required `Ct={64,96,128}` x `Seg={8,16,32}` compact sweep table, then use the best operating point as the launchpad for the next structural macro move.
