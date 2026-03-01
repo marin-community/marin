@@ -684,3 +684,11 @@ Notes:
 - In the only shared working dtype (`float32`), our `xla` custom-vjp path is clearly fastest on combined throughput on both `v5e-8` and `v6e-8`.
 - `pallas_tpu` remains competitive on forward but trails on backward, so combined is below `xla`.
 - Tokamax `mosaic_tpu` is not competitive in this setup and cannot currently run bf16 on these TPUs due the matmul-accumulator verification failure.
+
+### 2026-03-01: Restore explicit TPU v6 tuned table entries
+- Added an explicit `TPU v6` section in `tuned_block_sizes.py` (no `v5e` copy/fallback indirection).
+- `TPU v6` entries now include:
+  - `small-vocab`: `b=1024,h=256,v=512` (bf16/f32)
+  - `llama3-ish`: `b=1024,h=512,v=1024` (bf16/f32)
+  - `mid-h-large-vocab`: `b=1024,h=1024,v=1024` (bf16/f32)
+  - `large-batch-small-h`: `b=1024,h=512,v=2048` (bf16/f32)
