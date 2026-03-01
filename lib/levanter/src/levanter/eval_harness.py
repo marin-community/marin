@@ -80,6 +80,7 @@ from levanter.callbacks import StepInfo
 from levanter.checkpoint import load_checkpoint
 from levanter.data import batched
 from levanter.data.loader import stack_batches
+from levanter.eval import resolve_batch_axis_resource
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
@@ -225,6 +226,7 @@ class _LmEvalHarnessWorker:
         EvalPos,
         model,
         axis_resources,
+        batch_axis_resource,
         tokenizer,
         mp,
         max_packed_segments,
@@ -238,6 +240,9 @@ class _LmEvalHarnessWorker:
         self.EvalPos = EvalPos
         self.model = model
         self.axis_resources = axis_resources
+        self.batch_axis_resources = axis_resources
+        if batch_axis_resource is not None:
+            self.batch_axis_resources = {self.EvalBatch.name: batch_axis_resource}
         self.mp = mp
         self.max_packed_segments = max_packed_segments
         self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
@@ -424,6 +429,7 @@ class LevanterHarnessLM(TemplateLM):
         super().__init__()
         self.leader = leader
         self.axis_resources = leader.axis_resources
+        self.batch_axis_resources = leader.batch_axis_resources
         # Storage for prompts and generations to include in outputs
         self.sample_outputs: dict[str, list[dict]] = {}
         self.sample_logging_config = leader.sample_logging_config
@@ -617,7 +623,7 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
-            batch = hax.shard(batch, self.axis_resources)
+            batch = hax.shard(batch, self.batch_axis_resources)
 
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
@@ -1249,6 +1255,7 @@ def run_lm_eval_harness(
     EvalBatch: haliax.Axis | int,
     axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
+    batch_axis_resource=None,
     profiler_config: ProfilerConfig | None = None,
 ) -> dict | None:
     """
@@ -1261,6 +1268,7 @@ def run_lm_eval_harness(
         EvalBatch: Batch axis for evaluation, or an integer batch size.
         axis_resources: Resource mapping for distributed computation
         mp: Mixed precision policy
+        batch_axis_resource: Explicit resource to use for the eval batch axis.
         profiler_config: Optional ProfilerConfig for profiling during evaluation
 
     Returns:
@@ -1268,11 +1276,22 @@ def run_lm_eval_harness(
         - "averages": A dictionary with macro and micro averages for all metrics.
         Otherwise, returns None.
     """
+    if batch_axis_resource is None:
+        batch_axis_resource = resolve_batch_axis_resource(EvalBatch, axis_resources)
+
     # Build the tasks dictionary
     tasks_to_run = config.to_task_dict()
 
     outputs = _actually_run_eval_harness(
-        config, model, tasks_to_run, tokenizer, EvalBatch, axis_resources, mp, profiler_config
+        config,
+        model,
+        tasks_to_run,
+        tokenizer,
+        EvalBatch,
+        axis_resources,
+        mp,
+        batch_axis_resource=batch_axis_resource,
+        profiler_config=profiler_config,
     )
 
     return outputs
@@ -1286,6 +1305,7 @@ def _actually_run_eval_harness(
     EvalBatch: haliax.Axis | int,
     axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
+    batch_axis_resource=None,
     profiler_config: ProfilerConfig | None = None,
 ) -> dict | None:
     """
@@ -1312,12 +1332,15 @@ def _actually_run_eval_harness(
         f" {num_parameters} parameters in the model."
     )
     logger.info("Running eval harness...")
+    if batch_axis_resource is None:
+        batch_axis_resource = resolve_batch_axis_resource(EvalBatch, axis_resources)
 
     worker = _LmEvalHarnessWorker(
         EvalBatch,
         EvalPos,
         model,
         axis_resources,
+        batch_axis_resource,
         tokenizer,
         mp,
         max_packed_segments=64,
@@ -1507,6 +1530,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
             config.EvalBatch,
             axis_resources=compute_axis_mapping,
             mp=config.trainer.mp,
+            batch_axis_resource=resolve_batch_axis_resource(config.EvalBatch, compute_axis_mapping),
             profiler_config=profiler_config,
         )
 
@@ -1572,6 +1596,7 @@ def lm_eval_harness(
     EvalBatch: haliax.Axis | int,
     axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
+    batch_axis_resource=None,
 ):
     """
     Create a callback function for running the LM Eval Harness during training.
@@ -1582,11 +1607,14 @@ def lm_eval_harness(
         EvalBatch: Batch axis for evaluation, or an integer batch size.
         axis_resources: Resource mapping for distributed computation
         mp: Mixed precision policy
+        batch_axis_resource: Explicit resource to use for the eval batch axis.
 
     Returns:
         Callback function that can be used with the trainer
     """
     tasks_to_run = config.to_task_dict()
+    if batch_axis_resource is None:
+        batch_axis_resource = resolve_batch_axis_resource(EvalBatch, axis_resources)
 
     def lm_eval_harness(step: StepInfo, force=False):
         if step.step == 0 and not force:
@@ -1604,6 +1632,7 @@ def lm_eval_harness(
             EvalBatch,
             axis_resources,
             mp,
+            batch_axis_resource=batch_axis_resource,
             profiler_config=None,
         )
         logger.info("Finished running eval harness.")
