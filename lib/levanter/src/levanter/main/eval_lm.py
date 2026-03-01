@@ -21,7 +21,7 @@ from levanter.data.text import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmExample
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
@@ -121,12 +121,6 @@ def main(config: EvalLmConfig):
             batch_axis_resource=batch_axis_resource,
             max_examples_per_dataset=max_examples,
         )
-
-        @named_jit(axis_resources=compute_axis_mapping)
-        def compute_loss(model: LmHeadModel, example: LmExample):
-            model = inference_mode(model, True)
-            model = mp.cast_to_compute(model)
-            return model.compute_next_token_loss(example, key=None)
 
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: ArrayLmHeadModel, example: LmEvalExample):
