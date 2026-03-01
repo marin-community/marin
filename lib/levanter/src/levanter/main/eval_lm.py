@@ -120,16 +120,8 @@ def main(config: EvalLmConfig):
 
         def compute_logits(model: ArrayLmHeadModel, example: LmEvalExample):
             model = mp.cast_to_compute(model)
-            with hax.axis_mapping(compute_axis_mapping):
-                token_ids = token_ids_array_from_lm_example(example)
-                logits_array = model.logits_from_token_ids_array(token_ids, batch_axis=Batch, key=None)
-                if logits_array.ndim == 2:
-                    return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), Vocab))
-                if logits_array.ndim == 3:
-                    batch_axis = Axis(Batch.name, logits_array.shape[0])
-                    pos_axis = Pos.resize(logits_array.shape[1])
-                    return hax.named(logits_array, (batch_axis, pos_axis, Vocab))
-                raise ValueError(f"Unexpected logits rank for analysis callbacks: {logits_array.ndim}")
+            token_ids = token_ids_array_from_lm_example(example)
+            return model.logits_from_token_ids_array(token_ids, batch_axis=Batch, key=None)
 
         # initialize the model
         if config.checkpoint_path is not None:

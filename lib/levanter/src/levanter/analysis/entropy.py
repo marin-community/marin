@@ -66,7 +66,7 @@ def top2_gap_from_logits(logits: hax.NamedArray, axis: hax.AxisSelector) -> hax.
 def compute_entropy_histogram(
     model,
     Vocab: hax.AxisSelector,
-    logit_fn: Callable[[PyTree, B], hax.NamedArray],
+    logit_fn: Callable[[PyTree, B], hax.NamedArray | jax.Array],
     test_data,
     max_tokens: int = 1024 * 1024,
     num_bins: int = 64,
@@ -102,8 +102,11 @@ def compute_entropy_histogram(
 def _compute_entropy_on_device(logit_fn, model, batch: B, Vocab) -> jnp.ndarray:
     with jax.named_scope("logits"):
         logits = logit_fn(model, batch)
-    entropies = entropy_from_logits(logits, axis=Vocab)
-    return entropies.flatten("token").array
+    if isinstance(logits, hax.NamedArray):
+        entropies = entropy_from_logits(logits, axis=Vocab)
+        return entropies.flatten("token").array
+    entropies = _entropy_from_logits_array(logits, axis=-1)
+    return entropies.reshape(-1)
 
 
 def cb_compute_entropies(
@@ -160,7 +163,7 @@ def cb_compute_entropies(
 def compute_top2_gap_histogram(
     model,
     Vocab: hax.AxisSelector,
-    logit_fn: Callable[[PyTree, B], hax.NamedArray],
+    logit_fn: Callable[[PyTree, B], hax.NamedArray | jax.Array],
     test_data,
     max_tokens: int = 1024 * 1024,
     num_bins: int = 64,
@@ -183,8 +186,23 @@ def compute_top2_gap_histogram(
 def _compute_top2_gap_on_device(logit_fn, model, batch: B, Vocab) -> jnp.ndarray:
     with jax.named_scope("logits"):
         logits = logit_fn(model, batch)
-    gaps = top2_gap_from_logits(logits, axis=Vocab)
-    return gaps.flatten("token").array
+    if isinstance(logits, hax.NamedArray):
+        gaps = top2_gap_from_logits(logits, axis=Vocab)
+        return gaps.flatten("token").array
+    gaps = _top2_gap_from_logits_array(logits, axis=-1)
+    return gaps.reshape(-1)
+
+
+def _entropy_from_logits_array(logits: jax.Array, axis: int = -1) -> jax.Array:
+    log_z = jax.nn.logsumexp(logits, axis=axis)
+    probs = jax.nn.softmax(logits, axis=axis)
+    return log_z - jnp.sum(probs * logits, axis=axis)
+
+
+def _top2_gap_from_logits_array(logits: jax.Array, axis: int = -1) -> jax.Array:
+    moved = jnp.moveaxis(logits, axis, -1)
+    top2_vals, _ = jax.lax.top_k(moved, 2)
+    return top2_vals[..., 0] - top2_vals[..., 1]
 
 
 def cb_compute_top2_gap(
