@@ -20,7 +20,6 @@ import haliax.nn as hnn
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.normalization import LayerNormBase
-from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 import levanter.tracker
@@ -30,6 +29,7 @@ from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddin
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.models.mistral import MistralConfig
+from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -530,14 +530,12 @@ class MixtralTransformer(eqx.Module):
 
     @staticmethod
     def init(config: MistralConfig, *, key) -> "MixtralTransformer":
-        S = Stacked
-        if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
-            S = BlockSeq
-
-        layers = S.init(config.Layers, MixtralDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
+        layers = init_scan_foldable(
+            config.Layers,
+            MixtralDecoderLayer,
             config,
+            scan_layers=config.scan_layers,
+            gradient_checkpointing=config.gradient_checkpointing,
             key=shaped_rng_split(key, config.num_layers),
         )
         ln_f = config.mk_LayerNorm(config.Embed)
