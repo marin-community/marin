@@ -52,6 +52,16 @@ class ArrayLmHeadModel(Protocol):
     ) -> jax.Array: ...
 
 
+class ArrayLmHarnessModel(ArrayLmHeadModel, Protocol):
+    """Array-native model surface required by eval harness-style flows."""
+
+    @property
+    def Pos(self) -> Axis: ...
+
+    @property
+    def max_length(self) -> int: ...
+
+
 def _to_plain_jax_array(value: Any) -> jax.Array:
     """Best-effort conversion from a model-native tensor/scalar to a plain JAX array."""
     array_attr = getattr(value, "array", None)
