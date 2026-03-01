@@ -83,7 +83,7 @@ from levanter.eval import resolve_batch_axis_resource
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
-from levanter.utils.partitioning import infer_resource_partitions, round_axis_for_partitioning
+from levanter.utils.partitioning import infer_resource_partitions, named_jit, round_axis_for_partitioning
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ResourceMapping
@@ -312,7 +312,7 @@ class _LmEvalHarnessWorker:
             return segments, -losses, correct
 
         # no sharded outputs
-        self._jit_loglikelihood = hax.named_jit(
+        self._jit_loglikelihood = named_jit(
             _eval_loglikelihood, axis_resources=compute_axis_resources, out_axis_resources={}
         )
 
