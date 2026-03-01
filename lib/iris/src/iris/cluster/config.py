@@ -879,6 +879,7 @@ class IrisConfig:
         Returns:
             Platform implementation (GCP, Manual, or Local)
         """
+        # Local import: platform.factory imports config.py, creating a circular dependency.
         from iris.cluster.platform.factory import create_platform
 
         return create_platform(
@@ -933,6 +934,7 @@ def create_autoscaler(
     Raises:
         ValueError: If autoscaler_config has invalid timing values
     """
+    # Local import: controller modules import config.py, creating a circular dependency.
     from iris.cluster.controller.autoscaler import Autoscaler
     from iris.cluster.controller.scaling_group import ScalingGroup
 

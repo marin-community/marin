@@ -1002,19 +1002,16 @@ def get_iris_ctx() -> IrisContext | None:
     if job_info is None:
         return None
 
-    else:
-        # Set up client if controller address is available
-        client = None
-        if job_info.controller_address:
-            bundle_gcs_path = job_info.bundle_gcs_path
+    # Set up client if controller address is available
+    client = None
+    if job_info.controller_address:
+        bundle_gcs_path = job_info.bundle_gcs_path
+        client = IrisClient.remote(
+            controller_address=job_info.controller_address,
+            bundle_gcs_path=bundle_gcs_path,
+        )
 
-            # Create remote client for context use
-            client = IrisClient.remote(
-                controller_address=job_info.controller_address,
-                bundle_gcs_path=bundle_gcs_path,
-            )
-
-        ctx = IrisContext.from_job_info(job_info, client=client)
+    ctx = IrisContext.from_job_info(job_info, client=client)
     _iris_context.set(ctx)
     return ctx
 

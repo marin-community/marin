@@ -17,6 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from google.protobuf import json_format
+
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.runtime.types import (
     ContainerConfig,
@@ -26,8 +28,6 @@ from iris.cluster.runtime.types import (
     ContainerRuntime,
     RuntimeLogReader,
 )
-from google.protobuf import json_format
-
 from iris.cluster.types import (
     JobName,
     is_task_finished,
@@ -702,7 +702,7 @@ class TaskAttempt:
                 if self.workdir:
                     self.disk_mb = collect_workdir_size_mb(self.workdir)
             except Exception:
-                pass  # Don't fail task on stats collection errors
+                logger.debug("Stats collection failed for task %s", self.task_id, exc_info=True)
 
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
@@ -713,7 +713,7 @@ class TaskAttempt:
             for log_line in reader.read():
                 self._log_sink.append(source=log_line.source, data=log_line.data)
         except Exception:
-            pass  # Don't fail task on log streaming errors
+            logger.debug("Log streaming failed for task %s", self.task_id, exc_info=True)
 
     def _cleanup(self) -> None:
         """Clean up task resources: container, ports, image protection, workdir.
