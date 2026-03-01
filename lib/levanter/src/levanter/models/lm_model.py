@@ -30,6 +30,14 @@ LmAttentionMask = AttentionMask | Any
 LmAuxData = Any
 
 
+def _to_plain_jax_array(value: Any) -> jax.Array:
+    """Best-effort conversion from a model-native tensor/scalar to a plain JAX array."""
+    array_attr = getattr(value, "array", None)
+    if array_attr is not None:
+        return jnp.asarray(array_attr)
+    return jnp.asarray(value)
+
+
 class LmExample(eqx.Module):
     tokens: hax.NamedArray
     loss_weight: hax.NamedArray
@@ -384,6 +392,4 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             logit_soft_cap=logit_soft_cap,
         )
 
-        if isinstance(loss, hax.NamedArray):
-            return loss.array
-        return jnp.asarray(loss)
+        return _to_plain_jax_array(loss)
