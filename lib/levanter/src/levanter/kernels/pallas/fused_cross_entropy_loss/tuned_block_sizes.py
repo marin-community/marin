@@ -646,7 +646,6 @@ __all__ = [
     "ShapeBucket",
     "TUNED_BLOCK_SIZES",
     "SHAPE_BUCKETS",
-    "requires_tpu_label_layout_1024",
     "infer_block_sizes",
     "infer_xla_v_block_size",
 ]
