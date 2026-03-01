@@ -84,6 +84,7 @@ ALL_BENCHMARKS = [
     "chartqa",
     "ai2d",
     "mmmu",
+    "seedbench_image",
     # Generation
     "cifar10_small",
     "cifar10",
@@ -112,10 +113,10 @@ def build_understanding_sequence(
     image_token_lists: list[list[int]],
     tokenizer: transformers.PreTrainedTokenizer,
 ) -> dict[str, np.ndarray] | None:
-    """Build an image-first (understanding) sequence with loss only on answer tokens.
+    """Build an understanding sequence with loss only on answer tokens.
 
-    Format: [user visual+text] [assistant answer text] <endoftext>
-    Loss weights: 0.0 for user content (images + question), 1.0 for answer + eos.
+    Format: [user visual+text] \\nAnswer: [assistant answer text] <endoftext>
+    Loss weights: 0.0 for user content + separator, 1.0 for answer + eos.
 
     Handles multi-image cases (e.g., MMMU) by inserting visual tokens in order
     of appearance in the user content.
@@ -139,6 +140,8 @@ def build_understanding_sequence(
             text_ids = tokenizer.encode(part["text"], add_special_tokens=False)
             user_ids.extend(text_ids)
 
+    separator_ids = tokenizer.encode("\nAnswer: ", add_special_tokens=False)
+
     # Build assistant region: answer text tokens
     assistant_ids: list[int] = []
     for part in assistant_content:
@@ -149,13 +152,13 @@ def build_understanding_sequence(
     if not assistant_ids:
         return None
 
-    # Full sequence: user + assistant + eos
-    all_ids = user_ids + assistant_ids + [ENDOFTEXT_ID]
-    n_user = len(user_ids)
+    # Full sequence: user + separator + assistant + eos
+    all_ids = user_ids + separator_ids + assistant_ids + [ENDOFTEXT_ID]
+    n_prompt = len(user_ids) + len(separator_ids)
 
     input_ids = np.array(all_ids, dtype=np.int32)
     loss_weights = np.zeros(len(all_ids), dtype=np.float32)
-    loss_weights[n_user:] = 1.0  # answer + eos
+    loss_weights[n_prompt:] = 1.0  # answer + eos
 
     return {"input_ids": input_ids, "loss_weights": loss_weights}
 
@@ -187,8 +190,8 @@ def build_mc_understanding_sequence(
 ) -> dict[str, np.ndarray] | None:
     """Build an images-first MC sequence matching the training token distribution.
 
-    Format: <vision_start> V₁..Vₙ <vision_end> [...] question_text answer_text <eos>
-    Loss weights: 0.0 for visual + question, 1.0 for answer + eos.
+    Format: <vision_start> V₁..Vₙ <vision_end> [...] question_text \\nAnswer: answer_text <eos>
+    Loss weights: 0.0 for visual + question + separator, 1.0 for answer + eos.
     """
     visual_ids: list[int] = []
     for raw_tokens in image_token_lists:
@@ -198,13 +201,14 @@ def build_mc_understanding_sequence(
         visual_ids.append(VISION_END_ID)
 
     question_ids = tokenizer.encode(question_text, add_special_tokens=False)
+    separator_ids = tokenizer.encode("\nAnswer: ", add_special_tokens=False)
     answer_ids = tokenizer.encode(answer_text, add_special_tokens=False)
 
     if not answer_ids:
         return None
 
-    all_ids = visual_ids + question_ids + answer_ids + [ENDOFTEXT_ID]
-    n_prompt = len(visual_ids) + len(question_ids)
+    all_ids = visual_ids + question_ids + separator_ids + answer_ids + [ENDOFTEXT_ID]
+    n_prompt = len(visual_ids) + len(question_ids) + len(separator_ids)
 
     input_ids = np.array(all_ids, dtype=np.int32)
     loss_weights = np.zeros(len(all_ids), dtype=np.float32)

@@ -61,10 +61,10 @@ UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
 TEXT_EVAL_CACHE_PATH = "gs://marin-vlm/text_eval_cache"
 
 # Eval benchmark categories (used for tagging in eval metrics)
-UNDERSTANDING_BENCHMARKS = {"textvqa", "chartqa", "ai2d", "mmmu"}
+UNDERSTANDING_BENCHMARKS = {"textvqa", "chartqa", "ai2d", "mmmu", "seedbench_image"}
 GENERATION_BENCHMARKS = {"cifar10_small", "cifar10", "imagenet_small", "imagenet"}
-MC_BENCHMARKS = ["ai2d", "mmmu"]
-VLM_EVAL_BENCHMARKS = ["ai2d", "mmmu", "textvqa", "chartqa"]
+MC_BENCHMARKS = ["ai2d", "mmmu", "seedbench_image"]
+VLM_EVAL_BENCHMARKS = ["ai2d", "mmmu", "seedbench_image", "textvqa", "chartqa"]
 
 
 # --- Extended Tokenizer Creation ---
@@ -385,6 +385,7 @@ DEFAULT_EVAL_BENCHMARKS = [
     "chartqa",
     "ai2d",
     "mmmu",
+    "seedbench_image",
     "cifar10_small",
     "imagenet_small",
 ]

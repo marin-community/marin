@@ -9,7 +9,7 @@ and displays token breakdown, decoded text, and loss weights.
 Usage:
     uv run experiments/unified/inspect_parquet_row.py --row_index 5
     uv run experiments/unified/inspect_parquet_row.py --row_index 0 \
-        --cache_path gs://marin-vlm/stage2_sharded_full_tokenized_llama3/train
+        --cache_path gs://marin-vlm/unified_eval_cache/mmmu/validation
 """
 
 import argparse

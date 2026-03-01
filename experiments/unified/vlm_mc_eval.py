@@ -779,7 +779,7 @@ MC_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
 # Benchmark parquet paths
 DEFAULT_EVAL_PARQUET_PATH = "gs://marin-vlm/eval_benchmarks_tokenized"
-MC_BENCHMARKS = ["ai2d", "mmmu"]
+MC_BENCHMARKS = ["ai2d", "mmmu", "seedbench_image"]
 OPEN_ENDED_BENCHMARKS = ["textvqa", "chartqa"]
 VLM_EVAL_BENCHMARKS = MC_BENCHMARKS + OPEN_ENDED_BENCHMARKS
 

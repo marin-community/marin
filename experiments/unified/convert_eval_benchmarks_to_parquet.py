@@ -635,6 +635,62 @@ class ImageNetConverter(BenchmarkConverter):
 
 
 # ---------------------------------------------------------------------------
+# SEED-Bench (image-only subset)
+# ---------------------------------------------------------------------------
+
+
+class SEEDBenchImageConverter(BenchmarkConverter):
+    name = "seedbench_image"
+    hf_dataset_id = "lmms-lab/SEED-Bench"
+    hf_split = "test"
+    task_type = "multiple_choice"
+
+    def load(self, max_rows: int | None = None) -> Dataset:
+        ds = load_dataset(self.hf_dataset_id, split=self.hf_split, trust_remote_code=True)
+        # Filter to image-only questions (question_type_id 1-9)
+        ds = ds.filter(lambda x: x["question_type_id"] <= 9)
+        if max_rows is not None:
+            ds = ds.select(range(min(max_rows, len(ds))))
+        return ds
+
+    def convert_row(self, item: dict, index: int) -> dict | None:
+        image = item.get("image")
+        if image is None:
+            return None
+
+        # SEED-Bench stores images as a list; take the first one
+        if isinstance(image, list):
+            if not image:
+                return None
+            image = image[0]
+
+        image_bytes = extract_image_bytes(image)
+        if image_bytes is None:
+            return None
+
+        question = item["question"]
+        options = [item["choice_a"], item["choice_b"], item["choice_c"], item["choice_d"]]
+        answer_letter = item["answer"]  # Already A/B/C/D
+
+        formatted_options = format_mc_options(options)
+        question_text = f"{question}\n{formatted_options}\nAnswer with the option letter."
+        messages = build_eval_messages(question_text, answer_letter)
+
+        return {
+            "messages": messages,
+            "images": [{"bytes": image_bytes}],
+            "source": self.name,
+            "answer": answer_letter,
+            "choices": options,
+            "task_type": self.task_type,
+            "question_id": f"seedbench_image_{item.get('question_id', index)}",
+            "benchmark": self.name,
+            "split": "test",
+            "metadata": json.dumps({"question_type_id": item.get("question_type_id", -1)}),
+        }
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -644,6 +700,7 @@ BENCHMARK_REGISTRY: dict[str, BenchmarkConverter] = {
     "chartqa": ChartQAConverter(),
     "ai2d": AI2DConverter(),
     "mmmu": MMMUConverter(),
+    "seedbench_image": SEEDBenchImageConverter(),
     # Generation
     "cifar10_small": CIFAR10Converter(name="cifar10_small", n_per_class=100),
     "cifar10": CIFAR10Converter(name="cifar10"),
