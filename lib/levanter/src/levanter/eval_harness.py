@@ -1439,7 +1439,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
-    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
+    with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
@@ -1463,7 +1463,12 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         else:
             with use_cpu_device():
                 model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                model = load_checkpoint(model, config.checkpoint_path, subpath="model")
+                model = load_checkpoint(
+                    model,
+                    config.checkpoint_path,
+                    subpath="model",
+                    axis_mapping=parameter_axis_mapping,
+                )
             model = hax.shard(model, parameter_axis_mapping)
 
         model = typing.cast(LmHeadModel, inference_mode(model, True))
