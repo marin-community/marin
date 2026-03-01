@@ -58,29 +58,31 @@ def test_entrypoint_callable_has_workdir_files():
 
 
 def test_job_name_roundtrip_and_hierarchy():
-    job = JobName.root("root")
+    job = JobName.root("test-user", "root")
     child = job.child("child")
     task = child.task(0)
 
-    assert str(job) == "/root"
-    assert str(child) == "/root/child"
-    assert str(task) == "/root/child/0"
+    assert str(job) == "/test-user/root"
+    assert str(child) == "/test-user/root/child"
+    assert str(task) == "/test-user/root/child/0"
+    assert job.user == "test-user"
+    assert child.root_job == job
     assert task.parent == child
     assert child.parent == job
     assert job.parent is None
 
-    parsed = JobName.from_string("/root/child/0")
+    parsed = JobName.from_string("/test-user/root/child/0")
     assert parsed == task
-    assert parsed.namespace == "root"
+    assert parsed.namespace == "test-user/root"
     assert parsed.is_task
     assert parsed.task_index == 0
-    assert JobName.root("root").is_ancestor_of(parsed)
-    assert not parsed.is_ancestor_of(JobName.root("root"), include_self=False)
+    assert JobName.root("test-user", "root").is_ancestor_of(parsed)
+    assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
 
 
 @pytest.mark.parametrize(
     "value",
-    ["", "root", "/root//child", "/root/ ", "/root/child/", "/root/child//0"],
+    ["", "root", "/root", "/test-user//child", "/test-user/root/ ", "/test-user/root/", "/test-user/root//0"],
 )
 def test_job_name_rejects_invalid_inputs(value: str):
     with pytest.raises(ValueError):
@@ -89,23 +91,23 @@ def test_job_name_rejects_invalid_inputs(value: str):
 
 def test_job_name_require_task_errors_on_non_task():
     with pytest.raises(ValueError):
-        JobName.from_string("/root/child").require_task()
+        JobName.from_string("/test-user/root/child").require_task()
 
 
 def test_job_name_to_safe_token_and_deep_nesting():
-    job = JobName.from_string("/a/b/c/d/e/0")
-    assert job.to_safe_token() == "job__a__b__c__d__e__0"
+    job = JobName.from_string("/test-user/a/b/c/d/e/0")
+    assert job.to_safe_token() == "job__test-user__a__b__c__d__e__0"
     assert job.require_task()[1] == 0
 
 
 def test_job_name_depth():
     """Job depth increases with hierarchy; tasks inherit parent depth."""
-    assert JobName.root("train").depth == 1
-    assert JobName.from_string("/train/eval").depth == 2
-    assert JobName.from_string("/train/eval/score").depth == 3
+    assert JobName.root("test-user", "train").depth == 1
+    assert JobName.from_string("/test-user/train/eval").depth == 2
+    assert JobName.from_string("/test-user/train/eval/score").depth == 3
     # Task depth equals parent job depth
-    assert JobName.from_string("/train/0").depth == 1
-    assert JobName.from_string("/train/eval/0").depth == 2
+    assert JobName.from_string("/test-user/train/0").depth == 1
+    assert JobName.from_string("/test-user/train/eval/0").depth == 2
 
 
 # ---------------------------------------------------------------------------

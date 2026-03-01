@@ -44,7 +44,7 @@ def local_client():
 def parent_context(local_client):
     """Simulate running inside a parent Iris job."""
     return IrisContext(
-        job_id=JobName.root("parent-job"),
+        job_id=JobName.root("test-user", "parent-job"),
         client=local_client,
     )
 
@@ -70,7 +70,7 @@ def test_child_job_inherits_parent_env(local_client, parent_context):
         job = local_client.submit(entrypoint, "child-job", resources)
 
     job.wait(timeout=30)
-    assert job.job_id == JobName.root("parent-job").child("child-job")
+    assert job.job_id == JobName.root("test-user", "parent-job").child("child-job")
 
 
 def test_child_job_does_not_inherit_os_environ(local_client, parent_context):

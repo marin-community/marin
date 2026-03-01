@@ -7,7 +7,7 @@ For high-level operations with context magic, use iris.client.
 """
 
 from iris.cluster.client.bundle import BundleCreator
-from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
+from iris.cluster.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
 from iris.cluster.client.local_client import LocalClusterClient
 from iris.cluster.client.remote_client import RemoteClusterClient, TaskStateLogger
 
@@ -18,5 +18,6 @@ __all__ = [
     "RemoteClusterClient",
     "TaskStateLogger",
     "get_job_info",
+    "resolve_job_user",
     "set_job_info",
 ]

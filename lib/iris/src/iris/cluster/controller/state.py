@@ -591,6 +591,15 @@ class ControllerJob:
         return None
 
 
+@dataclass(frozen=True)
+class UserStats:
+    """Aggregate counts for a single user."""
+
+    user: str
+    task_state_counts: dict[int, int] = field(default_factory=dict)
+    job_state_counts: dict[int, int] = field(default_factory=dict)
+
+
 # =============================================================================
 # Job Helper Functions
 # =============================================================================
@@ -1494,6 +1503,25 @@ class ControllerState:
     def list_all_jobs(self) -> list[ControllerJob]:
         with self._lock:
             return list(self._jobs.values())
+
+    def list_user_stats(self) -> list[UserStats]:
+        """Return aggregated live counts grouped by user."""
+        with self._lock:
+            by_user: dict[str, UserStats] = {}
+            for job in self._jobs.values():
+                task_ids = self._tasks_by_job.get(job.job_id, [])
+                user_stats = by_user.setdefault(
+                    job.job_id.user,
+                    UserStats(user=job.job_id.user),
+                )
+                for task_id in task_ids:
+                    task = self._tasks.get(task_id)
+                    if task is None:
+                        continue
+                    user_stats.task_state_counts[task.state] = user_stats.task_state_counts.get(task.state, 0) + 1
+                user_stats.job_state_counts[job.state] = user_stats.job_state_counts.get(job.state, 0) + 1
+
+            return list(by_user.values())
 
     def get_children(self, job_id: JobName) -> list[ControllerJob]:
         with self._lock:
