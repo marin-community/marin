@@ -644,12 +644,13 @@ class Trainer:
             batch_name = self.config.batch_axis_name
             batch_size = self.config.train_batch_size
 
+        batch_axis_resource = self.compute_axis_mapping.get(batch_name, self.config.batch_axis_resource)
         return DataLoader(
             dataset,
             batch_size=batch_size,
             max_buffered_batches=128,
             mesh=self.device_mesh,
-            axis_resources=self.compute_axis_mapping,
+            axis_resources={batch_name: batch_axis_resource},
             prefetch_size=32,
             batch_axis_name=batch_name,
             allow_nondivisible_batch_size=self.config.allow_nondivisible_batch_size,
@@ -981,7 +982,7 @@ class TrainerConfig:
     @property
     def data_axis_size(self):
         """size of the data parallel/batch parallel axis."""
-        batch_map = self.compute_axis_mapping.get(self.batch_axis_name, self.compute_axis_mapping.get("batch"))
+        batch_map = self.batch_axis_resource
         if batch_map is None:
             raise ValueError(
                 f"No mapping found for batch axis {self.batch_axis_name} in compute axis mapping."
@@ -997,6 +998,10 @@ class TrainerConfig:
         for ax in axes:
             prod_size *= self._axis_size(ax)
         return prod_size
+
+    @property
+    def batch_axis_resource(self):
+        return self.compute_axis_mapping.get(self.batch_axis_name, self.compute_axis_mapping.get("batch"))
 
     @property
     def compute_axis_mapping(self) -> ResourceMapping:
