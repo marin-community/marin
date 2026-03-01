@@ -69,9 +69,9 @@ def dpo_loss_from_logps(
 def _logp_sum(model: LmHeadModel, example, *, key=None, axis_mapping=None) -> jnp.ndarray:
     if axis_mapping is not None:
         with hax.axis_mapping(axis_mapping):
-            nll = model.compute_next_token_loss_array(example, reduction=hax.sum, reduction_axis="position", key=key)
+            nll = model.compute_next_token_loss_array(example, reduction="sum", reduction_axis="position", key=key)
     else:
-        nll = model.compute_next_token_loss_array(example, reduction=hax.sum, reduction_axis="position", key=key)
+        nll = model.compute_next_token_loss_array(example, reduction="sum", reduction_axis="position", key=key)
     return -nll
 
 

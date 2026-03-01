@@ -36,7 +36,7 @@ class ArrayLmHeadModel(Protocol):
         *,
         batch_axis: Axis | str | None = "batch",
         key=None,
-        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction: str | hax.ReductionFunction | None = "mean",
         reduction_axis: Optional[hax.AxisSelection] = None,
         logsumexp_weight: Optional[float] = None,
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
@@ -388,7 +388,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         *,
         batch_axis: Axis | str | None = "batch",
         key=None,
-        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction: str | hax.ReductionFunction | None = "mean",
         reduction_axis: Optional[hax.AxisSelection] = None,
         logsumexp_weight: Optional[float] = None,
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
@@ -404,7 +404,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         loss = self._compute_next_token_loss_named(
             named_example,
             key=key,
-            reduction=reduction,
+            reduction=_normalize_reduction(reduction),
             reduction_axis=reduction_axis,
             logsumexp_weight=logsumexp_weight,
             loss_dtype=loss_dtype,
@@ -424,3 +424,17 @@ def _as_named_lm_example(example: Any, *, Pos: Axis, batch_axis: Axis | str | No
         return named_lm_example_from_grug(example, Pos=Pos, batch_axis=batch_axis)
 
     raise TypeError(f"Unsupported example type: {type(example)}")
+
+
+def _normalize_reduction(
+    reduction: str | hax.ReductionFunction | None,
+) -> Optional[hax.ReductionFunction]:
+    if reduction is None:
+        return None
+    if reduction == "mean":
+        return cast(hax.ReductionFunction, hax.mean)
+    if reduction == "sum":
+        return cast(hax.ReductionFunction, hax.sum)
+    if callable(reduction):
+        return cast(hax.ReductionFunction, reduction)
+    raise ValueError(f"Unsupported reduction spec: {reduction!r}")
