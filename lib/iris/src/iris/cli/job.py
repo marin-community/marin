@@ -8,7 +8,6 @@ Usage:
     iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
-import getpass
 import json
 import logging
 import os
@@ -230,8 +229,7 @@ def generate_job_name(command: list[str]) -> str:
             break
 
     timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    username = getpass.getuser()
-    return f"iris-run-{username}-{script_name}-{timestamp}"
+    return f"iris-run-{script_name}-{timestamp}"
 
 
 def run_iris_job(
@@ -253,6 +251,7 @@ def run_iris_job(
     terminate_on_exit: bool = True,
     regions: tuple[str, ...] | None = None,
     zone: str | None = None,
+    user: str | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -305,6 +304,7 @@ def run_iris_job(
         include_children_logs=include_children_logs,
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
+        user=user,
     )
 
 
@@ -322,6 +322,7 @@ def _submit_and_wait_job(
     include_children_logs: bool = True,
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
+    user: str | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -341,6 +342,7 @@ def _submit_and_wait_job(
         replicas=replicas,
         max_retries_failure=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
+        user=user,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -412,6 +414,7 @@ Examples:
 )
 @click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
 @click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
+@click.option("--user", type=str, help="Override the user prefix for the submitted job.")
 @click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
@@ -440,6 +443,7 @@ def run(
     disk: str,
     no_wait: bool,
     job_name: str | None,
+    user: str | None,
     replicas: int,
     max_retries: int,
     timeout: int,
@@ -471,6 +475,7 @@ def run(
             disk=disk,
             wait=not no_wait,
             job_name=job_name,
+            user=user,
             replicas=replicas,
             max_retries=max_retries,
             timeout=timeout,

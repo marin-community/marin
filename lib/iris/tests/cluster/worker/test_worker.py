@@ -192,7 +192,7 @@ def create_test_entrypoint():
 
 
 def create_run_task_request(
-    task_id: str = JobName.root("test-task").task(0).to_wire(),
+    task_id: str = JobName.root("test-user", "test-task").task(0).to_wire(),
     num_tasks: int = 1,
     ports: list[str] | None = None,
     attempt_id: int = 0,
@@ -341,7 +341,9 @@ def test_task_exception_handling(worker, mock_runtime):
 
 def test_list_tasks(worker):
     """Test listing all tasks."""
-    requests = [create_run_task_request(task_id=JobName.root("test-job").task(i).to_wire()) for i in range(3)]
+    requests = [
+        create_run_task_request(task_id=JobName.root("test-user", "test-job").task(i).to_wire()) for i in range(3)
+    ]
 
     for request in requests:
         worker.submit_task(request)
@@ -388,11 +390,11 @@ def test_new_attempt_supersedes_old(worker, mock_runtime):
     )  # Stay running
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request_0 = create_run_task_request(task_id=JobName.root("retry-task").task(0).to_wire(), attempt_id=0)
+    request_0 = create_run_task_request(task_id=JobName.root("test-user", "retry-task").task(0).to_wire(), attempt_id=0)
     worker.submit_task(request_0)
 
     # Wait for attempt 0 to be running
-    task_id = JobName.root("retry-task").task(0).to_wire()
+    task_id = JobName.root("test-user", "retry-task").task(0).to_wire()
     old_task = worker.get_task(task_id)
     deadline = time.time() + 2.0
     while time.time() < deadline:
@@ -406,7 +408,7 @@ def test_new_attempt_supersedes_old(worker, mock_runtime):
     assert old_task.attempt_id == 0
 
     # Submit attempt 1 for the same task_id — should kill attempt 0
-    request_1 = create_run_task_request(task_id=JobName.root("retry-task").task(0).to_wire(), attempt_id=1)
+    request_1 = create_run_task_request(task_id=JobName.root("test-user", "retry-task").task(0).to_wire(), attempt_id=1)
     worker.submit_task(request_1)
 
     # Old attempt should have been killed
@@ -430,11 +432,11 @@ def test_duplicate_attempt_rejected(worker, mock_runtime):
     )  # Stay running
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request = create_run_task_request(task_id=JobName.root("dup-task").task(0).to_wire(), attempt_id=0)
+    request = create_run_task_request(task_id=JobName.root("test-user", "dup-task").task(0).to_wire(), attempt_id=0)
     worker.submit_task(request)
 
     # Wait for it to be running
-    task_id = JobName.root("dup-task").task(0).to_wire()
+    task_id = JobName.root("test-user", "dup-task").task(0).to_wire()
     task = worker.get_task(task_id)
     deadline = time.time() + 2.0
     while time.time() < deadline:
@@ -455,13 +457,13 @@ def test_duplicate_attempt_rejected(worker, mock_runtime):
 
 def test_kill_nonexistent_task(worker):
     """Test killing a nonexistent task returns False."""
-    result = worker.kill_task(JobName.root("nonexistent-task").task(0).to_wire())
+    result = worker.kill_task(JobName.root("test-user", "nonexistent-task").task(0).to_wire())
     assert result is False
 
 
 def test_get_logs_nonexistent_task(worker):
     """Test getting logs for nonexistent task returns empty list."""
-    logs = worker.get_logs(JobName.root("nonexistent-task").task(0).to_wire())
+    logs = worker.get_logs(JobName.root("test-user", "nonexistent-task").task(0).to_wire())
     assert logs == []
 
 
@@ -515,7 +517,7 @@ def test_env_merge_precedence(mock_bundle_cache, mock_runtime, tmp_path):
         pass
 
     request = cluster_pb2.Worker.RunTaskRequest(
-        task_id=JobName.root("env-test").task(0).to_wire(),
+        task_id=JobName.root("test-user", "env-test").task(0).to_wire(),
         num_tasks=1,
         attempt_id=0,
         entrypoint=Entrypoint.from_callable(_fn).to_proto(),
@@ -702,7 +704,7 @@ class TestWorkerIntegration:
     @pytest.mark.docker
     def test_submit_task_lifecycle(self, real_worker, test_bundle):
         """Test full task lifecycle from submission to completion."""
-        expected_task_id = JobName.root("integration-test").task(0).to_wire()
+        expected_task_id = JobName.root("test-user", "integration-test").task(0).to_wire()
         request = create_integration_run_task_request(test_bundle, expected_task_id)
 
         task_id = real_worker.submit_task(request)
@@ -745,7 +747,7 @@ class TestWorkerServiceIntegration:
         """Test FetchLogs with negative start_line for tailing."""
         ctx = Mock(spec=RequestContext)
 
-        task_id = JobName.root("logs-test").task(0).to_wire()
+        task_id = JobName.root("test-user", "logs-test").task(0).to_wire()
         request = create_integration_run_task_request(test_bundle, task_id)
         real_worker.submit_task(request)
 

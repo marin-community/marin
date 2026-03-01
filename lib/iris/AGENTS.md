@@ -102,6 +102,7 @@ When adding new modules or significant features:
 | Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
 | Original Design | docs/fray-zero.md | Rationale and design decisions |
 | Task States | docs/task-states.md | Task state machine, transitions, retry semantics, dashboard display |
+| User-Aware Job IDs | docs/users.md | User-prefixed job naming, user inference, and dashboard user aggregates |
 | CoreWeave Integration | (below) | Platform, runtime, and networking for CoreWeave bare metal |
 
 ### CoreWeave Integration
