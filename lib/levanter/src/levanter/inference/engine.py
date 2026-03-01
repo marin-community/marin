@@ -35,6 +35,7 @@ from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 from levanter.utils.partitioning import named_jit
+from levanter.utils.types import ResourceMapping
 
 logger = logging.getLogger(__name__)
 
