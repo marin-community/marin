@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import gc
 import hashlib
 import json
 import logging
@@ -226,21 +227,6 @@ def _make_vlm_eval_jit(axis_resources, mp, EvalPos, EvalBatch, max_packed_segmen
 
     _eval_step.__name__ = "vlm_eval_loglikelihood_step"
     return hax.named_jit(_eval_step, axis_resources=axis_resources, out_axis_resources={})
-
-
-def _force_vanilla_attention_backend_for_vlm_eval(model):
-    """Return a model copy with TPU splash/flash attention disabled for eval stability."""
-    from levanter.layers.attention import Attention, AttentionBackend
-
-    def _rewrite(node):
-        if isinstance(node, Attention):
-            cfg = node.config
-            if cfg.attn_backend == AttentionBackend.VANILLA:
-                return node
-            return dataclasses.replace(node, config=dataclasses.replace(cfg, attn_backend=AttentionBackend.VANILLA))
-        return node
-
-    return jax.tree.map(_rewrite, model, is_leaf=lambda x: isinstance(x, Attention))
 
 
 def _make_dummy_eval_batch(EvalBatch, EvalPos):
@@ -1374,7 +1360,10 @@ def main():
             model = hax.shard(model, parameter_axis_mapping)
 
         model = typing.cast(LmHeadModel, inference_mode(model, True))
-        model = _force_vanilla_attention_backend_for_vlm_eval(model)
+        # Use default attention backend (SPLASH on TPU) — same as text eval harness.
+        # Vanilla attention materializes O(seq²) attention matrices, causing OOM on v4-8.
+
+        gc.collect()  # Free lingering state_dict buffers from load_pretrained
 
         EvalPos = model.Pos if args.max_length is None else model.Pos.resize(args.max_length)
 
@@ -1534,7 +1523,7 @@ def vlm_mc_eval_callback(
         local_uuid = uuid.uuid4().hex[:8] if jax.process_index() == 0 else ""
         eval_run_uuid = multihost_broadcast_sync(local_uuid)
         model = inference_mode(step.eval_model, True)
-        model = _force_vanilla_attention_backend_for_vlm_eval(model)
+        # Use default attention backend (inherited from training config).
         EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
         # Keep multi-host defaults aligned with text-mc style settings unless
         # explicitly overridden via environment.
@@ -1575,11 +1564,6 @@ def vlm_mc_eval_callback(
             EvalBatch.size,
             VlmEvalBatch.size,
             f"{parameter_count(model):,}",
-        )
-        logger.warning(
-            "VLM_EVAL_ATTN_BACKEND eval_run_uuid=%s host=%d backend=vanilla",
-            eval_run_uuid,
-            jax.process_index(),
         )
         run_file = __file__
         git_commit = os.environ.get("GIT_COMMIT", "unknown")
