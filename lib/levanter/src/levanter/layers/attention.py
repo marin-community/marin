@@ -2121,11 +2121,11 @@ def _do_tpu_ragged_paged_attention(
         _rpa_with_runtime_scale,
         mesh=jax.sharding.get_abstract_mesh(),
         in_specs=(
-            haliax.partitioning.pspec_for_axis(q_flat.axes),
-            haliax.partitioning.pspec_for_axis(kv_pages_padded.axes),
-            haliax.partitioning.pspec_for_axis(kv_lens.axes),
-            haliax.partitioning.pspec_for_axis(page_indices.axes),
-            haliax.partitioning.pspec_for_axis(cu_q_lens.axes),
+            pspec_for_axis(q_flat.axes),
+            pspec_for_axis(kv_pages_padded.axes),
+            pspec_for_axis(kv_lens.axes),
+            pspec_for_axis(page_indices.axes),
+            pspec_for_axis(cu_q_lens.axes),
             PartitionSpec(),  # num_seqs
         ),
         out_specs=pspec_for_axis(
