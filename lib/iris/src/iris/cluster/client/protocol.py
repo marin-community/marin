@@ -34,8 +34,8 @@ class TaskStateLogger(Protocol):
 class ClusterClient(Protocol):
     """Protocol for cluster client implementations.
 
-    Both RemoteClusterClient and LocalClusterClient satisfy this protocol,
-    enabling callers to depend on the interface rather than concrete types.
+    RemoteClusterClient satisfies this protocol, enabling callers to depend
+    on the interface rather than concrete types.
     """
 
     def submit_job(

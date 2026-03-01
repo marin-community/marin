@@ -18,6 +18,7 @@ import threading
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.config import make_local_config
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.controller import (
     Controller as _InnerController,
@@ -30,8 +31,9 @@ from iris.cluster.platform.base import find_free_port
 from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
-from iris.rpc import config_pb2
-from iris.time_utils import Duration
+from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import Duration, ExponentialBackoff
 
 
 def create_local_autoscaler(
@@ -216,3 +218,55 @@ class LocalController:
 
     def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
         return "(local controller — no startup logs)"
+
+
+def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
+    """Build a fully-configured IrisClusterConfig for local execution.
+
+    Creates a minimal base config and transforms it via make_local_config()
+    to ensure local defaults (fast autoscaler timings, etc.) are applied
+    consistently from config.py.
+    """
+    base_config = config_pb2.IrisClusterConfig()
+
+    sg = config_pb2.ScaleGroupConfig(
+        name="local-cpu",
+        min_slices=1,
+        max_slices=max_workers,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        num_vms=1,
+        resources=config_pb2.ScaleGroupResources(
+            cpu_millicores=8000,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=50 * 1024**3,
+            gpu_count=0,
+            tpu_count=0,
+        ),
+    )
+    base_config.scale_groups["local-cpu"].CopyFrom(sg)
+
+    return make_local_config(base_config)
+
+
+def wait_for_worker_registration(controller_address: str, timeout: float = 10.0) -> None:
+    """Poll the controller until at least one worker has registered.
+
+    Args:
+        controller_address: Address of the controller to poll.
+        timeout: Maximum time to wait in seconds.
+
+    Raises:
+        TimeoutError: If no worker registers within the timeout.
+    """
+    temp_client = ControllerServiceClientSync(
+        address=controller_address,
+        timeout_ms=30000,
+    )
+    try:
+        ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
+            lambda: bool(temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers),
+            timeout=Duration.from_seconds(timeout),
+            error_message="Worker failed to register with controller",
+        )
+    finally:
+        temp_client.close()

@@ -33,10 +33,14 @@ from iris.cluster.client import (
     BundleCreator,
     ClusterClient,
     JobInfo,
-    LocalClusterClient,
     RemoteClusterClient,
     get_job_info,
     resolve_job_user,
+)
+from iris.cluster.controller.local import (
+    LocalController,
+    make_local_cluster_config,
+    wait_for_worker_registration,
 )
 from iris.cluster.types import (
     Constraint,
@@ -486,16 +490,23 @@ class IrisClient:
                 print(entry.data)
     """
 
-    def __init__(self, cluster: ClusterClient, namespace: Namespace = Namespace("")):
+    def __init__(
+        self,
+        cluster: ClusterClient,
+        namespace: Namespace = Namespace(""),
+        controller: LocalController | None = None,
+    ):
         """Initialize IrisClient with a cluster client.
 
         Prefer using factory methods (local(), remote()) over direct construction.
 
         Args:
-            cluster: Low-level cluster client (LocalClusterClient or RemoteClusterClient)
+            cluster: Low-level cluster client (RemoteClusterClient)
+            controller: Optional LocalController to manage lifecycle for local mode.
         """
         self._cluster_client = cluster
         self._namespace = namespace
+        self._controller = controller
 
     @classmethod
     def local(cls, config: LocalClientConfig | None = None) -> "IrisClient":
@@ -505,11 +516,15 @@ class IrisClient:
             config: Configuration for local execution
 
         Returns:
-            IrisClient wrapping LocalClusterClient
+            IrisClient wrapping a RemoteClusterClient connected to a local controller.
         """
         cfg = config or LocalClientConfig()
-        cluster = LocalClusterClient.create(max_workers=cfg.max_workers)
-        return cls(cluster)
+        config_proto = make_local_cluster_config(cfg.max_workers)
+        controller = LocalController(config_proto)
+        address = controller.start()
+        wait_for_worker_registration(address)
+        cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
+        return cls(cluster, controller=controller)
 
     @classmethod
     def remote(
@@ -835,12 +850,14 @@ class IrisClient:
         return result
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the client.
+        """Shutdown the client and, in local mode, the controller.
 
         Args:
             wait: If True, wait for pending jobs to complete (local mode only)
         """
         self._cluster_client.shutdown(wait=wait)
+        if self._controller is not None:
+            self._controller.stop()
 
 
 @dataclass
