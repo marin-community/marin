@@ -36,6 +36,7 @@ from iris.cluster.platform._worker_base import RemoteExecWorkerBase
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
+    Labels,
     PlatformError,
     SliceStatus,
     WorkerStatus,
@@ -128,6 +129,7 @@ class ManualSliceHandle:
         self._labels = _labels
         self._created_at = _created_at
         self._label_prefix = _label_prefix
+        self._iris_labels = Labels(_label_prefix)
         self._ssh_connections = _ssh_connections
         self._on_terminate = _on_terminate
         self._terminated = False
@@ -147,7 +149,7 @@ class ManualSliceHandle:
 
     @property
     def scale_group(self) -> str:
-        return self._labels.get(f"{self._label_prefix}-scale-group", "")
+        return self._labels.get(self._iris_labels.iris_scale_group, "")
 
     @property
     def labels(self) -> dict[str, str]:
@@ -214,12 +216,16 @@ class ManualPlatform:
         hosts: list[str] | None = None,
     ):
         self._label_prefix = label_prefix
+        self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._all_hosts = list(hosts or [])
         self._available_hosts: set[str] = set(self._all_hosts)
         self._allocated_hosts: set[str] = set()
         self._slices: dict[str, ManualSliceHandle] = {}
         self._vms: dict[str, ManualStandaloneWorkerHandle] = {}
+
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
 
     def create_vm(self, config: config_pb2.VmConfig) -> ManualStandaloneWorkerHandle:
         """Allocate a host from the pool for a standalone VM (e.g., controller)."""
@@ -257,11 +263,11 @@ class ManualPlatform:
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> ManualSliceHandle:
         """Allocate hosts from the pool for a slice.
 
-        When bootstrap_config is provided, spawns a background thread that runs
+        When worker_config is provided, spawns a background thread that runs
         the bootstrap script on each worker. The handle's describe() composites
         bootstrap state with the base state.
         """
@@ -297,15 +303,15 @@ class ManualPlatform:
             _label_prefix=self._label_prefix,
             _ssh_connections=ssh_connections,
             _on_terminate=on_terminate,
-            _bootstrapping=bootstrap_config is not None,
+            _bootstrapping=worker_config is not None,
         )
         self._slices[slice_id] = handle
 
-        if bootstrap_config:
+        if worker_config:
 
             def _bootstrap_worker():
                 try:
-                    self._run_bootstrap(handle, bootstrap_config)
+                    self._run_bootstrap(handle, worker_config)
                 except Exception as e:
                     logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
                     with handle._bootstrap_lock:
@@ -322,7 +328,7 @@ class ManualPlatform:
     def _run_bootstrap(
         self,
         handle: ManualSliceHandle,
-        bootstrap_config: config_pb2.BootstrapConfig,
+        worker_config: config_pb2.WorkerConfig,
     ) -> None:
         """Bootstrap all workers in the slice in parallel.
 
@@ -340,7 +346,7 @@ class ManualPlatform:
                     raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
                 if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
                     raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-                script = build_worker_bootstrap_script(bootstrap_config, worker.internal_address)
+                script = build_worker_bootstrap_script(worker_config)
                 worker.bootstrap(script)
             except Exception as e:
                 errors.append((worker.worker_id, e))
@@ -438,7 +444,8 @@ class ManualPlatform:
 
     def reload(self, config: config_pb2.IrisClusterConfig) -> str:
         label_prefix = config.platform.label_prefix or "iris"
-        all_slices = self.list_all_slices(labels={f"{label_prefix}-managed": "true"})
+        labels = Labels(label_prefix)
+        all_slices = self.list_all_slices(labels={labels.iris_managed: "true"})
         for s in all_slices:
             logger.info("Terminating slice %s for reload", s.slice_id)
             s.terminate()

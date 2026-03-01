@@ -22,9 +22,14 @@ import pytest
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
+    Labels,
     PlatformError,
 )
-from iris.cluster.platform.coreweave import CoreweavePlatform
+from iris.cluster.platform.coreweave import (
+    _CONTROLLER_CPU_REQUEST,
+    _CONTROLLER_MEMORY_REQUEST,
+    CoreweavePlatform,
+)
 from iris.cluster.platform.factory import create_platform
 from iris.rpc import config_pb2
 
@@ -61,10 +66,10 @@ def _make_slice_config(
     )
 
 
-def _make_bootstrap_config() -> config_pb2.BootstrapConfig:
-    return config_pb2.BootstrapConfig(
+def _make_worker_config() -> config_pb2.WorkerConfig:
+    return config_pb2.WorkerConfig(
         docker_image="ghcr.io/marin-community/iris-worker:latest",
-        worker_port=10001,
+        port=10001,
         cache_dir="/var/cache/iris",
         runtime="kubernetes",
     )
@@ -490,7 +495,7 @@ def test_create_slice_returns_handle_in_creating_state(fake_kubectl: FakeKubectl
     """create_slice() returns a handle immediately in CREATING state."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     status = handle.describe()
@@ -506,7 +511,7 @@ def test_slice_lifecycle_happy_path(fake_kubectl: FakeKubectl):
     """Simulate the full lifecycle: CREATING -> BOOTSTRAPPING -> READY."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
 
@@ -529,7 +534,7 @@ def test_slice_transitions_through_bootstrapping(fake_kubectl: FakeKubectl):
     """Verify the BOOTSTRAPPING state is observed between CREATING and READY."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
 
@@ -551,7 +556,7 @@ def test_slice_failure_on_pod_apply_error(fake_kubectl: FakeKubectl):
     """When Pod apply fails, handle transitions to FAILED."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     # Fail on the first apply (which will be the Pod apply)
     fake_kubectl.set_failure("apply", "node provisioning failed")
@@ -572,7 +577,7 @@ def test_list_slices_by_label(fake_kubectl: FakeKubectl):
 
     handles = platform.list_slices(
         zones=["LGA1"],
-        labels={"iris-scale-group": "h100-8x"},
+        labels={Labels("iris").iris_scale_group: "h100-8x"},
     )
     assert len(handles) == 1
     assert handles[0].slice_id == "iris-h100-8x-1000"
@@ -588,11 +593,12 @@ def test_list_all_slices(fake_kubectl: FakeKubectl):
     _seed_worker_pod(fake_kubectl, "iris-a100-4x-2000", "a100-4x")
 
     # Add a non-worker Pod that should be ignored
+    iris_labels = Labels("iris")
     fake_kubectl._pods["some-other-pod"] = {
         "metadata": {
             "name": "some-other-pod",
             "namespace": "iris",
-            "labels": {"iris-managed": "true"},
+            "labels": {iris_labels.iris_managed: "true"},
         },
         "spec": {},
         "status": {"phase": "Running", "podIP": "10.0.0.99", "conditions": []},
@@ -632,12 +638,12 @@ def test_discover_controller_defaults():
     platform.shutdown()
 
 
-def test_create_slice_requires_bootstrap_config(fake_kubectl: FakeKubectl):
-    """create_slice() raises ValueError when bootstrap_config is not provided."""
+def test_create_slice_requires_worker_config(fake_kubectl: FakeKubectl):
+    """create_slice() raises ValueError when worker_config is not provided."""
     platform = _make_platform()
     config = _make_slice_config()
 
-    with pytest.raises(ValueError, match="bootstrap_config is required"):
+    with pytest.raises(ValueError, match="worker_config is required"):
         platform.create_slice(config)
     platform.shutdown()
 
@@ -646,7 +652,7 @@ def test_terminate_deletes_pod_only(fake_kubectl: FakeKubectl):
     """terminate() deletes the Pod but does not touch NodePools."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     slice_id = handle.slice_id
@@ -674,7 +680,7 @@ def test_worker_handle_status(fake_kubectl: FakeKubectl):
     """CoreweaveWorkerHandle.status() maps Pod phase to CloudWorkerState."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
@@ -706,7 +712,7 @@ def test_run_command_on_line_streams_output(fake_kubectl: FakeKubectl):
     """run_command() with on_line streams output line-by-line via Popen."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
@@ -739,9 +745,10 @@ def test_node_selector_uses_label_override_not_name_prefix(fake_kubectl: FakeKub
     platform = _make_platform()
     # Simulate what prepare_slice_config does: name_prefix = "iris-h100_8x"
     # but labels override iris-scale-group = "h100_8x" (the bare scale group name).
+    iris_labels = Labels("iris")
     config = _make_slice_config(name_prefix="iris-h100_8x")
-    config.labels["iris-scale-group"] = "h100_8x"
-    bootstrap = _make_bootstrap_config()
+    config.labels[iris_labels.iris_scale_group] = "h100_8x"
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     assert handle.scale_group == "h100_8x"
@@ -750,7 +757,7 @@ def test_node_selector_uses_label_override_not_name_prefix(fake_kubectl: FakeKub
 
     pod_name = f"iris-worker-{handle.slice_id}"
     node_selector = fake_kubectl._pods[pod_name]["spec"]["nodeSelector"]
-    assert node_selector == {"iris-scale-group": "h100_8x"}
+    assert node_selector == {iris_labels.iris_scale_group: "h100_8x"}
     platform.shutdown()
 
 
@@ -780,11 +787,12 @@ def test_list_slices_only_returns_worker_pods(fake_kubectl: FakeKubectl):
     _seed_worker_pod(fake_kubectl, "iris-h100-8x-1000", "h100-8x")
 
     # Non-worker Pod (e.g. controller or auxiliary)
+    iris_labels = Labels("iris")
     fake_kubectl._pods["iris-controller-abc"] = {
         "metadata": {
             "name": "iris-controller-abc",
             "namespace": "iris",
-            "labels": {"iris-managed": "true"},
+            "labels": {iris_labels.iris_managed: "true"},
         },
         "spec": {},
         "status": {"phase": "Running", "podIP": "10.0.0.99", "conditions": []},
@@ -888,10 +896,11 @@ def test_ensure_nodepools_deletes_stale_pools(fake_kubectl: FakeKubectl):
     cluster_config = _make_cluster_config()
 
     # Pre-create a stale NodePool from a previous config (e.g. renamed scale group)
+    iris_labels = Labels("iris")
     fake_kubectl._nodepools["iris-old-gpu-pool"] = {
         "metadata": {
             "name": "iris-old-gpu-pool",
-            "labels": {"iris-managed": "true", "iris-scale-group": "old-gpu-pool"},
+            "labels": {iris_labels.iris_managed: "true", iris_labels.iris_scale_group: "old-gpu-pool"},
         },
         "spec": {"instanceType": "gd-8xh100ib-i128"},
         "status": {"readyNodes": 0, "conditions": []},
@@ -997,9 +1006,10 @@ def test_start_controller_creates_all_resources(fake_kubectl: FakeKubectl):
     assert "iris-controller-svc" in fake_kubectl._services
 
     # Verify Deployment nodeSelector targets the configured scale group
+    iris_labels = Labels("iris")
     deploy_spec = fake_kubectl._deployments["iris-controller"]["spec"]
     node_selector = deploy_spec["template"]["spec"]["nodeSelector"]
-    assert node_selector == {"iris-scale-group": "cpu-erapids"}
+    assert node_selector == {iris_labels.iris_scale_group: "cpu-erapids"}
 
     # Verify controller uses S3 env vars (no GCS credentials)
     container = deploy_spec["template"]["spec"]["containers"][0]
@@ -1007,6 +1017,8 @@ def test_start_controller_creates_all_resources(fake_kubectl: FakeKubectl):
     assert "AWS_ACCESS_KEY_ID" in env_names
     assert "AWS_SECRET_ACCESS_KEY" in env_names
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_names
+    assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
+    assert container["resources"]["limits"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
 
     t.join(timeout=5)
     platform.shutdown()
@@ -1178,14 +1190,14 @@ def test_worker_pod_has_gpu_resource_limits_with_docker_runtime(fake_kubectl: Fa
     """Worker Pods request nvidia.com/gpu resource limits when runtime is docker."""
     platform = _make_platform()
     config = _make_slice_config(gpu_count=8)
-    bootstrap = config_pb2.BootstrapConfig(
+    wc = config_pb2.WorkerConfig(
         docker_image="ghcr.io/marin-community/iris-worker:latest",
-        worker_port=10001,
+        port=10001,
         cache_dir="/var/cache/iris",
         runtime="docker",
     )
 
-    handle = platform.create_slice(config, bootstrap)
+    handle = platform.create_slice(config, wc)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
     pod_name = f"iris-worker-{handle.slice_id}"
@@ -1199,7 +1211,7 @@ def test_worker_pod_no_gpu_limits_with_kubernetes_runtime(fake_kubectl: FakeKube
     """With kubernetes runtime, worker Pods must not request GPU resources (task Pods claim them)."""
     platform = _make_platform()
     config = _make_slice_config(gpu_count=8)
-    bootstrap = _make_bootstrap_config()  # runtime="kubernetes"
+    bootstrap = _make_worker_config()  # runtime="kubernetes"
 
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
@@ -1214,7 +1226,7 @@ def test_worker_pod_no_gpu_limits_when_zero(fake_kubectl: FakeKubectl):
     """Worker Pods omit nvidia.com/gpu when gpu_count is 0 (CPU-only)."""
     platform = _make_platform()
     config = _make_slice_config(gpu_count=0)
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
@@ -1230,7 +1242,7 @@ def test_worker_pod_has_s3_env_vars(fake_kubectl: FakeKubectl):
     platform = _make_platform()
     platform._s3_enabled = True
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
 
@@ -1533,17 +1545,17 @@ def _make_cluster_config_with_workers(
     service_name: str = "iris-controller-svc",
     bundle_prefix: str = "gs://test-bucket/bundles",
 ) -> config_pb2.IrisClusterConfig:
-    """Build a cluster config with scale_groups and bootstrap config for reload tests."""
+    """Build a cluster config with scale_groups and worker config for reload tests."""
     config = _make_cluster_config(
         port=port,
         service_name=service_name,
         image=controller_image,
         bundle_prefix=bundle_prefix,
     )
-    config.defaults.bootstrap.CopyFrom(
-        config_pb2.BootstrapConfig(
+    config.defaults.worker.CopyFrom(
+        config_pb2.WorkerConfig(
             docker_image=worker_image,
-            worker_port=10001,
+            port=10001,
             cache_dir="/var/cache/iris",
             runtime="kubernetes",
         )
@@ -1575,15 +1587,16 @@ def _seed_worker_pod(
     ready: bool = True,
 ) -> None:
     """Inject a managed worker Pod into FakeKubectl state."""
+    pod_labels = Labels(label_prefix)
     pod_name = f"iris-worker-{slice_id}"
     fake_kubectl._pods[pod_name] = {
         "metadata": {
             "name": pod_name,
             "namespace": "iris",
             "labels": {
-                f"{label_prefix}-managed": "true",
-                f"{label_prefix}-scale-group": scale_group,
-                f"{label_prefix}-slice-id": slice_id,
+                pod_labels.iris_managed: "true",
+                pod_labels.iris_scale_group: scale_group,
+                pod_labels.iris_slice_id: slice_id,
             },
             "creationTimestamp": "2026-02-18T00:00:00Z",
         },

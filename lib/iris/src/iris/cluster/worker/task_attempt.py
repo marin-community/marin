@@ -18,7 +18,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from iris.chaos import chaos, chaos_raise
-from iris.cluster.runtime.types import ContainerConfig, ContainerHandle, ContainerRuntime, RuntimeLogReader
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerErrorKind,
+    ContainerHandle,
+    ContainerPhase,
+    ContainerRuntime,
+    RuntimeLogReader,
+)
 from google.protobuf import json_format
 
 from iris.cluster.types import (
@@ -206,6 +213,7 @@ class TaskAttempt:
         controller_address: str | None,
         default_task_env: dict[str, str],
         default_task_image: str | None,
+        resolve_image: Callable[[str], str],
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
         log_sink: LogSink,
@@ -222,6 +230,8 @@ class TaskAttempt:
             controller_address: Controller address for env injection
             default_task_env: Worker-level default env vars injected into task containers
             default_task_image: Fully-qualified task container image from cluster config
+            resolve_image: Resolves image tags for the current platform
+                (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
             port_allocator: Port allocator for retry logic
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
@@ -234,6 +244,7 @@ class TaskAttempt:
         self._controller_address = controller_address
         self._default_task_env = default_task_env
         self._default_task_image = default_task_image
+        self._resolve_image_fn = resolve_image
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
@@ -422,6 +433,7 @@ class TaskAttempt:
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
+        self._building_start_monotonic = time.monotonic()
         self._report_state()  # Report BUILDING state to controller
 
         download_start = time.monotonic()
@@ -459,7 +471,8 @@ class TaskAttempt:
         """
         if not self._default_task_image:
             raise ValueError("No task image configured. Set defaults.default_task_image in cluster config.")
-        self.image_tag = self._default_task_image
+        self.image_tag = self._resolve_image_fn(self._default_task_image)
+
         logger.info("Using task image %s for task %s", self.image_tag, self.task_id)
 
     def _create_container(self) -> None:
@@ -516,6 +529,7 @@ class TaskAttempt:
             timeout_seconds=timeout_seconds,
             mounts=mounts,
             task_id=self.task_id.to_wire(),
+            attempt_id=self.attempt_id,
             job_id=job_id.to_wire(),
             worker_metadata=self._worker_metadata,
         )
@@ -549,14 +563,8 @@ class TaskAttempt:
             logger.info("Build phase completed for task %s", self.task_id)
 
     def _run_container(self) -> None:
-        """Start the main command during RUNNING state.
-
-        Non-blocking - returns immediately after starting.
-        """
+        """Start the container. Task stays in BUILDING until _monitor() confirms readiness."""
         assert self._container_handle is not None
-
-        self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
-        self._report_state()
 
         self._container_handle.run()
         logger.info(
@@ -612,7 +620,14 @@ class TaskAttempt:
 
             # Check container status
             status = handle.status()
-            if not status.running:
+
+            if self.status == cluster_pb2.TASK_STATE_BUILDING and status.phase == ContainerPhase.RUNNING:
+                building_duration = time.monotonic() - self._building_start_monotonic
+                logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
+                self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
+                self._report_state()
+
+            if status.phase == ContainerPhase.STOPPED:
                 logger.info(
                     "Container exited for task %s (container_id=%s, exit_code=%s, error=%s)",
                     self.task_id,
@@ -625,11 +640,10 @@ class TaskAttempt:
 
                 # Container has stopped
                 if status.error:
-                    self.transition_to(
-                        cluster_pb2.TASK_STATE_FAILED,
-                        error=status.error,
-                        exit_code=status.exit_code or -1,
-                    )
+                    failure_state = cluster_pb2.TASK_STATE_FAILED
+                    if status.error_kind == ContainerErrorKind.INFRA_NOT_FOUND:
+                        failure_state = cluster_pb2.TASK_STATE_WORKER_FAILED
+                    self.transition_to(failure_state, error=status.error, exit_code=status.exit_code or -1)
                 elif status.exit_code == 0:
                     self.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:

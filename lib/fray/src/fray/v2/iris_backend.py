@@ -118,16 +118,20 @@ def convert_entrypoint(entrypoint: Entrypoint_v2) -> IrisEntrypoint:
     raise ValueError("Entrypoint must have either callable_entrypoint or binary_entrypoint")
 
 
-def convert_environment(env: EnvironmentConfig | None) -> EnvironmentSpec | None:
+def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | None = None) -> EnvironmentSpec | None:
     """Convert fray v2 EnvironmentConfig to Iris EnvironmentSpec."""
-    if env is None:
+    env_vars = dict(env.env_vars) if env is not None else {}
+    if device is not None:
+        for key, value in device.default_env_vars().items():
+            env_vars.setdefault(key, value)
+    if env is None and not env_vars:
         return None
     from iris.cluster.types import EnvironmentSpec
 
     return EnvironmentSpec(
-        pip_packages=list(env.pip_packages),
-        env_vars=dict(env.env_vars),
-        extras=list(env.extras),
+        pip_packages=list(env.pip_packages) if env is not None else [],
+        env_vars=env_vars,
+        extras=list(env.extras) if env is not None else [],
     )
 
 
@@ -430,7 +434,7 @@ class FrayIrisClient:
 
         iris_resources = convert_resources(request.resources)
         iris_entrypoint = convert_entrypoint(request.entrypoint)
-        iris_environment = convert_environment(request.environment)
+        iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
         # Auto-enable coscheduling for multi-host TPU jobs.

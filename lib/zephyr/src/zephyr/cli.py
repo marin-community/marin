@@ -134,14 +134,14 @@ def run_local(
     main_fn = _load_entry_point(script_path, entry_point)
     sys.argv = [script_path, *script_args]
 
-    with ZephyrContext(
+    ZephyrContext(
         client=client,
         max_workers=config.max_parallelism,
         resources=resources,
         name="cli",
         no_workers_timeout=config.worker_start_timeout,
-    ):
-        main_fn()
+    )
+    main_fn()
 
 
 def run_ray_cluster(

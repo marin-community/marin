@@ -15,7 +15,7 @@ from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.types import ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import ContainerErrorKind, ContainerPhase, ContainerStats, ContainerStatus
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
@@ -111,8 +111,8 @@ def create_mock_container_handle(
 
     if status_sequence is None:
         status_sequence = [
-            ContainerStatus(running=True),
-            ContainerStatus(running=False, exit_code=0),
+            ContainerStatus(phase=ContainerPhase.RUNNING),
+            ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=0),
         ]
 
     call_count = [0]
@@ -213,7 +213,7 @@ def create_run_task_request(
         dockerfile="FROM python:3.11-slim\nRUN echo test",
     )
 
-    resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)
+    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3)
 
     request = cluster_pb2.Worker.RunTaskRequest(
         task_id=task_id,
@@ -260,7 +260,9 @@ def test_task_with_ports(worker):
 def test_task_failure_on_nonzero_exit(worker, mock_runtime):
     """Test task fails when container exits with non-zero code."""
     # Update the mock handle's status to return failure immediately
-    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(running=False, exit_code=1)])
+    mock_handle = create_mock_container_handle(
+        status_sequence=[ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=1)]
+    )
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
@@ -280,8 +282,8 @@ def test_task_failure_on_error(worker, mock_runtime):
     # Update the mock handle's status to return error after first poll
     mock_handle = create_mock_container_handle(
         status_sequence=[
-            ContainerStatus(running=True),
-            ContainerStatus(running=False, exit_code=1, error="Container crashed"),
+            ContainerStatus(phase=ContainerPhase.RUNNING),
+            ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=1, error="Container crashed"),
         ]
     )
     mock_runtime.create_container = Mock(return_value=mock_handle)
@@ -295,6 +297,31 @@ def test_task_failure_on_error(worker, mock_runtime):
     final_task = worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
     assert final_task.error == "Container crashed"
+
+
+def test_task_infra_not_found_error_maps_to_worker_failed(worker, mock_runtime):
+    """Infrastructure disappearance should consume preemption budget, not failure budget."""
+    mock_handle = create_mock_container_handle(
+        status_sequence=[
+            ContainerStatus(
+                phase=ContainerPhase.STOPPED,
+                exit_code=1,
+                error="Task pod not found after retry window: name=iris-task-abc, namespace=iris",
+                error_kind=ContainerErrorKind.INFRA_NOT_FOUND,
+            )
+        ]
+    )
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    request = create_run_task_request()
+    task_id = worker.submit_task(request)
+
+    task = worker.get_task(task_id)
+    task.thread.join(timeout=10.0)
+
+    final_task = worker.get_task(task_id)
+    assert final_task.status == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert "Task pod not found" in (final_task.error or "")
 
 
 def test_task_exception_handling(worker, mock_runtime):
@@ -326,7 +353,9 @@ def test_list_tasks(worker):
 def test_kill_running_task(worker, mock_runtime):
     """Test killing a running task with graceful timeout."""
     # Create a handle that stays running until killed
-    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(running=True)] * 100)  # Stay running
+    mock_handle = create_mock_container_handle(
+        status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100
+    )  # Stay running
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
@@ -354,7 +383,9 @@ def test_kill_running_task(worker, mock_runtime):
 def test_new_attempt_supersedes_old(worker, mock_runtime):
     """New attempt for same task_id kills the old attempt and starts a new one."""
     # Create a handle that stays running until killed
-    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(running=True)] * 100)  # Stay running
+    mock_handle = create_mock_container_handle(
+        status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100
+    )  # Stay running
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request_0 = create_run_task_request(task_id=JobName.root("retry-task").task(0).to_wire(), attempt_id=0)
@@ -394,7 +425,9 @@ def test_new_attempt_supersedes_old(worker, mock_runtime):
 def test_duplicate_attempt_rejected(worker, mock_runtime):
     """Same attempt_id for an existing non-terminal task is rejected."""
     # Create a handle that stays running until killed
-    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(running=True)] * 100)  # Stay running
+    mock_handle = create_mock_container_handle(
+        status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100
+    )  # Stay running
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request(task_id=JobName.root("dup-task").task(0).to_wire(), attempt_id=0)
@@ -490,7 +523,7 @@ def test_env_merge_precedence(mock_bundle_cache, mock_runtime, tmp_path):
             env_vars={"SHARED_KEY": "job_value", "JOB_ONLY": "from_job"},
         ),
         bundle_gcs_path="gs://bucket/bundle.zip",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
     )
 
     task_id = w.submit_task(request)
@@ -621,7 +654,7 @@ def create_integration_run_task_request(bundle_path: str, task_id: str):
         entrypoint=entrypoint.to_proto(),
         bundle_gcs_path=bundle_path,
         environment=cluster_pb2.EnvironmentConfig(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
     )
 
 

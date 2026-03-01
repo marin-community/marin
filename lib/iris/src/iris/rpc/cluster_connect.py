@@ -58,10 +58,10 @@ class ControllerService(Protocol):
     async def get_autoscaler_status(self, request: cluster__pb2.Controller.GetAutoscalerStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetAutoscalerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_vm_logs(self, request: cluster__pb2.Controller.GetVmLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetVmLogsResponse:
+    async def get_transactions(self, request: cluster__pb2.Controller.GetTransactionsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTransactionsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_transactions(self, request: cluster__pb2.Controller.GetTransactionsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTransactionsResponse:
+    async def get_cluster_summary(self, request: cluster__pb2.Controller.GetClusterSummaryRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetClusterSummaryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
@@ -71,6 +71,9 @@ class ControllerService(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_worker_status(self, request: cluster__pb2.Controller.GetWorkerStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetWorkerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -219,16 +222,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     ),
                     function=svc.get_autoscaler_status,
                 ),
-                "/iris.cluster.ControllerService/GetVmLogs": Endpoint.unary(
-                    method=MethodInfo(
-                        name="GetVmLogs",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.GetVmLogsRequest,
-                        output=cluster__pb2.Controller.GetVmLogsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_vm_logs,
-                ),
                 "/iris.cluster.ControllerService/GetTransactions": Endpoint.unary(
                     method=MethodInfo(
                         name="GetTransactions",
@@ -238,6 +231,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_transactions,
+                ),
+                "/iris.cluster.ControllerService/GetClusterSummary": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetClusterSummary",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.GetClusterSummaryRequest,
+                        output=cluster__pb2.Controller.GetClusterSummaryResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_cluster_summary,
                 ),
                 "/iris.cluster.ControllerService/GetTaskLogs": Endpoint.unary(
                     method=MethodInfo(
@@ -268,6 +271,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.profile_task,
+                ),
+                "/iris.cluster.ControllerService/GetWorkerStatus": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetWorkerStatus",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.GetWorkerStatusRequest,
+                        output=cluster__pb2.Controller.GetWorkerStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_worker_status,
                 ),
             },
             interceptors=interceptors,
@@ -561,26 +574,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_vm_logs(
-        self,
-        request: cluster__pb2.Controller.GetVmLogsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Controller.GetVmLogsResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetVmLogs",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.GetVmLogsRequest,
-                output=cluster__pb2.Controller.GetVmLogsResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     async def get_transactions(
         self,
         request: cluster__pb2.Controller.GetTransactionsRequest,
@@ -595,6 +588,26 @@ class ControllerServiceClient(ConnectClient):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.GetTransactionsRequest,
                 output=cluster__pb2.Controller.GetTransactionsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_cluster_summary(
+        self,
+        request: cluster__pb2.Controller.GetClusterSummaryRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.GetClusterSummaryResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetClusterSummary",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.GetClusterSummaryRequest,
+                output=cluster__pb2.Controller.GetClusterSummaryResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -655,6 +668,26 @@ class ControllerServiceClient(ConnectClient):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.ProfileTaskRequest,
                 output=cluster__pb2.ProfileTaskResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_worker_status(
+        self,
+        request: cluster__pb2.Controller.GetWorkerStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.GetWorkerStatusResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetWorkerStatus",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.GetWorkerStatusRequest,
+                output=cluster__pb2.Controller.GetWorkerStatusResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -943,15 +976,17 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_autoscaler_status(self, request: cluster__pb2.Controller.GetAutoscalerStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetAutoscalerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_vm_logs(self, request: cluster__pb2.Controller.GetVmLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetVmLogsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_transactions(self, request: cluster__pb2.Controller.GetTransactionsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTransactionsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_cluster_summary(self, request: cluster__pb2.Controller.GetClusterSummaryRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetClusterSummaryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_process_logs(self, request: cluster__pb2.Controller.GetProcessLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetProcessLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_worker_status(self, request: cluster__pb2.Controller.GetWorkerStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetWorkerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1099,16 +1134,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.get_autoscaler_status,
                 ),
-                "/iris.cluster.ControllerService/GetVmLogs": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="GetVmLogs",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.GetVmLogsRequest,
-                        output=cluster__pb2.Controller.GetVmLogsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_vm_logs,
-                ),
                 "/iris.cluster.ControllerService/GetTransactions": EndpointSync.unary(
                     method=MethodInfo(
                         name="GetTransactions",
@@ -1118,6 +1143,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_transactions,
+                ),
+                "/iris.cluster.ControllerService/GetClusterSummary": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetClusterSummary",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.GetClusterSummaryRequest,
+                        output=cluster__pb2.Controller.GetClusterSummaryResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_cluster_summary,
                 ),
                 "/iris.cluster.ControllerService/GetTaskLogs": EndpointSync.unary(
                     method=MethodInfo(
@@ -1148,6 +1183,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.profile_task,
+                ),
+                "/iris.cluster.ControllerService/GetWorkerStatus": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetWorkerStatus",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.GetWorkerStatusRequest,
+                        output=cluster__pb2.Controller.GetWorkerStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_worker_status,
                 ),
             },
             interceptors=interceptors,
@@ -1441,26 +1486,6 @@ class ControllerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
-    def get_vm_logs(
-        self,
-        request: cluster__pb2.Controller.GetVmLogsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Controller.GetVmLogsResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetVmLogs",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.GetVmLogsRequest,
-                output=cluster__pb2.Controller.GetVmLogsResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     def get_transactions(
         self,
         request: cluster__pb2.Controller.GetTransactionsRequest,
@@ -1475,6 +1500,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.GetTransactionsRequest,
                 output=cluster__pb2.Controller.GetTransactionsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_cluster_summary(
+        self,
+        request: cluster__pb2.Controller.GetClusterSummaryRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.GetClusterSummaryResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetClusterSummary",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.GetClusterSummaryRequest,
+                output=cluster__pb2.Controller.GetClusterSummaryResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -1535,6 +1580,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.ProfileTaskRequest,
                 output=cluster__pb2.ProfileTaskResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_worker_status(
+        self,
+        request: cluster__pb2.Controller.GetWorkerStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.GetWorkerStatusResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetWorkerStatus",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.GetWorkerStatusRequest,
+                output=cluster__pb2.Controller.GetWorkerStatusResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

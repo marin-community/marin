@@ -24,20 +24,7 @@ class Scheduler:
     ... self.job_creator.create_job()
 ```
 
-* Tests should test stable behavior, not implementation details.
-
-ABSOLUTELY DO NOT test things that are trivially caught by the type checker.
-Explicitly that means:
-
-- No tests for "constant = constant"
-- No tests for "method exists"
-- No tests for "create an object(x, y, z) and attributes are x, y, z"
-
-These tests have negative value - they make our code more brittle.
-
-Test _stable behavior_ instead. You can use mocks as needed to isolate
-environments (e.g.  mock around a remote API), but prefer "fakes" -- e.g. create
-a real database but with fake data -- when reasonable.
+See [TESTING.md](TESTING.md) for the full testing policy.
 
 ## Documentation
 
@@ -48,16 +35,9 @@ Documentation should be kept up-to-date as code changes. When implementing new f
 
 @README.md - Main overview, CLI reference, and quick start
 
-## Protocols and Testing
+## Operations
 
-Non-trivial public classes should define a protocol which represents their
-_important_ interface characteristics. Use this protocol in type hints for
-when the class is used instead of the concrete class.
-
-Test to this protocol, not the concrete class: the protocol should describe the
-interesting behavior of the class, but not betray the implementation details.
-
-(You may of course _instantiate_ the concrete class for testing.)
+When troubleshooting, monitoring, or deploying a live Iris cluster, read [OPS.md](OPS.md) first.
 
 ## Imports
 
@@ -121,6 +101,7 @@ When adding new modules or significant features:
 | Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
 | Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
 | Original Design | docs/fray-zero.md | Rationale and design decisions |
+| Task States | docs/task-states.md | Task state machine, transitions, retry semantics, dashboard display |
 | CoreWeave Integration | (below) | Platform, runtime, and networking for CoreWeave bare metal |
 
 ### CoreWeave Integration
@@ -167,11 +148,10 @@ it as `/var/lib/containerd`, `/var/lib/kubelet`, `/opt`, etc. The `cache_dir` mu
 NVMe (e.g. `/mnt/local/iris-cache`) — the default `/var/cache/iris` lands on the tiny RAM disk
 and will fill up immediately when installing CUDA packages.
 
-**K8s manifests** (`infra/coreweave/k8s/`):
-- `namespace.yaml`, `service-account.yaml`, `cluster-role.yaml`, `cluster-role-binding.yaml` — RBAC/namespace prerequisites (one-time operator setup)
-
-Controller lifecycle resources (ConfigMap, shared NodePools, Deployment, Service) are created
-automatically by `iris cluster start` via `CoreweavePlatform.start_controller()`.
+All K8s resources (RBAC, ConfigMap, shared NodePools, Deployment, Service) are created
+automatically by `iris cluster start` via `CoreweavePlatform.start_controller()`. RBAC
+manifests (Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding) are defined in
+`CoreweavePlatform.ensure_rbac()` — no separate YAML files needed.
 
 ## Key Modules
 
@@ -209,14 +189,28 @@ in any zone and serve workers across all regions.
 
 **When changing the controller zone**, update in `examples/marin.yaml`:
 - `controller.gcp.zone` — the GCE zone
-- `controller.image` and `defaults.bootstrap.docker_image` — use a registry in
-  the same region (see below). `cluster start` auto-builds and pushes images to
-  the region parsed from the image tag, so no manual push is needed.
+- Image tags use `ghcr.io/marin-community/...` format. The controller and
+  autoscaler automatically rewrite these to AR remote repos for the VM's
+  continent at boot time.
 
-**Docker registries** are configured in `platform/bootstrap.py` (both worker and
-controller bootstrap scripts). If you add a new region's Artifact Registry, add
-it to both `gcloud auth configure-docker` lines. List existing repos with:
-`gcloud artifacts repositories list --project=hai-gcp-models`
+**Docker registries**: Bootstrap scripts in `platform/bootstrap.py` auto-detect
+AR image tags and configure `gcloud auth configure-docker`. AR remote repos
+proxy GHCR — see `docs/image-push.md` for setup.
+
+### Multi-Region Image Push/Pull
+
+Images are pushed only to **GHCR** (`ghcr.io/marin-community/`). GCP VMs pull
+from **Artifact Registry remote repositories** that act as pull-through caches
+for GHCR. See `docs/image-push.md` for full details.
+
+**Push**: `iris build push` and `iris cluster start` push to GHCR only.
+
+**Pull**: The autoscaler and controller bootstrap automatically rewrite GHCR
+image tags to the AR remote repo for the VM's continent:
+- `ghcr.io/org/image:v1` → `us-docker.pkg.dev/project/ghcr-mirror/org/image:v1`
+
+Set `defaults.worker.docker_image` to a `ghcr.io/...` tag. Non-GHCR tags
+(`docker.io`, existing AR tags) pass through unchanged.
 
 **Bundle storage** (`controller.bundle_prefix`) is a GCS URI with no zone
 affinity — globally accessible.
@@ -234,8 +228,14 @@ Iris follows a clean layering architecture:
 - Owns autoscaling logic and scaling group state
 
 **Platform layer** (`cluster/platform/`): Platform abstractions for managing VMs
-- Provides VM lifecycle management (GCP, manual, local, CoreWeave)
 - Does NOT depend on controller layer
+- Four platform implementations with independent launch/teardown paths:
+  - `gcp.py` — GCP TPU/VM slices, SSH bootstrap
+  - `coreweave.py` — CoreWeave CKS, Kubernetes Pods on shared NodePools
+  - `manual.py` — Pre-existing hosts, SSH bootstrap
+  - `local.py` — Local development, in-process workers
+- Changes to shared interfaces (worker CLI, bootstrap flow, proto schemas)
+  must be applied to all four platforms
 
 **Cluster layer** (`cluster/`): High-level orchestration
 - `connect_cluster()` and `stop_all()` free functions for cluster lifecycle
@@ -286,59 +286,102 @@ The controller and worker dashboards are client-side SPAs using Preact + HTM.
 ```
 src/iris/cluster/static/
 ├── controller/          # Controller dashboard
-│   ├── app.js           # Main app (tabs, state, data fetching)
+│   ├── app.js           # Main app (tabs, cluster summary, data fetching)
 │   ├── jobs-tab.js      # Jobs table with pagination/sorting/tree view
 │   ├── job-detail.js    # Job detail page with task list
+│   ├── fleet-tab.js     # Fleet tab: worker health table with inline gauges
+│   ├── worker-detail.js # Worker detail page: live resource gauges, task history, logs
 │   ├── workers-tab.js   # Workers table
 │   └── vms-tab.js       # VM management table
-├── shared/              # Shared utilities
+├── shared/              # Shared utilities and components
+│   ├── components.js    # Reusable Preact components (MetricCard, Gauge, etc.)
 │   ├── rpc.js           # Connect RPC client wrapper
-│   ├── utils.js         # Formatting (dates, durations)
-│   └── styles.css       # Consolidated CSS
-├── vendor/              # Third-party ES modules
+│   ├── utils.js         # Formatting (dates, durations, bytes)
+│   └── styles.css       # Consolidated CSS with design tokens
+├── vendor/              # Third-party ES modules (vendored, not npm)
 │   ├── preact.mjs       # UI framework
 │   └── htm.mjs          # HTML template literals
 └── worker/              # Worker dashboard components
+    ├── app.js            # Worker dashboard: task list, aggregate resources
+    └── task-detail.js    # Task detail: resource usage, auto-refresh
 ```
 
 **Key patterns:**
-- All data fetched via Connect RPC (e.g., `ListJobs`, `GetJobStatus`)
-- No REST endpoints - RPC only
-- State management with Preact hooks (`useState`, `useEffect`)
+- All data fetched via Connect RPC (e.g., `ListJobs`, `GetWorkerStatus`)
+- No REST endpoints — RPC only. New dashboard features MUST have a backing RPC.
+- State management with Preact hooks (`useState`, `useEffect`, `useCallback`)
 - HTML templates via `htm.bind(h)` tagged template literals
+- Auto-refresh: active pages poll their RPC endpoint (5s for worker/task detail, 30s for controller overview)
 - Jobs displayed as a hierarchical tree based on name structure
+
+#### Design System
+
+The dashboard uses CSS custom properties (design tokens) defined in `:root` at the
+top of `shared/styles.css`. All new styles should reference these tokens rather
+than hard-coding colors, fonts, or shadows.
+
+| Token family     | Examples                                    | Purpose                         |
+|------------------|---------------------------------------------|---------------------------------|
+| `--color-*`      | `--color-accent`, `--color-danger`          | Semantic colors                 |
+| `--font-*`       | `--font-sans`, `--font-mono`                | Typography stacks               |
+| `--radius-*`     | `--radius-sm`, `--radius-md`                | Border radius scale             |
+| `--shadow-*`     | `--shadow-sm`, `--shadow-md`                | Elevation / depth               |
+
+#### Shared Components (`shared/components.js`)
+
+| Component        | Purpose                                               |
+|------------------|-------------------------------------------------------|
+| `MetricCard`     | Prominent number + label tile (e.g., "3 Running Tasks") |
+| `Gauge`          | Horizontal bar gauge with ok/warning/danger thresholds |
+| `InlineGauge`    | Compact gauge for use inside table cells               |
+| `ResourceSection`| Titled wrapper for a group of Gauge bars               |
+| `InfoRow`        | Simple label/value pair                                |
+| `InfoCard`       | Card container with title                              |
+
+When adding new dashboard components, add them to `shared/components.js` if
+they are reusable across pages. Page-specific components (e.g., `StatusBadge`)
+live in the page's own JS file.
+
+#### Resource Display Conventions
+
+- **Live utilization** from heartbeat snapshots (`WorkerResourceSnapshot`) is shown
+  as Gauge bars with ok/warning/danger color thresholds (70%/90% by default).
+- **Static capacity** from worker metadata (CPU cores, total memory) is shown as
+  MetricCard tiles or Field label/value pairs.
+- When live data is available, prefer gauges over raw numbers. Fall back to static
+  capacity display when no heartbeat snapshots exist yet.
+- Use `formatBytes()` for human-readable byte values. Use `formatRelativeTime()`
+  for timestamps.
+
+#### Navigation Flow
+
+```
+Controller Dashboard (/)
+  ├── Jobs tab (default) → click job row → /job/{jobId}
+  │     └── Job Detail → task list, task logs, resource usage
+  ├── Fleet tab → click worker row → /worker/{id}
+  │     └── Worker Detail → identity, live resources, task history, logs
+  ├── Endpoints tab
+  ├── Autoscaler tab
+  ├── Logs tab
+  └── Transactions tab
+
+Worker Dashboard (:worker_port/)
+  ├── Task list with aggregate resource summary
+  └── Click task → /task/{taskId} → Task Detail (auto-refreshing)
+```
 
 **When modifying the dashboard:**
 1. Run dashboard tests: `uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="`
-2. Ensure any new UI features have corresponding RPC endpoints
+2. New UI features MUST have a corresponding RPC endpoint — no internal API calls
 3. Follow existing component patterns (functional components, hooks)
+4. Preserve CSS class names that E2E tests rely on (`.worker-detail-grid`, `.tab-btn`, `#log-container`, etc.)
+5. Use design tokens from `:root` — do not hard-code colors or fonts
 
 ## Testing
 
-All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
-Tests use three core fixtures:
-
-- `cluster`: Booted local cluster with `IrisClient` and RPC access
-- `page`: Playwright page pointed at the dashboard (request only when needed)
-- `screenshot`: Capture labeled screenshots to `IRIS_SCREENSHOT_DIR`
-
-Chaos injection is auto-reset between tests. Call `enable_chaos()` directly.
-Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
-
-Run all E2E tests:
-    uv run pytest lib/iris/tests/e2e/ -m e2e -o "addopts="
-
-Run E2E tests without Docker (fast):
-    uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker" -o "addopts="
-
-Run Docker-only tests:
-    uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
-
-Run dashboard tests with saved screenshots:
-    IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_dashboard.py -o "addopts="
-
-When modifying the dashboard:
-    uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="
+See [TESTING.md](TESTING.md) for the full testing policy, E2E fixtures,
+and run commands.
 
 ## Debugging Container Failures
 

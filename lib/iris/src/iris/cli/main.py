@@ -65,6 +65,7 @@ def require_controller_url(ctx: click.Context) -> str:
 
         iris_config = IrisConfig(config)
         platform = iris_config.platform()
+        ctx.obj["platform"] = platform
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
             from iris.cluster.controller.local import LocalController
@@ -108,6 +109,7 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     """Iris cluster management."""
     ctx.ensure_object(dict)
     ctx.obj["traceback"] = show_traceback
+    ctx.obj["verbose"] = verbose
 
     if verbose:
         configure_logging(level=_logging_module.DEBUG)

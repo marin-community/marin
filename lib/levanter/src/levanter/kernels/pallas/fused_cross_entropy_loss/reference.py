@@ -23,7 +23,8 @@ def linear_softmax_cross_entropy_loss_reference(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     block_sizes: Optional[object] = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Reference loss + logsumexp for linear softmax cross-entropy.
 
     Args:
@@ -53,6 +54,9 @@ def linear_softmax_cross_entropy_loss_reference(
     lse = jax.nn.logsumexp(logits, axis=-1)
     label_logits = logits[jnp.arange(logits.shape[0]), labels]
     loss = lse - label_logits
+    if return_argmax:
+        argmax = jnp.argmax(logits, axis=-1).astype(jnp.int32)
+        return loss, lse, argmax
     return loss, lse
 
 
@@ -65,7 +69,8 @@ def linear_softmax_cross_entropy_loss_streaming(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Streaming reference loss + logsumexp without materializing logits."""
 
     if block_size <= 0:
@@ -87,7 +92,10 @@ def linear_softmax_cross_entropy_loss_streaming(
     label_logit_init = jnp.full_like(x.sum(-1), -jnp.inf, dtype=out_dtype)
 
     def body(block_idx, state):
-        logsumexp, label_logit = state
+        if return_argmax:
+            logsumexp, label_logit, best_logits, best_ids = state
+        else:
+            logsumexp, label_logit = state
         start = block_idx * block_size
 
         w_block = jax.lax.dynamic_slice(w, (0, start), (w.shape[0], block_size))
@@ -96,7 +104,6 @@ def linear_softmax_cross_entropy_loss_streaming(
             w_block,
             (((1,), (0,)), ((), ())),
             precision=precision,
-            preferred_element_type=jnp.float32,
         )
         if dtype is not None:
             logits = logits.astype(dtype)
@@ -113,8 +120,24 @@ def linear_softmax_cross_entropy_loss_streaming(
         safe_idx = jnp.where(in_block, label_idx, 0)
         block_label_logit = logits[jnp.arange(b_dim), safe_idx]
         label_logit = jnp.where(in_block, block_label_logit, label_logit)
+        if return_argmax:
+            block_best_logits = jnp.max(logits, axis=-1)
+            block_best_ids = jnp.argmax(logits, axis=-1).astype(jnp.int32) + start
+            better = block_best_logits > best_logits
+            best_logits = jnp.where(better, block_best_logits, best_logits)
+            best_ids = jnp.where(better, block_best_ids, best_ids)
+            return logsumexp, label_logit, best_logits, best_ids
         return logsumexp, label_logit
 
-    logsumexp, label_logit = jax.lax.fori_loop(0, num_blocks, body, (logsumexp_init, label_logit_init))
+    if return_argmax:
+        best_logits_init = jnp.full((b_dim,), -jnp.inf, dtype=out_dtype)
+        best_ids_init = jnp.zeros((b_dim,), dtype=jnp.int32)
+        logsumexp, label_logit, _, argmax = jax.lax.fori_loop(
+            0, num_blocks, body, (logsumexp_init, label_logit_init, best_logits_init, best_ids_init)
+        )
+    else:
+        logsumexp, label_logit = jax.lax.fori_loop(0, num_blocks, body, (logsumexp_init, label_logit_init))
     loss = logsumexp - label_logit
+    if return_argmax:
+        return loss, logsumexp, argmax
     return loss, logsumexp

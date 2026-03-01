@@ -100,6 +100,31 @@ def test_basic_equivalence(test_data):
     ), "Logsumexp penalty does not match full loss."
 
 
+def test_fused_loss_returns_argmax(test_data):
+    pred_embeddings, pred_lm_head, true_ids = test_data
+
+    loss_block, argmax_block = fused_cross_entropy_loss_and_logsumexp_penalty(
+        pred_embeddings,
+        pred_lm_head,
+        Contract=Embed,
+        Label=Vocab,
+        target_y=true_ids,
+        reduction=None,
+        logsumexp_weight=0.0,
+        block_size=8,
+        dtype=pred_embeddings.dtype,
+        return_argmax=True,
+    )
+
+    logits_full = hax.dot(pred_embeddings, pred_lm_head, axis="embed")
+    target_y_full = hax.nn.one_hot(true_ids, Vocab, dtype=pred_embeddings.dtype)
+    loss_full, _ = cross_entropy_loss_and_log_normalizers(logits_full, Vocab, target_y_full)
+    argmax_full = hax.argmax(logits_full, axis=Vocab)
+
+    assert hax.all(hax.isclose(loss_block, loss_full, atol=1e-3, rtol=1e-3))
+    assert hax.all(argmax_block == argmax_full)
+
+
 def test_single_block(test_data):
     """
     Test behavior when vocab_size equals block_size.
