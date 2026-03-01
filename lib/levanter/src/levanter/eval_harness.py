@@ -54,7 +54,6 @@ from levanter.inference.engine import Request as GenRequest
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
 from levanter.models.gpt2 import Gpt2Config
-from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.py_utils import set_global_rng_seeds
@@ -80,7 +79,7 @@ from levanter.checkpoint import load_checkpoint
 from levanter.data import batched
 from levanter.data.loader import stack_batches
 from levanter.eval import resolve_batch_axis_resource
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.partitioning import infer_resource_partitions, named_jit, round_axis_for_partitioning
@@ -253,7 +252,7 @@ class _LmEvalHarnessWorker:
         self._dummy_batch = _make_dummy_batch(EvalBatch, EvalPos)
 
         def _eval_loglikelihood(
-            model: LmHeadModel, packed_example: LmExample
+            model: ArrayLmHeadModel, packed_example: LmExample
         ) -> tuple[NamedArray, NamedArray, NamedArray]:
             """
             Returns:
@@ -265,30 +264,22 @@ class _LmEvalHarnessWorker:
             if self.mp is not None:
                 model = self.mp.cast_to_compute(model)
 
-            activations = model.activations(packed_example.tokens, attn_mask=packed_example.attn_mask)
-            if isinstance(activations, tuple):
-                activations, _ = activations
-
-            pred_embeddings = activations.astype(jnp.float32)
-            pred_lm_head = model.get_lm_head().astype(jnp.float32)
-            Pos = pred_embeddings.resolve_axis(self.EvalPos.name)
+            logits = model.logits_from_token_ids_array(
+                packed_example.tokens.array,
+                batch_axis=self.EvalBatch,
+            ).astype(jnp.float32)
+            Pos = packed_example.tokens.resolve_axis(self.EvalPos.name)
 
             target_y = hax.roll(packed_example.tokens, -1, Pos)
             not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
             loss_weight = packed_example.loss_weight.astype(jnp.float32) * not_last_mask.astype(jnp.float32)
-
-            loss, pred_targets = fused_cross_entropy_loss_and_logsumexp_penalty(
-                pred_embeddings,
-                pred_lm_head,
-                Contract=model.Embed,
-                Label=model.Vocab,
-                target_y=target_y,
-                reduction=None,
-                weight=loss_weight,
-                logsumexp_weight=0.0,
-                return_argmax=True,
-                implementation="xla",
-            )
+            target_y_array = target_y.array.astype(jnp.int32)
+            log_probs = jax.nn.log_softmax(logits, axis=-1)
+            loss_array = -jnp.take_along_axis(log_probs, target_y_array[..., None], axis=-1).squeeze(-1)
+            loss_array = loss_array * loss_weight.array
+            pred_targets_array = jnp.argmax(logits, axis=-1).astype(target_y_array.dtype)
+            loss = hax.named(loss_array, packed_example.tokens.axes)
+            pred_targets = hax.named(pred_targets_array, packed_example.tokens.axes)
 
             # We need to compute losses and also whether or not the completion is correct
             # (i.e. the greedy prediction is the target)
