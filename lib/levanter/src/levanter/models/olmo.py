@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type, Union
+from typing import Callable, Dict, Optional, Type, Union, cast
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -14,7 +14,6 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -32,6 +31,7 @@ from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
+from levanter.utils.types import BlockFoldable
 
 
 silence_transformer_nag()
@@ -437,7 +437,7 @@ class Olmo2DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
 
 class Olmo2Transformer(ModuleWithStateDictSerialization, eqx.Module):
     config: Olmo2Config = eqx.field(static=True)
-    layers: Stacked[Olmo2DecoderLayer]
+    layers: BlockFoldable[Olmo2DecoderLayer]
     norm: hnn.RmsNorm
 
     @staticmethod
@@ -459,7 +459,7 @@ class Olmo2Transformer(ModuleWithStateDictSerialization, eqx.Module):
         self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
+        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 
