@@ -130,7 +130,12 @@ def main(config: SampleLmConfig):
         prompt_ids = tokenizer(prompts, add_special_tokens=False)["input_ids"]
 
         # Initialize a reusable generation service with capacity from config
-        service = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
+        service = InferenceEngine.from_model_with_config(
+            model=model,
+            tokenizer=tokenizer,
+            config=config.engine,
+            axis_resources=config.trainer.compute_axis_mapping,
+        )
 
         if config.log_kernel_jaxprs_path:
             service.write_kernel_jaxprs(config.log_kernel_jaxprs_path)

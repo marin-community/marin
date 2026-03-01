@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 import equinox as eqx
-import haliax as hax
 import jax
 import jax.random as jrandom
 import jmp
@@ -263,7 +262,7 @@ class ReplContext:
 
             self.server.reload(_reload)
         else:
-            with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
+            with self.config.trainer.use_device_mesh():
                 self.server = InferenceServer.create(self.config.server, model=model, tokenizer=tokenizer)
 
         console.print(f"[green]✓ Loaded {path}[/green]")

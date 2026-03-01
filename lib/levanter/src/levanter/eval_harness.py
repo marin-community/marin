@@ -847,7 +847,10 @@ class LevanterHarnessLM(TemplateLM):
             hbm_utilization=0.5,
         )
         engine = InferenceEngine.from_model_with_config(
-            model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg
+            model=self.leader.model,
+            tokenizer=self.tokenizer,
+            config=engine_cfg,
+            axis_resources=self.compute_axis_resources,
         )
 
         # Build generation requests
