@@ -47,18 +47,18 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Literal, TextIO
-from collections.abc import Callable
 
 import click
+import fsspec
 from iris.client import IrisClient
 from iris.cluster.config import load_config
-import fsspec
 from iris.cluster.types import (
     Constraint,
     CoschedulingConfig,
@@ -78,6 +78,7 @@ logger = logging.getLogger("smoke-test")
 
 IRIS_ROOT = Path(__file__).parent.parent
 DEFAULT_CONFIG_PATH = IRIS_ROOT / "examples" / "smoke.yaml"
+DEFAULT_SCREENSHOT_DIR = Path("/tmp/iris-smoke-screenshots")
 
 DEFAULT_JOB_TIMEOUT = 600  # 10 minutes; all jobs launch in parallel, this is the global wait ceiling
 DEFAULT_BOOT_TIMEOUT = 300  # 5 minutes; cluster start + connection
@@ -689,6 +690,53 @@ def _configure_logging():
 
 
 # =============================================================================
+# Dashboard Screenshots
+# =============================================================================
+
+
+def _try_capture_dashboard(controller_url: str, output_dir: Path, label: str) -> None:
+    """Capture dashboard screenshots for observability.
+
+    Gracefully degrades when Playwright is not installed or browser launch fails.
+    Takes screenshots of the Jobs, Fleet, and Autoscaler tabs.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.info("Playwright not installed, skipping dashboard screenshot")
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+
+            page.goto(controller_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+            page.screenshot(path=str(output_dir / f"{label}-jobs.png"), full_page=True)
+            logger.info("  Screenshot: %s-jobs.png", label)
+
+            fleet_btn = page.query_selector('button.tab-btn:has-text("Fleet")')
+            if fleet_btn:
+                fleet_btn.click()
+                page.wait_for_timeout(1000)
+                page.screenshot(path=str(output_dir / f"{label}-fleet.png"), full_page=True)
+                logger.info("  Screenshot: %s-fleet.png", label)
+
+            auto_btn = page.query_selector('button.tab-btn:has-text("Autoscaler")')
+            if auto_btn:
+                auto_btn.click()
+                page.wait_for_timeout(1000)
+                page.screenshot(path=str(output_dir / f"{label}-autoscaler.png"), full_page=True)
+                logger.info("  Screenshot: %s-autoscaler.png", label)
+
+            browser.close()
+    except Exception as e:
+        logger.warning("Dashboard screenshot failed: %s", e)
+
+
+# =============================================================================
 # Configuration
 # =============================================================================
 
@@ -702,6 +750,7 @@ class SmokeTestConfig:
     boot_timeout_seconds: int = DEFAULT_BOOT_TIMEOUT
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
     mode: Literal["full", "keep", "redeploy", "local"] = "full"
+    screenshot_dir: Path | None = None
 
     @property
     def local(self) -> bool:
@@ -816,6 +865,12 @@ class SmokeTestRunner:
         finally:
             self._cleanup()
 
+    def _capture_dashboard(self, label: str) -> None:
+        """Capture dashboard screenshots if a screenshot directory is configured."""
+        if not self.config.screenshot_dir or not self._controller_url:
+            return
+        _try_capture_dashboard(self._controller_url, self.config.screenshot_dir, label)
+
     def _handle_interrupt(self, _signum: int, _frame: object):
         logger.warning("Interrupted! Cleaning up...")
         signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -929,6 +984,7 @@ class SmokeTestRunner:
         """Run test jobs against the cluster."""
         tests = self._build_test_cases()
         self._run_test_cases_parallel(controller_url, tests)
+        self._capture_dashboard("after-tests")
 
     def _build_test_cases(self) -> list[SmokeTestCase]:
         """Build the test list based on accelerator type and local mode."""
@@ -1151,7 +1207,6 @@ class SmokeTestRunner:
             status = job.status()
             state_name = cluster_pb2.JobState.Name(status.state)
             if status.state in (
-                cluster_pb2.JOB_STATE_PENDING,
                 cluster_pb2.JOB_STATE_BUILDING,
                 cluster_pb2.JOB_STATE_RUNNING,
                 cluster_pb2.JOB_STATE_SUCCEEDED,
@@ -1436,6 +1491,7 @@ class SmokeTestRunner:
             return
 
         _log_section("Controller Diagnostics")
+        self._capture_dashboard("diagnostics")
         self._dump_process_logs()
         self._dump_autoscaler_status()
         self._dump_job_list()
@@ -1644,11 +1700,19 @@ class SmokeTestRunner:
     help="Execution mode: 'full' (clean start + teardown), 'keep' (clean start + keep VMs), "
     "'redeploy' (reuse VMs), 'local' (in-process controller and workers, no cloud VMs)",
 )
+@click.option(
+    "--screenshot-dir",
+    "screenshot_dir",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Directory to save dashboard screenshots. Requires Playwright. " f"Default: {DEFAULT_SCREENSHOT_DIR}",
+)
 def main(
     config_path: Path,
     boot_timeout_seconds: int,
     job_timeout_seconds: int,
     mode: str,
+    screenshot_dir: Path | None,
 ):
     """Run Iris cluster autoscaling smoke test.
 
@@ -1684,6 +1748,7 @@ def main(
         boot_timeout_seconds=boot_timeout_seconds,
         job_timeout_seconds=job_timeout_seconds,
         mode=mode,  # type: ignore
+        screenshot_dir=screenshot_dir,
     )
 
     runner = SmokeTestRunner(config)
