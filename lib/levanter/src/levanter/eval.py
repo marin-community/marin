@@ -201,6 +201,7 @@ def cb_tagged_lm_evaluate(
     tokenizer: Optional[HfTokenizer] = None,
     device_mesh: Optional[Mesh] = None,
     axis_mapping: ResourceMapping | None = None,
+    batch_axis_resource=None,
     max_examples_per_dataset: Optional[int] = None,
     eval_current: bool = True,
     eval_ema: bool = True,
@@ -228,6 +229,7 @@ def cb_tagged_lm_evaluate(
         tokenizer: The tokenizer to use for bits-per-byte evaluation (optional)
         device_mesh: The mesh to use for evaluation
         axis_mapping: The axis mapping to use for evaluation
+        batch_axis_resource: The explicit mesh resource to shard the eval batch axis onto.
         max_examples_per_dataset: The maximum number of examples to use from each dataset
         prefix: The prefix to use for logging the losses
         eval_current: Whether to evaluate the model's current parameters
@@ -240,6 +242,9 @@ def cb_tagged_lm_evaluate(
         def loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
             return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp)
 
+    if batch_axis_resource is None and axis_mapping is not None:
+        batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
+
     evaluator = TaggedEvaluator(
         EvalBatch=EvalBatch,
         tagged_eval_sets=tagged_eval_sets,
@@ -247,6 +252,7 @@ def cb_tagged_lm_evaluate(
         tokenizer=tokenizer,
         device_mesh=device_mesh,
         axis_mapping=axis_mapping,
+        batch_axis_resource=batch_axis_resource,
         max_examples_per_dataset=max_examples_per_dataset,
     )
 
@@ -402,7 +408,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         if batch_axis_resource is None and axis_mapping is not None:
             batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
         loader_axis_resources = axis_mapping
-        if loader_axis_resources is None and batch_axis_resource is not None:
+        if batch_axis_resource is not None:
             loader_axis_resources = {EvalBatch.name: batch_axis_resource}
         self.loss_fn = loss_fn
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
