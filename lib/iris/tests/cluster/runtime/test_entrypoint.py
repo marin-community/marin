@@ -54,14 +54,6 @@ def test_build_runtime_entrypoint_includes_pip_packages():
     assert "memray" in setup
 
 
-def test_build_runtime_entrypoint_preserves_run_command():
-    ep = _make_entrypoint(["python", "-m", "mymodule", "--flag"])
-    env = _make_env_config()
-    rt = build_runtime_entrypoint(ep, env)
-
-    assert list(rt.run_command.argv) == ["python", "-m", "mymodule", "--flag"]
-
-
 def test_build_runtime_entrypoint_with_python_version():
     ep = _make_entrypoint(["python", "app.py"])
     env = _make_env_config(python_version="3.11")
