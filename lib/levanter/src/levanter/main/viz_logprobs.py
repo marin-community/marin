@@ -18,10 +18,10 @@ import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data import DataLoader
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+from levanter.data.text.examples import GrugLmExample
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
@@ -80,7 +80,7 @@ def main(config: VizLmConfig):
         # don't want to compute the mask w.r.t. the final token
 
         @named_jit(axis_resources=compute_axis_mapping)
-        def compute_log_probs(model: LmHeadModel, example: GrugLmExample):
+        def compute_log_probs(model: ArrayLmHeadModel, example: GrugLmExample):
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
 
@@ -90,12 +90,7 @@ def main(config: VizLmConfig):
                 reduction=None,
                 reduction_axis=(),
             )
-
-            named_example = named_lm_example_from_grug(example, Pos=Pos, batch_axis=EvalBatch)
-            activations = model.activations(named_example.tokens, named_example.attn_mask, key=key)
-            if isinstance(activations, tuple):
-                activations = activations[0]
-            logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed).array
+            logits = model.logits_from_token_ids_array(example.tokens, batch_axis=EvalBatch, key=key)
 
             # Roll forward to align each prediction with its target token.
             logprobs = jnp.roll(-loss, 1, axis=-1)
