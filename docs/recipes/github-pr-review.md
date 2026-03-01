@@ -23,6 +23,11 @@ Scope:
 - If a specification exists (issue description, design doc, acceptance criteria, or inline requirements), verify the code adheres to it and flag concrete mismatches.
 - Ignore formatting, import order, lint/style preferences, naming opinions, missing docstrings/comments, and generic best-practice advice.
 
+Grug Variants:
+- In `experiments/grug`, duplication is often intentional. This area is designed for high-velocity, short-lived research iteration.
+- Do not flag copy/paste or DRY concerns by default in `experiments/grug` if behavior/contracts are correct.
+- Only call out duplication there when it causes a concrete correctness issue, regression risk, or clear divergence from stated objectives.
+
 Output contract:
 - Return exactly one final review.
 - Keep output compact and high-signal.

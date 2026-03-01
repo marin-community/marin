@@ -73,7 +73,7 @@ Run the relevant checks:
 
 ```bash
 uv run python infra/pre-commit.py --all-files
-uv run pytest tests/test_grug_base_template.py
+uv run pytest experiments/grug/test_variant_contracts.py
 ```
 
 Add any additional focused tests needed for behavior changes.

@@ -37,7 +37,11 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.base.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import GrugModelConfig, Transformer
+
+# This file intentionally mirrors `experiments/grug/base/train.py` with
+# variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
+# `docs/recipes/change_grug.md`.
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +187,10 @@ def _compute_flops(
         num_heads=model_config.num_heads,
         seq_len=model_config.max_seq_len,
         vocab_size=model_config.vocab_size,
-        glu=False,
+        glu=True,
+        num_experts=model_config.num_experts,
+        num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
+        num_experts_per_tok=model_config.num_experts_per_token,
     )
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 

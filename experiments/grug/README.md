@@ -11,10 +11,10 @@
 ## Entry-point guide
 
 - Start in `base/launch.py` for normal run edits.
-- `GrugBaseLaunchConfig` is the user-facing knob surface (model/data/optimizer/trainer/eval/run metadata).
+- Each variant `<variant>/launch.py` exposes its own `*LaunchConfig` as the user-facing knob surface.
 - `versioned(...)` marks config values that should affect executor step version/hash.
 - `this_output_path()` resolves to the current step's output root.
-- `run_grug(...)` in `base/train.py` is the runtime entry point used by the `ExecutorStep`.
+- `run_grug(...)` in each variant's `train.py` is the runtime entry point used by the `ExecutorStep`.
 - `P` in train/model code is the usual JAX alias for `PartitionSpec`; see the JAX explicit sharding tutorial: [Explicit Sharding (JAX)](https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html).
 
 ## How to use it
@@ -105,6 +105,11 @@ uv run lib/marin/src/marin/run/ray_run.py \
 
 - Keep core training/eval metrics aligned with classic Levanter (`train/loss`, `throughput/*`, `eval/*`).
 - Prefer shared helpers only for generic infrastructure; keep variant behavior local to the template.
+
+## Current variants
+
+- `base`: `experiments/grug/base/`
+- `moe`: `experiments/grug/moe/`
 
 ## Further guidance
 
