@@ -14,6 +14,7 @@ from lenses import lens
 import haliax as hax
 
 from levanter.utils.hf_utils import HfTokenizer
+from levanter.utils.partitioning import named_jit
 
 
 def reinitialize_some_tokens(
@@ -50,7 +51,7 @@ def reinitialize_some_tokens(
     ):
         raise ValueError("One or more tokens are not in the tokenizer vocabulary")
 
-    @hax.named_jit(donate_args=(donate,))
+    @named_jit(donate_args=(donate,))
     def _reinit_tokens(model):
         Embed = model.embeddings.Embed
         new_vocab = model.Vocab.resize(len(ids_to_reinit))
