@@ -30,6 +30,7 @@ from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from levanter.utils.partitioning import named_jit
 from levanter.utils.stat_utils import RunningMean
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ResourceMapping
@@ -426,7 +427,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
         per_pos_out_sharding = self.per_pos_out_sharding
 
-        @hax.named_jit(axis_resources=self.axis_mapping)
+        @named_jit
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
             losses, weights, token_ids = self.loss_fn(model, batch)
             weighted_loss = losses * weights  # b t
