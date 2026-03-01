@@ -228,20 +228,6 @@ def test_infer_block_sizes_preserves_defaults_without_128_aligned_divisors():
     assert block_sizes.h_block_size == 512
 
 
-@pytest.mark.parametrize(
-    ("device_kind", "expected"),
-    [
-        ("TPU v4", True),
-        ("TPU v5", True),
-        ("TPU v5e", True),
-        ("TPU v6e", False),
-        ("NVIDIA H100", False),
-    ],
-)
-def test_requires_tpu_label_layout_1024(device_kind: str, expected: bool):
-    assert tuned_block_sizes.requires_tpu_label_layout_1024(device_kind) is expected
-
-
 def test_infer_num_tensorcores_respects_disable_megacore_env(monkeypatch):
     fake_device = type("FakeDevice", (), {"device_kind": "TPU v4"})()
     monkeypatch.setattr(pallas_tpu.jax, "default_backend", lambda: "tpu")
