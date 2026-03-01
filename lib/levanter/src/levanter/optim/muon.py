@@ -112,9 +112,10 @@ class MuonConfig(OptimizerConfig):
                 return "adamw"
             elif is_linear_like_module(param):
                 # muon for linear layers
-                assert (
-                    param._out_first or use_kimi_scaling
-                )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
+                if isinstance(param, haliax.nn.Linear):
+                    assert (
+                        param._out_first or use_kimi_scaling
+                    )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
                 return label_linear_like_module(param, weight_label="muon", bias_label="adamw")
             else:
                 return "adamw"
