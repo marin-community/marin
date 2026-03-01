@@ -94,12 +94,17 @@ def _load_model(
     tokenizer = load_tokenizer(hf_checkpoint)
     vocab_size = len(tokenizer)
 
-    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+    with trainer_config.use_device_mesh():
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), trainer_config.compute_axis_mapping)
 
         if levanter_checkpoint is not None:
             model = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
-            model = load_checkpoint(model, levanter_checkpoint, subpath="model")
+            model = load_checkpoint(
+                model,
+                levanter_checkpoint,
+                subpath="model",
+                axis_mapping=trainer_config.parameter_axis_mapping,
+            )
             model = mp.cast_to_compute(model)
             return model, None
         else:
