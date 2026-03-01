@@ -112,7 +112,8 @@ def cb_compute_entropies(
     test_data,
     prefix: str | None,
     batch_size: int,
-    mapping: hax.partitioning.ResourceMapping,
+    batch_axis_resource,
+    batch_axis_name: str = "batch",
     num_tokens: int = 10 * 1024 * 1024,
 ):
     """
@@ -125,7 +126,8 @@ def cb_compute_entropies(
         prefix (str | None): The key to log to the tracker. If None, "entropy" is used.
         num_tokens: The number of tokens to use.
         batch_size: The batch size to use.
-        mapping: The resource mapping
+        batch_axis_resource: Resource for sharding the batch axis.
+        batch_axis_name: Name of the batch axis in the dataset examples.
 
     Returns:
         function: A function that takes a step info and computes and visualizes the log probabilities.
@@ -134,7 +136,16 @@ def cb_compute_entropies(
         prefix = "analysis"
 
     def compute_entropy(step: StepInfo):
-        data_loader = DataLoader(test_data, batch_size=batch_size, pad_final_batch=False, axis_resources=mapping)
+        loader_axis_resources = None
+        if batch_axis_resource is not None:
+            loader_axis_resources = {batch_axis_name: batch_axis_resource}
+        data_loader = DataLoader(
+            test_data,
+            batch_size=batch_size,
+            batch_axis_name=batch_axis_name,
+            pad_final_batch=False,
+            axis_resources=loader_axis_resources,
+        )
         model = step.eval_model
 
         try:
@@ -193,14 +204,24 @@ def cb_compute_top2_gap(
     test_data,
     prefix: str | None,
     batch_size: int,
-    mapping: hax.partitioning.ResourceMapping,
+    batch_axis_resource,
+    batch_axis_name: str = "batch",
     num_tokens: int = 10 * 1024 * 1024,
 ):
     if prefix is None:
         prefix = "analysis"
 
     def compute_top2_gap(step: StepInfo):
-        data_loader = DataLoader(test_data, batch_size=batch_size, pad_final_batch=False, axis_resources=mapping)
+        loader_axis_resources = None
+        if batch_axis_resource is not None:
+            loader_axis_resources = {batch_axis_name: batch_axis_resource}
+        data_loader = DataLoader(
+            test_data,
+            batch_size=batch_size,
+            batch_axis_name=batch_axis_name,
+            pad_final_batch=False,
+            axis_resources=loader_axis_resources,
+        )
         model = step.eval_model
         try:
             top2_gap_hist = compute_top2_gap_histogram(

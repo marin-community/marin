@@ -305,7 +305,8 @@ def main(config: TrainLmConfig):
                         dataset,
                         prefix=os.path.join("analysis", name) if name else "analysis",
                         batch_size=EvalBatch.size,
-                        mapping={EvalBatch.name: batch_axis_resource},
+                        batch_axis_resource=batch_axis_resource,
+                        batch_axis_name=EvalBatch.name,
                     ),
                     every=config.trainer.steps_per_eval,
                 )
