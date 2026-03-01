@@ -21,7 +21,7 @@ from levanter.lora import (
     save_merged_hf_checkpoint_callback,
     save_peft_checkpoint_callback,
 )
-from levanter.models.lm_model import LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -73,7 +73,7 @@ def main(config: LoraLmConfig):
 
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_fn(model: LmHeadModel, example: GrugLmExample, *, key=None):
+    def loss_fn(model: ArrayLmHeadModel, example: GrugLmExample, *, key=None):
         return model.compute_next_token_loss_array(example, batch_axis=config.trainer.batch_axis_name, key=key)
 
     with Trainer(config.trainer, optimizer, loss_fn=loss_fn) as trainer:  # type: ignore[arg-type]

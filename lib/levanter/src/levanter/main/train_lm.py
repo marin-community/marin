@@ -26,7 +26,7 @@ from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -112,7 +112,7 @@ def main(config: TrainLmConfig):
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_function(model: LmHeadModel, example: GrugLmExample, *, key=None):
+    def loss_function(model: ArrayLmHeadModel, example: GrugLmExample, *, key=None):
         return model.compute_next_token_loss_array(
             example,
             batch_axis=config.trainer.batch_axis_name,

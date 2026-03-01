@@ -3,7 +3,7 @@
 
 import abc
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Optional, Type, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Optional, Protocol, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
@@ -28,6 +28,31 @@ if TYPE_CHECKING:
 LmTensor = Any
 LmAttentionMask = AttentionMask | Any
 LmAuxData = Any
+
+
+class ArrayLmHeadModel(Protocol):
+    """Array-native LM interface used by training/eval surfaces."""
+
+    def compute_next_token_loss_array(
+        self,
+        example: "LmExample | GrugLmExample",
+        *,
+        batch_axis: Axis | str | None = "batch",
+        key=None,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jax.Array: ...
+
+    def logits_from_token_ids_array(
+        self,
+        input_ids: jax.Array,
+        *,
+        batch_axis: Axis | str | None = "batch",
+        key=None,
+    ) -> jax.Array: ...
 
 
 def _to_plain_jax_array(value: Any) -> jax.Array:
