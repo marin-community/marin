@@ -14,7 +14,7 @@ from typing import Protocol
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry, ReservationTag
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.scheduler import (
@@ -32,6 +32,7 @@ from iris.cluster.controller.state import (
     HeartbeatSnapshot,
 )
 from iris.cluster.types import (
+    DeviceType,
     JobName,
     VmWorkerStatus,
     VmWorkerStatusMap,
@@ -62,13 +63,16 @@ def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
     )
 
 
-def compute_demand_entries(state: ControllerState) -> list:
-    """Compute demand entries from controller state."""
-    from iris.cluster.controller.autoscaler import DemandEntry
-    from iris.cluster.types import DeviceType
+def compute_demand_entries(state: ControllerState) -> list[DemandEntry]:
+    """Compute demand entries from controller state.
 
+    Combines demand from pending tasks and from reservation entries.
+    Reservation entries produce persistent demand that keeps the autoscaler
+    from scaling down reserved capacity.
+    """
     demand_entries: list[DemandEntry] = []
 
+    # Demand from pending tasks
     tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
     for task in state.peek_pending_tasks():
         if not task.can_be_scheduled():
@@ -129,7 +133,75 @@ def compute_demand_entries(state: ControllerState) -> list:
             )
             demand_entries.append(entry)
 
+    # Demand from reservations (persistent demand that keeps capacity alive)
+    demand_entries.extend(_demand_from_reservations(state))
+
     return demand_entries
+
+
+def _demand_from_reservations(state: ControllerState) -> list[DemandEntry]:
+    """Generate demand entries from non-terminal jobs with reservations.
+
+    Each reservation entry maps 1:1 to a DemandEntry, creating persistent
+    demand that keeps the autoscaler from scaling down reserved capacity.
+
+    Entries that already have a provisioned worker (matched by reservation
+    attributes) still generate demand (to prevent scale-down) but with
+    reservation=None so the autoscaler won't re-tag new workers with a
+    duplicate index.
+    """
+    # Build lookup of already-provisioned (job_id, entry_idx) pairs.
+    provisioned: set[tuple[str, str]] = set()
+    for worker in state.list_all_workers():
+        attrs = worker.metadata.attributes
+        if "reservation-job" in attrs and "reservation-entry" in attrs:
+            provisioned.add((attrs["reservation-job"].string_value, attrs["reservation-entry"].string_value))
+
+    entries: list[DemandEntry] = []
+    for job in state.list_all_jobs():
+        if job.is_finished():
+            continue
+        if not job.request.HasField("reservation"):
+            continue
+
+        job_wire = job.job_id.to_wire()
+        for idx, res_entry in enumerate(job.request.reservation.entries):
+            device = res_entry.resources.device
+            device_type = get_device_type_enum(device)
+            device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
+
+            preemptible_pref: bool | None = None
+            required_regions: frozenset[str] | None = None
+            required_zones: frozenset[str] | None = None
+            invalid_reason: str | None = None
+            try:
+                normalized = normalize_constraints(res_entry.constraints)
+                preemptible_pref = normalized.preemptible
+                required_regions = normalized.required_regions
+                required_zones = normalized.required_zones
+            except ValueError as e:
+                invalid_reason = f"invalid_constraints: {e}"
+
+            already_provisioned = (job_wire, str(idx)) in provisioned
+
+            entries.append(
+                DemandEntry(
+                    task_ids=[f"{job_wire}:reservation:{idx}"],
+                    coschedule_group_id=None,
+                    device_type=device_type,
+                    device_variant=device_variant,
+                    constraints=list(res_entry.constraints),
+                    resources=res_entry.resources,
+                    preemptible=preemptible_pref,
+                    required_regions=required_regions,
+                    required_zones=required_zones,
+                    invalid_reason=invalid_reason,
+                    # Already-provisioned entries anchor demand (prevent scale-down)
+                    # but carry no tag — only unprovisioned entries tag new workers.
+                    reservation=None if already_provisioned else ReservationTag(job_id=job_wire, entry_idx=idx),
+                )
+            )
+    return entries
 
 
 class WorkerStubFactory(Protocol):
@@ -377,6 +449,32 @@ class Controller:
                 break
             self._heartbeat_all_workers()
 
+    def _is_reservation_satisfied(self, job: ControllerJob) -> bool:
+        """Check if a job's reservation is fully satisfied (one-time gate).
+
+        A job with a reservation is held pending until enough workers with
+        matching reservation tags exist. Once satisfied, the gate opens and
+        the job schedules normally.
+
+        Returns True if the job has no reservation or if all entries are fulfilled.
+        """
+        if not job.request.HasField("reservation"):
+            return True
+
+        fulfilled = self._count_reservation_workers(job.job_id.to_wire())
+        return fulfilled >= len(job.request.reservation.entries)
+
+    def _count_reservation_workers(self, job_id_wire: str) -> int:
+        """Count workers tagged with reservation-job=<job_id>."""
+        count = 0
+        for worker in self._state.list_all_workers():
+            attrs = worker.metadata.attributes
+            if "reservation-job" in attrs:
+                attr_val = attrs["reservation-job"]
+                if attr_val.string_value == job_id_wire:
+                    count += 1
+        return count
+
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle.
 
@@ -394,7 +492,7 @@ class Controller:
         if not pending_tasks:
             return
 
-        # Handle timeouts before scheduling (scheduler doesn't know about deadlines)
+        # Handle timeouts and reservation gates before scheduling
         schedulable_task_ids: list[JobName] = []
         jobs: dict[JobName, JobRequirements] = {}
         for task in pending_tasks:
@@ -405,6 +503,9 @@ class Controller:
                 continue
             if job.scheduling_deadline is not None and job.scheduling_deadline.expired():
                 self._mark_task_unschedulable(task)
+                continue
+            # Gate: skip tasks whose job has an unsatisfied reservation
+            if not self._is_reservation_satisfied(job):
                 continue
             schedulable_task_ids.append(task.task_id)
             if task.job_id not in jobs:

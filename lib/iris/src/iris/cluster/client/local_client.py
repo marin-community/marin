@@ -117,6 +117,7 @@ class LocalClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
+        reservation: cluster_pb2.ReservationConfig | None = None,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -131,6 +132,7 @@ class LocalClusterClient:
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
             timeout=timeout,
+            reservation=reservation,
         )
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:

@@ -5,6 +5,7 @@ from iris.cluster.config import create_autoscaler
 from iris.cluster.controller.autoscaler import (
     Autoscaler,
     DemandEntry,
+    ReservationTag,
     RoutingDecision,
     ScalingAction,
     ScalingDecision,
@@ -26,6 +27,7 @@ __all__ = [
     "DemandEntry",
     "GroupAvailability",
     "LocalController",
+    "ReservationTag",
     "RoutingDecision",
     "ScalingAction",
     "ScalingDecision",

@@ -402,6 +402,30 @@ class CoschedulingConfig:
         return cluster_pb2.CoschedulingConfig(group_by=self.group_by)
 
 
+@dataclass(frozen=True)
+class ReservationEntry:
+    """A single reservation entry describing one worker's worth of resources.
+
+    Used in the high-level client API. Each entry becomes a demand anchor
+    that the autoscaler provisions before the reserving job schedules.
+
+    Example:
+        >>> ReservationEntry(resources=ResourceSpec(cpu=2, memory="8g"))
+        >>> ReservationEntry(resources=ResourceSpec(cpu=2), constraints=[Constraint("region", value="us-central1")])
+    """
+
+    resources: "ResourceSpec"
+    constraints: list[Constraint] | None = None
+
+    def to_proto(self) -> cluster_pb2.ReservationEntry:
+        """Convert to protobuf representation."""
+        constraints_proto = [c.to_proto() for c in self.constraints or []]
+        return cluster_pb2.ReservationEntry(
+            resources=self.resources.to_proto(),
+            constraints=constraints_proto,
+        )
+
+
 def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConfig:
     """Create a DeviceConfig for a TPU device.
 
