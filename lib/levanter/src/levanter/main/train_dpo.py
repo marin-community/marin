@@ -28,7 +28,7 @@ from levanter.data.text import (
     dataset_for_preference_format,
 )
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmHeadModel
 from levanter.metrics import Metric, ReductionType
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -65,7 +65,7 @@ def dpo_loss_from_logps(
     return loss, metrics
 
 
-def _logp_sum(model: LmHeadModel, example, *, key=None) -> jnp.ndarray:
+def _logp_sum(model: ArrayLmHeadModel, example, *, key=None) -> jnp.ndarray:
     nll = model.compute_next_token_loss_array(example, reduction="sum", reduction_axis="position", key=key)
     return -nll
 
