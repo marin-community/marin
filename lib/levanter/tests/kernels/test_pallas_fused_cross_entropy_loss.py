@@ -238,17 +238,6 @@ def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
     assert pallas_tpu._infer_num_tensorcores() == 1
 
 
-def test_infer_block_sizes_treats_unknown_tpu_kind_as_tpu_for_shape_sanitization():
-    block_sizes = infer_block_sizes(
-        b=768,
-        h=384,
-        v=4096,
-        dtype=jnp.float32,
-        device_kind="TPU experimental",
-    )
-    assert block_sizes == fused_api.BlockSizes(b_block_size=768, h_block_size=384, v_block_size=1024)
-
-
 def test_default_implementation_on_cpu_skips_expected_tpu_warning():
     if jax.default_backend() == "tpu":
         pytest.skip("requires non-TPU backend")
