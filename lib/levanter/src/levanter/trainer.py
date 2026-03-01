@@ -189,7 +189,7 @@ class WrappedLossFunction:
     """
     Wrapper around a loss function that provides a uniform interface.
 
-    Handles casting & executing in the proper axis mapping.
+    Handles model casting and metric normalization.
 
     Always returns (loss, wrapped_metrics_dict). The user loss function
     may return `Metric` objects or floats. Floats are automatically coerced to Metrics
@@ -198,32 +198,27 @@ class WrappedLossFunction:
 
     _raw_fn: ComputeLossFunction
     _mp: jmp.Policy
-    _compute_axis_mapping: ResourceMapping
 
     def __init__(
         self,
         raw_fn: ComputeLossFunction,
         mp: jmp.Policy,
-        compute_axis_mapping: ResourceMapping,
     ):
         """
         Args:
             raw_fn: The underlying loss function
             mp: Mixed precision policy for casting
-            compute_axis_mapping: Axis mapping for compute
         """
         self._raw_fn = raw_fn
         self._mp = mp
-        self._compute_axis_mapping = compute_axis_mapping
 
     def __call__(self, model, *batch, **batch_kwargs) -> Tuple[Scalar, Dict[str, Metric]]:
         """
-        Call the loss function with model casting and axis mapping.
+        Call the loss function with model casting.
         Always returns (loss, wrapped_metrics) where metrics are Metric objects.
         """
-        with hax.axis_mapping(self._compute_axis_mapping):
-            model = self._mp.cast_to_compute(model)
-            result = self._raw_fn(model, *batch, **batch_kwargs)
+        model = self._mp.cast_to_compute(model)
+        result = self._raw_fn(model, *batch, **batch_kwargs)
 
         if isinstance(result, tuple) and len(result) == 2:
             loss, metrics = result
@@ -301,12 +296,11 @@ class Trainer:
     def loss_fn(self) -> WrappedLossFunction:
         """
         Wrapped loss function that always returns (loss, metrics_dict).
-        Casts the model to compute precision and sets the context axis mapping to compute.
+        Casts the model to compute precision and normalizes metric values.
         """
         return WrappedLossFunction(
             self._raw_loss_function,
             self.mp,
-            self.compute_axis_mapping,
         )
 
     @property
@@ -610,8 +604,8 @@ class Trainer:
 
             @eqx.filter_jit
             def eval_loss(model, *batch, **batch_kwargs):
-                model = self.mp.cast_to_compute(model)
-                return self.loss_fn(model, *batch, **batch_kwargs, key=None)
+                with hax.axis_mapping(self.compute_axis_mapping):
+                    return self.loss_fn(model, *batch, **batch_kwargs, key=None)
 
             self.add_hook(
                 callbacks.compute_validation_loss(
