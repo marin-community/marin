@@ -12,7 +12,6 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -20,6 +19,7 @@ from levanter.layers.attention import Attention, AttentionConfig, AttentionMask
 from levanter.layers.rotary import RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding, LlamaLMHeadModel, LlamaMlp, LlamaTransformer
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -194,15 +194,13 @@ class QwenTransformer(LlamaTransformer):
 
     @staticmethod
     def init(config: QwenConfig, *, key) -> "QwenTransformer":
-        S = Stacked
-        if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
-            S = BlockSeq
-
-        # Initialize layers with their indices
-        layers = S.init(config.Layers, QwenDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
+        # Initialize layers with their indices.
+        layers = init_scan_foldable(
+            config.Layers,
+            QwenDecoderLayer,
             config,
+            scan_layers=config.scan_layers,
+            gradient_checkpointing=config.gradient_checkpointing,
             key=shaped_rng_split(key, config.num_layers),
         )
 
