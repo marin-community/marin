@@ -218,6 +218,45 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
         return lm_logits
 
+    def logits_from_token_ids_array(
+        self,
+        input_ids: jax.Array,
+        *,
+        batch_axis: Axis | str | None = "batch",
+        key=None,
+    ) -> jax.Array:
+        """
+        Compute logits from array token IDs and return a plain JAX array.
+
+        This adapter is intended for migration paths that avoid named tensors at
+        call sites while keeping existing model internals unchanged.
+        """
+        if input_ids.ndim == 1:
+            Pos = self.Pos.resize(input_ids.shape[0])
+            named_input_ids = hax.named(input_ids, Pos)
+        elif input_ids.ndim == 2:
+            if batch_axis is None:
+                Batch = Axis("batch", input_ids.shape[0])
+            elif isinstance(batch_axis, str):
+                Batch = Axis(batch_axis, input_ids.shape[0])
+            else:
+                Batch = batch_axis
+                if Batch.size != input_ids.shape[0]:
+                    raise ValueError(
+                        f"Batch axis size ({Batch.size}) must match input batch size ({input_ids.shape[0]})."
+                    )
+
+            Pos = self.Pos.resize(input_ids.shape[1])
+            named_input_ids = hax.named(input_ids, (Batch, Pos))
+        else:
+            raise ValueError(f"input_ids must have rank 1 or 2, got rank={input_ids.ndim}")
+
+        activations = self.activations(named_input_ids, key=key)
+        if isinstance(activations, tuple):
+            activations, _ = activations
+        logits = hax.dot(activations, self.get_lm_head(), axis=self.Embed)
+        return logits.array
+
     @abc.abstractmethod
     def activations(
         self,

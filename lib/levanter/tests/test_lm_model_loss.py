@@ -144,3 +144,21 @@ def test_compute_next_token_loss_array_matches_named_for_grug_example():
     grug_loss = model.compute_next_token_loss_array(grug_example, batch_axis=Batch, reduction=None, reduction_axis=())
 
     np.testing.assert_allclose(grug_loss, named_loss, rtol=1e-5, atol=1e-6)
+
+
+def test_logits_from_token_ids_array_matches_named_logits():
+    Vocab = Axis("vocab", 32)
+    cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
+    model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
+
+    Batch = Axis("batch", 4)
+    Pos = cfg.max_Pos.resize(8)
+    example = _toy_example(Batch, Pos, Vocab, key=jax.random.PRNGKey(1))
+
+    activations = model.activations(example.tokens)
+    if isinstance(activations, tuple):
+        activations = activations[0]
+    named_logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed).array
+    array_logits = model.logits_from_token_ids_array(example.tokens.array, batch_axis=Batch)
+
+    np.testing.assert_allclose(array_logits, named_logits, rtol=1e-5, atol=1e-6)
