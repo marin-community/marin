@@ -3169,3 +3169,96 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / regression**. The recurrent-scaffold full-sequence Macro-I fusion reduced measured train closed-call shard-map time, but the new `while` overhead dominated and regressed end-to-end throughput.
 - Next bold hypothesis:
   - Move to **Macro Move J** next with required `Ct={64,96,128}` x `Seg={8,16,32}` compact sweep table, then use the best operating point to launch a stronger structural pivot (likely Macro E if `while` overhead persists).
+
+### Iteration 54 - Macro Move J / no-pad segmented train decomposition + Ct/Seg sweep (regression, reverted)
+
+- Coverage slot: J (2/5)
+- Covered set so far: {I, J}
+- Date: 2026-03-01T10:20:02Z
+- Commit: none (failed attempt)
+- Starting commit: `5608cdd87bccba0f296d6f44ab6e83622cffaada`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` remained dominant:
+    - `shard_map` bucket: `78.098 ms`
+    - forward closed-call source: `gated_deltanet.py:2486` = `41.324 ms`
+    - backward closed-call source: `gated_deltanet.py:3972` = `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move J**: remove pad-to-segment execution in train flash path and sweep `Ct/Seg` to expose true work scaling (`+10-18%`, high control-flow/launch risk).
+  2. **Macro Move E**: V-tiling with shared-K precompute in recurrent/backward kernels (`+15-30%`, high decomposition/correctness risk).
+  3. **Macro Move I**: another train prepare+recurrent fusion variant that avoids added `while` costs (`+10-20%`, high repeat-regression risk; on cooldown after repeated `<3%` outcomes).
+
+- Selected macro-move category: **J) Sweep `Ct`/`Seg` explicitly**.
+- Selected hypothesis: structurally remove padded chunk-axis execution (`full segments + explicit tail segment`) in train flash forward/backward so the sweep measures real chunk work instead of padded segment overhead.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Implemented a no-pad decomposition in train flash forward/backward: execute `n_full_segments * seg` chunks via existing segmented kernels, then run one tail segmented kernel for `tail_chunks`.
+  - This changed launch/dataflow structure in both forward and backward train paths (Macro J structural candidate).
+  - TPU validation tests passed with the structural change.
+  - Profile sweep showed clear regressions across tested operating points; speculative kernel edits were reverted.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (`tests=both`):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - Result: `87 passed, 2 skipped`.
+
+- Profile runs (dev TPU):
+  - `Ct=96, Seg=32` (primary run; completed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --chunk-size 96 --segment-size 32 --run-name-prefix gdn_iter8_macroJ_nopad_c96s32 --marin-prefix gs://marin-us-east5 --no-sync`
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_iter8_macroJ_nopad_c96s32_130m_ch96_seg32_20steps-d1d70d`
+    - Trace: `.profiles/wandb/gdn_iter8_macroJ_nopad_c96s32_130m_ch96_seg32_20steps-d1d70d-profiler-v0/plugins/profile/2026_03_01_10_03_00/perfetto_trace.json.gz`
+  - `Ct=64, Seg=8` attempt A (infra failure, retried once per policy):
+    - same command with `--run-name-prefix gdn_iter8_macroJ_nopad_c64s8`
+    - failure signature: TPU init contention (`/dev/vfio/3` device busy).
+  - `Ct=64, Seg=8` attempt B (retry; completed):
+    - same command with `--run-name-prefix gdn_iter8_macroJ_nopad_c64s8_retry`
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_iter8_macroJ_nopad_c64s8_retry_130m_ch64_seg8_20ste-b26968`
+    - Trace: `.profiles/wandb/gdn_iter8_macroJ_nopad_c64s8_retry_130m_ch64_seg8_20ste-b26968-profiler-v0/plugins/profile/2026_03_01_10_12_16/perfetto_trace.json.gz`
+  - `Ct=128, Seg=16` (completed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --chunk-size 128 --segment-size 16 --run-name-prefix gdn_iter8_macroJ_nopad_c128s16 --marin-prefix gs://marin-us-east5 --no-sync`
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_iter8_macroJ_nopad_c128s16_130m_ch128_seg16_20steps-961f0a`
+    - Trace: `.profiles/wandb/gdn_iter8_macroJ_nopad_c128s16_130m_ch128_seg16_20steps-961f0a-profiler-v0/plugins/profile/2026_03_01_10_16_31/perfetto_trace.json.gz`
+
+- Macro J sweep table (tested operating points):
+
+| Ct | Seg | Compile/run status | `throughput/mfu` (10..18 median) | `tokens/s` (10..18 median) | `duration` (10..18 median) | Delta vs baseline MFU |
+| --- | --- | --- | --- | --- | --- | --- |
+| 64 | 8 | Attempt A infra-failed (`/dev/vfio/3` busy), attempt B succeeded | `4.295130` | `138946.643` | `0.235832s` | `-26.33%` |
+| 96 | 32 | Succeeded | `4.952903` | `160225.466` | `0.204512s` | `-15.04%` |
+| 128 | 16 | Succeeded | `5.387411` | `174281.723` | `0.188017s` | `-7.59%` |
+
+- Hotspots observed (`pid=3, tid=3`, vs baseline trace):
+  - `Ct=96, Seg=32` (selected structural candidate):
+    - bucket deltas: `shard_map 78.098 -> 50.846 ms` (`-34.90%`), `fusion 45.618 -> 35.145 ms` (`-22.95%`), `all-gather 20.158 -> 13.178 ms` (`-34.63%`), `while 0.000 -> 31.434 ms` (new major overhead).
+    - train closed-call shard-map deltas: forward `gated_deltanet.py:2486 -> 2504` = `41.324 -> 27.803 ms` (`-32.72%`), backward `3972 -> 4099` = `26.266 -> 17.815 ms` (`-32.17%`).
+  - `Ct=128, Seg=16` (best tested point this iteration):
+    - bucket deltas: `shard_map 78.098 -> 39.018 ms` (`-50.04%`), `fusion 45.618 -> 35.043 ms` (`-23.18%`), `all-gather 20.158 -> 10.113 ms` (`-49.83%`), `while 0.000 -> 31.658 ms` (new major overhead).
+    - train closed-call shard-map deltas: forward `2486 -> 2504` = `41.324 -> 20.661 ms` (`-50.00%`), backward `3972 -> 4099` = `26.266 -> 13.131 ms` (`-50.01%`).
+
+- MFU/throughput delta (history-window median, steps `10..18`, vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `Ct=96, Seg=32` (primary candidate):
+    - `throughput/mfu`: `5.830017 -> 4.952903` (`-15.04%`)
+    - `throughput/tokens_per_second`: `188599.934 -> 160225.466` (`-15.04%`)
+    - `throughput/duration`: `0.173743s -> 0.204512s` (`+17.71%`)
+  - best tested point (`Ct=128, Seg=16`) still regressed:
+    - `throughput/mfu`: `5.830017 -> 5.387411` (`-7.59%`)
+    - `throughput/tokens_per_second`: `188599.934 -> 174281.723` (`-7.59%`)
+    - `throughput/duration`: `0.173743s -> 0.188017s` (`+8.22%`)
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + final result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward `shard_map/pallas_call` (selected candidate `Ct=96,Seg=32`): `41.324 ms -> 27.803 ms` (`-32.72%`).
+    - Backward `shard_map/pallas_call` (selected candidate `Ct=96,Seg=32`): `26.266 ms -> 17.815 ms` (`-32.17%`).
+    - `throughput/mfu -15.04%`, `throughput/tokens_per_second -15.04%`, `throughput/duration +17.71%`.
+  - Governance:
+    - MFU gain `<3%` (regression) and dominant hotspot class remained train-path `shard_map/custom-call`, with large new `while` overhead.
+    - Attempt marked **low-impact/regressive**; speculative no-pad kernel edits were reverted.
+
+- Assessment: **failed attempt / regression**. Removing pad-to-segment work reduced measured train shard-map kernel time, but introduced/retained large `while` overhead that dominated end-to-end and regressed MFU across tested operating points.
+- Next bold hypothesis:
+  - Move to **Macro Move E** next: V-tiling with shared-K precompute in train recurrent/backward kernels, explicitly targeting `while` overhead by increasing useful work per launch and reducing control-flow-heavy segmented loops.
