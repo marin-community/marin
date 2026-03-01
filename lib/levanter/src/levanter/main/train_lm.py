@@ -220,7 +220,7 @@ def main(config: TrainLmConfig):
                 tagged_eval_sets=tagged_eval_datasets,
                 tokenizer=tokenizer,
                 device_mesh=trainer.device_mesh,
-                axis_mapping=compute_axis_mapping,
+                compute_axis_mapping=compute_axis_mapping,
                 batch_axis_resource=batch_axis_resource,
                 max_examples_per_dataset=max_eval_examples_per_ds,
                 mp=config.trainer.mp,
