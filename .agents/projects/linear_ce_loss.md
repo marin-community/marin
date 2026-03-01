@@ -692,3 +692,9 @@ Notes:
   - `llama3-ish`: `b=1024,h=512,v=1024` (bf16/f32)
   - `mid-h-large-vocab`: `b=1024,h=1024,v=1024` (bf16/f32)
   - `large-batch-small-h`: `b=1024,h=512,v=2048` (bf16/f32)
+
+### 2026-03-01: Uniform TPU label-layout rule
+- Simplified fused-CE TPU block-size validation and inference policy:
+  - For all TPU device kinds, when `B >= 1024`, require `b_block_size % 1024 == 0`.
+  - Removed per-generation label-layout gating in `tuned_block_sizes.py`.
+  - Updated runtime validation in `pallas_tpu.py` to enforce the same uniform TPU rule.

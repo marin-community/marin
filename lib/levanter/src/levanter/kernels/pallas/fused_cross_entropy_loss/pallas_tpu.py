@@ -18,7 +18,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
-from .tuned_block_sizes import infer_xla_v_block_size, requires_tpu_label_layout_1024
+from .tuned_block_sizes import infer_xla_v_block_size
 from ..cost_estimate_utils import with_io_bytes_accessed
 from .xla import _linear_softmax_cross_entropy_loss_streaming_bwd
 
@@ -234,8 +234,7 @@ def _validate_inputs(
             f"H={w.shape[0]}, h_block_size={block_sizes.h_block_size}."
         )
     if require_label_layout and jax.default_backend() == "tpu" and x.shape[0] >= 1024:
-        device_kind = jax.devices()[0].device_kind
-        if requires_tpu_label_layout_1024(device_kind) and block_sizes.b_block_size % 1024 != 0:
+        if block_sizes.b_block_size % 1024 != 0:
             raise PallasUnsupportedError(
                 "TPU label layout requires b_block_size to be a multiple of 1024 when B>=1024; "
                 f"got b_block_size={block_sizes.b_block_size}."

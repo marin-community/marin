@@ -362,7 +362,6 @@ _HUGE_BATCH_BUCKET = "huge-batch-llama3-ish"
 _FAST_HUGE_BATCH_SOURCE_BUCKET = "llama3-ish"
 _SCOPED_VMEM_LIMIT_ARG = "xla_tpu_scoped_vmem_limit_kib="
 _WARNED_HUGE_BATCH_SAFE_FALLBACK = False
-_TPU_LABEL_LAYOUT_DEVICE_KEYS = {"TPU v4", "TPU v5", "TPU v5e", "TPU v5p"}
 
 
 def _is_tpu_device(device_key: Optional[str]) -> bool:
@@ -375,14 +374,6 @@ def _normalized_device_kind(device_kind: Optional[str]) -> Optional[str]:
     if not device_kind:
         return None
     return device_kind.lower()
-
-
-def requires_tpu_label_layout_1024(device_kind: Optional[str]) -> bool:
-    """Whether TPU label layout requires b_block_size to be a multiple of 1024."""
-    normalized = _normalized_device_kind(device_kind)
-    if not normalized:
-        return False
-    return "tpu v4" in normalized or "tpu v5" in normalized
 
 
 def _device_key(device_kind: Optional[str]) -> Optional[str]:
@@ -505,15 +496,13 @@ def _is_valid_for_pallas_shape(
     device_key: Optional[str],
     device_kind: Optional[str],
 ) -> bool:
+    del device_kind
     if _is_tpu_device(device_key):
         if block_sizes.b_block_size % 128 != 0 or block_sizes.h_block_size % 128 != 0:
             return False
         if b % block_sizes.b_block_size != 0 or h % block_sizes.h_block_size != 0:
             return False
-        has_label_layout_constraint = device_key in _TPU_LABEL_LAYOUT_DEVICE_KEYS or requires_tpu_label_layout_1024(
-            device_kind
-        )
-        if has_label_layout_constraint and b >= 1024 and block_sizes.b_block_size % 1024 != 0:
+        if b >= 1024 and block_sizes.b_block_size % 1024 != 0:
             return False
         return True
 
@@ -536,12 +525,10 @@ def _sanitize_for_pallas(
     device_kind: Optional[str],
 ) -> BlockSizes:
     """Adjust inferred block sizes so B/H blocks divide local shapes when possible."""
+    del device_kind
     if not _is_tpu_device(device_key):
         return block_sizes
-    has_label_layout_constraint = device_key in _TPU_LABEL_LAYOUT_DEVICE_KEYS or requires_tpu_label_layout_1024(
-        device_kind
-    )
-    if has_label_layout_constraint and b >= 1024:
+    if b >= 1024:
         b_block_size = _largest_divisor_multiple_of_1024(b, block_sizes.b_block_size)
     else:
         b_block_size = _largest_divisor_multiple_of_128(b, block_sizes.b_block_size)
