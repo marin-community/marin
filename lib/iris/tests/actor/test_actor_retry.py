@@ -9,7 +9,7 @@ import pytest
 from connectrpc.errors import ConnectError
 
 from iris.actor import ActorClient, ActorPool
-from iris.actor.client import RetryConfig
+from iris.time_utils import ExponentialBackoff
 from iris.actor.resolver import FixedResolver, ResolveResult
 from iris.actor.server import ActorServer
 
@@ -70,7 +70,8 @@ def test_actor_client_retries_on_transient_rpc_error():
             switching,
             "counter",
             resolve_timeout=5.0,
-            retry_config=RetryConfig(max_call_attempts=3, initial_backoff=0.05, max_backoff=0.1),
+            max_call_attempts=3,
+            backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
         )
 
         # First call should fail to reach dead endpoint, re-resolve to real
@@ -94,7 +95,7 @@ def test_actor_client_does_not_retry_on_application_error():
 
     try:
         resolver = FixedResolver({"divider": f"http://127.0.0.1:{port}"})
-        client = ActorClient(resolver, "divider", retry_config=RetryConfig(max_call_attempts=3))
+        client = ActorClient(resolver, "divider", max_call_attempts=3)
 
         # ZeroDivisionError is an application error, not a transient RPC error.
         # It should propagate immediately without retry.
@@ -125,7 +126,8 @@ def test_actor_pool_retries_on_transient_rpc_error():
             switching,
             "counter",
             timeout=2.0,
-            retry_config=RetryConfig(max_call_attempts=3, initial_backoff=0.05, max_backoff=0.1),
+            max_call_attempts=3,
+            backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
         )
 
         result = pool.call().increment()
@@ -142,7 +144,8 @@ def test_actor_client_exhausts_retries():
         resolver,
         "ghost",
         resolve_timeout=2.0,
-        retry_config=RetryConfig(max_call_attempts=2, initial_backoff=0.05, max_backoff=0.1),
+        max_call_attempts=2,
+        backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
     )
 
     with pytest.raises(ConnectError):
@@ -174,7 +177,8 @@ def test_actor_client_clears_cache_on_final_retryable_failure():
             switching,
             "counter",
             resolve_timeout=5.0,
-            retry_config=RetryConfig(max_call_attempts=1, initial_backoff=0.05, max_backoff=0.1),
+            max_call_attempts=1,
+            backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
         )
 
         # First call: resolves to dead endpoint, fails (only 1 attempt).

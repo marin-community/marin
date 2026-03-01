@@ -16,13 +16,13 @@ Example:
 Custom backoff behavior:
     client = ActorClient(
         resolver, "my-actor",
-        retry_config=RetryConfig(initial_backoff=0.2, max_backoff=5.0),
+        backoff=ExponentialBackoff(initial=0.2, maximum=5.0),
+        max_call_attempts=3,
     )
 """
 
 import logging
 import time
-from dataclasses import dataclass
 from typing import Any
 
 import cloudpickle
@@ -34,17 +34,6 @@ from iris.rpc.errors import call_with_retry
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class RetryConfig:
-    """Configuration for retry behavior on transient RPC errors."""
-
-    initial_backoff: float = 0.1
-    max_backoff: float = 10.0
-    backoff_factor: float = 2.0
-    backoff_jitter: float = 0.25
-    max_call_attempts: int = 5
 
 
 def unwrap_actor_response(resp: actor_pb2.ActorResponse) -> Any:
@@ -65,7 +54,8 @@ class ActorClient:
         name: str,
         resolve_timeout: float = 3600.0,
         call_timeout: float | None = None,
-        retry_config: RetryConfig = RetryConfig(),
+        max_call_attempts: int = 5,
+        backoff: ExponentialBackoff = ExponentialBackoff(initial=0.1, maximum=10.0, factor=2.0, jitter=0.25),
     ):
         """Initialize the actor client.
 
@@ -75,13 +65,15 @@ class ActorClient:
             resolve_timeout: Total timeout in seconds for initial worker resolution.
             call_timeout: Timeout in seconds for RPC calls. Defaults to `resolve_timeout`
                 when not specified.
-            retry_config: Configuration for retry behavior on transient errors.
+            max_call_attempts: Maximum number of RPC call attempts before giving up.
+            backoff: Exponential backoff configuration for both resolution and call retries.
         """
         self._resolver = resolver
         self._name = name
         self._resolve_timeout = resolve_timeout
         self._call_timeout = resolve_timeout if call_timeout is None else call_timeout
-        self.retry_config = retry_config
+        self._max_call_attempts = max_call_attempts
+        self._backoff = backoff
 
         self._rpc_client: ActorServiceClientSync | None = None
 
@@ -97,12 +89,7 @@ class ActorClient:
         if self._rpc_client:
             return self._rpc_client
 
-        backoff = ExponentialBackoff(
-            initial=self.retry_config.initial_backoff,
-            maximum=self.retry_config.max_backoff,
-            factor=self.retry_config.backoff_factor,
-            jitter=self.retry_config.backoff_jitter,
-        )
+        backoff = self._backoff.copy()
         start_time = time.monotonic()
         attempt = 0
 
@@ -171,8 +158,6 @@ class _RpcMethod:
             f"{self._client._name}.{self._method_name}",
             do_call,
             on_retry=clear_connection,
-            max_attempts=self._client.retry_config.max_call_attempts,
-            initial_backoff=self._client.retry_config.initial_backoff,
-            max_backoff=self._client.retry_config.max_backoff,
-            backoff_factor=self._client.retry_config.backoff_factor,
+            max_attempts=self._client._max_call_attempts,
+            backoff=self._client._backoff,
         )

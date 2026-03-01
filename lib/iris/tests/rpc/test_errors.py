@@ -8,6 +8,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.rpc.errors import call_with_retry, connect_error_with_traceback, extract_error_details
+from iris.time_utils import ExponentialBackoff
 
 
 def test_connect_error_with_traceback_populates_timestamp() -> None:
@@ -79,7 +80,7 @@ def test_call_with_retry_retries_on_deadline_exceeded() -> None:
             raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out")
         return "success"
 
-    result = call_with_retry("test_op", retry_then_succeed, initial_backoff=0.001, max_backoff=0.001)
+    result = call_with_retry("test_op", retry_then_succeed, backoff=ExponentialBackoff(initial=0.001, maximum=0.001))
     assert result == "success"
     assert call_count == 3
 

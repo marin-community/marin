@@ -122,9 +122,7 @@ def call_with_retry(
     *,
     on_retry: Callable[[Exception], None] | None = None,
     max_attempts: int = 5,
-    initial_backoff: float = 0.1,
-    max_backoff: float = 5.0,
-    backoff_factor: float = 2.0,
+    backoff: ExponentialBackoff | None = None,
 ) -> T:
     """Execute an RPC call with exponential backoff retry.
 
@@ -135,9 +133,9 @@ def call_with_retry(
             failure, including the final attempt. Useful for clearing cached
             connections so subsequent calls can re-resolve endpoints.
         max_attempts: Maximum number of attempts (default: 5)
-        initial_backoff: Initial retry delay in seconds (default: 0.1)
-        max_backoff: Maximum delay between retries (default: 5.0)
-        backoff_factor: Exponential backoff multiplier (default: 2.0)
+        backoff: Backoff configuration. A fresh copy is made internally so the
+            caller's instance is not mutated. Defaults to
+            ExponentialBackoff(initial=0.1, maximum=5.0, factor=2.0).
 
     Returns:
         Result from call_fn
@@ -145,11 +143,10 @@ def call_with_retry(
     Raises:
         Exception from call_fn if all retries exhausted or error is not retryable
     """
-    backoff = ExponentialBackoff(
-        initial=initial_backoff,
-        maximum=max_backoff,
-        factor=backoff_factor,
-    )
+    if backoff is None:
+        backoff = ExponentialBackoff(initial=0.1, maximum=5.0, factor=2.0)
+    else:
+        backoff = backoff.copy()
     last_exception = None
 
     for attempt in range(max_attempts):

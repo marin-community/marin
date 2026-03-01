@@ -13,11 +13,12 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 
-from iris.actor.client import RetryConfig, unwrap_actor_response
+from iris.actor.client import unwrap_actor_response
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult, Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
 from iris.rpc.errors import call_with_retry
+from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,8 @@ class ActorPool(Generic[T]):
         resolver: Resolver,
         name: str,
         timeout: float = 30.0,
-        retry_config: RetryConfig = RetryConfig(),
+        max_call_attempts: int = 5,
+        backoff: ExponentialBackoff = ExponentialBackoff(initial=0.1, maximum=10.0, factor=2.0, jitter=0.25),
         resolve_ttl: float = 5.0,
     ):
         """Initialize actor pool.
@@ -103,13 +105,15 @@ class ActorPool(Generic[T]):
             resolver: Resolver to discover endpoints
             name: Actor name to resolve
             timeout: RPC timeout in seconds
-            retry_config: Configuration for retry behavior on transient errors.
+            max_call_attempts: Maximum number of RPC call attempts before giving up.
+            backoff: Exponential backoff configuration for call retries.
             resolve_ttl: Seconds to cache resolve results before re-querying the resolver
         """
         self._resolver = resolver
         self._name = name
         self._timeout = timeout
-        self._retry_config = retry_config
+        self._max_call_attempts = max_call_attempts
+        self._backoff = backoff
         self._resolve_ttl = resolve_ttl
         self._endpoint_index = 0
         self._cached_result: ResolveResult | None = None
@@ -242,15 +246,12 @@ class _PoolCallProxy(Generic[T]):
                 if last_url[0] is not None:
                     self._pool._evict_client(last_url[0])
 
-            rc = self._pool._retry_config
             return call_with_retry(
                 f"{self._pool._name}.{method_name}",
                 do_call,
                 on_retry=on_retry,
-                max_attempts=rc.max_call_attempts,
-                initial_backoff=rc.initial_backoff,
-                max_backoff=rc.max_backoff,
-                backoff_factor=rc.backoff_factor,
+                max_attempts=self._pool._max_call_attempts,
+                backoff=self._pool._backoff,
             )
 
         return call
