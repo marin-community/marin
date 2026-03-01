@@ -64,6 +64,7 @@ from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
+    ReservationEntry,
     ResourceSpec,
     gpu_device,
     is_job_finished,
@@ -969,6 +970,12 @@ class SmokeTestRunner:
                 )
             )
 
+        # Reservation tests — run in all modes since they exercise the gate + autoscaler tagging.
+        tests.append(SmokeTestCase(f"Reserved job ({a.label()})", so(self._run_reserved_job, scheduling_only)))
+        tests.append(
+            SmokeTestCase("Reservation status reporting", so(self._run_reservation_status_check, scheduling_only))
+        )
+
         return tests
 
     def _maybe_scheduling_only(self, method, scheduling_only: bool):
@@ -1037,6 +1044,7 @@ class SmokeTestRunner:
         replicas: int = 1,
         timeout: int | None = None,
         scheduling_only: bool = False,
+        reservation: list[ReservationEntry] | None = None,
     ) -> TestResult:
         """Generic job runner that handles submission, waiting, and result collection."""
         job_timeout = timeout or self.config.job_timeout_seconds
@@ -1050,6 +1058,7 @@ class SmokeTestRunner:
                 constraints=constraints,
                 coscheduling=coscheduling,
                 replicas=replicas,
+                reservation=reservation,
             )
             logger.info("  Job submitted: %s", job.job_id)
 
@@ -1258,6 +1267,100 @@ class SmokeTestRunner:
             constraints=[region_constraint([a.region])],
             scheduling_only=scheduling_only,
         )
+
+    def _run_reserved_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
+        """Run a job with a reservation matching the cluster's accelerator.
+
+        The reservation gate should be satisfied once the autoscaler provisions
+        a tagged worker, then the job should schedule and complete normally.
+        """
+        return self._run_job_test(
+            client=client,
+            test_name=f"Reserved job ({self._accel.label()})",
+            entrypoint=Entrypoint.from_callable(_hello_job),
+            job_name=f"smoke-reserved-{self._run_id}",
+            resources=ResourceSpec(device=self._accel.make_device()),
+            reservation=[ReservationEntry(resources=ResourceSpec(device=self._accel.make_device()))],
+            scheduling_only=scheduling_only,
+        )
+
+    def _run_reservation_status_check(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
+        """Verify that a reservation-gated job reports fulfillment progress in its status.
+
+        Submits a job with 2 reservation entries, polls until the status includes
+        reservation info, then lets the job complete (or terminates on timeout).
+        """
+        a = self._accel
+        test_name = "Reservation status reporting"
+        start = time.monotonic()
+        job_timeout = self.config.job_timeout_seconds
+        try:
+            job = client.submit(
+                entrypoint=Entrypoint.from_callable(_hello_job),
+                name=f"smoke-reservation-status-{self._run_id}",
+                resources=ResourceSpec(device=a.make_device()),
+                environment=EnvironmentSpec(),
+                reservation=[
+                    ReservationEntry(resources=ResourceSpec(device=a.make_device())),
+                    ReservationEntry(resources=ResourceSpec(device=a.make_device())),
+                ],
+            )
+            logger.info("  Job submitted: %s", job.job_id)
+
+            # Poll until we see reservation status in the job status.
+            deadline = time.monotonic() + min(job_timeout, 60)
+            saw_reservation_status = False
+            while time.monotonic() < deadline:
+                status = job.status()
+                if status.HasField("reservation"):
+                    saw_reservation_status = True
+                    logger.info(
+                        "  Reservation: %d/%d entries fulfilled, satisfied=%s",
+                        status.reservation.fulfilled,
+                        status.reservation.total_entries,
+                        status.reservation.satisfied,
+                    )
+                    break
+                if is_job_finished(status.state):
+                    break
+                time.sleep(0.5)
+
+            if not saw_reservation_status:
+                duration = time.monotonic() - start
+                logger.error("  [FAIL] Never observed reservation status in job response")
+                return TestResult(test_name, False, "Reservation status never appeared", duration)
+
+            # Wait for the job to finish (reservation should eventually be satisfied).
+            if scheduling_only:
+                scheduled, detail, status = self._wait_for_scheduling(job, timeout=min(job_timeout, 30))
+                duration = time.monotonic() - start
+                if not is_job_finished(status.state):
+                    try:
+                        job.terminate()
+                    except Exception as e:
+                        logger.warning("  Could not terminate job %s: %s", job.job_id, e)
+                if scheduled:
+                    logger.info("  [PASS] %s in %.1fs", detail, duration)
+                    return TestResult(test_name, True, f"Reservation status observed, {detail}", duration)
+                logger.error("  [FAIL] %s", detail)
+                return TestResult(test_name, False, detail, duration)
+
+            status = job.wait(timeout=job_timeout, raise_on_failure=False, stream_logs=True)
+            duration = time.monotonic() - start
+            if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
+                logger.info("  [PASS] Reservation status observed, completed in %.1fs", duration)
+                return TestResult(
+                    test_name, True, f"Reservation status observed, completed in {duration:.1f}s", duration
+                )
+            else:
+                state_name = cluster_pb2.JobState.Name(status.state)
+                logger.error("  [FAIL] Job ended with state %s", state_name)
+                return TestResult(test_name, False, f"State: {state_name}, error: {status.error}", duration)
+
+        except TimeoutError:
+            duration = time.monotonic() - start
+            logger.error("  [FAIL] Timed out after %ds", job_timeout)
+            return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
 
     def _run_non_preemptible_cpu_job(self, client: IrisClient, scheduling_only: bool = False) -> TestResult:
         """Run a CPU-only job constrained to non-preemptible workers."""
