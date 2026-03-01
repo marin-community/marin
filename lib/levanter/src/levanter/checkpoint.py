@@ -17,7 +17,6 @@ from typing import Callable, List, Optional, ParamSpec, Sequence, TypeVar, Union
 
 import equinox
 import fsspec
-import haliax.partitioning
 import jax
 import jax.numpy as jnp
 from draccus import field
@@ -33,6 +32,7 @@ from levanter.tensorstore_serialization import (
 )
 from levanter.utils import fsspec_utils
 from levanter.utils.jax_utils import broadcast_one_to_all
+from levanter.utils.partitioning import named_jit
 from levanter.utils.types import FilterSpec, ResourceMapping
 
 logger = logging.getLogger(__name__)
@@ -485,7 +485,7 @@ def load_checkpoint_or_initialize(
 
     # some state might not be initialized, so we need to initialize it
     # JAX will be smart and only do the compute for things we actually need
-    @haliax.named_jit(
+    @named_jit(
         axis_resources=axis_mapping,
         out_axis_resources=axis_mapping,
         donate_args=donate_args,
