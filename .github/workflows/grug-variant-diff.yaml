@@ -78,7 +78,7 @@ jobs:
           keep_files: true
 
       - name: Post PR comment with report links
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: "!cancelled() && github.event.pull_request.head.repo.full_name == github.repository"
         uses: actions/github-script@v7
         env:
           ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
