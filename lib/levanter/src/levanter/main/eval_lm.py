@@ -20,7 +20,7 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
 from levanter.data.text import LmDataConfig
-from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
+from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model, resolve_batch_axis_resource
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
@@ -73,7 +73,7 @@ def main(config: EvalLmConfig):
 
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
-    batch_axis_resource = compute_axis_mapping.get(Batch.name, compute_axis_mapping.get("batch"))
+    batch_axis_resource = resolve_batch_axis_resource(Batch, compute_axis_mapping)
 
     if config.checkpoint_path is None and config.hf_checkpoint is None:
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint")
