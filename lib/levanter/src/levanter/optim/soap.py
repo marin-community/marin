@@ -23,7 +23,7 @@ from optax._src.utils import canonicalize_dtype
 
 from levanter.models.scan_layers import is_scan_container
 from levanter.optim.config import OptimizerConfig
-from levanter.utils.mesh import DATA_AXIS
+from levanter.utils.mesh import DATA_AXIS, get_active_mesh
 from levanter.utils.partitioning import infer_resource_partitions
 
 
@@ -839,9 +839,7 @@ def init_conditioner(p_shape, max_precond_dim: int, dtype: Optional[Union[str, j
         return ([jnp.zeros((p_shape[0], p_shape[0]), dtype=dtype)], [PartitionSpec()])
 
     # sharding purpose
-    mesh = jax._src.mesh.get_concrete_mesh()
-    if mesh.devices.shape == ():
-        mesh = None
+    mesh = get_active_mesh()
     # get fsdp mesh axis
     if mesh is not None:
         fsdp_axis_name = DATA_AXIS
