@@ -52,12 +52,12 @@ def test_tagged_evaluator_accepts_grug_lm_examples():
             return per_pos_loss, named_batch.loss_weight.array, jnp.roll(named_batch.tokens.array, -1, axis=-1)
 
         evaluator = TaggedEvaluator(
-            EvalBatch=EvalBatch,
+            EvalBatch=EvalBatch.size,
             tagged_eval_sets=[(dataset, ["grug"])],
             loss_fn=loss_fn,
             tokenizer=None,
             device_mesh=mesh,
-            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+            batch_axis_resource=ResourceAxis.DATA,
         )
         result = evaluator.evaluate(model)
 

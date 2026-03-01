@@ -394,10 +394,16 @@ class TaggedEvaluator(Generic[Ex, M]):
         tokenizer: Optional[HfTokenizer] = None,
         device_mesh=None,
         axis_mapping=None,
+        batch_axis_resource=None,
         max_examples_per_dataset=None,
     ):
         if isinstance(EvalBatch, int):
             EvalBatch = hax.Axis("batch", EvalBatch)
+        if batch_axis_resource is None and axis_mapping is not None:
+            batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
+        loader_axis_resources = axis_mapping
+        if loader_axis_resources is None and batch_axis_resource is not None:
+            loader_axis_resources = {EvalBatch.name: batch_axis_resource}
         self.loss_fn = loss_fn
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
         self.loader = DataLoader(
@@ -405,15 +411,14 @@ class TaggedEvaluator(Generic[Ex, M]):
             EvalBatch,
             max_buffered_batches=100,
             mesh=device_mesh,
-            axis_resources=axis_mapping,
+            axis_resources=loader_axis_resources,
         )
         self.device_mesh = device_mesh
         self.tokenizer = tokenizer
         self.axis_mapping = axis_mapping
         self.per_pos_out_sharding = None
-        if device_mesh is not None and axis_mapping is not None:
-            batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
-            if batch_axis_resource is not None and axis_resource_is_explicit(device_mesh, batch_axis_resource):
+        if device_mesh is not None and batch_axis_resource is not None:
+            if axis_resource_is_explicit(device_mesh, batch_axis_resource):
                 self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
 
         self.bytes_per_token = self._calculate_bytes_per_token_type(tokenizer)
