@@ -34,10 +34,15 @@ from fsspec import AbstractFileSystem
 from fsspec.asyn import get_loop
 from fsspec.asyn import sync as fsspec_sync
 from haliax import Axis
-from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
-from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
+from haliax.state_dict import (
+    StateDict,
+    flatten_modules_for_export,
+    from_torch_compatible_state_dict,
+    save_state_dict,
+    to_state_dict,
+)
 from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download, ModelInfo
 from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.file_download import repo_folder_name
