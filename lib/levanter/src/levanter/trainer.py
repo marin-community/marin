@@ -602,10 +602,9 @@ class Trainer:
 
         if eval_loader and (self.config.max_eval_batches is None or self.config.max_eval_batches > 0):
 
-            @eqx.filter_jit
+            @named_jit(axis_resources=self.compute_axis_mapping)
             def eval_loss(model, *batch, **batch_kwargs):
-                with hax.axis_mapping(self.compute_axis_mapping):
-                    return self.loss_fn(model, *batch, **batch_kwargs, key=None)
+                return self.loss_fn(model, *batch, **batch_kwargs, key=None)
 
             self.add_hook(
                 callbacks.compute_validation_loss(
