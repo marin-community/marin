@@ -97,13 +97,12 @@ def main(config: EvalLmConfig):
         def eval_loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
-            with hax.axis_mapping(compute_axis_mapping):
-                per_pos_loss = model.compute_next_token_loss_array(
-                    batch,
-                    batch_axis=Batch,
-                    reduction=None,
-                    reduction_axis=(),
-                )
+            per_pos_loss = model.compute_next_token_loss_array(
+                batch,
+                batch_axis=Batch,
+                reduction=None,
+                reduction_axis=(),
+            )
 
             if isinstance(batch, LmExample):
                 per_pos_weight = batch.loss_weight.array

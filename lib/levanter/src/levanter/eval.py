@@ -177,27 +177,17 @@ def _default_lm_eval_loss_fn(
     *,
     EvalBatch: hax.Axis,
     mp: jmp.Policy | None,
-    compute_axis_mapping: ResourceMapping | None = None,
 ) -> LossFnOutput:
     model = inference_mode(model, True)
     if mp is not None:
         model = mp.cast_to_compute(model)
 
-    if compute_axis_mapping is not None:
-        with hax.axis_mapping(compute_axis_mapping):
-            per_pos_loss = model.compute_next_token_loss_array(
-                batch,
-                batch_axis=EvalBatch,
-                reduction=None,
-                reduction_axis=(),
-            )
-    else:
-        per_pos_loss = model.compute_next_token_loss_array(
-            batch,
-            batch_axis=EvalBatch,
-            reduction=None,
-            reduction_axis=(),
-        )
+    per_pos_loss = model.compute_next_token_loss_array(
+        batch,
+        batch_axis=EvalBatch,
+        reduction=None,
+        reduction_axis=(),
+    )
 
     if isinstance(batch, LmExample):
         per_pos_weight = batch.loss_weight.array
@@ -256,9 +246,7 @@ def cb_tagged_lm_evaluate(
     if loss_fn is None:
 
         def loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
-            return _default_lm_eval_loss_fn(
-                model, batch, EvalBatch=EvalBatch, mp=mp, compute_axis_mapping=compute_axis_mapping
-            )
+            return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp)
 
     if batch_axis_resource is None:
         batch_axis_resource = resolve_batch_axis_resource(EvalBatch, compute_axis_mapping)
@@ -455,7 +443,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
         per_pos_out_sharding = self.per_pos_out_sharding
 
-        @named_jit
+        @named_jit(axis_resources=self.compute_axis_mapping)
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
             losses, weights, token_ids = self.loss_fn(model, batch)
             weighted_loss = losses * weights  # b t
