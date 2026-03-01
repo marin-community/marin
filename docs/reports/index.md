@@ -98,6 +98,10 @@ This page includes only experiments that have at least one run or report.
 - Fantastic Pretraining Optimizers And Where to Find them [![#1290](https://img.shields.io/github/issues/detail/state/marin-community/marin/1290)](https://github.com/marin-community/marin/issues/1290)
     - [GitHub Issue #1290](https://github.com/marin-community/marin/issues/1290)
     - [WandB Report](https://wandb.ai/stanford-mercury/optimizer-scaling/reports/Fantastic-Optimizers-and-Where-to-Find-Them--VmlldzoxMjgzMDU5NQ?accessToken=2ib82ugpvrywe89kndzbdffpjc7rezwlo7jdvz5gc9huc9thwyjs9itpu2nvs8zz)
+- NAMO/NAMO-D weight-decay ablation in Marin [![#3037](https://img.shields.io/github/issues/detail/state/marin-community/marin/3037)](https://github.com/marin-community/marin/issues/3037)
+    - [GitHub Issue #3037](https://github.com/marin-community/marin/issues/3037)
+    - [WandB Report](https://wandb.ai/suranganath-uc-san-diego/marin/reports/-Exp-Issue-3037-NAMO-NAMO-D-Weight-Decay-Ablation-in-Marin-16-runs-50k-steps-GPT-2-Llama---VmlldzoxNjA1NzU3Mg?accessToken=2hcqtpbw6x3p2t7e9s00uhmsiek8ytyetzpj2u49m7zjwaxuz90c5tm7sudxl3xr)
+    - Conclusion: In this setup, NAMO/NAMO-D with AdamW-style matrix decay finished better than adaptive-decay variants by 50k steps.
 - Qwen (QK Norm) Speedruns [![#1572](https://img.shields.io/github/issues/detail/state/marin-community/marin/1572)](https://github.com/marin-community/marin/issues/1572)
     - [GitHub Issue #1572](https://github.com/marin-community/marin/issues/1572)
     - [WandB Report](https://wandb.ai/marin-community/marin/reports/Qwen-3-speedruns-QK-Norm-Muon---VmlldzoxNDM1NjY5MA)
