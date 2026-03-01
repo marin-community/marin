@@ -21,11 +21,12 @@ from levanter import callbacks
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
+from levanter.data.text.examples import GrugLmExample
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -111,8 +112,13 @@ def main(config: TrainLmConfig):
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+    def loss_function(model: LmHeadModel, example: GrugLmExample, *, key=None):
+        return model.compute_next_token_loss_array(
+            example,
+            batch_axis=config.trainer.batch_axis_name,
+            key=key,
+            logsumexp_weight=config.z_loss_weight,
+        )
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
@@ -161,15 +167,15 @@ def main(config: TrainLmConfig):
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
         # Get the training dataset
-        train_dataset = config.data.train_set(
-            Pos,
-            config.trainer.batch_schedule,
+        train_dataset = config.data.train_grug_set(
+            seq_len=Pos.size,
+            batch_schedule=config.trainer.batch_schedule,
             key=data_key,
         )
         install_tensorstore_metrics_hook_if_enabled(trainer)
 
         # Get the tagged evaluation datasets
-        tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
+        tagged_eval_datasets = config.data.tagged_eval_grug_sets(seq_len=Pos.size)
 
         state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
 
