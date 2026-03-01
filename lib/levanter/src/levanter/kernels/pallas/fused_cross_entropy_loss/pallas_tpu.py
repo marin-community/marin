@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2026 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -30,6 +33,51 @@ class PallasUnsupportedError(NotImplementedError):
 
 NUM_LANES = 128
 _DISABLE_MEGACORE_ENV = "LEVANTER_PALLAS_TPU_DISABLE_MEGACORE"
+
+
+def _forward_lse_cost_reference(
+    x: jax.Array,
+    w: jax.Array,
+    *,
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
+    precision: jax.lax.PrecisionLike,
+) -> jax.Array:
+    logits = jax.lax.dot_general(
+        x,
+        w,
+        (((1,), (0,)), ((), ())),
+        precision=precision,
+    )
+    if dtype is not None:
+        logits = logits.astype(dtype)
+    logits = _apply_logit_soft_cap(logits, logit_soft_cap)
+    return jax.nn.logsumexp(logits, axis=-1)
+
+
+def _fwd_cost_estimate(
+    x: jax.Array,
+    w: jax.Array,
+    *,
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
+    precision: jax.lax.PrecisionLike,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate | None:
+    body_cost = pl.estimate_cost(
+        _forward_lse_cost_reference,
+        x,
+        w,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+    )
+    return with_io_bytes_accessed(
+        body_cost,
+        kernel_inputs_specs=kernel_inputs_specs,
+        kernel_outputs_specs=kernel_outputs_specs,
+    )
 
 
 def _backward_cost_reference(
@@ -293,6 +341,9 @@ def linear_softmax_lse_forward_fori_pallas_kernel(
         m_prev = m_scratch_ref[...].astype(jnp.float32)
         l_prev = l_scratch_ref[...].astype(jnp.float32)
         num_iters = v_block_size // v_compute_block_size
+        # Keep the streaming LSE recurrence in one program over V subtiles so we
+        # only carry per-row (m, l) state instead of materializing full logits tiles.
+        # This materially reduces VMEM pressure on TPU v4.
         m_next, l_next = jax.lax.fori_loop(0, num_iters, body, (m_prev, l_prev), unroll=True)
         m_scratch_ref[...] = m_next.astype(m_scratch_ref.dtype)
         l_scratch_ref[...] = l_next.astype(l_scratch_ref.dtype)
@@ -364,6 +415,15 @@ def _linear_softmax_lse_forward_fori(
         grid=(num_cores, num_b_blocks_per_core, num_v_outer_blocks, 1),
         compiler_params=pltpu.CompilerParams(
             dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary"),
+        ),
+        cost_estimate=_fwd_cost_estimate(
+            x,
+            w,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            kernel_inputs_specs=(x, w),
+            kernel_outputs_specs=(lse_shape,),
         ),
     )(x, w)
     return lse_lanes[:, 0]
@@ -827,64 +887,12 @@ def linear_softmax_cross_entropy_loss_pallas(
         dtype,
         logit_soft_cap,
         precision,
-        False,
-    )
-    return fn(x, labels, w)
-
-
-def linear_softmax_cross_entropy_loss_linear_ce_tpu(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
-    *,
-    block_sizes: BlockSizes,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
-    precision: jax.lax.PrecisionLike = None,
-    return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
-    """Optimized TPU v4 linear CE path: pallas forward + XLA streaming backward."""
-    if return_argmax:
-        raise PallasUnsupportedError("Pallas backend does not support return_argmax. Use XLA for return_argmax=True.")
-    fn = _make_custom_vjp(
-        block_sizes.b_block_size,
-        block_sizes.h_block_size,
-        block_sizes.v_block_size,
-        dtype,
-        logit_soft_cap,
-        precision,
         True,
     )
     return fn(x, labels, w)
 
 
-def linear_softmax_cross_entropy_loss_linear_ce_tpu_pallas_bwd(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
-    *,
-    block_sizes: BlockSizes,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
-    precision: jax.lax.PrecisionLike = None,
-    return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
-    """Optimized TPU v4 linear CE path with Pallas backward."""
-    return linear_softmax_cross_entropy_loss_pallas(
-        x,
-        labels,
-        w,
-        block_sizes=block_sizes,
-        dtype=dtype,
-        logit_soft_cap=logit_soft_cap,
-        precision=precision,
-        return_argmax=return_argmax,
-    )
-
-
 __all__ = [
     "PallasUnsupportedError",
-    "linear_softmax_cross_entropy_loss_linear_ce_tpu",
-    "linear_softmax_cross_entropy_loss_linear_ce_tpu_pallas_bwd",
     "linear_softmax_cross_entropy_loss_pallas",
 ]

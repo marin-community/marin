@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2026 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -180,7 +183,7 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.parametrize("implementation", ["pallas_tpu", "linear_ce_tpu", "linear_ce_tpu_pallas_bwd"])
+@pytest.mark.parametrize("implementation", ["pallas_tpu"])
 def test_fused_cross_entropy_pallas_requires_tpu(implementation: str):
     if jax.default_backend() == "tpu":
         pytest.skip("requires non-TPU backend")
@@ -865,8 +868,8 @@ def test_fused_cross_entropy_pallas_backward_matches_xla():
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
 
 
-@pytest.mark.parametrize("implementation", ["linear_ce_tpu", "linear_ce_tpu_pallas_bwd"])
-def test_fused_cross_entropy_linear_ce_tpu_backward_matches_xla(implementation: str):
+@pytest.mark.parametrize("implementation", ["pallas_tpu"])
+def test_fused_cross_entropy_pallas_backward_matches_xla_infer_blocks(implementation: str):
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
 

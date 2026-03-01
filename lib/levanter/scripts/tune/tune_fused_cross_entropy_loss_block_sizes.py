@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2026 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -63,7 +66,7 @@ def _parse_args() -> argparse.Namespace:
         "--implementation",
         type=str,
         default="pallas_tpu",
-        choices=("pallas_tpu", "linear_ce_tpu", "linear_ce_tpu_pallas_bwd", "xla", "reference"),
+        choices=("pallas_tpu", "xla", "reference"),
         help="Kernel backend implementation to benchmark.",
     )
     parser.add_argument("--input-dtype", type=str, default="bfloat16", help="Input dtype for x and w.")
@@ -610,11 +613,7 @@ def main() -> None:
             # Env vars affect compile-time kernel behavior, so force retrace.
             jax.clear_caches()
 
-        variant_configs = (
-            pallas_configs
-            if variant.implementation in ("pallas_tpu", "linear_ce_tpu", "linear_ce_tpu_pallas_bwd")
-            else [("none", None)]
-        )
+        variant_configs = pallas_configs if variant.implementation == "pallas_tpu" else [("none", None)]
         with _variant_env(variant):
             for label, cfg in variant_configs:
                 print("variant", variant.name, variant.implementation, label, cfg)
