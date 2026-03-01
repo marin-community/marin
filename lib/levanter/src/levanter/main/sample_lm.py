@@ -11,7 +11,6 @@ import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
-from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
 from levanter.callbacks import profile_ctx
@@ -24,6 +23,7 @@ from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
+from levanter.utils.partitioning import round_axis_for_partitioning
 
 logger = logging.getLogger(__name__)
 
