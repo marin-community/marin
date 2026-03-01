@@ -128,22 +128,22 @@ def main(config: EvalLmConfig):
             model = mp.cast_to_compute(model)
             return model.compute_next_token_loss(example, key=None)
 
+        @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmEvalExample):
             model = mp.cast_to_compute(model)
-            with hax.axis_mapping(compute_axis_mapping):
-                if isinstance(example, LmExample):
-                    activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-                    head = model.get_lm_head()
-                    return hax.dot(activations, head, axis=model.Embed)
+            if isinstance(example, LmExample):
+                activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
+                head = model.get_lm_head()
+                return hax.dot(activations, head, axis=model.Embed)
 
-                logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=Batch, key=None)
-                if logits_array.ndim == 2:
-                    return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))
-                if logits_array.ndim == 3:
-                    batch_axis = Axis(Batch.name, logits_array.shape[0])
-                    pos_axis = Pos.resize(logits_array.shape[1])
-                    return hax.named(logits_array, (batch_axis, pos_axis, model.Vocab))
-                raise ValueError(f"Unexpected logits rank for analysis callbacks: {logits_array.ndim}")
+            logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=Batch, key=None)
+            if logits_array.ndim == 2:
+                return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))
+            if logits_array.ndim == 3:
+                batch_axis = Axis(Batch.name, logits_array.shape[0])
+                pos_axis = Pos.resize(logits_array.shape[1])
+                return hax.named(logits_array, (batch_axis, pos_axis, model.Vocab))
+            raise ValueError(f"Unexpected logits rank for analysis callbacks: {logits_array.ndim}")
 
         # initialize the model
         if config.checkpoint_path is not None:
