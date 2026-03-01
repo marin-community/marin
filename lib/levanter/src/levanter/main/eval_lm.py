@@ -19,6 +19,7 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
 from levanter.data.text import LmDataConfig
+from levanter.data.text.examples import GrugLmExample
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -29,6 +30,9 @@ from levanter.utils.tree_utils import inference_mode
 
 
 logger = logging.getLogger(__name__)
+
+
+LmEvalExample = LmExample | GrugLmExample
 
 
 @dataclass
@@ -56,11 +60,11 @@ def main(config: EvalLmConfig):
     Pos = config.model.max_Pos.resize(config.max_eval_length)
 
     if config.eval_on_train:
-        datasets_dict = config.data.train_sets(Pos, key=jax.random.PRNGKey(0))
+        datasets_dict = config.data.train_grug_sets(seq_len=Pos.size, key=jax.random.PRNGKey(0))
         # need tagged eval sets for the evaluator
         datasets = [(ds, [name]) for name, ds in datasets_dict.items()]
     else:
-        datasets = config.data.tagged_eval_sets(Pos)
+        datasets = config.data.tagged_eval_grug_sets(seq_len=Pos.size)
 
     if not datasets:
         raise ValueError("no dataset found!")
@@ -91,7 +95,7 @@ def main(config: EvalLmConfig):
 
         mp: jmp.Policy = config.trainer.mp
 
-        def eval_loss_fn(model: LmHeadModel, batch: LmExample) -> LossFnOutput:
+        def eval_loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
             with hax.axis_mapping(compute_axis_mapping):
@@ -101,8 +105,13 @@ def main(config: EvalLmConfig):
                     reduction=None,
                     reduction_axis=(),
                 )
-            per_pos_weight = batch.loss_weight.array
-            per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
+
+            if isinstance(batch, LmExample):
+                per_pos_weight = batch.loss_weight.array
+                per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
+            else:
+                per_pos_weight = batch.loss_weight
+                per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
             return per_pos_loss, per_pos_weight, per_pos_token_id
 
         evaluator = TaggedEvaluator(
