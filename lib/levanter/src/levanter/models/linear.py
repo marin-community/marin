@@ -17,6 +17,7 @@ class LinearLikeModule(eqx.Module):
     """
 
 
+
 def has_linear_like_marker(node: Any) -> bool:
     """Return True if an object inherits Levanter's linear-like marker base class."""
     return isinstance(node, LinearLikeModule)

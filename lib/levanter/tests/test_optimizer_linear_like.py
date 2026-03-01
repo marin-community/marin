@@ -75,3 +75,20 @@ def test_muon_mask_routes_eqx_linear_to_adamw_without_out_first():
 
     assert mask.linear.weight == "adamw"
     assert mask.linear.bias == "adamw"
+
+
+def test_map_flattened_linear_layers_updates_marker_linear_weight():
+    class _MarkedLinear(LinearLikeModule):
+        weight: jax.Array
+        bias: jax.Array | None
+
+    class _Module(eqx.Module):
+        linear: _MarkedLinear
+
+    module = _Module(linear=_MarkedLinear(weight=jnp.zeros((4, 3)), bias=jnp.zeros((3,))))
+
+    def _set_unit_weight(linear):
+        return replace_linear_like_weight_array(linear, jnp.ones_like(linear_like_weight_array(linear)))
+
+    updated = map_flattened_linear_layers(_set_unit_weight, module)
+    assert jnp.all(updated.linear.weight == 1.0)
