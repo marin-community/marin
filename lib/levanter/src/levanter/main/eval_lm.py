@@ -74,6 +74,7 @@ def main(config: EvalLmConfig):
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
     batch_axis_resource = resolve_batch_axis_resource(Batch, compute_axis_mapping)
+    loader_axis_resources = {Batch.name: batch_axis_resource} if batch_axis_resource is not None else None
 
     if config.checkpoint_path is None and config.hf_checkpoint is None:
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint")
@@ -162,7 +163,8 @@ def main(config: EvalLmConfig):
                 loader = DataLoader(
                     dataset,
                     batch_size=config.trainer.eval_batch_size,
-                    axis_resources={"batch": batch_axis_resource} if batch_axis_resource is not None else None,
+                    batch_axis_name=Batch.name,
+                    axis_resources=loader_axis_resources,
                 )
                 entropy_hist = levanter.analysis.compute_entropy_histogram(
                     model,
@@ -183,24 +185,25 @@ def main(config: EvalLmConfig):
             for name, dataset in config.data.validation_sets(Pos).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
-                    loader = DataLoader(
-                        dataset,
-                        batch_size=config.trainer.eval_batch_size,
-                        axis_resources={"batch": batch_axis_resource} if batch_axis_resource is not None else None,
-                    )
-                    top2_gap_hist = levanter.analysis.compute_top2_gap_histogram(
-                        model,
-                        Vocab,
-                        compute_logits,
-                        loader,
-                    )
+                loader = DataLoader(
+                    dataset,
+                    batch_size=config.trainer.eval_batch_size,
+                    batch_axis_name=Batch.name,
+                    axis_resources=loader_axis_resources,
+                )
+                top2_gap_hist = levanter.analysis.compute_top2_gap_histogram(
+                    model,
+                    Vocab,
+                    compute_logits,
+                    loader,
+                )
 
-                    levanter.tracker.log(
-                        {
-                            f"analysis/{name}/top2_gap": top2_gap_hist,
-                        },
-                        step=0,
-                    )
+                levanter.tracker.log(
+                    {
+                        f"analysis/{name}/top2_gap": top2_gap_hist,
+                    },
+                    step=0,
+                )
 
         if config.log_param_stats:
             logger.info("Computing param stats...")
