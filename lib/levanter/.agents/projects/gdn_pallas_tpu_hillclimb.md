@@ -3262,3 +3262,92 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / regression**. Removing pad-to-segment work reduced measured train shard-map kernel time, but introduced/retained large `while` overhead that dominated end-to-end and regressed MFU across tested operating points.
 - Next bold hypothesis:
   - Move to **Macro Move E** next: V-tiling with shared-K precompute in train recurrent/backward kernels, explicitly targeting `while` overhead by increasing useful work per launch and reducing control-flow-heavy segmented loops.
+
+### Iteration 55 - Macro Move I / full-sequence train-forward static-loop fusion (regression, reverted)
+
+- Coverage slot: I (1/5)
+- Covered set so far: {I}
+- Date: 2026-03-01T12:31:36Z
+- Commit: none (failed attempt)
+- Starting commit: `6b7e3b2a7d1f4472419153cab0a45a98b1a42f42`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` remained dominant:
+    - `shard_map` bucket: `78.098 ms`
+    - forward closed-call source: `gated_deltanet.py:2486` = `41.324 ms`
+    - backward closed-call source: `gated_deltanet.py:3972` = `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move I**: training-only full-sequence fused forward kernel with static chunk loop (no `emit_pipeline` in forward) (`+10-20%`, high lowering/VMEM risk).
+  2. **Macro Move J**: explicit `Ct in {64,96,128}` x `Seg in {8,16,32}` sweep with compact benchmark table (`+5-12%`, medium risk).
+  3. **Macro Move E**: V-tiling with shared-K precompute in recurrent/backward kernels (`+15-30%`, high decomposition risk).
+
+- Selected macro-move category: **I) Fuse segmented/full-sequence forward prepare + recurrent with reusable heavy intermediates**.
+- Selected hypothesis: replace the train full-sequence split prepare+recurrent path with a single full-sequence fused train-forward kernel using a static chunk loop, so we reduce train-path custom-call launches and avoid `emit_pipeline` loop-lowering overhead in forward.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added a full-sequence fused train-forward kernel/call path that computes prepare + recurrent + tape in one Pallas call.
+  - Routed `return_prepare_tape=True` under `use_fullseq_pipeline` to this fused path.
+  - Kept no-tape forward path on the validated split full-sequence prepare/recurrent kernels.
+  - Profiled result regressed end-to-end throughput; speculative kernel edits were reverted.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (`tests=both`):
+    - Ray attempt A (required path):
+      - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+      - status progressed `PENDING` beyond 180s and failed with signature: `Job supervisor actor failed to start within 900.0 seconds`.
+      - per directive, switched to next validation cluster.
+    - Ray attempt B (next validation cluster):
+      - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+      - failed during test setup with deterministic fixture signature: `ValueError: _configure_marin_prefix did not yield a value`.
+    - Dev TPU fallback:
+      - initial `dev-tpu-test` failed before allocation (`Could not resolve hostname dev-tpu-calvinxu-gdn`).
+      - allocated TPU then reran:
+      - `uv run python scripts/gdn/gdnctl.py dev-tpu-allocate --cluster us-east5-a --tpu-name "$USER-gdn"`
+      - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both`
+      - Result: `87 passed, 2 skipped`.
+
+- Profile run (completed):
+  - Command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_iter55_macroI_fullseq_staticloop --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_iter55_macroI_fullseq_staticloop_130m_ch128_seg16_2-0cc2c9`
+  - W&B profiler artifact:
+    - `run-gdn_iter55_macroI_fullseq_staticloop_130m_ch128_seg16_2-0cc2c9-profiler:v0`
+  - Downloaded trace:
+    - `.profiles/dev_tpu/gdn_iter55_macroI_fullseq_staticloop/perfetto_trace.json.gz`
+  - Throughput source:
+    - W&B history-window medians (`global_step in [10,18]`) from the run above.
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, vs baseline trace above):
+  - Bucket deltas:
+    - `shard_map`: `78.098 ms -> 39.003 ms` (`-50.06%`)
+    - `fusion`: `45.618 ms -> 35.051 ms` (`-23.16%`)
+    - `all-gather`: `20.158 ms -> 10.147 ms` (`-49.67%`)
+    - `while`: `0.000 ms -> 31.688 ms` (new dominant overhead)
+  - Train closed-call shard-map source deltas:
+    - forward source `gated_deltanet.py:2486 -> 2729`: `41.324 ms -> 20.660 ms` (`-50.00%`)
+    - backward source `gated_deltanet.py:3972 -> 4232`: `26.266 ms -> 13.130 ms` (`-50.01%`)
+
+- MFU/throughput delta (history-window median, steps `10..18`, vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.830017 -> 5.395648` (`-7.45%`)
+  - `throughput/tokens_per_second`: `188599.934 -> 174548.198` (`-7.45%`)
+  - `throughput/duration`: `0.173743s -> 0.187730s` (`+8.05%`)
+  - final-step reference (step `19`): `throughput/mfu=5.420683`, `tokens/s=175358.062`, `duration=0.186863s`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call` source: `41.324 ms -> 20.660 ms` (`-50.00%`).
+    - Backward closed-call `shard_map/pallas_call` source: `26.266 ms -> 13.130 ms` (`-50.01%`).
+    - `throughput/mfu -7.45%`, `throughput/tokens_per_second -7.45%`, `throughput/duration +8.05%`.
+  - Governance:
+    - MFU gain `<3%` and dominant hotspot family remained train-path `shard_map/custom-call` with large new `while` overhead.
+    - Attempt marked **low-impact/regressive**; speculative kernel edits were reverted and escalated.
+
+- Assessment: **failed attempt / regression**. The fused full-sequence train kernel cut train closed-call `shard_map/pallas_call` times by ~50%, but added substantial `while` overhead and regressed end-to-end throughput.
+- Next bold hypothesis:
+  - Move to **Macro Move J** next (coverage slot 2/5 for this run): execute the required `Ct={64,96,128}` x `Seg={8,16,32}` sweep with a compact benchmark table, then use the best point to launch a stronger structural move (likely Macro E if `while` overhead persists).
