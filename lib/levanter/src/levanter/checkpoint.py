@@ -24,6 +24,7 @@ from draccus import field
 from fsspec import AbstractFileSystem
 from haliax.jax_utils import is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
+from jax.sharding import Mesh
 from jaxtyping import PyTree
 
 from levanter.tensorstore_serialization import (
@@ -32,7 +33,7 @@ from levanter.tensorstore_serialization import (
 )
 from levanter.utils import fsspec_utils
 from levanter.utils.jax_utils import broadcast_one_to_all
-from levanter.utils.types import FilterSpec
+from levanter.utils.types import FilterSpec, ResourceMapping
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +141,8 @@ class Checkpointer:
         path: Optional[PathLike] = None,
         *,
         discover_latest: bool = True,
-        axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
-        mesh: Optional[haliax.partitioning.Mesh] = None,
+        axis_mapping: Optional[ResourceMapping] = None,
+        mesh: Optional[Mesh] = None,
     ) -> Optional[M]:
         if path is None:
             path = self.base_path
@@ -153,8 +154,8 @@ class Checkpointer:
         path: Optional[str] = None,
         *,
         discover_latest: bool = True,
-        axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
-        mesh: Optional[haliax.partitioning.Mesh] = None,
+        axis_mapping: Optional[ResourceMapping] = None,
+        mesh: Optional[Mesh] = None,
     ) -> Optional[M]:
         """
         Convenience method/holdover from  previous API for loading checkpoints.
@@ -373,8 +374,8 @@ def load_checkpoint(
     *,
     subpath: Optional[str] = None,
     discover_latest=True,
-    axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
-    mesh: Optional[jax.sharding.Mesh] = None,
+    axis_mapping: Optional[ResourceMapping] = None,
+    mesh: Optional[Mesh] = None,
     allow_partial: bool = False,
 ) -> M:
     """
@@ -436,8 +437,8 @@ def load_checkpoint_or_initialize(
     *,
     subpath: Optional[str] = None,
     discover_latest=True,
-    axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
-    mesh: Optional[jax.sharding.Mesh] = None,
+    axis_mapping: Optional[ResourceMapping] = None,
+    mesh: Optional[Mesh] = None,
     is_checkpointed: FilterSpec = True,
     donate_args: FilterSpec = True,
     donate_kwargs: Optional[FilterSpec] = None,

@@ -27,7 +27,6 @@ from optax.tree_utils import tree_zeros_like
 
 import haliax as hax
 from haliax import is_named_array
-from haliax.partitioning import ResourceMapping
 
 from levanter.data.dataset import AsyncDataset
 from levanter.data.utils import batched
@@ -39,6 +38,7 @@ from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.py_utils import index_where
 from levanter.utils.thread_utils import AsyncIteratorWrapper, blocking_wait
+from levanter.utils.types import ResourceMapping
 
 
 Ex = TypeVar("Ex")

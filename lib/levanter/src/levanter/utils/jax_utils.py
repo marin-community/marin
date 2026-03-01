@@ -16,7 +16,6 @@ import jax
 import numpy as np
 from haliax import is_named_array
 from haliax.jax_utils import is_jax_array_like
-from haliax.partitioning import ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
 from jax.experimental.multihost_utils import host_local_array_to_global_array
@@ -26,6 +25,7 @@ from jaxtyping import PRNGKeyArray, PyTree
 from levanter.utils.mesh import CONTEXT_AXIS, DATA_AXIS, MODEL_AXIS, REPLICA_AXIS, create_mesh_from_axis_specs
 from levanter.utils.py_utils import index_where
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
+from levanter.utils.types import ResourceMapping
 
 X = TypeVar("X")
 T = TypeVar("T", bound=PyTree)

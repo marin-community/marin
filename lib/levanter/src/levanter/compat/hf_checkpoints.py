@@ -35,7 +35,6 @@ from fsspec.asyn import get_loop
 from fsspec.asyn import sync as fsspec_sync
 from haliax import Axis
 from haliax.jax_utils import is_jax_array_like
-from haliax.partitioning import ResourceMapping
 from haliax.state_dict import (
     StateDict,
     flatten_modules_for_export,
@@ -64,6 +63,7 @@ from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, 
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
+from levanter.utils.types import ResourceMapping
 
 silence_transformer_nag()
 from transformers import (  # noqa: E402  # noqa: E402
