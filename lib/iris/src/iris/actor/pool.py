@@ -150,6 +150,16 @@ class ActorPool(Generic[T]):
             self._last_resolve_time = 0.0
             self._cached_result = None
 
+    def _evict_client(self, url: str) -> None:
+        """Remove and close a cached client so it is recreated on next use."""
+        with self._lock:
+            client = self._clients.pop(url, None)
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                logger.debug("Error closing evicted client for %s", url, exc_info=True)
+
     def _get_next_endpoint(self) -> ResolvedEndpoint:
         """Get the next endpoint in round-robin order.
 
@@ -165,6 +175,14 @@ class ActorPool(Generic[T]):
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=True)
+        with self._lock:
+            clients = list(self._clients.values())
+            self._clients.clear()
+        for client in clients:
+            try:
+                client.close()
+            except Exception:
+                logger.debug("Error closing client during shutdown", exc_info=True)
 
     def __enter__(self) -> "ActorPool[T]":
         return self
@@ -212,15 +230,23 @@ class _PoolCallProxy(Generic[T]):
 
     def __getattr__(self, method_name: str) -> Callable[..., Any]:
         def call(*args, **kwargs):
+            last_url: list[str | None] = [None]
+
             def do_call():
                 endpoint = self._pool._get_next_endpoint()
+                last_url[0] = endpoint.url
                 return self._pool._call_endpoint(endpoint, method_name, args, kwargs)
+
+            def on_retry(_exc):
+                self._pool._invalidate_resolve_cache()
+                if last_url[0] is not None:
+                    self._pool._evict_client(last_url[0])
 
             rc = self._pool._retry_config
             return call_with_retry(
                 f"{self._pool._name}.{method_name}",
                 do_call,
-                on_retry=lambda _exc: self._pool._invalidate_resolve_cache(),
+                on_retry=on_retry,
                 max_attempts=rc.max_call_attempts,
                 initial_backoff=rc.initial_backoff,
                 max_backoff=rc.max_backoff,
