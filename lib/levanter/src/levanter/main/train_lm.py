@@ -220,7 +220,7 @@ def main(config: TrainLmConfig):
                 tokenizer=tokenizer,
                 device_mesh=trainer.device_mesh,
                 axis_mapping=compute_axis_mapping,
-                batch_axis_resource=compute_axis_mapping.get(EvalBatch.name, compute_axis_mapping.get("batch")),
+                batch_axis_resource=levanter.eval.resolve_batch_axis_resource(EvalBatch, compute_axis_mapping),
                 max_examples_per_dataset=max_eval_examples_per_ds,
                 mp=config.trainer.mp,
                 checkpoint_path=checkpoint_path,

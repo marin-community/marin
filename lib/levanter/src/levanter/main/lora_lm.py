@@ -143,8 +143,8 @@ def main(config: LoraLmConfig):
                 tokenizer=tokenizer,
                 device_mesh=trainer.device_mesh,
                 axis_mapping=trainer.compute_axis_mapping,
-                batch_axis_resource=trainer.compute_axis_mapping.get(
-                    trainer.EvalBatch.name, trainer.compute_axis_mapping.get("batch")
+                batch_axis_resource=levanter.eval.resolve_batch_axis_resource(
+                    trainer.EvalBatch, trainer.compute_axis_mapping
                 ),
                 max_examples_per_dataset=max_eval_examples_per_ds,
                 mp=config.trainer.mp,

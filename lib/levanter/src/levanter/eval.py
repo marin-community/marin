@@ -47,6 +47,14 @@ TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
 
 
+def resolve_batch_axis_resource(EvalBatch: hax.Axis | int, axis_mapping: ResourceMapping | None):
+    if axis_mapping is None:
+        return None
+    if isinstance(EvalBatch, int):
+        return axis_mapping.get("batch")
+    return axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
+
+
 @dataclasses.dataclass
 class EvalResult:
     micro_avg_loss: float  # per token across all datasets
@@ -245,8 +253,8 @@ def cb_tagged_lm_evaluate(
         def loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
             return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp)
 
-    if batch_axis_resource is None and axis_mapping is not None:
-        batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
+    if batch_axis_resource is None:
+        batch_axis_resource = resolve_batch_axis_resource(EvalBatch, axis_mapping)
 
     evaluator = TaggedEvaluator(
         EvalBatch=EvalBatch,
@@ -408,8 +416,8 @@ class TaggedEvaluator(Generic[Ex, M]):
     ):
         if isinstance(EvalBatch, int):
             EvalBatch = hax.Axis("batch", EvalBatch)
-        if batch_axis_resource is None and axis_mapping is not None:
-            batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
+        if batch_axis_resource is None:
+            batch_axis_resource = resolve_batch_axis_resource(EvalBatch, axis_mapping)
         loader_axis_resources = axis_mapping
         if batch_axis_resource is not None:
             loader_axis_resources = {EvalBatch.name: batch_axis_resource}
