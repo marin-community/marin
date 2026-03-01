@@ -15,6 +15,7 @@ import levanter.eval
 from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.text import LmDataConfig
+from levanter.data.text.examples import GrugLmExample
 from levanter.lora import (
     LoraConfig,
     lora_trainable_params_filter,
@@ -22,7 +23,7 @@ from levanter.lora import (
     save_merged_hf_checkpoint_callback,
     save_peft_checkpoint_callback,
 )
-from levanter.models.lm_model import LmExample, LmHeadModel
+from levanter.models.lm_model import LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -73,26 +74,21 @@ def main(config: LoraLmConfig):
 
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_fn(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(example, key=key, axis_mapping=config.trainer.compute_axis_mapping)
+    def loss_fn(model: LmHeadModel, example: GrugLmExample, *, key=None):
+        return model.compute_next_token_loss_array(example, batch_axis=config.trainer.batch_axis_name, key=key)
 
     with Trainer(config.trainer, optimizer, loss_fn=loss_fn) as trainer:  # type: ignore[arg-type]
         # how we shard parameters across devices
         parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
-        train_dataset = config.data.train_set(
-            Pos,
+        train_dataset = config.data.train_grug_set(
+            seq_len=Pos.size,
             batch_schedule=config.trainer.batch_schedule,
             key=data_key,
         )
 
         if train_dataset is None:
             raise ValueError("No training set!")
-
-        eval_datasets = config.data.validation_sets(Pos)
-
-        if len(eval_datasets) == 0:
-            logger.warning("No evaluation datasets provided.")
 
         train_loader = trainer.data_loader(train_dataset, Batch)
 
@@ -132,7 +128,7 @@ def main(config: LoraLmConfig):
         if max_eval_examples_per_ds is not None:
             max_eval_examples_per_ds *= config.trainer.eval_batch_size
 
-        tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
+        tagged_eval_datasets = config.data.tagged_eval_grug_sets(seq_len=Pos.size)
 
         if len(tagged_eval_datasets) == 0:
             logger.warning("No evaluation datasets provided.")
