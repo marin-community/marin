@@ -799,25 +799,7 @@ class LmDataConfig:
             key=key,
         )
 
-    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
-        doc_caches = self.build_caches("validation")
-        validation_datasets = self.build_token_datasets(doc_caches, Pos, split="validation")
-
-        if self.num_validation_sequences is not None:
-            train_doc_caches = self.build_caches("train")
-            train_datasets = self.build_token_datasets(train_doc_caches, Pos, split="train")
-
-            for name, num_sequences in self.num_validation_sequences.items():
-                _, val_ds = _split_into_trainval_sets(
-                    train_datasets[name], num_sequences, shuffle=self.shuffle_before_trainval_split
-                )
-                validation_datasets[name] = val_ds
-
-        return {name: NamedLmDataset(ds, Pos) for name, ds in validation_datasets.items()}
-
-    def validation_grug_sets(self, *, seq_len: int) -> Mapping[str, AsyncDataset[GrugLmExample]]:
-        """Build validation datasets that emit array-first [GrugLmExample][]."""
-        Pos = self._position_axis(seq_len)
+    def _validation_datasets_unwrapped(self, Pos: Axis) -> dict[str, AsyncDataset[GrugLmExample]]:
         doc_caches = self.build_caches("validation")
         validation_datasets = self.build_token_datasets(doc_caches, Pos, split="validation")
 
@@ -832,6 +814,15 @@ class LmDataConfig:
                 validation_datasets[name] = val_ds
 
         return validation_datasets
+
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+        validation_datasets = self._validation_datasets_unwrapped(Pos)
+        return {name: NamedLmDataset(ds, Pos) for name, ds in validation_datasets.items()}
+
+    def validation_grug_sets(self, *, seq_len: int) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Build validation datasets that emit array-first [GrugLmExample][]."""
+        Pos = self._position_axis(seq_len)
+        return self._validation_datasets_unwrapped(Pos)
 
     def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
         caches: dict[str, TreeCache[dict]] = {}
