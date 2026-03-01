@@ -1530,7 +1530,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
             config.EvalBatch,
             axis_resources=compute_axis_mapping,
             mp=config.trainer.mp,
-            batch_axis_resource=resolve_batch_axis_resource(config.EvalBatch, compute_axis_mapping),
+            batch_axis_resource=config.trainer.batch_axis_resource,
             profiler_config=profiler_config,
         )
 
