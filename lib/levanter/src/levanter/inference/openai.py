@@ -251,10 +251,7 @@ class InferenceContext:
             logger.info(f"Acquired model lock after {lock_wait_time}, reloading weights...")
 
             start = time.time()
-            with (
-                activate_mesh(self.config.trainer.device_mesh),
-                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-            ):
+            with activate_mesh(self.config.trainer.device_mesh):
                 self.model = weight_callback(self.model)
                 self.engine = InferenceEngine.from_model_with_config(
                     model=self.model,
@@ -352,11 +349,7 @@ class InferenceContext:
         while not self.shutdown_event.is_set():
             try:
                 batch = self.batch_queue.get(timeout=1)
-                with (
-                    self.model_lock,
-                    activate_mesh(self.config.trainer.device_mesh),
-                    hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-                ):
+                with self.model_lock, activate_mesh(self.config.trainer.device_mesh):
                     self._execute_batch(batch)
             except queue.Empty:
                 continue
