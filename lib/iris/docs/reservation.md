@@ -172,10 +172,109 @@ Abandoned in favor of the taint-based approach.
 **Standalone reservation object**: Independent CRUD lifecycle. Overkill —
 orphaned reservations, complex cleanup. Can extract later if needed.
 
+## Soft Worker Preference for Reservation Jobs
+
+### Problem
+
+The current taint/constraint mechanism keeps non-reservation jobs off claimed
+workers (via `NOT_EXISTS`), but does not steer reservation jobs *toward* their
+claimed workers. The scheduler iterates `candidate_ids` — a `set` intersection
+— so the "claimed workers first" ordering produced by
+`_inject_reservation_taints` is lost. Reservation jobs can land on unclaimed
+workers while their claimed workers sit idle and remain tainted (blocked for
+regular jobs). This wastes reserved capacity and can trigger unnecessary
+scale-up.
+
+Reservations are a **floor**, not a ceiling — reservation jobs should be allowed
+to use unclaimed workers too. So a hard constraint (`EQ reservation-job=<id>`)
+is wrong. What we need is a soft preference: try claimed workers first, fall
+back to any eligible worker.
+
+### Proposed Fix: Two-Pass Scheduling in `_run_scheduling`
+
+The claimed set per job is small (equal to the reservation entry count, typically
+1–8). We can iterate it directly in the controller without touching the
+scheduler's constraint engine.
+
+**Approach**: Before calling `scheduler.find_assignments()`, do a first pass
+over reservation-job tasks. For each such task, iterate the (small) set of
+workers claimed for that job and check if any has capacity. If so, assign
+directly and remove the task from the pending list. Remaining tasks fall through
+to the normal scheduler path.
+
+```python
+def _run_scheduling(self) -> None:
+    # ... existing setup: cleanup, claiming, gate checks ...
+
+    # -- NEW: soft-preference pass for reservation jobs --
+    # Iterate claimed workers for each reservation job. Since the claims set
+    # is small (≤ reservation entry count), this is O(tasks × claims) which
+    # is negligible.
+    early_assignments: list[tuple[JobName, WorkerId]] = []
+    remaining_tasks: list[JobName] = []
+
+    # Build reverse index: job_id -> set of claimed worker IDs
+    claimed_by_job: dict[str, set[WorkerId]] = defaultdict(set)
+    for wid, claim in self._reservation_claims.items():
+        claimed_by_job[claim.job_id].add(wid)
+
+    for task_id in schedulable_task_ids:
+        job_id = task_id.parent
+        if job_id is None or job_id not in has_reservation:
+            remaining_tasks.append(task_id)
+            continue
+
+        job_wire = job_id.to_wire()
+        claimed_workers = claimed_by_job.get(job_wire, set())
+        assigned = False
+        for wid in claimed_workers:
+            worker = ... # look up in available workers
+            if worker is not None and _has_capacity(worker, jobs[job_id]):
+                early_assignments.append((task_id, wid))
+                assigned = True
+                break
+        if not assigned:
+            remaining_tasks.append(task_id)
+
+    # Buffer early assignments, then run normal scheduling on remaining tasks
+    if early_assignments:
+        self._buffer_assignments(early_assignments)
+
+    # Pass remaining_tasks (not schedulable_task_ids) to the scheduler
+    context = self._scheduler.create_scheduling_context(
+        modified_workers,
+        building_counts=building_counts,
+        pending_tasks=remaining_tasks,
+        jobs=jobs,
+    )
+    result = self._scheduler.find_assignments(context)
+    # ...
+```
+
+**Key properties**:
+
+- **Soft, not hard**: If no claimed worker has capacity, the task falls through
+  to the normal scheduler and can land on any eligible worker.
+- **No scheduler changes**: The scheduler remains a pure constraint engine.
+  Preference logic stays in the controller where reservation state lives.
+- **O(tasks × claims)**: Claims per job ≤ entry count (typically 1–8).
+  The inner loop is bounded by the reservation size, not the cluster size.
+- **Idempotent**: The preference pass uses the same capacity-checking logic as
+  the scheduler. An early assignment commits resources identically to a
+  scheduler assignment.
+
+### Implementation Notes
+
+- The capacity check needs to use the scheduler's `WorkerCapacity.can_fit()`
+  and `deduct()` methods. The simplest path is to create a `SchedulingContext`
+  first and use it for both the preference pass and the scheduler pass.
+- The preference pass should respect building back-pressure (skip workers at
+  the building limit).
+- Non-reservation tasks must NOT go through the preference pass — they should
+  only use the normal scheduler path with the `NOT_EXISTS` taint constraint.
+
 ## Phase 2 (Future)
 
-- Scheduler affinity: 2-pass scheduling preferring reserved workers
-  (currently approximated by worker ordering)
 - `reservation_timeout` separate from `scheduling_timeout`
 - Entry validation at submission time
 - Client-side `ReservationConfig.replicate(entry, count=N)` helper

@@ -222,6 +222,11 @@ def _build_reservation_budget(job: ControllerJob) -> Counter[tuple[DeviceType, s
     Returns a Counter keyed by (device_type, device_variant). Task demand that
     matches a budget entry consumes one unit; unmatched task demand passes through.
     Jobs without reservations return an empty counter.
+
+    TODO: Budget key only matches (device_type, device_variant). If a reservation entry
+    has different constraints or resource quantities than the job's tasks, dedup may
+    incorrectly suppress task demand. In practice this is fine because reservation
+    entries are expected to match the job's own resource spec. Tighten if needed.
     """
     budget: Counter[tuple[DeviceType, str | None]] = Counter()
     if not job.request.HasField("reservation"):
@@ -329,6 +334,66 @@ def _inject_taint_constraints(
                 constraints=[*list(req.constraints), taint_constraint],
             )
     return modified
+
+
+def _preference_pass(
+    context: SchedulingContext,
+    has_reservation: set[JobName],
+    claims: dict[WorkerId, ReservationClaim],
+) -> list[tuple[JobName, WorkerId]]:
+    """Try to assign reservation-job tasks to their claimed workers first.
+
+    Iterates reservation-job tasks and, for each, checks the (small) set of
+    workers claimed for that job. If a claimed worker has capacity, the task
+    is assigned immediately — deducting resources and marking the worker as
+    scheduled in the shared context so the subsequent find_assignments pass
+    sees the updated state.
+
+    Coscheduled jobs are skipped because they require atomic all-or-nothing
+    assignment across a worker group.
+
+    Returns the list of (task_id, worker_id) assignments made.
+    """
+    if not has_reservation or not claims:
+        return []
+
+    # Reverse index: job_wire -> list of claimed worker IDs
+    claimed_by_job: dict[str, list[WorkerId]] = defaultdict(list)
+    for wid, claim in claims.items():
+        claimed_by_job[claim.job_id].append(wid)
+
+    assignments: list[tuple[JobName, WorkerId]] = []
+    preference_scheduled: set[JobName] = set()
+
+    for task_id in context.pending_tasks:
+        job_id = task_id.parent
+        if job_id is None or job_id not in has_reservation:
+            continue
+
+        req = context.jobs.get(job_id)
+        if req is None or req.is_coscheduled:
+            continue
+
+        job_wire = job_id.to_wire()
+        for wid in claimed_by_job.get(job_wire, ()):
+            if wid in context.scheduled_workers:
+                continue
+            capacity = context.capacities.get(wid)
+            if capacity is None:
+                continue
+            if capacity.can_fit(req) is not None:
+                continue
+            capacity.deduct(req)
+            context.scheduled_workers.add(wid)
+            assignments.append((task_id, wid))
+            preference_scheduled.add(task_id)
+            break
+
+    # Remove preference-assigned tasks from pending so find_assignments skips them.
+    if preference_scheduled:
+        context.pending_tasks = [t for t in context.pending_tasks if t not in preference_scheduled]
+
+    return assignments
 
 
 class WorkerStubFactory(Protocol):
@@ -605,7 +670,7 @@ class Controller:
                 stale.append(worker_id)
                 continue
             job = self._state.get_job(JobName.from_wire(claim.job_id))
-            if job is not None and job.is_finished():
+            if job is None or job.is_finished():
                 stale.append(worker_id)
         for wid in stale:
             del self._reservation_claims[wid]
@@ -650,8 +715,13 @@ class Controller:
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle.
 
-        Computes task assignments and buffers them for heartbeat delivery.
-        No direct dispatch RPCs - tasks are delivered via the next heartbeat cycle.
+        Two-pass scheduling:
+        1. Preference pass: for reservation jobs, try claimed workers first.
+           The claims set is small (≤ reservation entry count), so this is cheap.
+        2. Normal pass: remaining tasks go through the standard scheduler.
+
+        Both passes share a single SchedulingContext so capacity deductions
+        from the preference pass are visible to the normal scheduler.
 
         No lock is needed since only one scheduling thread exists. All state
         reads and writes go through ControllerState which has its own lock.
@@ -704,13 +774,21 @@ class Controller:
             pending_tasks=schedulable_task_ids,
             jobs=jobs,
         )
+
+        # Pass 1: soft preference — steer reservation tasks toward claimed workers.
+        # Skips coscheduled jobs (they need atomic all-or-nothing via find_assignments).
+        preference_assignments = _preference_pass(context, has_reservation, self._reservation_claims)
+
+        # Pass 2: normal scheduler for all remaining tasks.
         result = self._scheduler.find_assignments(context)
 
-        # Buffer assignments for heartbeat delivery (commits resources via TaskAssignedEvent)
-        if result.assignments:
-            self._buffer_assignments(result.assignments)
+        all_assignments = preference_assignments + result.assignments
+        if all_assignments:
+            self._buffer_assignments(all_assignments)
             logger.debug(
-                "Scheduling cycle: %d assignments, %dms (state read: %dms)",
+                "Scheduling cycle: %d assignments (%d preferred, %d normal), %dms (state read: %dms)",
+                len(all_assignments),
+                len(preference_assignments),
                 len(result.assignments),
                 timer.elapsed_ms(),
                 state_read_ms,
