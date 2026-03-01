@@ -8,8 +8,6 @@ from typing import Optional
 
 import jax.random as jrandom
 
-import haliax.random
-
 import levanter
 import levanter.eval
 from levanter import callbacks
@@ -27,6 +25,7 @@ from levanter.models.lm_model import LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
+from levanter.utils.partitioning import named_jit
 
 
 logger = logging.getLogger(__name__)
@@ -66,11 +65,11 @@ def main(config: LoraLmConfig):
     # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
     # this makes deterministic training pretty easy
     seed = config.trainer.seed
-    data_key, loader_key, model_key, lora_key, training_key = jrandom.split(jrandom.PRNGKey(seed), 5)
+    data_key, model_key, lora_key, training_key = jrandom.split(jrandom.PRNGKey(seed), 4)
 
     # some axes we need
     Batch = config.trainer.TrainBatch
-    Pos = model_config.max_Pos.resize(config.max_train_length)
+    Pos = model_config.max_Pos.resize(config.train_seq_len)
 
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
@@ -98,7 +97,7 @@ def main(config: LoraLmConfig):
             model_config.model_type, axis_mapping=parameter_axis_mapping, dtype=trainer.mp.compute_dtype
         )
 
-        @haliax.named_jit(axis_resources=parameter_axis_mapping, donate_args=(True))
+        @named_jit(axis_resources=parameter_axis_mapping, donate_args=(True))
         def loraize_hf_model(model):
             return loraize(model, config.lora, key=lora_key)
 
