@@ -33,7 +33,6 @@ from haliax import Axis, AxisSelection, AxisSelector, NamedArray, axis_name
 from haliax.jax_utils import maybe_rng_split, named_call
 from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
 from haliax.nn.normalization import LayerNormBase
-from haliax.partitioning import pspec_for_axis, shard_map
 from haliax.types import PrecisionLike
 from jax.sharding import PartitionSpec
 from jaxtyping import PRNGKeyArray
@@ -46,6 +45,7 @@ else:
     _SPLASH_KERNEL_SUPPORTS_SINKS = "sinks" in inspect.signature(_splash_attention).parameters
 
 from ..inference.page_table import PageBatchInfo, PageTableSpec
+from ..utils.partitioning import pspec_for_axis, shard_map
 from .kv_cache import KvPageCache
 from .normalization import LayerNormConfigBase
 from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
