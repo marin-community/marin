@@ -281,7 +281,7 @@ def main(config: TrainLmConfig):
                     eval_harness,
                     tokenizer,
                     EvalBatch,
-                    axis_resources=compute_axis_mapping,
+                    compute_axis_resources=compute_axis_mapping,
                     mp=trainer.mp,
                     batch_axis_resource=batch_axis_resource,
                 ),
