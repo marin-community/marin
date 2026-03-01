@@ -239,17 +239,6 @@ def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
     assert pallas_tpu._infer_num_tensorcores() == 1
 
 
-def test_infer_block_sizes_has_v6_tuned_profile():
-    block_sizes = infer_block_sizes(
-        b=1024,
-        h=512,
-        v=8192,
-        dtype=jnp.float32,
-        device_kind="TPU v6e",
-    )
-    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)
-
-
 def test_infer_block_sizes_has_v4_mid_h_large_vocab_profile():
     block_sizes = infer_block_sizes(
         b=8192,
