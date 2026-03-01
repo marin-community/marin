@@ -1,6 +1,3 @@
-# Copyright 2025 The Levanter Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # Copyright 2026 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +17,6 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
 
-_DISABLE_MEGACORE_ENV = "LEVANTER_PALLAS_TPU_DISABLE_MEGACORE"
 _SKIP_LABEL_LOGITS_ENV = "LEVANTER_PALLAS_TPU_SKIP_LABEL_LOGITS_BENCH"
 _FWD_XW_BF16_ENV = "LEVANTER_PALLAS_TPU_FWD_XW_BF16_BENCH"
 _FWD_DOT_ACCUM_BF16_ENV = "LEVANTER_PALLAS_TPU_FWD_DOT_ACCUM_BF16_BENCH"
@@ -40,7 +36,6 @@ _MAX_ERROR_CHARS = 600
 class BenchVariant:
     name: str
     implementation: str
-    disable_megacore: bool = False
     skip_label_logits: bool = False
     fwd_xw_bf16: bool = False
     fwd_dot_accum_bf16: bool = False
@@ -95,7 +90,6 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also benchmark infer/default behavior (block_sizes=None) for pallas_tpu.",
     )
-    parser.add_argument("--disable-megacore", action="store_true", help="Disable megacore path in pallas.")
     parser.add_argument(
         "--skip-label-logits", action="store_true", help="Skip label-logit extraction (benchmark-only)."
     )
@@ -155,7 +149,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--variant-sweep",
         action="store_true",
-        help="Run pallas variants: baseline and no-megacore.",
+        help="Run pallas variant sweep.",
     )
     parser.add_argument(
         "--compare-xla",
@@ -240,7 +234,6 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
             BenchVariant(
                 name="single",
                 implementation=args.implementation,
-                disable_megacore=args.disable_megacore if args.implementation == "pallas_tpu" else False,
                 skip_label_logits=args.skip_label_logits if args.implementation == "pallas_tpu" else False,
                 fwd_xw_bf16=args.fwd_xw_bf16 if args.implementation == "pallas_tpu" else False,
                 fwd_dot_accum_bf16=args.fwd_dot_accum_bf16 if args.implementation == "pallas_tpu" else False,
@@ -260,12 +253,7 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
 
     variants: list[BenchVariant] = []
     if args.implementation == "pallas_tpu":
-        variants.extend(
-            [
-                BenchVariant(name="pallas_baseline", implementation="pallas_tpu"),
-                BenchVariant(name="pallas_no_megacore", implementation="pallas_tpu", disable_megacore=True),
-            ]
-        )
+        variants.append(BenchVariant(name="pallas_baseline", implementation="pallas_tpu"))
         if args.compare_no_label_logits:
             variants.append(
                 BenchVariant(name="pallas_no_label_logits", implementation="pallas_tpu", skip_label_logits=True)
@@ -435,7 +423,6 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
 @contextmanager
 def _variant_env(variant: BenchVariant):
     previous = {
-        _DISABLE_MEGACORE_ENV: os.environ.get(_DISABLE_MEGACORE_ENV),
         _SKIP_LABEL_LOGITS_ENV: os.environ.get(_SKIP_LABEL_LOGITS_ENV),
         _FWD_XW_BF16_ENV: os.environ.get(_FWD_XW_BF16_ENV),
         _FWD_DOT_ACCUM_BF16_ENV: os.environ.get(_FWD_DOT_ACCUM_BF16_ENV),
@@ -450,7 +437,6 @@ def _variant_env(variant: BenchVariant):
         _FWD_LSE_STORE_PATH_ENV: os.environ.get(_FWD_LSE_STORE_PATH_ENV),
     }
     updates = {
-        _DISABLE_MEGACORE_ENV: "1" if variant.disable_megacore else None,
         _SKIP_LABEL_LOGITS_ENV: "1" if variant.skip_label_logits else None,
         _FWD_XW_BF16_ENV: "1" if variant.fwd_xw_bf16 else None,
         _FWD_DOT_ACCUM_BF16_ENV: "1" if variant.fwd_dot_accum_bf16 else None,
@@ -626,7 +612,6 @@ def main() -> None:
                     "variant": variant.name,
                     "label": label,
                     "implementation": variant.implementation,
-                    "disable_megacore": int(variant.disable_megacore),
                     "skip_label_logits": int(variant.skip_label_logits),
                     "fwd_xw_bf16": int(variant.fwd_xw_bf16),
                     "fwd_dot_accum_bf16": int(variant.fwd_dot_accum_bf16),

@@ -1,6 +1,3 @@
-# Copyright 2025 The Levanter Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # Copyright 2026 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -11,7 +8,6 @@
 
 from functools import lru_cache, partial
 import math
-import os
 from typing import Optional
 
 import jax
@@ -32,7 +28,6 @@ class PallasUnsupportedError(NotImplementedError):
 
 
 NUM_LANES = 128
-_DISABLE_MEGACORE_ENV = "LEVANTER_PALLAS_TPU_DISABLE_MEGACORE"
 
 
 def _forward_lse_cost_reference(
@@ -249,8 +244,6 @@ def _validate_inputs(
 
 def _infer_num_tensorcores() -> int:
     if jax.default_backend() != "tpu":
-        return 1
-    if os.environ.get(_DISABLE_MEGACORE_ENV, "") == "1":
         return 1
     device_kind = jax.devices()[0].device_kind.lower()
     if "tpu v4" in device_kind or ("tpu v5" in device_kind and "v5e" not in device_kind):

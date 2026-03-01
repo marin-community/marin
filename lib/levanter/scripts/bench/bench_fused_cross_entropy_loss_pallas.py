@@ -23,7 +23,6 @@ _V5P_HBM_BW_BYTES_PER_S_PER_CHIP = 2.765e12
 _V4_TFLOPS_BF16_PER_CHIP = 275e12
 _V4_HBM_BW_BYTES_PER_S_PER_CHIP = 1.2e12
 
-_DISABLE_MEGACORE_ENV = "LEVANTER_PALLAS_TPU_DISABLE_MEGACORE"
 _SKIP_LABEL_LOGITS_ENV = "LEVANTER_PALLAS_TPU_SKIP_LABEL_LOGITS_BENCH"
 _FWD_XW_BF16_ENV = "LEVANTER_PALLAS_TPU_FWD_XW_BF16_BENCH"
 _FWD_DOT_ACCUM_BF16_ENV = "LEVANTER_PALLAS_TPU_FWD_DOT_ACCUM_BF16_BENCH"
@@ -43,7 +42,6 @@ _BWD_USE_XLA_STREAMING_ENV = "LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH"
 class BenchVariant:
     name: str
     implementation: str
-    disable_megacore: bool = False
     skip_label_logits: bool = False
     fwd_xw_bf16: bool = False
     fwd_dot_accum_bf16: bool = False
@@ -145,7 +143,6 @@ def _clear_mesh(mesh):
 @contextmanager
 def _variant_env(variant: BenchVariant):
     previous = {
-        _DISABLE_MEGACORE_ENV: os.environ.get(_DISABLE_MEGACORE_ENV),
         _SKIP_LABEL_LOGITS_ENV: os.environ.get(_SKIP_LABEL_LOGITS_ENV),
         _FWD_XW_BF16_ENV: os.environ.get(_FWD_XW_BF16_ENV),
         _FWD_DOT_ACCUM_BF16_ENV: os.environ.get(_FWD_DOT_ACCUM_BF16_ENV),
@@ -161,7 +158,6 @@ def _variant_env(variant: BenchVariant):
         _BWD_USE_XLA_STREAMING_ENV: os.environ.get(_BWD_USE_XLA_STREAMING_ENV),
     }
     updates = {
-        _DISABLE_MEGACORE_ENV: "1" if variant.disable_megacore else None,
         _SKIP_LABEL_LOGITS_ENV: "1" if variant.skip_label_logits else None,
         _FWD_XW_BF16_ENV: "1" if variant.fwd_xw_bf16 else None,
         _FWD_DOT_ACCUM_BF16_ENV: "1" if variant.fwd_dot_accum_bf16 else None,
@@ -214,12 +210,7 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
     if args.variant_sweep:
         variants: list[BenchVariant] = []
         if args.implementation == "pallas_tpu":
-            variants.extend(
-                [
-                    BenchVariant(name="pallas_baseline", implementation="pallas_tpu"),
-                    BenchVariant(name="pallas_no_megacore", implementation="pallas_tpu", disable_megacore=True),
-                ]
-            )
+            variants.append(BenchVariant(name="pallas_baseline", implementation="pallas_tpu"))
             if args.compare_no_label_logits:
                 variants.append(
                     BenchVariant(name="pallas_no_label_logits", implementation="pallas_tpu", skip_label_logits=True)
@@ -412,7 +403,6 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
         BenchVariant(
             name="single",
             implementation=args.implementation,
-            disable_megacore=args.disable_megacore if args.implementation == "pallas_tpu" else False,
             skip_label_logits=args.skip_label_logits if args.implementation == "pallas_tpu" else False,
             fwd_xw_bf16=args.fwd_xw_bf16 if args.implementation == "pallas_tpu" else False,
             fwd_dot_accum_bf16=args.fwd_dot_accum_bf16 if args.implementation == "pallas_tpu" else False,
@@ -583,7 +573,6 @@ def main() -> None:
     parser.add_argument("--data-shards", type=int, default=0)
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=0)
-    parser.add_argument("--disable-megacore", action="store_true")
     parser.add_argument("--skip-label-logits", action="store_true")
     parser.add_argument("--fwd-xw-bf16", action="store_true")
     parser.add_argument("--fwd-dot-accum-bf16", action="store_true")
@@ -734,7 +723,6 @@ def main() -> None:
         result: dict[str, str | int | float] = {
             "variant": variant.name,
             "implementation": variant.implementation,
-            "disable_megacore": int(variant.disable_megacore),
             "skip_label_logits": int(variant.skip_label_logits),
             "fwd_xw_bf16": int(variant.fwd_xw_bf16),
             "fwd_dot_accum_bf16": int(variant.fwd_dot_accum_bf16),
@@ -802,7 +790,6 @@ def main() -> None:
         result = {key: value for key, value in result.items() if key != "error" or len(str(value)) < 800}
         print("variant", variant.name)
         print("implementation", variant.implementation)
-        print("disable_megacore", int(variant.disable_megacore))
         print("skip_label_logits", int(variant.skip_label_logits))
         print("fwd_xw_bf16", int(variant.fwd_xw_bf16))
         print("fwd_dot_accum_bf16", int(variant.fwd_dot_accum_bf16))

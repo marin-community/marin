@@ -228,15 +228,14 @@ def test_infer_block_sizes_preserves_defaults_without_128_aligned_divisors():
     assert block_sizes.h_block_size == 512
 
 
-def test_infer_num_tensorcores_respects_disable_megacore_env(monkeypatch):
+def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
     fake_device = type("FakeDevice", (), {"device_kind": "TPU v4"})()
     monkeypatch.setattr(pallas_tpu.jax, "default_backend", lambda: "tpu")
     monkeypatch.setattr(pallas_tpu.jax, "devices", lambda: [fake_device])
-
-    monkeypatch.delenv(pallas_tpu._DISABLE_MEGACORE_ENV, raising=False)
     assert pallas_tpu._infer_num_tensorcores() == 2
 
-    monkeypatch.setenv(pallas_tpu._DISABLE_MEGACORE_ENV, "1")
+    fake_v5e_device = type("FakeDevice", (), {"device_kind": "TPU v5e"})()
+    monkeypatch.setattr(pallas_tpu.jax, "devices", lambda: [fake_v5e_device])
     assert pallas_tpu._infer_num_tensorcores() == 1
 
 
