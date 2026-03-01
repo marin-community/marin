@@ -82,7 +82,7 @@ from levanter.data.loader import stack_batches
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
-from levanter.utils.partitioning import round_axis_for_partitioning
+from levanter.utils.partitioning import infer_resource_partitions, round_axis_for_partitioning
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ResourceMapping
@@ -348,7 +348,7 @@ class _LmEvalHarnessWorker:
     def _receive_payload(self):
         payload = broadcast_shard(
             self._dummy_batch,
-            hax.partitioning.infer_resource_partitions(self._dummy_batch),
+            infer_resource_partitions(self._dummy_batch),
         )
         return payload
 
@@ -359,7 +359,7 @@ class _LmEvalHarnessWorker:
 
     def _send_payload(self, payload):
         assert jax.process_index() == 0
-        out = broadcast_shard(payload, hax.partitioning.infer_resource_partitions(payload))
+        out = broadcast_shard(payload, infer_resource_partitions(payload))
         return out
 
     def process_loglikelihood(self, packed_request):

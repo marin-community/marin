@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Generic, TypeVar
 
-import haliax.partitioning
 import jax
 import numpy
 from jax import Array
@@ -37,6 +36,13 @@ from levanter.shapes import NamedShapeSpec, ShapeSpec, to_raw_shape
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.mesh import activate_mesh
+from levanter.utils.partitioning import (
+    current_thread_local_mapping,
+    physical_axis_name,
+    physical_axis_size,
+    pspec_for_axis,
+    sharding_for_axis,
+)
 from levanter.utils.py_utils import index_where
 from levanter.utils.thread_utils import AsyncIteratorWrapper, blocking_wait
 from levanter.utils.types import ResourceMapping
@@ -120,9 +126,9 @@ class DataLoader(Iterable[Ex]):
             self.batch_axis_name = batch_axis_name or "batch"
             self.scheduler = BatchSchedule(batch_size)
 
-        self._batch_sharding = hax.partitioning.sharding_for_axis(self.batch_axis_name, axis_resources, mesh)
+        self._batch_sharding = sharding_for_axis(self.batch_axis_name, axis_resources, mesh)
         with activate_mesh(mesh):
-            self._data_axis_size = hax.partitioning.physical_axis_size(self.batch_axis_name, axis_resources)
+            self._data_axis_size = physical_axis_size(self.batch_axis_name, axis_resources)
 
         assert self._data_axis_size is not None, "Data axis size must be known. Make sure you're passing in a mesh"
 
@@ -245,7 +251,7 @@ class DataLoaderIterator(Iterator[Ex]):
         self._start_from_batch = start_from_batch
         self.mapping = self.dl.axis_resources
         if self.mapping is None:
-            self.mapping = hax.partitioning.current_thread_local_mapping()
+            self.mapping = current_thread_local_mapping()
 
         buffered_batches = self.dl.max_buffered_batches
         self._batches: Iterator[Ex]
@@ -478,10 +484,10 @@ class DataLoaderIterator(Iterator[Ex]):
 
     def _pspec_for(self, shape_spec: ShapeSpec | NamedShapeSpec) -> PartitionSpec:
         if isinstance(shape_spec, ShapeSpec):  # type: ignore
-            batch_name = hax.partitioning.physical_axis_name(self.dl.batch_axis_name, self.dl.axis_resources)
+            batch_name = physical_axis_name(self.dl.batch_axis_name, self.dl.axis_resources)
             return PartitionSpec(batch_name, *((None,) * (len(shape_spec.shape) - 1)))
         else:
-            return hax.partitioning.pspec_for_axis(shape_spec.shape, self.dl.axis_resources)  # type: ignore
+            return pspec_for_axis(shape_spec.shape, self.dl.axis_resources)  # type: ignore
 
     async def run_and_report_slowness(self, coro, description: str):
         threshold = 10.0
