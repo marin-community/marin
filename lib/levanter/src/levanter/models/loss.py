@@ -10,10 +10,10 @@ import haliax as hax
 from haliax import NamedArray
 from haliax.core import flatten_all_axes_but
 from haliax.nn import cross_entropy_loss_and_log_normalizers
-from haliax.partitioning import current_thread_local_mapping, shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
+from levanter.utils.partitioning import current_thread_local_mapping, shard_map
 
 DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
 

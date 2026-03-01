@@ -11,8 +11,8 @@ from jaxtyping import ArrayLike, Scalar
 
 import haliax as hax
 from haliax import NamedArray
-from haliax.partitioning import shard_map
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
+from levanter.utils.partitioning import shard_map
 
 
 class Histogram(equinox.Module):
