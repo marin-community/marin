@@ -28,6 +28,7 @@ from levanter.layers.attention import (
 )
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -441,14 +442,12 @@ class Olmo2Transformer(ModuleWithStateDictSerialization, eqx.Module):
 
     @staticmethod
     def init(config: Olmo2Config, *, key) -> "Olmo2Transformer":
-        S = Stacked
-        if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
-            S = BlockSeq
-
-        layers = S.init(config.Layers, Olmo2DecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
+        layers = init_scan_foldable(
+            config.Layers,
+            Olmo2DecoderLayer,
             config,
+            scan_layers=config.scan_layers,
+            gradient_checkpointing=config.gradient_checkpointing,
             key=shaped_rng_split(key, config.num_layers),
         )
         ln_f = config.mk_LayerNorm(config.Embed)
