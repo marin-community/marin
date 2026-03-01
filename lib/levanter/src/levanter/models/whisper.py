@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type
+from typing import Callable, Dict, Optional, Type, cast
 
 import equinox as eqx
 import jax
@@ -15,7 +15,6 @@ import haliax.jax_utils
 import haliax.nn as hnn
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig, ModelWithHfSerializationMixin
@@ -25,6 +24,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
+from levanter.utils.types import BlockFoldable
 
 
 silence_transformer_nag()
@@ -276,7 +276,7 @@ class WhisperLayer(ModuleWithStateDictSerialization, eqx.Module):
 
 
 class WhisperTransformer(ModuleWithStateDictSerialization):
-    layers: Stacked[WhisperLayer]
+    layers: BlockFoldable[WhisperLayer]
     Layer: Axis
     layer_norm: hnn.LayerNorm
 
@@ -308,7 +308,7 @@ class WhisperTransformer(ModuleWithStateDictSerialization):
         key=None,
     ) -> NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.Layer.size) if key is not None else None
-        x = self.layers.fold(x, xa, attn_mask, key=keys)
+        x = cast(NamedArray, self.layers.fold(x, xa, attn_mask, key=keys))
         x = self.layer_norm(x)
 
         return x
