@@ -238,6 +238,24 @@ Replace:
 The cluster you use will vary depending on TPU generation/availability; most kernel work should start with a single
 node (e.g. `*-8`) unless you’re explicitly targeting multi-slice behavior.
 
+##### Scoped VMEM flag policy (kernel benchmarking/tuning)
+
+When running TPU Pallas microbenches/tuning, set `LIBTPU_INIT_ARGS` explicitly by TPU generation:
+
+- `v5p`/`v5e`: `LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000"`
+- `v6e`: `LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=98304"`
+- `v4`: do **not** set a special scoped VMEM limit flag (use default platform behavior).
+
+Examples:
+
+```sh
+# v5p / v5e
+-e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000"
+
+# v6e
+-e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=98304"
+```
+
 ##### Listing available TPU clusters
 
 If you’re not sure which cluster has which TPU types, use the cluster CLI:

@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright 2026 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence
@@ -16,7 +16,12 @@ from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
 
-Implementation: TypeAlias = Literal["pallas_tpu", "pallas_gpu", "xla", "reference"]
+Implementation: TypeAlias = Literal[
+    "pallas_tpu",
+    "pallas_gpu",
+    "xla",
+    "reference",
+]
 Reduction: TypeAlias = Literal["sum", "mean"] | None
 
 
@@ -32,7 +37,10 @@ _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _PALLAS_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 try:
-    from .pallas_tpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas
+    from .pallas_tpu import (
+        PallasUnsupportedError,
+        linear_softmax_cross_entropy_loss_pallas,
+    )
 
     IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
 except ImportError:
@@ -50,16 +58,14 @@ except ImportError:
 def _default_implementations() -> tuple[Implementation, ...]:
     implementations = _DEFAULT_IMPLEMENTATION
     backend = jax.default_backend()
-    devices = jax.devices()
-    device_kind = devices[0].device_kind.lower() if devices else ""
 
     if backend == "gpu" and "pallas_gpu" in IMPLEMENTATIONS:
+        devices = jax.devices()
+        device_kind = devices[0].device_kind.lower() if devices else ""
         if "gb10" in device_kind:
             return cast(tuple[Implementation, ...], implementations + ("pallas_gpu",))
         return cast(tuple[Implementation, ...], ("pallas_gpu",) + implementations)
     if backend == "tpu" and "pallas_tpu" in IMPLEMENTATIONS:
-        if "v4" in device_kind:
-            return cast(tuple[Implementation, ...], implementations + ("pallas_tpu",))
         return cast(tuple[Implementation, ...], ("pallas_tpu",) + implementations)
     return implementations
 

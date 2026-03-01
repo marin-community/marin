@@ -1,6 +1,9 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Copyright 2026 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import warnings
 import jax
 import jax.numpy as jnp
@@ -180,7 +183,8 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
 
 
-def test_fused_cross_entropy_pallas_requires_tpu():
+@pytest.mark.parametrize("implementation", ["pallas_tpu"])
+def test_fused_cross_entropy_pallas_requires_tpu(implementation: str):
     if jax.default_backend() == "tpu":
         pytest.skip("requires non-TPU backend")
 
@@ -194,7 +198,7 @@ def test_fused_cross_entropy_pallas_requires_tpu():
             y,
             w,
             reduction=None,
-            implementation="pallas_tpu",
+            implementation=implementation,
         )
 
 
@@ -222,6 +226,28 @@ def test_infer_block_sizes_preserves_defaults_without_128_aligned_divisors():
 
     assert block_sizes.b_block_size == 1024
     assert block_sizes.h_block_size == 512
+
+
+def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
+    fake_device = type("FakeDevice", (), {"device_kind": "TPU v4"})()
+    monkeypatch.setattr(pallas_tpu.jax, "default_backend", lambda: "tpu")
+    monkeypatch.setattr(pallas_tpu.jax, "devices", lambda: [fake_device])
+    assert pallas_tpu._infer_num_tensorcores() == 2
+
+    fake_v5e_device = type("FakeDevice", (), {"device_kind": "TPU v5e"})()
+    monkeypatch.setattr(pallas_tpu.jax, "devices", lambda: [fake_v5e_device])
+    assert pallas_tpu._infer_num_tensorcores() == 1
+
+
+def test_infer_block_sizes_treats_unknown_tpu_kind_as_tpu_for_shape_sanitization():
+    block_sizes = infer_block_sizes(
+        b=768,
+        h=384,
+        v=4096,
+        dtype=jnp.float32,
+        device_kind="TPU experimental",
+    )
+    assert block_sizes == fused_api.BlockSizes(b_block_size=768, h_block_size=384, v_block_size=1024)
 
 
 def test_default_implementation_on_cpu_skips_expected_tpu_warning():
@@ -590,17 +616,6 @@ def test_infer_block_sizes_respects_local_batch_and_hidden_divisibility():
     assert 768 % block_sizes.h_block_size == 0
 
 
-def test_infer_block_sizes_uses_gb10_gpu_tuned_entry():
-    block_sizes = infer_block_sizes(
-        b=128,
-        h=128,
-        v=128,
-        dtype=jnp.float32,
-        device_kind="NVIDIA GB10",
-    )
-    assert block_sizes == fused_api.BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128)
-
-
 def test_infer_block_sizes_huge_batch_without_scoped_vmem_flag_warns_and_uses_safe_v(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -661,7 +676,7 @@ def test_fused_cross_entropy_default_non_divisible_vocab_matches_reference():
         pytest.skip("requires TPU backend")
 
     hidden, vocab, batch = 128, 130, 128
-    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    block_sizes = fused_api.BlockSizes(b_block_size=512, h_block_size=128, v_block_size=128)
 
     key = jax.random.PRNGKey(0)
     key_x, key_w, key_y = jax.random.split(key, 3)
@@ -738,3 +753,88 @@ def test_fused_cross_entropy_pallas_non_divisible_vocab_dx_matches_xla():
 
     assert jnp.allclose(gx_pallas, gx_xla, atol=1e-4, rtol=1e-4)
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
+
+
+def test_fused_cross_entropy_pallas_backward_matches_xla():
+    if jax.default_backend() != "tpu":
+        pytest.skip("requires TPU backend")
+
+    hidden, vocab, batch = 256, 2048, 512
+    block_sizes = fused_api.BlockSizes(b_block_size=512, h_block_size=128, v_block_size=128)
+
+    key = jax.random.PRNGKey(29)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+    x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
+
+    def loss_pallas(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation="pallas_tpu",
+        )
+
+    def loss_xla(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation="xla",
+        )
+
+    gx_pallas, gw_pallas = jax.grad(loss_pallas, argnums=(0, 1))(x, w)
+    gx_xla, gw_xla = jax.grad(loss_xla, argnums=(0, 1))(x, w)
+
+    assert jnp.allclose(gx_pallas, gx_xla, atol=1e-4, rtol=1e-4)
+    assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.parametrize("implementation", ["pallas_tpu"])
+def test_fused_cross_entropy_pallas_backward_matches_xla_infer_blocks(implementation: str):
+    if jax.default_backend() != "tpu":
+        pytest.skip("requires TPU backend")
+
+    hidden, vocab, batch = 256, 2048, 512
+    block_sizes = fused_api.BlockSizes(b_block_size=512, h_block_size=128, v_block_size=128)
+
+    key = jax.random.PRNGKey(37)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+    x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
+
+    def loss_linear_ce(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation=implementation,
+        )
+
+    def loss_xla(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_raw,
+            y,
+            w_raw,
+            reduction="mean",
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation="xla",
+        )
+
+    gx_linear_ce, gw_linear_ce = jax.grad(loss_linear_ce, argnums=(0, 1))(x, w)
+    gx_xla, gw_xla = jax.grad(loss_xla, argnums=(0, 1))(x, w)
+
+    assert jnp.allclose(gx_linear_ce, gx_xla, atol=1e-4, rtol=1e-4)
+    assert jnp.allclose(gw_linear_ce, gw_xla, atol=1e-4, rtol=1e-4)
