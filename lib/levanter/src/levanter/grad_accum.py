@@ -10,7 +10,6 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 from haliax import Axis
-from haliax.partitioning import ResourceAxis
 from haliax.util import is_named_array
 from jax.lax import with_sharding_constraint
 from jax.sharding import PartitionSpec
@@ -18,6 +17,7 @@ from jax.sharding import PartitionSpec
 from levanter.metrics import Metric
 from levanter.metrics import fold as fold_metric
 from levanter.utils.jax_utils import zeros_like_tree
+from levanter.utils.mesh import DATA_AXIS
 
 Args = ParamSpec("Args")
 R = TypeVar("R")
@@ -179,7 +179,7 @@ def _reshape_for_microbatch(Batch: Axis, Microbatch: Axis, AccumStep: Axis, inpu
             return hax.shard(x, axis_mapping)
         elif isinstance(x, jnp.ndarray):
             x = x.reshape((AccumStep.size, Microbatch.size) + x.shape[1:])
-            return with_sharding_constraint(x, PartitionSpec(None, ResourceAxis.DATA, *(None,) * (len(x.shape) - 2)))
+            return with_sharding_constraint(x, PartitionSpec(None, DATA_AXIS, *(None,) * (len(x.shape) - 2)))
         else:
             # assert jnp.isscalar(x)
             return x

@@ -16,14 +16,14 @@ import jax
 import numpy as np
 from haliax import is_named_array
 from haliax.jax_utils import is_jax_array_like
-from haliax.partitioning import ResourceAxis, ResourceMapping
+from haliax.partitioning import ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
 
-from levanter.utils.mesh import create_mesh_from_axis_specs
+from levanter.utils.mesh import CONTEXT_AXIS, DATA_AXIS, MODEL_AXIS, REPLICA_AXIS, create_mesh_from_axis_specs
 from levanter.utils.py_utils import index_where
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
 
@@ -55,10 +55,10 @@ def local_cpu_mesh():
     cpu = jax.local_devices(backend="cpu")[0]
     mesh = create_mesh_from_axis_specs(
         ici_axes={
-            ResourceAxis.REPLICA: 1,
-            ResourceAxis.DATA: 1,
-            ResourceAxis.MODEL: 1,
-            ResourceAxis.CONTEXT: 1,
+            REPLICA_AXIS: 1,
+            DATA_AXIS: 1,
+            MODEL_AXIS: 1,
+            CONTEXT_AXIS: 1,
         },
         dcn_axes={},
         devices=[cpu],
@@ -353,7 +353,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         return sharding
     else:
         # get the existing mesh and find the FSDP axis
-        num_devices = mesh.shape[hax.partitioning.ResourceAxis.DATA]
+        num_devices = mesh.shape[DATA_AXIS]
 
         for i in range(len(shape) - 1, -1, -1):
             shape_i = shape[i]
@@ -364,7 +364,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
             return NamedSharding(mesh, PartitionSpec(None))
 
         axis_sharding: list[str | None] = [None] * len(shape)
-        axis_sharding[sharded_axis] = hax.partitioning.ResourceAxis.DATA
+        axis_sharding[sharded_axis] = DATA_AXIS
         sharding = NamedSharding(mesh, PartitionSpec(*axis_sharding))
 
         return sharding
