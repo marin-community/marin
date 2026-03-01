@@ -3,7 +3,7 @@
 
 import abc
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Optional, Protocol, Type, TypeVar, cast
+from typing import Any, Generic, Optional, Protocol, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
@@ -21,9 +21,6 @@ from levanter.models.loss import maybe_fused_next_token_loss
 LmConfigT = TypeVar("LmConfigT", bound="LmConfig")
 LmT = TypeVar("LmT", bound="LmHeadModel")
 
-if TYPE_CHECKING:
-    from levanter.data.text.examples import GrugLmExample
-
 
 LmTensor = Any
 LmAttentionMask = AttentionMask | Any
@@ -35,7 +32,7 @@ class ArrayLmHeadModel(Protocol):
 
     def compute_next_token_loss_array(
         self,
-        example: "LmExample | GrugLmExample",
+        example: Any,
         *,
         batch_axis: Axis | str | None = "batch",
         key=None,
@@ -340,8 +337,9 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
     def compute_next_token_loss(
         self,
-        example: LmExample,
+        example: Any,
         *,
+        batch_axis: Axis | str | None = "batch",
         key=None,
         reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
         reduction_axis: Optional[hax.AxisSelection] = None,
@@ -356,7 +354,8 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         If `reduction` is None, the loss is returned unreduced as a model-native tensor with axes
         (*batch axes, sequence_length).
         """
-        activations = self.activations(example.tokens, example.attn_mask, key=key)
+        named_example = _as_named_lm_example(example, Pos=self.Pos, batch_axis=batch_axis)
+        activations = self.activations(named_example.tokens, named_example.attn_mask, key=key)
 
         aux_loss = 0
         if isinstance(activations, tuple):
@@ -368,8 +367,8 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             self.Vocab,
             activations,
             self.get_lm_head(),
-            example.tokens,
-            loss_weight=example.loss_weight,
+            named_example.tokens,
+            loss_weight=named_example.loss_weight,
             reduction=reduction,
             reduction_axis=reduction_axis,
             logsumexp_weight=logsumexp_weight,
@@ -381,7 +380,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
     def compute_next_token_loss_array(
         self,
-        example: "LmExample | GrugLmExample",
+        example: Any,
         *,
         batch_axis: Axis | str | None = "batch",
         key=None,
@@ -397,18 +396,9 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         This bridges array-native batches (for example `GrugLmExample`) to the legacy
         named-tensor model interface during migration.
         """
-        named_example: LmExample
-        if isinstance(example, LmExample):
-            named_example = example
-        else:
-            from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
-
-            if not isinstance(example, GrugLmExample):
-                raise TypeError(f"Unsupported example type: {type(example)}")
-            named_example = named_lm_example_from_grug(example, Pos=self.Pos, batch_axis=batch_axis)
-
         loss = self.compute_next_token_loss(
-            named_example,
+            example,
+            batch_axis=batch_axis,
             key=key,
             reduction=reduction,
             reduction_axis=reduction_axis,
@@ -418,3 +408,15 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         )
 
         return _to_plain_jax_array(loss)
+
+
+def _as_named_lm_example(example: Any, *, Pos: Axis, batch_axis: Axis | str | None = "batch") -> LmExample:
+    if isinstance(example, LmExample):
+        return example
+
+    from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+
+    if isinstance(example, GrugLmExample):
+        return named_lm_example_from_grug(example, Pos=Pos, batch_axis=batch_axis)
+
+    raise TypeError(f"Unsupported example type: {type(example)}")
