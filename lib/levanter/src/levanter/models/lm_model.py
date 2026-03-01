@@ -3,7 +3,7 @@
 
 import abc
 from dataclasses import dataclass
-from typing import Generic, Optional, Type, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Optional, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
@@ -19,6 +19,11 @@ from levanter.models.loss import maybe_fused_next_token_loss
 
 LmConfigT = TypeVar("LmConfigT", bound="LmConfig")
 LmT = TypeVar("LmT", bound="LmHeadModel")
+
+
+LmTensor = Any
+LmAttentionMask = AttentionMask | Any
+LmAuxData = Any
 
 
 class LmExample(eqx.Module):
@@ -187,21 +192,22 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
     def __call__(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        input_ids: LmTensor,
+        attn_mask: Optional[LmAttentionMask] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: LmTensor | None = None,
+    ) -> LmTensor:
         """
-        Compute the logits for the next token in a sequence.
+        Compute next-token logits for a model-native token tensor.
+
         Args:
-            input_ids: token IDs with shape [..., Pos]
-            attn_mask: attention mask with shape [..., Pos, KeyPos]
+            input_ids: model-native token tensor with shape [..., Pos]
+            attn_mask: model-native attention mask for the same sequence
             key: PRNGKeyArray for random number generation
 
         Returns:
-            NamedArray: logits with shape [..., Pos, Vocab]
+            Model-native logits tensor with shape [..., Pos, Vocab]
 
         """
         try:
@@ -217,27 +223,28 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
     @abc.abstractmethod
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        input_ids: LmTensor,
+        attn_mask: Optional[LmAttentionMask] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray | tuple[NamedArray, NamedArray | float]:
+        pos_ids: LmTensor | None = None,
+    ) -> LmTensor | tuple[LmTensor, LmAuxData]:
         """
-        Compute the activations for the next token in a sequence.
+        Compute activations for a model-native token tensor.
+
         Args:
-            input_ids: token IDs with shape {Pos}
-            attn_mask: attention mask with shape {Pos, KeyPos}
+            input_ids: model-native token tensor with shape {Pos}
+            attn_mask: model-native attention mask with shape {Pos, KeyPos}
             key: PRNGKeyArray for random number generation
 
         Returns:
-            NamedArray: activations with shape {Pos, Embed}
+            Model-native activation tensor with shape {Pos, Embed}
 
         """
         pass
 
     @abc.abstractmethod
-    def get_lm_head(self) -> hax.NamedArray:
+    def get_lm_head(self) -> LmTensor:
         """
         The language modeling head of the model. Should have shape {Embed, Vocab}.
         """
@@ -265,12 +272,12 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         logsumexp_weight: Optional[float] = None,
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
         logit_soft_cap: Optional[float] = None,
-    ) -> jnp.ndarray | NamedArray:
+    ) -> jnp.ndarray | LmTensor:
         """
         Compute next-token cross-entropy for a language modeling example.
 
         If `reduction` is not None, the loss is reduced across `reduction_axis` (`None` means all axes).
-        If `reduction` is None, the loss is returned unreduced as a `NamedArray` with axes
+        If `reduction` is None, the loss is returned unreduced as a model-native tensor with axes
         (*batch axes, sequence_length).
         """
         activations = self.activations(example.tokens, example.attn_mask, key=key)
