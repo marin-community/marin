@@ -120,10 +120,9 @@ def main(config: TrainLmConfig):
             logsumexp_weight=config.z_loss_weight,
         )
 
-    # Using the trainer as a context manager does 3 things:
+    # Using the trainer as a context manager does 2 things:
     # 1. Sets the device mesh
-    # 2. Sets the axis mapping (for fsdp)
-    # 3. Sets the global metrics tracker
+    # 2. Sets the global metrics tracker
     with Trainer(config.trainer, optimizer, loss_function) as trainer:
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
         # this makes deterministic training pretty easy

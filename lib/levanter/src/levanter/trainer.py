@@ -935,10 +935,7 @@ class TrainerConfig:
 
     def use_device_mesh(self) -> ContextManager[None]:
         """
-        Context manager that sets the device mesh for jax, using Haliax's wrapper.
-
-        In recent jax, this is the same as `jax.set_mesh(self.device_mesh)`, but we use Haliax's wrapper for
-        compatibility with older jax versions.
+        Context manager that sets the process-wide JAX mesh.
         """
         return activate_mesh(self.device_mesh)
 
