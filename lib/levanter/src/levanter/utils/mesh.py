@@ -195,10 +195,8 @@ def create_mesh_from_axis_specs(
 
 
 def activate_mesh(mesh: Mesh):
-    """Activate the process-wide mesh context used by Haliax partitioning."""
-    import haliax.partitioning
-
-    return haliax.partitioning.set_mesh(mesh)
+    """Activate the process-wide mesh context."""
+    return jax.set_mesh(mesh)
 
 
 def get_active_mesh() -> Mesh | None:
