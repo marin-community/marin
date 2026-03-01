@@ -29,7 +29,6 @@ import jax
 import jax.random as jrandom
 import jmp
 from haliax import Axis
-from haliax.partitioning import round_axis_for_partitioning
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
@@ -53,6 +52,7 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.mesh import MeshConfig
+from levanter.utils.partitioning import round_axis_for_partitioning
 
 logger = logging.getLogger(__name__)
 console = Console()

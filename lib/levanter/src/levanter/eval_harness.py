@@ -72,7 +72,6 @@ except ImportError:
     postprocess_generated_text = None
 
 import haliax as hax
-from haliax.partitioning import round_axis_for_partitioning
 from tqdm_loggable.auto import tqdm
 
 import levanter.config
@@ -84,6 +83,7 @@ from levanter.eval import resolve_batch_axis_resource
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
+from levanter.utils.partitioning import round_axis_for_partitioning
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ResourceMapping

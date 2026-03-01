@@ -38,7 +38,6 @@ import jmp
 import numpy as np
 from draccus import field
 from haliax import Axis
-from haliax.partitioning import named_jit
 from haliax.quantization import QuantizationConfig
 from haliax.types import Scalar
 from jax.experimental import multihost_utils
@@ -70,6 +69,7 @@ from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_trainin
 from levanter.utils import cloud_utils, fsspec_utils
 from levanter.utils.jax_utils import zeros_like_tree
 from levanter.utils.mesh import MeshConfig, activate_mesh, create_mesh_from_axis_specs
+from levanter.utils.partitioning import named_jit
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec, ResourceMapping
 
