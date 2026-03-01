@@ -363,7 +363,6 @@ class Trainer:
         self._cmanagers = [
             levanter.current_tracker(self.tracker),
             activate_mesh(self.device_mesh),
-            hax.axis_mapping(self.parameter_axis_mapping),
         ]
 
         for cmanager in self._cmanagers:
