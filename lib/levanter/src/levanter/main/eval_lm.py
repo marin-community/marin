@@ -73,6 +73,7 @@ def main(config: EvalLmConfig):
 
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
+    batch_axis_resource = compute_axis_mapping.get(Batch.name, compute_axis_mapping.get("batch"))
 
     if config.checkpoint_path is None and config.hf_checkpoint is None:
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint")
@@ -97,7 +98,6 @@ def main(config: EvalLmConfig):
             per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
             return per_pos_loss, per_pos_weight, per_pos_token_id
 
-        batch_axis_resource = compute_axis_mapping.get(Batch.name, compute_axis_mapping.get("batch"))
         evaluator = TaggedEvaluator(
             EvalBatch=Batch,
             tagged_eval_sets=datasets,
@@ -160,7 +160,9 @@ def main(config: EvalLmConfig):
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
                 loader = DataLoader(
-                    dataset, batch_size=config.trainer.eval_batch_size, axis_resources=compute_axis_mapping
+                    dataset,
+                    batch_size=config.trainer.eval_batch_size,
+                    axis_resources={"batch": batch_axis_resource} if batch_axis_resource is not None else None,
                 )
                 entropy_hist = levanter.analysis.compute_entropy_histogram(
                     model,
@@ -182,7 +184,9 @@ def main(config: EvalLmConfig):
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
                     loader = DataLoader(
-                        dataset, batch_size=config.trainer.eval_batch_size, axis_resources=compute_axis_mapping
+                        dataset,
+                        batch_size=config.trainer.eval_batch_size,
+                        axis_resources={"batch": batch_axis_resource} if batch_axis_resource is not None else None,
                     )
                     top2_gap_hist = levanter.analysis.compute_top2_gap_histogram(
                         model,
