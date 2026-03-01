@@ -13,7 +13,6 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
-from haliax import Axis
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -27,9 +26,7 @@ from levanter.checkpoint import load_checkpoint
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text import GrugLmExample, LmDataConfig
-from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
-from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
@@ -86,14 +83,13 @@ def build_train_dataset(
     batch_schedule: BatchSchedule,
     key: PRNGKeyArray,
 ) -> MixtureDataset[GrugLmExample]:
-    pos = Axis("position", max_seq_len)
     mix_key, shuffle_key = jax.random.split(key)
     weights = data_config.train_weights
     if isinstance(weights, list):
         weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
 
     initial_batch_size = batch_schedule.batch_size_at_step(0)
-    datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
+    datasets = data_config.train_grug_sets(seq_len=max_seq_len, key=shuffle_key, initial_batch_size=initial_batch_size)
     return MixtureDataset(
         datasets=datasets,
         weights=weights,
@@ -128,9 +124,8 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
-) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
-    pos = Axis("position", max_seq_len)
-    tagged_eval_sets = data_config.tagged_eval_sets(pos)
+) -> TaggedEvaluator[GrugLmExample, Transformer] | None:
+    tagged_eval_sets = data_config.tagged_eval_grug_sets(seq_len=max_seq_len)
     if len(tagged_eval_sets) == 0:
         logger.warning("No evaluation datasets provided.")
         return None
@@ -142,12 +137,9 @@ def build_tagged_evaluator(
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
     batch_axis_resource = eval_cfg.eval_batch_pspec[0]
     eval_axis_mapping = {"batch": batch_axis_resource}
-    eval_batch = Axis("batch", eval_cfg.eval_batch_size)
     eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
 
-    def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
-        if isinstance(batch, LmExample):
-            batch = grug_lm_example_from_named(batch)
+    def eval_loss_fn(model: Transformer, batch: GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         per_pos_loss = model.compute_next_token_loss(
             batch.tokens,
             batch.loss_weight,
@@ -161,7 +153,7 @@ def build_tagged_evaluator(
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
-        EvalBatch=eval_batch,
+        EvalBatch=eval_cfg.eval_batch_size,
         tagged_eval_sets=tagged_eval_sets,
         loss_fn=eval_loss_fn,
         tokenizer=tokenizer,
