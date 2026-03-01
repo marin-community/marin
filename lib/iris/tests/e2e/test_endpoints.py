@@ -7,7 +7,7 @@ Migrated from tests/cluster/test_e2e.py::TestEndpoints, TestPorts, and TestJobIn
 
 Tests that validate runtime context (get_job_info(), ControllerServiceClientSync)
 work by submitting jobs whose inner functions use those APIs. The inner functions
-run inside the worker -- only the test harness uses TestCluster.
+run inside the worker -- only the test harness uses IrisTestCluster.
 """
 
 import time

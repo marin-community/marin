@@ -15,11 +15,11 @@ from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
 from iris.cluster.types import (
+    REGION_ATTRIBUTE_KEY,
+    ZONE_ATTRIBUTE_KEY,
     Entrypoint,
     EnvironmentSpec,
-    REGION_ATTRIBUTE_KEY,
     ResourceSpec,
-    ZONE_ATTRIBUTE_KEY,
     zone_constraint,
 )
 from iris.rpc import config_pb2
@@ -27,7 +27,7 @@ from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 from .conftest import (
     IRIS_ROOT,
-    TestCluster,
+    IrisTestCluster,
     _is_noop_page,
     assert_visible,
     dashboard_click,
@@ -81,7 +81,7 @@ def cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = TestCluster(url=url, client=client, controller_client=controller_client)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         # min_slices=1 each: 2 VMs for v5e_16 + 4 VMs for v5e_32 = 6 workers
         tc.wait_for_workers(6, timeout=30)
         yield tc

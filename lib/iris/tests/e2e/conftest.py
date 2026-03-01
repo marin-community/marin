@@ -4,7 +4,7 @@
 """Core fixtures for Iris E2E tests.
 
 Boots a local cluster via connect_cluster() + make_local_config() and provides
-a TestCluster dataclass that wraps the IrisClient and ControllerServiceClientSync
+a IrisTestCluster dataclass that wraps the IrisClient and ControllerServiceClientSync
 with convenience methods for job submission, waiting, and status queries.
 
 The cluster fixture is function-scoped so each test gets a fresh cluster with no
@@ -22,13 +22,13 @@ from pathlib import Path
 
 import pytest
 from iris.chaos import reset_chaos
-from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
+from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.types import (
-    CoschedulingConfig,
     Constraint,
+    CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     ReservationEntry,
@@ -46,7 +46,7 @@ DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
 
 
 @dataclass
-class TestCluster:
+class IrisTestCluster:
     """Wraps a booted local cluster with convenience methods for E2E tests.
 
     Combines the chaos conftest's connect_cluster() bootstrap with E2ECluster-style
@@ -206,14 +206,14 @@ def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
 
 @pytest.fixture
 def cluster():
-    """Boots a local cluster. Yields a TestCluster with IrisClient and RPC access."""
+    """Boots a local cluster. Yields a IrisTestCluster with IrisClient and RPC access."""
     config = load_config(DEFAULT_CONFIG)
     _add_coscheduling_group(config)
     config = make_local_config(config)
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        yield TestCluster(url=url, client=client, controller_client=controller_client)
+        yield IrisTestCluster(url=url, client=client, controller_client=controller_client)
         controller_client.close()
 
 
@@ -246,7 +246,7 @@ def multi_worker_cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = TestCluster(url=url, client=client, controller_client=controller_client)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(num_workers, timeout=30)
         yield tc
         controller_client.close()
