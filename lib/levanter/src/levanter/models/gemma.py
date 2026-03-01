@@ -13,7 +13,6 @@ import jax.random as jrandom
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.normalization import LayerNormBase
-from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -25,6 +24,7 @@ from levanter.models.llama import (  # Gemma attention and MLP is identical to L
     LlamaMlp,
 )
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.scan_layers import init_scan_foldable
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -344,14 +344,12 @@ class GemmaTransformer(ModuleWithStateDictSerialization):
 
     @staticmethod
     def init(config: GemmaConfig, *, key) -> "GemmaTransformer":
-        S = Stacked
-        if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
-            S = BlockSeq
-
-        layers = S.init(config.Layers, GemmaDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
+        layers = init_scan_foldable(
+            config.Layers,
+            GemmaDecoderLayer,
             config,
+            scan_layers=config.scan_layers,
+            gradient_checkpointing=config.gradient_checkpointing,
             key=shaped_rng_split(key, config.num_layers),
         )
         ln_f = config.mk_LayerNorm(config.Embed)
@@ -681,15 +679,12 @@ class Gemma2Transformer(ModuleWithStateDictSerialization):
 
     @staticmethod
     def init(config: Gemma2Config, *, key):
-        # Choose "Stacked" vs "BlockSeq" depending on scan_layers like the original implementation
-        S = Stacked
-        if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
-            S = BlockSeq
-
-        layers = S.init(config.Layers, Gemma2DecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
+        layers = init_scan_foldable(
+            config.Layers,
+            Gemma2DecoderLayer,
             config,
+            scan_layers=config.scan_layers,
+            gradient_checkpointing=config.gradient_checkpointing,
             key=shaped_rng_split(key, config.num_layers),
         )
         ln_f = config.mk_LayerNorm(config.Embed)
