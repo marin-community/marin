@@ -22,7 +22,14 @@ from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
 
-from levanter.utils.mesh import CONTEXT_AXIS, DATA_AXIS, MODEL_AXIS, REPLICA_AXIS, create_mesh_from_axis_specs
+from levanter.utils.mesh import (
+    CONTEXT_AXIS,
+    DATA_AXIS,
+    MODEL_AXIS,
+    REPLICA_AXIS,
+    activate_mesh,
+    create_mesh_from_axis_specs,
+)
 from levanter.utils.py_utils import index_where
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
 from levanter.utils.types import ResourceMapping
@@ -63,7 +70,7 @@ def local_cpu_mesh():
         dcn_axes={},
         devices=[cpu],
     )
-    with use_cpu_device(), haliax.partitioning.set_mesh(mesh):
+    with use_cpu_device(), activate_mesh(mesh):
         yield mesh
 
 
@@ -543,7 +550,7 @@ def broadcast_one_to_all(in_tree: Any, is_source: bool | None = None) -> Any:
     def post_jit(x):
         return jax.device_get(x.addressable_data(0))
 
-    with haliax.partitioning.set_mesh(global_mesh):
+    with activate_mesh(global_mesh):
         in_tree = jax.tree.map(pre_jit, in_tree)
         out_tree = jax.jit(_psum, out_shardings=jax.sharding.NamedSharding(global_mesh, PartitionSpec()))(in_tree)
         return jax.tree.map(post_jit, out_tree)

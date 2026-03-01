@@ -194,6 +194,13 @@ def create_mesh_from_axis_specs(
     return Mesh(device_mesh, tuple(axis_names), axis_types=axis_types)
 
 
+def activate_mesh(mesh: Mesh):
+    """Activate the process-wide mesh context used by Haliax partitioning."""
+    import haliax.partitioning
+
+    return haliax.partitioning.set_mesh(mesh)
+
+
 def _norm(v: Union[str, Sequence[str]]) -> Union[str, Tuple[str, ...]]:
     if isinstance(v, (list, tuple)):
         v = tuple(v)

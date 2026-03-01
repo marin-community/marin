@@ -69,7 +69,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils, fsspec_utils
 from levanter.utils.jax_utils import zeros_like_tree
-from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
+from levanter.utils.mesh import MeshConfig, activate_mesh, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec, ResourceMapping
 
@@ -368,7 +368,7 @@ class Trainer:
 
         self._cmanagers = [
             levanter.current_tracker(self.tracker),
-            haliax.partitioning.set_mesh(self.device_mesh),
+            activate_mesh(self.device_mesh),
             hax.axis_mapping(self.parameter_axis_mapping),
         ]
 
@@ -949,7 +949,7 @@ class TrainerConfig:
         In recent jax, this is the same as `jax.set_mesh(self.device_mesh)`, but we use Haliax's wrapper for
         compatibility with older jax versions.
         """
-        return haliax.partitioning.set_mesh(self.device_mesh)
+        return activate_mesh(self.device_mesh)
 
     @property
     def eval_batch_size(self):
