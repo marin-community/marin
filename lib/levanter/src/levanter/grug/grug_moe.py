@@ -127,7 +127,6 @@ def _moe_mlp_ep_ring_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-    _report_capacity_overflow: bool,
 ) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
@@ -278,7 +277,6 @@ def moe_mlp(
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
-                _report_capacity_overflow=report_capacity_overflow,
             ),
             mesh=mesh,
             in_specs=(

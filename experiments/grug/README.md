@@ -108,7 +108,7 @@ uv run lib/marin/src/marin/run/ray_run.py \
 
 ## Variant contract (enforced by tests)
 
-`experiments/grug/test_variant_contracts.py` treats each subdirectory under `experiments/grug/` as a variant and
+`tests/test_grug_variant_contracts.py` treats each subdirectory under `experiments/grug/` as a variant and
 enforces these minimum interfaces:
 
 - If `<variant>/model.py` exists, it must define:

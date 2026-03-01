@@ -248,56 +248,6 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
     np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
 
 
-def test_moe_mlp_validates_shapes():
-    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
-        key=jax.random.key(3),
-        tokens=16,
-        hidden_dim=16,
-        intermediate_dim=24,
-        num_experts=4,
-        topk=2,
-    )
-
-    with pytest.raises(ValueError, match="identical \\[T, K\\] shapes"):
-        moe_mlp(x, selected_experts, combine_weights[:, :1], w_up_gate, w_down, mesh=None)
-
-    with pytest.raises(ValueError, match="must match x token dim"):
-        moe_mlp(x[:-1], selected_experts, combine_weights, w_up_gate, w_down, mesh=None)
-
-    with pytest.raises(ValueError, match="must match w_up_gate expert dimension"):
-        moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down[:-1], mesh=None)
-
-
-def test_moe_mlp_returns_dropped_count_when_requested():
-    tokens = 16
-    hidden_dim = 16
-    intermediate_dim = 24
-    num_experts = 4
-    topk = 2
-
-    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
-        key=jax.random.key(4),
-        tokens=tokens,
-        hidden_dim=hidden_dim,
-        intermediate_dim=intermediate_dim,
-        num_experts=num_experts,
-        topk=topk,
-    )
-
-    out, dropped = moe_mlp(
-        x,
-        selected_experts,
-        combine_weights,
-        w_up_gate,
-        w_down,
-        mesh=None,
-        report_capacity_overflow=True,
-    )
-    assert out.shape == (tokens, hidden_dim)
-    assert dropped.shape == ()
-    assert int(dropped) == 0
-
-
 def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:

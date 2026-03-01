@@ -37,7 +37,7 @@ from levanter.trainer import TrainerConfig
 
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
-    grug_dir = Path(__file__).resolve().parent
+    grug_dir = Path(__file__).resolve().parents[1] / "experiments" / "grug"
     variants: list[str] = []
     found_any = False
     for child in sorted(grug_dir.iterdir()):
