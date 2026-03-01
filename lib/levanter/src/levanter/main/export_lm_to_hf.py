@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import equinox as eqx
-import haliax
 import jax
 
 from haliax import Axis
@@ -59,16 +58,19 @@ def main(config: ConvertLmConfig):
     if config.use_cpu:
         exit_stack.enter_context(local_cpu_mesh())
     else:
-        # exit_stack.enter_context(Mesh(jax.local_devices(), "dev"))
-        exit_stack.enter_context(config.trainer.device_mesh)
-        exit_stack.enter_context(haliax.axis_mapping(config.trainer.parameter_axis_mapping))
+        exit_stack.enter_context(config.trainer.use_device_mesh())
 
     with exit_stack:
         model: LmHeadModel = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
         trainable, non_trainable = eqx.partition(model, is_inexact_arrayish)
         # TODO: don't load the entire checkpoint into CPU memory when we only need our share of the model
         logger.info(f"Loading checkpoint from {config.checkpoint_path}...")
-        trainable = load_checkpoint(trainable, config.checkpoint_path, subpath="model")
+        trainable = load_checkpoint(
+            trainable,
+            config.checkpoint_path,
+            subpath="model",
+            axis_mapping=config.trainer.parameter_axis_mapping,
+        )
 
         assert trainable is not None
         model = eqx.combine(trainable, non_trainable)
