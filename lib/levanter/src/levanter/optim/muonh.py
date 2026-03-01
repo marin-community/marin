@@ -11,10 +11,15 @@ import optax
 from optax import tree_utils as otu
 
 import haliax
-from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import CoefficientType, map_flattened_linear_layers, zeropower_via_newtonschulz5
+from levanter.optim.util import (
+    CoefficientType,
+    is_linear_like_module,
+    label_linear_like_module,
+    map_flattened_linear_layers,
+    zeropower_via_newtonschulz5,
+)
 from levanter.utils.jax_utils import leaf_key_paths
 from levanter.optim.adamh import scale_by_adamh
 
@@ -114,13 +119,13 @@ class MuonHConfig(OptimizerConfig):
                 return "adam"
             elif "lm_head" in path_str:
                 return "adamh"
-            elif isinstance(param, Linear):
+            elif is_linear_like_module(param):
                 # muonh for linear layers
-                return dataclasses.replace(param, weight="muonh", bias="adam" if param.bias is not None else None)
+                return label_linear_like_module(param, weight_label="muonh", bias_label="adam")
             else:
                 return "adam"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
 
 
 class ScaleByMuonHState(NamedTuple):

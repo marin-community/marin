@@ -59,6 +59,8 @@ from levanter.optim.config import OptimizerConfig
 from levanter.optim.util import (
     CoefficientType,
     flatten_linear_layers,
+    is_linear_like_module,
+    label_linear_like_module,
     unflatten_linear_layers,
     zeropower_via_newtonschulz5,
 )
@@ -81,7 +83,7 @@ class _AdamWFallbackConfig(Protocol):
 
 
 def _is_linear_or_none(x: Any) -> bool:
-    return isinstance(x, Linear) or x is None
+    return is_linear_like_module(x) or x is None
 
 
 def _create_namo_mask(params: PyTree) -> PyTree:
@@ -91,11 +93,11 @@ def _create_namo_mask(params: PyTree) -> PyTree:
         path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
         if "Embedding" in path_str or "lm_head" in path_str:
             return "adamw"
-        if isinstance(param, Linear):
-            return dataclasses.replace(param, weight="namo", bias="adamw" if param.bias is not None else None)
+        if is_linear_like_module(param):
+            return label_linear_like_module(param, weight_label="namo", bias_label="adamw")
         return "adamw"
 
-    return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
+    return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
 
 
 def _adamw_transform(
