@@ -136,7 +136,6 @@ def build_tagged_evaluator(
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
     batch_axis_resource = eval_cfg.eval_batch_pspec[0]
-    eval_axis_mapping = {"batch": batch_axis_resource}
     eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
 
     def eval_loss_fn(model: Transformer, batch: GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
@@ -158,7 +157,7 @@ def build_tagged_evaluator(
         loss_fn=eval_loss_fn,
         tokenizer=tokenizer,
         device_mesh=mesh,
-        axis_mapping=eval_axis_mapping,
+        batch_axis_resource=batch_axis_resource,
         max_examples_per_dataset=max_examples_per_dataset,
     )
 
