@@ -21,7 +21,7 @@ from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
 from jax.experimental.multihost_utils import host_local_array_to_global_array
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
 
 from levanter.utils.mesh import create_mesh_from_axis_specs
@@ -70,6 +70,48 @@ def local_cpu_mesh():
 def is_inside_jit():
     """Returns True if we're currently inside a jit"""
     return isinstance(jnp.zeros(()), jax.core.Tracer)
+
+
+def shape_dtype_struct_tree(tree: T) -> T:
+    """Convert array-like leaves in a pytree to ShapeDtypeStruct leaves."""
+
+    def _to_shape_dtype_struct(x):
+        if isinstance(x, jax.ShapeDtypeStruct):
+            return x
+        if is_jax_array_like(x):
+            sharding = getattr(x, "sharding", None)
+            if sharding is not None:
+                return jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=sharding)
+            return jax.ShapeDtypeStruct(x.shape, x.dtype)
+        return x
+
+    return jax.tree.map(_to_shape_dtype_struct, tree)
+
+
+def _flatten_axis_resource(axis_resource: Any) -> tuple[str, ...]:
+    if axis_resource is None:
+        return ()
+    if isinstance(axis_resource, str):
+        return (axis_resource,)
+    if isinstance(axis_resource, tuple | list):
+        names: list[str] = []
+        for axis in axis_resource:
+            names.extend(_flatten_axis_resource(axis))
+        return tuple(names)
+    return ()
+
+
+def axis_resource_is_explicit(mesh: Mesh, axis_resource: Any) -> bool:
+    """Return True iff all axis names in ``axis_resource`` map to explicit mesh axes."""
+    axis_types = dict(zip(mesh.axis_names, mesh.axis_types, strict=True))
+    axis_names = _flatten_axis_resource(axis_resource)
+    if len(axis_names) == 0:
+        return False
+    for axis_name in axis_names:
+        axis_type = axis_types.get(axis_name)
+        if axis_type is None or axis_type != AxisType.Explicit:
+            return False
+    return True
 
 
 def parameter_count(model: PyTree):

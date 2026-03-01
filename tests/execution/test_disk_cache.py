@@ -122,10 +122,8 @@ def test_decorator_with_cloudpickle(tmp_path: Path):
 
 
 def test_decorator_auto_path_from_marin_prefix(tmp_path: Path, monkeypatch):
-    """When no output_path is given, disk_cache derives one from MARIN_PREFIX."""
+    """When no output_path is given, disk_cache derives one from MARIN_PREFIX via marin_temp_bucket."""
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
-    # Ensure get_temp_bucket_path returns None so MARIN_PREFIX is used
-    monkeypatch.setattr("marin.execution.disk_cache.get_temp_bucket_path", lambda *a, **kw: None)
 
     call_count = 0
 
@@ -144,9 +142,9 @@ def test_decorator_auto_path_from_marin_prefix(tmp_path: Path, monkeypatch):
     assert call_count == 1
     assert result2 == 50
 
-    # Verify the cache landed under MARIN_PREFIX
-    prefix_dir = tmp_path / "prefix"
-    cache_dirs = list(prefix_dir.glob("disk_cache_*"))
+    # marin_temp_bucket places local caches under {MARIN_PREFIX}/tmp/
+    tmp_dir = tmp_path / "prefix" / "tmp"
+    cache_dirs = list(tmp_dir.glob("disk_cache_*"))
     assert len(cache_dirs) == 1
     assert (cache_dirs[0] / "data.pkl").exists()
 
@@ -156,7 +154,6 @@ def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):
     from functools import cache
 
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
-    monkeypatch.setattr("marin.execution.disk_cache.get_temp_bucket_path", lambda *a, **kw: None)
 
     call_count = 0
 
@@ -183,8 +180,8 @@ def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):
     assert call_count == 1  # still 1: disk_cache served the result
     assert r3 == r1
 
-    # Verify the cache landed under MARIN_PREFIX
-    prefix_dir = tmp_path / "prefix"
-    cache_dirs = list(prefix_dir.glob("disk_cache_*"))
+    # marin_temp_bucket places local caches under {MARIN_PREFIX}/tmp/
+    tmp_dir = tmp_path / "prefix" / "tmp"
+    cache_dirs = list(tmp_dir.glob("disk_cache_*"))
     assert len(cache_dirs) == 1
     assert (cache_dirs[0] / "data.pkl").exists()

@@ -18,6 +18,8 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
+from ..cost_estimate_utils import with_io_bytes_accessed
+from .reference import linear_softmax_cross_entropy_loss_reference
 
 
 class PallasUnsupportedError(NotImplementedError):
@@ -25,6 +27,116 @@ class PallasUnsupportedError(NotImplementedError):
 
 
 NUM_LANES = 128
+
+
+def _fwd_cost_estimate(
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+    *,
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
+    precision: jax.lax.PrecisionLike,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate | None:
+    body_cost = pl.estimate_cost(
+        linear_softmax_cross_entropy_loss_reference,
+        x,
+        labels,
+        w,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+    )
+    return with_io_bytes_accessed(
+        body_cost,
+        kernel_inputs_specs=kernel_inputs_specs,
+        kernel_outputs_specs=kernel_outputs_specs,
+    )
+
+
+def _backward_cost_reference(
+    dout_loss: jax.Array,
+    dout_lse: jax.Array,
+    lse: jax.Array,
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+    *,
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
+    precision: jax.lax.PrecisionLike,
+) -> tuple[jax.Array, jax.Array]:
+    logits = jax.lax.dot_general(
+        x,
+        w,
+        (((1,), (0,)), ((), ())),
+        precision=precision,
+    )
+    if dtype is not None:
+        logits = logits.astype(dtype)
+
+    cap_deriv = jnp.asarray(1.0, dtype=logits.dtype)
+    if logit_soft_cap is not None:
+        tanh_arg = logits / logit_soft_cap
+        tanh_val = jnp.tanh(tanh_arg)
+        logits = tanh_val * logit_soft_cap
+        cap_deriv = (1.0 - tanh_val**2).astype(logits.dtype)
+
+    probs = jnp.exp(logits - lse[:, None].astype(logits.dtype))
+    delta = (dout_loss[:, None].astype(logits.dtype) + dout_lse[:, None].astype(logits.dtype)) * probs
+    delta = delta.at[jnp.arange(labels.shape[0], dtype=labels.dtype), labels].add(-dout_loss.astype(logits.dtype))
+    delta = (delta * cap_deriv).astype(logits.dtype)
+
+    x_grad = jax.lax.dot_general(
+        delta,
+        w,
+        (((1,), (1,)), ((), ())),
+        precision=precision,
+        preferred_element_type=jnp.float32,
+    )
+    w_grad = jax.lax.dot_general(
+        x,
+        delta,
+        (((0,), (0,)), ((), ())),
+        precision=precision,
+        preferred_element_type=jnp.float32,
+    )
+    return x_grad, w_grad
+
+
+def _bwd_cost_estimate(
+    dout_loss: jax.Array,
+    dout_lse: jax.Array,
+    lse: jax.Array,
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+    *,
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
+    precision: jax.lax.PrecisionLike,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate | None:
+    body_cost = pl.estimate_cost(
+        _backward_cost_reference,
+        dout_loss,
+        dout_lse,
+        lse,
+        x,
+        labels,
+        w,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+    )
+    return with_io_bytes_accessed(
+        body_cost,
+        kernel_inputs_specs=kernel_inputs_specs,
+        kernel_outputs_specs=kernel_outputs_specs,
+    )
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -223,7 +335,7 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
 
 @partial(
     jax.jit,
-    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"],
+    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision", "return_argmax"],
 )
 def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     x: Float[Array, "B H"],
@@ -234,9 +346,12 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Forward Pallas kernel wrapper (per-example loss + logsumexp)."""
     _validate_inputs(x, labels, w, block_sizes)
+    if return_argmax:
+        raise PallasUnsupportedError("Pallas backend does not support return_argmax. Use XLA for return_argmax=True.")
 
     h_dim = x.shape[-1]
     v_dim = w.shape[1]
@@ -247,6 +362,10 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     num_cores, num_b_blocks_per_core = _infer_core_grid(b_dim, block_sizes)
 
     out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    out_shape = [
+        jax.ShapeDtypeStruct(shape=(b_dim, NUM_LANES), dtype=out_dtype),
+        jax.ShapeDtypeStruct(shape=(b_dim, NUM_LANES), dtype=out_dtype),
+    ]
 
     lse_lanes, label_logits_lanes = pl.pallas_call(
         partial(
@@ -285,10 +404,7 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
                 memory_space=pltpu.VMEM,
             ),  # label logits lanes
         ],
-        out_shape=[
-            jax.ShapeDtypeStruct(shape=(b_dim, NUM_LANES), dtype=out_dtype),
-            jax.ShapeDtypeStruct(shape=(b_dim, NUM_LANES), dtype=out_dtype),
-        ],
+        out_shape=out_shape,
         scratch_shapes=(
             pltpu.VMEM(
                 (block_sizes.b_block_size, block_sizes.v_block_size),
@@ -301,6 +417,16 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
         grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_h_blocks),
         compiler_params=pltpu.CompilerParams(
             dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary"),
+        ),
+        cost_estimate=_fwd_cost_estimate(
+            x,
+            labels,
+            w,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            kernel_inputs_specs=(x, labels, w),
+            kernel_outputs_specs=out_shape,
         ),
     )(x, labels, w)
 
@@ -513,6 +639,10 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
     num_h_blocks = math.ceil(h_dim / block_sizes.h_block_size)
     num_stages = 2
     num_cores, num_b_blocks_per_core = _infer_core_grid(b_dim, block_sizes)
+    out_shape = [
+        jax.ShapeDtypeStruct(x.shape, dtype=jnp.float32),
+        jax.ShapeDtypeStruct((num_cores,) + w.shape, dtype=jnp.float32),
+    ]
     x_grad_f32, w_grad_partial_f32 = pl.pallas_call(
         partial(
             linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel,
@@ -557,10 +687,7 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
             pl.BlockSpec(memory_space=pltpu.HBM),  # x_grad
             pl.BlockSpec(memory_space=pltpu.HBM),  # w_grad_partial
         ],
-        out_shape=[
-            jax.ShapeDtypeStruct(x.shape, dtype=jnp.float32),
-            jax.ShapeDtypeStruct((num_cores,) + w.shape, dtype=jnp.float32),
-        ],
+        out_shape=out_shape,
         scratch_shapes=(
             pltpu.VMEM((block_sizes.b_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # xw_scratch
             pltpu.VMEM((block_sizes.b_block_size, block_sizes.h_block_size), dtype=jnp.float32),  # x_grad_tile
@@ -572,6 +699,19 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
         ),
         compiler_params=pltpu.CompilerParams(
             dimension_semantics=("parallel", "arbitrary", "arbitrary", "arbitrary", "arbitrary"),
+        ),
+        cost_estimate=_bwd_cost_estimate(
+            dout_loss,
+            dout_lse,
+            lse,
+            x,
+            labels,
+            w,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            kernel_inputs_specs=(x, labels, w, lse, dout_loss, dout_lse),
+            kernel_outputs_specs=out_shape,
         ),
     )(x, labels, w, lse, dout_loss, dout_lse)
     x_grad = x_grad_f32.astype(x.dtype)
@@ -684,8 +824,11 @@ def linear_softmax_cross_entropy_loss_pallas(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Pallas implementation returning (loss, lse) per example."""
+    if return_argmax:
+        raise PallasUnsupportedError("Pallas backend does not support return_argmax. Use XLA for return_argmax=True.")
     fn = _make_custom_vjp(
         block_sizes.b_block_size,
         block_sizes.h_block_size,

@@ -23,6 +23,7 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from haliax.jax_utils import named_call
 from levanter.grug.attention import AttentionMask, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -76,7 +77,7 @@ class CausalSelfAttention(eqx.Module):
     w_k: jax.Array
     w_v: jax.Array
     w_o: jax.Array
-    cfg: ModelConfig
+    cfg: ModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: ModelConfig, *, key):
@@ -123,7 +124,7 @@ class MLP(eqx.Module):
 
 class RMSNorm(eqx.Module):
     weight: jax.Array
-    eps: float
+    eps: float = eqx.field(static=True)
 
     @staticmethod
     def init(dim: int, eps: float):
@@ -168,7 +169,7 @@ class Transformer(eqx.Module):
     output_proj: jax.Array
     blocks: tuple[Block, ...]
     final_norm: RMSNorm
-    config: ModelConfig
+    config: ModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: ModelConfig, *, key):
@@ -296,7 +297,7 @@ def build_train_config(model_cfg: ModelConfig) -> SimpleTrainConfig:
         train_batch_size=batch_size,
         learning_rate=muon.learning_rate,
         explicit_mesh_axes=True,
-        profiler=True,
+        profiler=ProfilerConfig(enabled=True),
         train_seq_len=model_cfg.max_seq_len,
         num_train_steps=num_train_steps,
         steps_per_hf_export=-1,

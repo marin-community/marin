@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
-from jax.sharding import Mesh
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
 
@@ -29,6 +29,7 @@ from levanter.data import AsyncDataset, DataLoader
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
+from levanter.utils.jax_utils import axis_resource_is_explicit
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.stat_utils import RunningMean
 from levanter.utils.tree_utils import inference_mode
@@ -301,6 +302,42 @@ def cb_tagged_lm_evaluate(
     return eval_callback
 
 
+def cb_tagged_evaluate(
+    evaluator: "TaggedEvaluator[Ex, M]",
+    *,
+    prefix: str = "eval",
+    eval_current: bool = True,
+    eval_ema: bool = True,
+) -> Callable[[StepInfo], None]:
+    """Build a callback that logs tagged eval metrics for current and/or eval model."""
+    if not eval_current and not eval_ema:
+        raise ValueError("At least one of eval_current or eval_ema should be True")
+
+    last_eval_step: int | None = None
+
+    def eval_callback(step: StepInfo, force: bool = False):
+        del force
+        nonlocal last_eval_step
+
+        step_count = step.step
+        if step_count < 0:
+            return
+        if last_eval_step == step_count:
+            return
+
+        if eval_current:
+            log_dict = eval_model(evaluator, step.model, prefix=prefix)
+            levanter.tracker.log(log_dict, step=step_count)
+
+        if eval_ema:
+            log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
+            levanter.tracker.log(log_dict, step=step_count)
+
+        last_eval_step = step_count
+
+    return eval_callback
+
+
 def eval_model(evaluator, model, prefix: str = "") -> dict[str, float]:
     with levanter.tracker.capture_time() as time_fn:
         result = evaluator.evaluate(model)
@@ -373,8 +410,14 @@ class TaggedEvaluator(Generic[Ex, M]):
             mesh=device_mesh,
             axis_resources=axis_mapping,
         )
+        self.device_mesh = device_mesh
         self.tokenizer = tokenizer
         self.axis_mapping = axis_mapping
+        self.per_pos_out_sharding = None
+        if device_mesh is not None and axis_mapping is not None:
+            batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
+            if batch_axis_resource is not None and axis_resource_is_explicit(device_mesh, batch_axis_resource):
+                self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
 
         self.bytes_per_token = self._calculate_bytes_per_token_type(tokenizer)
         self.hierarchy = self._construct_tag_hierarchy()
@@ -383,6 +426,8 @@ class TaggedEvaluator(Generic[Ex, M]):
     def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
         bytes_per_token = self.bytes_per_token
         log2e = jnp.log2(jnp.e)
+        per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
+        per_pos_out_sharding = self.per_pos_out_sharding
 
         @hax.named_jit
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
@@ -396,8 +441,8 @@ class TaggedEvaluator(Generic[Ex, M]):
                     f"Expected batched eval tensors with rank 2, got losses={losses.ndim}, "
                     f"weights={weights.ndim}, token_ids={token_ids.ndim}, tags={tags.ndim}"
                 )
-            this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags)
-            this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags)
+            this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags, out_sharding=per_tag_out_sharding)
+            this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags, out_sharding=per_tag_out_sharding)
 
             mean = state.token_avg_loss.add(this_loss / jnp.maximum(this_weights, 1.0), this_weights)
             state = dataclasses.replace(state, token_avg_loss=mean)
@@ -409,9 +454,11 @@ class TaggedEvaluator(Generic[Ex, M]):
                 state = dataclasses.replace(state, loss_per_tag=mean_per_tag)
 
             if bytes_per_token is not None:
-                bytes_per_pos = bytes_per_token[token_ids]
+                bytes_per_pos = bytes_per_token.at[token_ids].get(out_sharding=per_pos_out_sharding)
                 this_bytes = jnp.sum(bytes_per_pos * weights)
-                bytes_per_tag = jnp.einsum("bt,bt,bk->k", bytes_per_pos, weights, tags)
+                bytes_per_tag = jnp.einsum(
+                    "bt,bt,bk->k", bytes_per_pos, weights, tags, out_sharding=per_tag_out_sharding
+                )
 
                 bpb = this_loss / jnp.maximum(this_bytes, 1.0) * log2e
                 bpb_per_tag = this_loss_per_tag / jnp.maximum(bytes_per_tag, 1.0) * log2e

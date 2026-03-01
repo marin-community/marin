@@ -391,7 +391,7 @@ class DistributedConfig:
 class RayConfig:
     address: Optional[str] = None
     start_workers: bool = True
-    auto_start_cluster: bool = True
+    auto_start_cluster: bool = False
 
     def initialize(self):
         if self.auto_start_cluster:

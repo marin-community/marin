@@ -10,6 +10,7 @@ protocol.
 """
 
 from __future__ import annotations
+
 import enum
 import logging
 import os
@@ -24,9 +25,10 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+import cloudpickle
 import fsspec
-from fray.v2 import ActorConfig, ActorHandle, Client, ResourceConfig
-from iris.temp_buckets import get_temp_bucket_path
+from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
+from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import ExponentialBackoff
 
 from zephyr.dataset import Dataset
@@ -137,6 +139,11 @@ class TaskResult:
 def _generate_execution_id() -> str:
     """Generate unique ID for this execution to avoid conflicts."""
     return uuid.uuid4().hex[:12]
+
+
+def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
+    """Path for a shared data object: {prefix}/{execution_id}/shared/{name}.pkl"""
+    return f"{prefix}/{execution_id}/shared/{name}.pkl"
 
 
 def _chunk_path(
@@ -253,7 +260,6 @@ class ZephyrCoordinator:
         self._results: dict[int, TaskResult] = {}
         self._worker_states: dict[str, WorkerState] = {}
         self._last_seen: dict[str, float] = {}
-        self._shared_data: dict[str, Any] = {}
         self._stage_name: str = ""
         self._total_shards: int = 0
         self._completed_shards: int = 0
@@ -381,7 +387,7 @@ class ZephyrCoordinator:
             self._task_queue.append(task)
             self._retries += 1
 
-    def _check_worker_heartbeats(self, timeout: float = 30.0) -> None:
+    def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
         """Internal heartbeat check (called with lock held)."""
         now = time.monotonic()
         for worker_id, last in list(self._last_seen.items()):
@@ -403,6 +409,7 @@ class ZephyrCoordinator:
             self._worker_states[worker_id] = WorkerState.READY
 
             if self._shutdown:
+                self._worker_states[worker_id] = WorkerState.DEAD
                 return "SHUTDOWN"
 
             if self._fatal_error:
@@ -410,6 +417,7 @@ class ZephyrCoordinator:
 
             if not self._task_queue:
                 if self._is_last_stage:
+                    self._worker_states[worker_id] = WorkerState.DEAD
                     return "SHUTDOWN"
                 return None
 
@@ -419,7 +427,6 @@ class ZephyrCoordinator:
             self._worker_states[worker_id] = WorkerState.BUSY
 
             config = {
-                "shared_data": self._shared_data,
                 "chunk_prefix": self._chunk_prefix,
                 "execution_id": self._execution_id,
             }
@@ -570,13 +577,11 @@ class ZephyrCoordinator:
     def run_pipeline(
         self,
         plan: PhysicalPlan,
-        shared_data: dict[str, Any],
         execution_id: str,
         hints: ExecutionHint,
     ) -> list:
         """Run complete pipeline, blocking until done. Returns flattened results."""
         with self._lock:
-            self._shared_data = shared_data
             self._execution_id = execution_id
 
         shards = _build_source_shards(plan.source_items)
@@ -682,15 +687,6 @@ class ZephyrCoordinator:
 
         logger.info("Coordinator shutdown complete")
 
-    # Legacy compatibility methods (used by tests)
-    def set_shared_data(self, data: dict[str, Any]) -> None:
-        with self._lock:
-            self._shared_data = data
-
-    def get_shared_data(self) -> dict[str, Any]:
-        with self._lock:
-            return self._shared_data
-
     def set_chunk_config(self, prefix: str, execution_id: str) -> None:
         """Configure chunk storage for this execution."""
         with self._lock:
@@ -709,7 +705,7 @@ class ZephyrCoordinator:
         """Load a new stage's tasks into the queue (legacy compat)."""
         self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
 
-    def check_heartbeats(self, timeout: float = 30.0) -> None:
+    def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
             self._check_worker_heartbeats(timeout)
@@ -742,7 +738,7 @@ class ZephyrWorker:
         from fray.v2 import current_actor
 
         self._coordinator = coordinator_handle
-        self._shared_data: dict[str, Any] = {}
+        self._shared_data_cache: dict[str, Any] = {}
         self._shutdown_event = threading.Event()
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
@@ -764,7 +760,22 @@ class ZephyrWorker:
         self._polling_thread.start()
 
     def get_shared(self, name: str) -> Any:
-        return self._shared_data[name]
+        if name not in self._shared_data_cache:
+            path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
+            logger.info("[%s] Loading shared data '%s' from %s", self._worker_id, name, path)
+            t0 = time.monotonic()
+            with fsspec.open(path, "rb") as f:
+                data = f.read()
+            elapsed = time.monotonic() - t0
+            self._shared_data_cache[name] = cloudpickle.loads(data)
+            logger.info(
+                "[%s] Loaded shared data '%s' in %.2fs (%d bytes)",
+                self._worker_id,
+                name,
+                elapsed,
+                len(data),
+            )
+        return self._shared_data_cache[name]
 
     def _run_polling(self, coordinator: ActorHandle) -> None:
         """Main polling loop. Runs in a background thread started by __init__."""
@@ -786,39 +797,73 @@ class ZephyrWorker:
             heartbeat_thread.join(timeout=5.0)
             logger.debug("[%s] Polling loop ended", self._worker_id)
 
-    def _heartbeat_loop(self, coordinator: ActorHandle, interval: float = 5.0) -> None:
+    def _heartbeat_loop(
+        self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
+    ) -> None:
         logger.debug("[%s] Heartbeat loop starting", self._worker_id)
         heartbeat_count = 0
+        consecutive_failures = 0
         while not self._shutdown_event.is_set():
             try:
                 # Block on result to avoid congesting the coordinator RPC pipe
                 # with fire-and-forget heartbeats.
                 coordinator.heartbeat.remote(self._worker_id).result()
                 heartbeat_count += 1
+                consecutive_failures = 0
                 if heartbeat_count % 10 == 1:
                     logger.debug("[%s] Sent heartbeat #%d", self._worker_id, heartbeat_count)
             except Exception as e:
-                logger.warning("[%s] Heartbeat failed: %s", self._worker_id, e)
+                consecutive_failures += 1
+                logger.warning(
+                    "[%s] Heartbeat failed (%d/%d): %s",
+                    self._worker_id,
+                    consecutive_failures,
+                    max_consecutive_failures,
+                    e,
+                )
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error(
+                        "[%s] %d consecutive heartbeat failures — coordinator is unreachable, shutting down",
+                        self._worker_id,
+                        consecutive_failures,
+                    )
+                    self._shutdown_event.set()
+                    break
             self._shutdown_event.wait(timeout=interval)
         logger.debug("[%s] Heartbeat loop exiting after %d beats", self._worker_id, heartbeat_count)
 
     def _poll_loop(self, coordinator: ActorHandle) -> None:
         """Pure polling loop. Exits on SHUTDOWN signal, coordinator death, or shutdown event."""
-        loop_count = 0
         task_count = 0
         backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
 
-        while not self._shutdown_event.is_set():
-            loop_count += 1
-            if loop_count % 100 == 1:
-                logger.debug("[%s] Poll iteration #%d, tasks completed: %d", self._worker_id, loop_count, task_count)
+        future: ActorFuture | None = None
+        future_start = 0.0
+        warned = False
 
+        while not self._shutdown_event.is_set():
+            # Create a pull_task future if we don't have one in flight
+            if future is None:
+                future = coordinator.pull_task.remote(self._worker_id)
+                future_start = time.monotonic()
+                warned = False
+
+            # Poll with a short timeout so we stay responsive to shutdown
+            # without killing the worker (and its heartbeat thread) on slow
+            # deserialization.
             try:
-                response = coordinator.pull_task.remote(self._worker_id).result(timeout=30.0)
+                response = future.result(timeout=0.5)
+            except TimeoutError:
+                elapsed = time.monotonic() - future_start
+                if elapsed > 30 and not warned:
+                    logger.warning("[%s] Waiting for coordinator pull_task response (%.0fs)", self._worker_id, elapsed)
+                    warned = True
+                continue
             except Exception as e:
-                # Coordinator is dead or unreachable - exit gracefully
                 logger.info("[%s] pull_task failed (coordinator may be dead): %s", self._worker_id, e)
                 break
+
+            future = None  # consumed; next iteration will create a new one
 
             # SHUTDOWN signal - exit cleanly
             if response == "SHUTDOWN":
@@ -866,7 +911,6 @@ class ZephyrWorker:
         Returns list[TaskResult].
         """
         # Update config for this execution
-        self._shared_data = config["shared_data"]
         self._chunk_prefix = config["chunk_prefix"]
         self._execution_id = config["execution_id"]
 
@@ -956,7 +1000,8 @@ class ZephyrContext:
     Each execute() call creates a fresh coordinator and worker pool, runs
     the pipeline, then tears everything down. Workers are sized to
     min(max_workers, plan.num_shards) to avoid over-provisioning. Shared
-    data broadcast via put() is delivered to workers with each task.
+    data registered via put() is serialized to disk once and loaded lazily
+    by workers on first access.
 
     Args:
         client: The fray client to use. If None, auto-detects using current_client().
@@ -972,7 +1017,7 @@ class ZephyrContext:
             Defaults to 600s.
         max_execution_retries: Maximum number of times to retry a pipeline execution after
             an infrastructure failure (e.g., coordinator VM preemption). Application errors
-            (ZephyrWorkerError) are never retried. Defaults to 3.
+            (ZephyrWorkerError) are never retried. Defaults to 100.
     """
 
     client: Client | None = None
@@ -981,8 +1026,10 @@ class ZephyrContext:
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
-    max_execution_retries: int = 3
+    # NOTE: 100 is fairly aggressive but it fits the preemptible env better
+    max_execution_retries: int = 100
 
+    # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     _coordinator: ActorHandle | None = field(default=None, repr=False)
     _coordinator_group: Any = field(default=None, repr=False)
@@ -1008,31 +1055,43 @@ class ZephyrContext:
                 self.max_workers = int(env_val) if env_val else 128
 
         if self.no_workers_timeout is None:
-            self.no_workers_timeout = 600.0
+            self.no_workers_timeout = 6 * 60 * 60  # 6 hours
 
         if self.chunk_storage_prefix is None:
-            temp_prefix = get_temp_bucket_path(ttl_days=3, prefix="zephyr")
-            if temp_prefix is None:
-                marin_prefix = os.environ.get("MARIN_PREFIX")
-                if not marin_prefix:
-                    raise RuntimeError(
-                        "MARIN_PREFIX must be set when using a distributed backend.\n"
-                        "  Example: export MARIN_PREFIX=gs://marin-us-central2"
-                    )
-                temp_prefix = f"{marin_prefix}/tmp/zephyr"
-
-            self.chunk_storage_prefix = temp_prefix
+            self.chunk_storage_prefix = marin_temp_bucket(ttl_days=3, prefix="zephyr")
 
         # make sure each context is unique
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
 
     def put(self, name: str, obj: Any) -> None:
-        """Register shared data to broadcast to all workers.
+        """Stage shared data for workers to load on demand.
 
         Must be called before execute(). The object must be picklable.
-        Workers access it via zephyr_worker_ctx().get_shared(name).
+        Workers access it via zephyr_worker_ctx().get_shared(name), which
+        loads from disk on first access and caches locally.
+
+        The actual serialization to disk happens at the start of execute(),
+        once the execution_id is known, so each execution is isolated.
         """
         self._shared_data[name] = obj
+
+    def _upload_shared_data(self, execution_id: str) -> None:
+        """Serialize all staged shared data to disk under the execution directory."""
+        for name, obj in self._shared_data.items():
+            path = _shared_data_path(self.chunk_storage_prefix, execution_id, name)
+            ensure_parent_dir(path)
+            t0 = time.monotonic()
+            data = cloudpickle.dumps(obj)
+            elapsed = time.monotonic() - t0
+            with fsspec.open(path, "wb") as f:
+                f.write(data)
+            logger.info(
+                "Shared data '%s' written to %s (serialized %d bytes in %.2fs)",
+                name,
+                path,
+                len(data),
+                elapsed,
+            )
 
     def execute(
         self,
@@ -1065,6 +1124,7 @@ class ZephyrContext:
             )
 
             try:
+                self._upload_shared_data(execution_id)
                 self._create_coordinator(attempt)
                 self._create_workers(plan.num_shards, attempt)
 
@@ -1072,7 +1132,7 @@ class ZephyrContext:
                 # run_pipeline() calls coordinator.shutdown() at the end,
                 # which causes workers to receive SHUTDOWN on their next
                 # pull_task() call.
-                results = self._coordinator.run_pipeline.remote(plan, self._shared_data, execution_id, hints).result()
+                results = self._coordinator.run_pipeline.remote(plan, execution_id, hints).result()
 
                 return results
 

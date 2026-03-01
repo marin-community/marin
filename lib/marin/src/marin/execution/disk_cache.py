@@ -8,13 +8,12 @@ from __future__ import annotations
 import functools
 import hashlib
 import logging
-import os
 from collections.abc import Callable
 from typing import Generic, TypeVar, ParamSpec
 
 import cloudpickle
 import fsspec
-from iris.temp_buckets import get_temp_bucket_path
+from iris.marin_fs import marin_temp_bucket
 
 from marin.execution.distributed_lock import StepAlreadyDone
 from marin.execution.executor_step_status import (
@@ -100,9 +99,7 @@ class disk_cache(Generic[P, T]):
         output_path = self._output_path
         if output_path is None:
             args_fingerprint = fingerprint_args(*args, **kwargs)
-            output_path = get_temp_bucket_path(1, f"disk_cache_{args_fingerprint}")
-            if output_path is None:
-                output_path = os.environ["MARIN_PREFIX"] + f"/disk_cache_{args_fingerprint}"
+            output_path = marin_temp_bucket(1, f"disk_cache_{args_fingerprint}")
 
         def load_result() -> T:
             assert output_path is not None

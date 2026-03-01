@@ -10,76 +10,64 @@ is performed by the worker environment probe at runtime.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
-import shlex
 
 import yaml
+from google.protobuf.json_format import MessageToDict
 
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
 
 
-def parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | None:
-    """Parse ``REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION``.
+# GCP multi-region locations used for AR remote repos that proxy GHCR.
+# Each AR remote repo is a pull-through cache for ghcr.io, deployed to a
+# multi-region location. GCP VMs pull from their continent's cache; egress
+# within a multi-region is free.
+_ZONE_PREFIX_TO_MULTI_REGION = {
+    "us": "us",
+    "europe": "europe",
+}
 
-    Returns:
-        (region, project, image_name, version) or None if not an AR tag.
+_UNSUPPORTED_ZONE_PREFIXES = {"asia", "me"}
+
+GHCR_MIRROR_REPO = "ghcr-mirror"
+
+
+def zone_to_multi_region(zone: str) -> str | None:
+    """Map a GCP zone to its multi-region location (e.g. 'us-central1-a' → 'us').
+
+    Returns None for unknown prefixes. Raises ValueError for zones in regions
+    where AR remote repos are not yet provisioned (asia, me).
     """
-    if "-docker.pkg.dev/" not in image_tag:
-        return None
-    parts = image_tag.split("/")
-    if len(parts) < 4:
-        return None
-    registry = parts[0]
-    if not registry.endswith("-docker.pkg.dev"):
-        return None
-    region = registry.replace("-docker.pkg.dev", "")
-    project = parts[1]
-    image_and_version = parts[3]
-    if ":" in image_and_version:
-        image_name, version = image_and_version.split(":", 1)
-    else:
-        image_name = image_and_version
-        version = "latest"
-    return region, project, image_name, version
+    prefix = zone.split("-", 1)[0]
+    if prefix in _UNSUPPORTED_ZONE_PREFIXES:
+        raise ValueError(
+            f"Zone {zone!r} is in region prefix {prefix!r} which has no AR remote repo provisioned. "
+            f"Supported prefixes: {sorted(_ZONE_PREFIX_TO_MULTI_REGION)}"
+        )
+    return _ZONE_PREFIX_TO_MULTI_REGION.get(prefix)
 
 
-def rewrite_artifact_registry_region(image_tag: str, target_region: str) -> str:
-    """Rewrite an Artifact Registry image tag to use a different region.
+def rewrite_ghcr_to_ar_remote(
+    image_tag: str,
+    multi_region: str,
+    project: str,
+    mirror_repo: str = GHCR_MIRROR_REPO,
+) -> str:
+    """Rewrite a ghcr.io image tag to pull from an AR remote repo.
 
-    Non-AR images pass through unchanged. If the image is already in the
-    target region, returns the original tag.
+    ghcr.io/marin-community/iris-worker:v1
+    → us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:v1
+
+    Non-GHCR images pass through unchanged.
     """
-    parsed = parse_artifact_registry_tag(image_tag)
-    if parsed is None:
+    if not image_tag.startswith("ghcr.io/"):
         return image_tag
-    current_region = parsed[0]
-    if current_region == target_region:
-        return image_tag
-    parts = image_tag.split("/")
-    parts[0] = f"{target_region}-docker.pkg.dev"
-    return "/".join(parts)
-
-
-def collect_all_regions(config: config_pb2.IrisClusterConfig) -> set[str]:
-    """Extract all unique GCP regions from an Iris cluster config.
-
-    Includes regions from all scale group zones and the controller zone.
-    """
-    regions: set[str] = set()
-
-    for sg in config.scale_groups.values():
-        template = sg.slice_template
-        if template.HasField("gcp") and template.gcp.zone:
-            regions.add(template.gcp.zone.rsplit("-", 1)[0])
-
-    ctrl = config.controller
-    if ctrl.HasField("gcp") and ctrl.gcp.zone:
-        regions.add(ctrl.gcp.zone.rsplit("-", 1)[0])
-
-    return regions
+    path = image_tag.removeprefix("ghcr.io/")
+    return f"{multi_region}-docker.pkg.dev/{project}/{mirror_repo}/{path}"
 
 
 def render_template(template: str, **variables: str | int) -> str:
@@ -168,10 +156,10 @@ sudo docker pull {{ docker_image }}
 
 echo "[iris-init] Phase: config_setup"
 sudo mkdir -p /etc/iris
-cat > /tmp/iris_config.json << 'IRIS_CONFIG_EOF'
-{{ config_json }}
-IRIS_CONFIG_EOF
-sudo mv /tmp/iris_config.json /etc/iris/config.json
+cat > /tmp/iris_worker_config.json << 'IRIS_WORKER_CONFIG_EOF'
+{{ worker_config_json }}
+IRIS_WORKER_CONFIG_EOF
+sudo mv /tmp/iris_worker_config.json /etc/iris/worker_config.json
 
 echo "[iris-init] Phase: worker_start"
 
@@ -190,14 +178,10 @@ sudo docker run -d --name iris-worker \\
     --network=host \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
-    -v /etc/iris/config.json:/etc/iris/config.json:ro \\
-    {{ env_flags }} \\
+    -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.worker.main serve \\
-        --host 0.0.0.0 --port {{ worker_port }} \\
-        --cache-dir {{ cache_dir }} \\
-        --controller-address {{ controller_address }} \\
-        --config /etc/iris/config.json
+        --worker-config /etc/iris/worker_config.json
 
 echo "[iris-init] Worker container started"
 echo "[iris-init] Phase: registration"
@@ -234,55 +218,34 @@ exit 1
 """
 
 
-def build_worker_env_flags(
-    config: config_pb2.BootstrapConfig,
-    vm_address: str,
-) -> str:
-    """Generate docker -e flags with proper escaping.
-
-    TPU metadata is probed by the worker process via env_probe.py, so bootstrap
-    only forwards explicit bootstrap env vars plus IRIS_VM_ADDRESS.
-    """
-    env_vars = dict(config.env_vars)
-
-    flags = []
-    for k, v in env_vars.items():
-        flags.append(f"-e {shlex.quote(k)}={shlex.quote(v)}")
-    # Inject VM address so worker can include it in registration for autoscaler tracking
-    if vm_address:
-        flags.append(f"-e IRIS_VM_ADDRESS={shlex.quote(vm_address)}")
-
-    return " ".join(flags)
-
-
 def build_worker_bootstrap_script(
-    bootstrap_config: config_pb2.BootstrapConfig,
-    vm_address: str,
+    worker_config: config_pb2.WorkerConfig,
 ) -> str:
     """Build the bootstrap script for a worker VM.
 
-    Args:
-        bootstrap_config: Worker bootstrap settings
-        vm_address: VM IP address for autoscaler tracking
+    Serializes the WorkerConfig as JSON and embeds it in the bootstrap script.
+    The worker reads the JSON at startup via --worker-config.
     """
-    env_flags = build_worker_env_flags(bootstrap_config, vm_address)
-    if not bootstrap_config.controller_address:
-        raise ValueError("bootstrap_config.controller_address is required for worker bootstrap")
-    if not bootstrap_config.docker_image:
-        raise ValueError("bootstrap_config.docker_image is required for worker bootstrap")
-    if bootstrap_config.worker_port <= 0:
-        raise ValueError("bootstrap_config.worker_port must be > 0 for worker bootstrap")
-    if not bootstrap_config.cache_dir:
-        raise ValueError("bootstrap_config.cache_dir is required for worker bootstrap")
+    if not worker_config.controller_address:
+        raise ValueError("worker_config.controller_address is required for worker bootstrap")
+    if not worker_config.docker_image:
+        raise ValueError("worker_config.docker_image is required for worker bootstrap")
+    if worker_config.port <= 0:
+        raise ValueError("worker_config.port must be > 0 for worker bootstrap")
+    if not worker_config.cache_dir:
+        raise ValueError("worker_config.cache_dir is required for worker bootstrap")
+
+    worker_config_json = json.dumps(
+        MessageToDict(worker_config, preserving_proto_field_name=True),
+        indent=2,
+    )
 
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
-        cache_dir=bootstrap_config.cache_dir,
-        docker_image=bootstrap_config.docker_image,
-        worker_port=bootstrap_config.worker_port,
-        controller_address=bootstrap_config.controller_address,
-        env_flags=env_flags,
-        config_json=bootstrap_config.config_json,
+        cache_dir=worker_config.cache_dir,
+        docker_image=worker_config.docker_image,
+        worker_port=worker_config.port,
+        worker_config_json=worker_config_json,
     )
 
 
@@ -462,10 +425,15 @@ def build_controller_bootstrap_script(
 
 def build_controller_bootstrap_script_from_config(
     config: config_pb2.IrisClusterConfig,
+    platform: object,
 ) -> str:
     """Build controller bootstrap script from the full cluster config.
 
     Serializes the config to YAML and embeds it in the bootstrap script.
+
+    Args:
+        config: Full cluster configuration.
+        platform: Platform instance used to resolve the controller image.
     """
     # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
@@ -473,9 +441,12 @@ def build_controller_bootstrap_script_from_config(
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
     port = config.controller.gcp.port or config.controller.manual.port or 10000
     image = config.controller.image
+
     ctrl = config.controller
+    zone: str | None = None
     if ctrl.HasField("gcp") and ctrl.gcp.zone:
-        controller_region = ctrl.gcp.zone.rsplit("-", 1)[0]
-        image = rewrite_artifact_registry_region(image, controller_region)
+        zone = ctrl.gcp.zone
+
+    image = platform.resolve_image(image, zone=zone)
 
     return build_controller_bootstrap_script(image, port, config_yaml)

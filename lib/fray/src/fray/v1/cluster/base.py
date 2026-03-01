@@ -250,6 +250,9 @@ class CpuConfig:
         """CPU FLOPS not tracked."""
         raise NotImplementedError("CPU FLOPS not available")
 
+    def default_env_vars(self) -> dict[str, str]:
+        return {"JAX_PLATFORMS": "cpu"}
+
 
 @dataclass(frozen=True)
 class GpuConfig:
@@ -275,6 +278,9 @@ class GpuConfig:
     def total_flops(self, dtype: str = "bf16") -> float:
         """Total peak FLOP/s across all GPUs."""
         return self.device_flops(dtype) * self.count
+
+    def default_env_vars(self) -> dict[str, str]:
+        return {"JAX_PLATFORMS": ""}
 
 
 @dataclass(frozen=True)
@@ -310,6 +316,14 @@ class TpuConfig:
     def total_flops(self, dtype: str = "bf16") -> float:
         """Total peak FLOP/s across all TPU chips."""
         return self.device_flops(dtype) * self.chip_count()
+
+    def default_env_vars(self) -> dict[str, str]:
+        defaults: dict[str, str] = {"JAX_PLATFORMS": ""}
+        if self.variant.startswith(("v5litepod-", "v5e-", "v5p-")):
+            defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=50000"
+        elif self.variant.startswith("v6e-"):
+            defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=98304"
+        return defaults
 
 
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig

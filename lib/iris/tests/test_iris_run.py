@@ -15,8 +15,10 @@ from iris.cluster.manager import connect_cluster
 from iris.cli.job import (
     build_resources,
     load_env_vars,
+    parse_gpu_spec,
     run_iris_job,
 )
+from iris.cluster.types import ConstraintOp
 
 # Unit tests for error handling and edge cases (not trivial assertions)
 
@@ -47,10 +49,43 @@ def test_iris_config_empty_file(tmp_path):
         IrisConfig.load(bad_config)
 
 
-def test_build_resources_gpu_not_supported():
-    """Test that GPU raises error."""
-    with pytest.raises(ValueError, match="GPU support not yet implemented"):
-        build_resources(tpu=None, gpu=2, cpu=None, memory=None)
+@pytest.mark.parametrize(
+    "spec, expected",
+    [
+        ("H100x8", ("H100", 8)),
+        ("4", ("", 4)),
+        ("A100", ("A100", 1)),
+        ("rtx4090", ("rtx4090", 1)),
+        ("rtx4090x2", ("rtx4090", 2)),
+        ("H100", ("H100", 1)),
+    ],
+)
+def test_parse_gpu_spec(spec, expected):
+    assert parse_gpu_spec(spec) == expected
+
+
+@pytest.mark.parametrize("spec", ["0", ""])
+def test_parse_gpu_spec_rejects_invalid(spec):
+    with pytest.raises(ValueError):
+        parse_gpu_spec(spec)
+
+
+def test_build_resources_gpu():
+    """Test GPU spec parsing in build_resources."""
+    spec = build_resources(tpu=None, gpu="H100x8")
+    assert spec.device.HasField("gpu")
+    assert spec.device.gpu.variant == "H100"
+    assert spec.device.gpu.count == 8
+
+    # Bare count defaults to empty variant
+    spec = build_resources(tpu=None, gpu="4")
+    assert spec.device.gpu.variant == ""
+    assert spec.device.gpu.count == 4
+
+    # Bare variant defaults to count=1
+    spec = build_resources(tpu=None, gpu="A100")
+    assert spec.device.gpu.variant == "A100"
+    assert spec.device.gpu.count == 1
 
 
 # Integration tests using local cluster
@@ -74,7 +109,7 @@ def local_cluster_and_config(tmp_path):
                 {
                     "platform": {"local": {}},
                     "defaults": {
-                        "bootstrap": {"controller_address": url},
+                        "worker": {"controller_address": url},
                     },
                     "scale_groups": {
                         "local-cpu": {
@@ -164,3 +199,65 @@ def test_iris_run_cli_job_failure(local_cluster_and_config, tmp_path):
     )
 
     assert exit_code == 1
+
+
+def test_run_iris_job_adds_zone_constraint(monkeypatch):
+    """run_iris_job forwards a zone placement constraint."""
+    captured: dict[str, object] = {}
+
+    def _fake_submit_and_wait_job(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
+
+    exit_code = run_iris_job(
+        controller_url="http://controller:10000",
+        command=[sys.executable, "-c", "print('ok')"],
+        env_vars={},
+        wait=False,
+        zone="us-central2-b",
+    )
+
+    assert exit_code == 0
+    constraints = captured["constraints"]
+    assert constraints is not None
+    assert len(constraints) == 1
+    assert constraints[0].key == "zone"
+    assert constraints[0].op == ConstraintOp.EQ
+    assert constraints[0].value == "us-central2-b"
+
+
+def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
+    """run_iris_job combines region and zone constraints when both are set."""
+    captured: dict[str, object] = {}
+
+    def _fake_submit_and_wait_job(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
+
+    exit_code = run_iris_job(
+        controller_url="http://controller:10000",
+        command=[sys.executable, "-c", "print('ok')"],
+        env_vars={},
+        wait=False,
+        regions=("us-central2",),
+        zone="us-central2-b",
+    )
+
+    assert exit_code == 0
+    constraints = captured["constraints"]
+    assert constraints is not None
+    assert len(constraints) == 2
+
+    region_constraints = [c for c in constraints if c.key == "region"]
+    assert len(region_constraints) == 1
+    assert region_constraints[0].op == ConstraintOp.EQ
+    assert region_constraints[0].value == "us-central2"
+
+    zone_constraints = [c for c in constraints if c.key == "zone"]
+    assert len(zone_constraints) == 1
+    assert zone_constraints[0].op == ConstraintOp.EQ
+    assert zone_constraints[0].value == "us-central2-b"

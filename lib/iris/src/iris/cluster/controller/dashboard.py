@@ -4,9 +4,9 @@
 """HTTP dashboard with Connect RPC and web UI.
 
 The dashboard serves:
-- Web UI at / (main dashboard with tabs: jobs, workers, endpoints, vms, autoscaler, logs)
+- Web UI at / (main dashboard with tabs: jobs, fleet, endpoints, autoscaler, logs, transactions)
 - Web UI at /job/{job_id} (job detail page)
-- Web UI at /vm/{vm_id} (VM detail page)
+- Web UI at /worker/{id} (worker detail page)
 - Connect RPC at /iris.cluster.ControllerService/* (called directly by JS)
 - Health check at /health
 
@@ -27,6 +27,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
+from iris.rpc.interceptors import RequestTimingInterceptor
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +58,13 @@ class ControllerDashboard:
         return self._port
 
     def _create_app(self) -> Starlette:
-        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service)
+        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=[RequestTimingInterceptor()])
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [
             Route("/", self._dashboard),
             Route("/job/{job_id:path}", self._job_detail_page),
-            Route("/vm/{vm_id:path}", self._vm_detail_page),
+            Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/health", self._health),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
@@ -76,8 +77,8 @@ class ControllerDashboard:
     def _job_detail_page(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("Job Detail", "/static/controller/job-detail.js"))
 
-    def _vm_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("VM Detail", "/static/controller/vm-detail.js"))
+    def _worker_detail_page(self, _request: Request) -> HTMLResponse:
+        return HTMLResponse(html_shell("Worker Detail", "/static/controller/worker-detail.js"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""

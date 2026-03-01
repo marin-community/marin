@@ -1,7 +1,7 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, cast
+from typing import Literal, Optional, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -157,6 +157,7 @@ def cross_entropy_and_logsumexp_penalty(
     return hax.nn.loss.reduce_loss(loss, reduction, reduction_axis, weight=weight)
 
 
+@overload
 def fused_cross_entropy_loss_and_logsumexp_penalty(
     pred_embeddings: NamedArray,
     pred_lm_head: NamedArray,
@@ -172,7 +173,47 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> NamedArray:
+    return_argmax: Literal[False] = False,
+) -> NamedArray: ...
+
+
+@overload
+def fused_cross_entropy_loss_and_logsumexp_penalty(
+    pred_embeddings: NamedArray,
+    pred_lm_head: NamedArray,
+    Contract: hax.AxisSelector,
+    Label: hax.AxisSelector,
+    target_y: NamedArray,
+    *,
+    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
+    reduction_axis: Optional[hax.AxisSelection] = None,
+    weight: Optional[NamedArray] = None,
+    logsumexp_weight: float | None = 0.0,
+    block_size: int | None = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    return_argmax: Literal[True] = True,
+) -> tuple[NamedArray, NamedArray]: ...
+
+
+def fused_cross_entropy_loss_and_logsumexp_penalty(
+    pred_embeddings: NamedArray,
+    pred_lm_head: NamedArray,
+    Contract: hax.AxisSelector,
+    Label: hax.AxisSelector,
+    target_y: NamedArray,
+    *,
+    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
+    reduction_axis: Optional[hax.AxisSelection] = None,
+    weight: Optional[NamedArray] = None,
+    logsumexp_weight: float | None = 0.0,
+    block_size: int | None = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    return_argmax: bool = False,
+) -> NamedArray | tuple[NamedArray, NamedArray]:
     """
     Compute cross-entropy loss and logsumexp penalty using the fused Pallas kernel.
 
@@ -189,9 +230,11 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         block_size (int | None): Optional vocabulary block size for processing.
         dtype (Optional[jnp.dtype]): Data type for the loss.
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override for the fused kernel.
+        return_argmax (bool): Whether to return per-position argmax token ids as well.
 
     Returns:
-        NamedArray: Computed loss.
+        If return_argmax=False: computed loss.
+        If return_argmax=True: tuple of (loss, argmax token ids).
     """
 
     Contract = pred_embeddings.resolve_axis(Contract)
@@ -199,7 +242,9 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
     lm_head = pred_lm_head.rearrange((Contract, Label))
 
-    def fused_impl(shard_embeddings: NamedArray, shard_labels: NamedArray, shard_lm_head: NamedArray) -> NamedArray:
+    def fused_impl(
+        shard_embeddings: NamedArray, shard_labels: NamedArray, shard_lm_head: NamedArray
+    ) -> NamedArray | tuple[NamedArray, NamedArray]:
         batch_axes = hax.axis.without_axes(shard_embeddings.axes, Contract)
         flat_embeddings, _ = flatten_all_axes_but(shard_embeddings, "__BATCH__", batch_axes, reorder_to_front=True)
         batch_axis = flat_embeddings.resolve_axis("__BATCH__")
@@ -207,7 +252,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
         flat_labels = hax.flatten_axes(shard_labels, shard_labels.axes, batch_axis)
 
-        loss_flat = fused_cross_entropy_loss_and_logsumexp_penalty_kernel(
+        kernel_output = fused_cross_entropy_loss_and_logsumexp_penalty_kernel(
             flat_embeddings.array,
             flat_labels.array.astype(jnp.int32),
             shard_lm_head.array,
@@ -218,14 +263,27 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
+            return_argmax=return_argmax,
         )
+        if return_argmax:
+            loss_flat, argmax_flat = cast(tuple[jax.Array, jax.Array], kernel_output)
+            loss = hax.named(loss_flat, batch_axis).unflatten_axis(batch_axis, shard_labels.axes)
+            argmax = hax.named(argmax_flat.astype(jnp.int32), batch_axis).unflatten_axis(batch_axis, shard_labels.axes)
+            return loss, argmax
+        loss_flat = cast(jax.Array, kernel_output)
         return hax.named(loss_flat, batch_axis).unflatten_axis(batch_axis, shard_labels.axes)
 
     mesh = _get_mesh()
     if mesh is None or getattr(mesh, "empty", False):
-        loss = fused_impl(pred_embeddings, target_y, lm_head)
+        output = fused_impl(pred_embeddings, target_y, lm_head)
     else:
         axis_mapping = current_thread_local_mapping() or {}
-        loss = shard_map(fused_impl, axis_mapping=axis_mapping, check_rep=False)(pred_embeddings, target_y, lm_head)
+        output = shard_map(fused_impl, axis_mapping=axis_mapping, check_rep=False)(pred_embeddings, target_y, lm_head)
 
+    if return_argmax:
+        loss, argmax = cast(tuple[NamedArray, NamedArray], output)
+        reduced_loss = hax.nn.loss.maybe_reduce_loss(loss, reduction, reduction_axis, where=None, weight=weight)
+        return reduced_loss, argmax
+
+    loss = cast(NamedArray, output)
     return hax.nn.loss.maybe_reduce_loss(loss, reduction, reduction_axis, where=None, weight=weight)

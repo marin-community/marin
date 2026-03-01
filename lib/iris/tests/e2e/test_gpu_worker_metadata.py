@@ -44,7 +44,7 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     sg.num_vms = 1
     sg.min_slices = 0
     sg.max_slices = 0
-    sg.resources.cpu = 1
+    sg.resources.cpu_millicores = 1000
     sg.resources.memory_bytes = 1 * 1024**3
     sg.resources.disk_bytes = 10 * 1024**3
     sg.slice_template.local.SetInParent()

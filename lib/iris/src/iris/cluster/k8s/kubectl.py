@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -115,9 +116,13 @@ class Kubectl:
             logger.info("kubectl: %s\n  stdin=%s", " ".join(cmd), stdin[:2000])
         else:
             logger.info("kubectl: %s", " ".join(cmd))
+        t0 = time.monotonic()
         result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=effective_timeout)
+        elapsed_ms = (time.monotonic() - t0) * 1000
         if result.returncode != 0:
-            logger.info("kubectl exit %d: stderr=%s", result.returncode, result.stderr.strip()[:500])
+            logger.info("kubectl exit %d: %dms stderr=%s", result.returncode, elapsed_ms, result.stderr.strip()[:500])
+        elif elapsed_ms > 2000:
+            logger.warning("kubectl slow: %dms cmd=%s", elapsed_ms, " ".join(args))
         return result
 
     def apply_json(self, manifest: dict) -> None:
@@ -349,6 +354,24 @@ class Kubectl:
 
         return KubectlLogResult(lines=lines, byte_offset=new_offset)
 
+    def top_pod(self, pod_name: str) -> tuple[int, int] | None:
+        """Get (cpu_millicores, memory_bytes) for a pod.
+
+        Returns None if metrics-server is unavailable or the command fails.
+        """
+        result = self.run(
+            ["top", "pod", pod_name, "--no-headers", "--containers"],
+            namespaced=True,
+            timeout=10.0,
+        )
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 4:
+                return (_parse_k8s_cpu(parts[2]), _parse_k8s_memory(parts[3]))
+        return None
+
     def popen(
         self,
         args: list[str],
@@ -393,3 +416,30 @@ def _parse_kubectl_log_line(line: str) -> KubectlLogLine:
     else:
         logger.warning("Unexpected kubectl log line format (no space-separated timestamp): %r", line[:120])
     return KubectlLogLine(timestamp=datetime.now(timezone.utc), stream="stdout", data=line)
+
+
+def _parse_k8s_cpu(value: str) -> int:
+    """Parse Kubernetes CPU notation to millicores.
+
+    Examples: '250m' -> 250, '1' -> 1000, '0.5' -> 500, '2500m' -> 2500
+    """
+    if value.endswith("m"):
+        return int(value[:-1])
+    return int(float(value) * 1000)
+
+
+def _parse_k8s_memory(value: str) -> int:
+    """Parse Kubernetes memory notation to bytes.
+
+    Examples: '512Mi' -> 536870912, '1Gi' -> 1073741824, '100Ki' -> 102400,
+              '1000' -> 1000 (raw bytes)
+    """
+    units = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4}
+    for suffix, multiplier in units.items():
+        if value.endswith(suffix):
+            return int(value[: -len(suffix)]) * multiplier
+    si_units = {"K": 1000, "M": 1000**2, "G": 1000**3, "T": 1000**4}
+    for suffix, multiplier in si_units.items():
+        if value.endswith(suffix) and not value.endswith("i"):
+            return int(value[: -len(suffix)]) * multiplier
+    return int(value)

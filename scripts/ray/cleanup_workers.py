@@ -256,6 +256,9 @@ def process_cluster(config_path: str, threshold: int, dry_run: bool, parallel: i
     if deleted:
         logger.info(f"Cleaned up {len(deleted)} preempted/terminated TPUs")
 
+    if threshold <= 0:
+        return True
+
     tpu_names = list_cluster_workers(zone, project)
     if not tpu_names:
         logger.info("No manual workers found")

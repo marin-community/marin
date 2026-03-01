@@ -3,7 +3,6 @@
 
 """Click-based CLI for the Iris controller daemon."""
 
-import json
 import logging
 import os
 import signal
@@ -15,9 +14,19 @@ import click
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
+from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
+
+
+def default_bundle_prefix() -> str:
+    """Return a region-local temp bucket path for bundle storage.
+
+    Uses the same marin_temp_bucket API that log_prefix uses, with a 7-day TTL
+    since bundles are ephemeral and regenerated on each job submission.
+    """
+    return marin_temp_bucket(ttl_days=7, prefix="iris/bundles")
 
 
 @click.group()
@@ -49,7 +58,7 @@ def serve(
     that provisions/terminates VM slices based on pending task demand.
     """
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.config import load_config, create_autoscaler, config_to_dict
+    from iris.cluster.config import load_config, create_autoscaler
     from iris.cluster.platform.factory import create_platform
     from iris.rpc import config_pb2
 
@@ -81,22 +90,22 @@ def serve(
             )
             logger.info("Platform created")
 
-            # Pass only BootstrapConfig through to platform.create_slice().
-            bootstrap_config = None
-            if cluster_config.defaults.bootstrap.docker_image:
-                bootstrap_config = config_pb2.BootstrapConfig()
-                bootstrap_config.CopyFrom(cluster_config.defaults.bootstrap)
-                if not bootstrap_config.controller_address:
-                    bootstrap_config.controller_address = platform.discover_controller(cluster_config.controller)
-                # Serialize full cluster config so workers can read task_image etc.
-                bootstrap_config.config_json = json.dumps(config_to_dict(cluster_config))
+            base_worker_config = None
+            if cluster_config.defaults.worker.docker_image:
+                base_worker_config = config_pb2.WorkerConfig()
+                base_worker_config.CopyFrom(cluster_config.defaults.worker)
+                if not base_worker_config.controller_address:
+                    base_worker_config.controller_address = platform.discover_controller(cluster_config.controller)
+                if cluster_config.storage.log_prefix:
+                    base_worker_config.log_prefix = cluster_config.storage.log_prefix
+                base_worker_config.platform.CopyFrom(cluster_config.platform)
 
             autoscaler = create_autoscaler(
                 platform=platform,
                 autoscaler_config=cluster_config.defaults.autoscaler,
                 scale_groups=cluster_config.scale_groups,
                 label_prefix=cluster_config.platform.label_prefix or "iris",
-                bootstrap_config=bootstrap_config,
+                base_worker_config=base_worker_config,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
@@ -108,6 +117,10 @@ def serve(
     heartbeat_failure_threshold = (
         cluster_config.controller.heartbeat_failure_threshold if cluster_config else HEARTBEAT_FAILURE_THRESHOLD
     )
+
+    if bundle_prefix is None:
+        bundle_prefix = default_bundle_prefix()
+        logger.info("Using auto-detected bundle_prefix: %s", bundle_prefix)
 
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)

@@ -53,6 +53,7 @@ import levanter.tracker
 import levanter.tracker.wandb
 import levanter.utils.logging
 from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
+from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
@@ -575,21 +576,15 @@ class Trainer:
         if self.config.watch.is_enabled:
             self.add_hook(self.config.watch.build(), every=self.config.watch.interval)
 
-        if self.config.profiler:
-            profile_path = self.config.log_dir / self.run_id / "profiler"
-            total_prof_steps = self.config.profiler_num_steps
-            if total_prof_steps + self.config.profiler_start_step > self.config.num_train_steps:
-                logger.warning(
-                    f"Adjusting profiler_total_steps from {total_prof_steps} to"
-                    f" {self.config.num_train_steps - self.config.profiler_start_step}"
-                )
-                total_prof_steps = self.config.num_train_steps - self.config.profiler_start_step
+        profiler = self.config.profiler
+        total_prof_steps = profiler.resolve_num_profile_steps(num_train_steps=self.config.num_train_steps)
+        if profiler.is_enabled and total_prof_steps > 0:
             self.add_hook(
                 callbacks.profile(
-                    str(profile_path),
-                    self.config.profiler_start_step,
+                    str(self.config.log_dir / self.run_id / "profiler"),
+                    profiler.start_step,
                     total_prof_steps,
-                    self.config.profiler_perfetto_link,
+                    profiler.perfetto_link,
                 ),
                 every=1,
             )
@@ -786,12 +781,7 @@ class TrainerConfig:
 
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
-
-    # TODO: refactor callbacks
-    profiler: bool = False
-    profiler_start_step: int = 5
-    profiler_num_steps: int = 100
-    profiler_perfetto_link: bool = False
+    profiler: ProfilerConfig = ProfilerConfig()
 
     log_jaxprs: bool = True
     """Whether to log the jaxpr of the training step. This is useful for debugging and understanding the model."""

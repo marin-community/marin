@@ -287,6 +287,7 @@ iris --config=... cluster dashboard --port 8080
 iris --config cluster.yaml job run -- python train.py
 iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 iris --config cluster.yaml job run --no-wait -- python long_job.py
+iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 
 # Stream logs for a job (batch-fetches from all tasks in one RPC)
 iris --config cluster.yaml job logs /my-job
@@ -345,13 +346,8 @@ platform:
     project_id: my-project
 
 defaults:
-  timeouts:
-    boot_timeout: { milliseconds: 300000 }
-    init_timeout: { milliseconds: 600000 }
-    ssh_poll_interval: { milliseconds: 5000 }
   autoscaler:
     evaluation_interval: { milliseconds: 10000 }
-    requesting_timeout: { milliseconds: 120000 }
     scale_up_delay: { milliseconds: 60000 }
     scale_down_delay: { milliseconds: 300000 }
   ssh:

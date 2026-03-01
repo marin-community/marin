@@ -42,7 +42,7 @@ enum ScalingAction {
 }
 
 message ResourceSpec {
-  int32 cpu = 1;
+  int32 cpu_millicores = 1;
   int64 memory_bytes = 2;
   int64 disk_bytes = 3;
   int32 gpu_count = 4;
@@ -112,6 +112,14 @@ message ScaleGroupStatus {
 
   // Slice lifecycle state counts (booting, initializing, ready, failed, requesting)
   map<string, int32> slice_state_counts = 60;
+
+  // Authoritative group availability from autoscaler routing policy
+  string availability_status = 61;   // "available", "requesting", "backoff", "quota_exceeded", "at_capacity"
+  string availability_reason = 62;   // Human-readable reason (for blocked states)
+  iris.time.Timestamp blocked_until = 63;  // Set for temporary blocked states (backoff/quota)
+
+  // Scale-up cooldown — set when cooldown is active (last_scale_up + cooldown > now)
+  iris.time.Timestamp scale_up_cooldown_until = 70;
 }
 
 // Autoscaler action/event log entry
@@ -143,10 +151,20 @@ message RoutingDecision {
   map<string, string> group_reasons = 2;
   map<string, DemandEntryStatusList> routed_entries = 3;
   repeated UnmetDemand unmet_entries = 4;
+  repeated GroupRoutingStatus group_statuses = 5;
 }
 
 message DemandEntryStatusList {
   repeated DemandEntryStatus entries = 1;
+}
+
+message GroupRoutingStatus {
+  string group = 1;
+  int32 priority = 2;
+  int32 assigned = 3;
+  int32 launch = 4;
+  string decision = 5;  // "selected", "blocked", "requesting", "at_capacity", "idle"
+  string reason = 6;
 }
 
 // Full autoscaler status (for RPC response)

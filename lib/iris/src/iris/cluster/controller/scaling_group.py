@@ -125,8 +125,14 @@ def prepare_slice_config(
     config.labels[labels.iris_managed] = "true"
     config.labels[labels.iris_scale_group] = parent_config.name
 
+    if not config.num_vms and parent_config.HasField("num_vms"):
+        config.num_vms = parent_config.num_vms
+
     if parent_config.HasField("resources"):
         config.gpu_count = parent_config.resources.gpu_count
+        disk_bytes = parent_config.resources.disk_bytes
+        if disk_bytes:
+            config.disk_size_gb = disk_bytes // (1024**3)
 
     return config
 
@@ -284,14 +290,18 @@ class ScalingGroup:
         """Number of consecutive scale-up failures."""
         return self._consecutive_failures
 
-    def begin_scale_up(self) -> None:
+    def begin_scale_up(self, timestamp: Timestamp | None = None) -> None:
         """Mark that a scale-up is in progress.
 
         Increments the pending counter, which is included in slice_count()
         and slice_state_counts(REQUESTING) to prevent over-provisioning.
+        Also updates _last_scale_up so the cooldown gates subsequent requests
+        even while this one is still in-flight.
         """
+        timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
             self._pending_scale_ups += 1
+        self._last_scale_up = timestamp
 
     def complete_scale_up(self, handle: SliceHandle, timestamp: Timestamp | None = None) -> None:
         """Record a successful scale-up: add the slice and decrement the pending counter."""
@@ -299,7 +309,6 @@ class ScalingGroup:
         with self._slices_lock:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
             self._slices[handle.slice_id] = SliceState(handle=handle)
-        self._last_scale_up = timestamp
         self._consecutive_failures = 0
         self._backoff_until = None
         self._quota_exceeded_until = None
@@ -349,7 +358,7 @@ class ScalingGroup:
         self,
         tags: dict[str, str] | None = None,
         timestamp: Timestamp | None = None,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a new slice via the platform.
 
@@ -359,7 +368,7 @@ class ScalingGroup:
         Args:
             tags: Optional extra labels/tags for the slice (merged with managed labels)
             timestamp: Optional timestamp (for testing)
-            bootstrap_config: Bootstrap settings passed to platform.create_slice()
+            worker_config: Worker settings passed to platform.create_slice()
 
         Returns:
             The newly created SliceHandle
@@ -385,7 +394,7 @@ class ScalingGroup:
             slice_config.coreweave.instance_type if slice_config.HasField("coreweave") else "n/a",
         )
 
-        return self._platform.create_slice(slice_config, bootstrap_config=bootstrap_config)
+        return self._platform.create_slice(slice_config, worker_config=worker_config)
 
     def scale_down(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
         """Terminate a slice.
@@ -407,6 +416,15 @@ class ScalingGroup:
         """All slice handles in this scale group."""
         with self._slices_lock:
             return [s.handle for s in self._slices.values()]
+
+    def non_ready_slice_handles(self) -> list[tuple[str, SliceHandle]]:
+        """Snapshot non-READY slice handles for background lifecycle polling."""
+        with self._slices_lock:
+            return [
+                (slice_id, state.handle)
+                for slice_id, state in self._slices.items()
+                if state.lifecycle in (SliceLifecycleState.BOOTING, SliceLifecycleState.INITIALIZING)
+            ]
 
     def slice_count(self) -> int:
         """Total number of slices including in-flight scale-ups."""
@@ -448,8 +466,11 @@ class ScalingGroup:
         if sg_resources is None:
             return f"group '{self.name}' has no resources configured"
 
-        if sg_resources.cpu and resources.cpu > sg_resources.cpu:
-            return f"cpu: need {resources.cpu}, group '{self.name}' has {sg_resources.cpu}"
+        if sg_resources.cpu_millicores and resources.cpu_millicores > sg_resources.cpu_millicores:
+            return (
+                f"cpu: need {resources.cpu_millicores / 1000:g},"
+                f" group '{self.name}' has {sg_resources.cpu_millicores / 1000:g}"
+            )
         if sg_resources.memory_bytes and resources.memory_bytes > sg_resources.memory_bytes:
             need_gb = resources.memory_bytes / (1024**3)
             have_gb = sg_resources.memory_bytes / (1024**3)
@@ -725,7 +746,7 @@ class ScalingGroup:
         if self._backoff_until is not None and not self._backoff_until.expired(now=timestamp):
             return AvailabilityState(
                 GroupAvailability.BACKOFF,
-                f"backoff until {self._backoff_until.as_timestamp().epoch_ms()}",
+                f"{self._consecutive_failures} consecutive failure{'s' if self._consecutive_failures != 1 else ''}",
                 self._backoff_until.as_timestamp(),
             )
 
@@ -785,8 +806,18 @@ class ScalingGroup:
         """Build a ScaleGroupStatus proto for the status API."""
         with self._slices_lock:
             snapshot = list(self._slices.values())
+        now = Timestamp.now()
+        availability = self.availability(now)
         backoff_ts = self._backoff_until.as_timestamp() if self._backoff_until else Timestamp.from_ms(0)
+        blocked_until = availability.until if availability.until is not None else Timestamp.from_ms(0)
         counts = self.slice_state_counts()
+
+        cooldown_until = Timestamp.from_ms(0)
+        if self._last_scale_up.epoch_ms() > 0:
+            cooldown_end = self._last_scale_up.add(self._scale_up_cooldown)
+            if now.before(cooldown_end):
+                cooldown_until = cooldown_end
+
         status = vm_pb2.ScaleGroupStatus(
             name=self.name,
             config=self._config,
@@ -796,6 +827,10 @@ class ScalingGroup:
             consecutive_failures=self._consecutive_failures,
             last_scale_up=self._last_scale_up.to_proto(),
             last_scale_down=self._last_scale_down.to_proto(),
+            availability_status=availability.status.value,
+            availability_reason=availability.reason,
+            blocked_until=blocked_until.to_proto(),
+            scale_up_cooldown_until=cooldown_until.to_proto(),
             slices=[slice_state_to_proto(state) for state in snapshot],
         )
         for state_name, count in counts.items():

@@ -35,7 +35,7 @@ from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 
-CANARY_DATE = os.environ.get("CANARY_DATE", datetime.date.today().isoformat())
+CANARY_DATE = os.environ.get("CANARY_DATE", datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"))
 
 # --- Model: Qwen3 ~30M (hidden_dim=512) ---
 model = Qwen3Config(

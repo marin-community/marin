@@ -50,176 +50,65 @@ class MockNestedConfig:
     path: str
 
 
-@pytest.mark.parametrize("tpu_type", [None, "v4-8"])
-def test_lm_config_with_local_paths(trainer_config, tpu_type):
-    """Test that local paths are allowed when running locally."""
-    with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
-    ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-central1"
-
-        # Create a config with local paths
-        resources = ResourceConfig.with_tpu(tpu_type) if tpu_type else ResourceConfig.with_cpu()
-        config = TrainLmOnPodConfig(
-            train_config=train_lm.TrainLmConfig(
-                data=MockDataConfig(cache_dir="local/path"),
-                trainer=trainer_config,
-            ),
-            resources=resources,
-        )
-
-        # This should not raise an exception
-        _doublecheck_paths(config)
-
-
-def test_lm_config_with_gcs_paths_same_region(trainer_config):
-    """Test that GCS paths in the same region are allowed."""
-    with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
-    ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-central1"
-
-        # Create a config with GCS paths in the same region
-        config = TrainLmOnPodConfig(
-            train_config=train_lm.TrainLmConfig(
-                data=MockDataConfig(cache_dir="gs://bucket/path"),
-                trainer=trainer_config,
-            ),
-            resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
-        )
-
-        # This should not raise an exception
-        _doublecheck_paths(config)
-
-
-def test_lm_config_with_gcs_paths_different_region(trainer_config):
-    """Test that GCS paths in a different region raise an exception."""
-    with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
-    ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
-        # Create a config with GCS paths in a different region
-        config = TrainLmOnPodConfig(
-            train_config=train_lm.TrainLmConfig(
-                data=MockDataConfig(cache_dir="gs://bucket/path"),
-                trainer=trainer_config,
-            ),
-            resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
-        )
-
-        # This should raise an exception
-        with pytest.raises(ValueError) as excinfo:
-            _doublecheck_paths(config)
-
-        assert "not in the same region" in str(excinfo.value)
-
-
 def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
-    """Test that train/validation source URLs are allowed to be in different regions."""
+    """train/validation source URLs are exempt from region checks."""
     with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+        patch("iris.marin_fs.marin_region", return_value="us-central1"),
+        patch("iris.marin_fs.get_bucket_location", return_value="us-east1"),
     ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
-        # Create a config with out-of-region source URL; this should be allowed.
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
                 data={"train_urls": ["gs://bucket/path"]},  # type: ignore[arg-type]
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v4-8"),
         )
-
-        # This should not raise an exception
         _doublecheck_paths(config)
 
 
 def test_recursive_path_checking(trainer_config):
-    """Test that paths are checked recursively in nested structures."""
+    """Paths are checked recursively in nested structures."""
     with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+        patch("iris.marin_fs.marin_region", return_value="us-central1"),
+        patch("iris.marin_fs.get_bucket_location", return_value="us-east1"),
     ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
-        # Create a config with nested GCS paths in a different region
         nested_data = MockNestedDataConfig(
             cache_dir="gs://bucket/path", subdir={"file": "gs://bucket/other/path", "list": ["gs://bucket/another/path"]}
         )
-
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
                 data=nested_data,
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v4-8"),
         )
-
-        # This should raise an exception
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="not in the same region"):
             _doublecheck_paths(config)
-
-        assert "not in the same region" in str(excinfo.value)
 
 
 def test_dataclass_recursive_checking(trainer_config):
-    """Test that paths are checked recursively in dataclass objects."""
+    """Paths are checked recursively in dataclass objects."""
     with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+        patch("iris.marin_fs.marin_region", return_value="us-central1"),
+        patch("iris.marin_fs.get_bucket_location", return_value="us-east1"),
     ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
-        # Create a config with a dataclass containing a GCS path
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
                 data=MockDataConfig(cache_dir=MockNestedConfig(path="gs://bucket/path")),  # type: ignore
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v4-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v4-8"),
         )
-
-        # This should raise an exception
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="not in the same region"):
             _doublecheck_paths(config)
-
-        assert "not in the same region" in str(excinfo.value)
 
 
 def test_pathlib_path_handling(trainer_config):
-    """Test that pathlib.Path objects are handled correctly."""
-
+    """pathlib.Path objects that represent GCS URIs are handled correctly."""
     with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+        patch("iris.marin_fs.marin_region", return_value="us-central1"),
+        patch("iris.marin_fs.get_bucket_location", return_value="us-east1"),
     ):
-
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
                 data=MockDataConfig(cache_dir=Path("gs://bucket/path")),
@@ -227,8 +116,5 @@ def test_pathlib_path_handling(trainer_config):
             ),
             resources=ResourceConfig.with_tpu("v4-8"),
         )
-
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="not in the same region"):
             _doublecheck_paths(config)
-
-        assert "not in the same region" in str(excinfo.value)

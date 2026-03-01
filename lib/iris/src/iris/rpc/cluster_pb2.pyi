@@ -232,6 +232,26 @@ class ResourceUsage(_message.Message):
     process_count: int
     def __init__(self, memory_mb: _Optional[int] = ..., disk_mb: _Optional[int] = ..., cpu_millicores: _Optional[int] = ..., memory_peak_mb: _Optional[int] = ..., cpu_percent: _Optional[int] = ..., process_count: _Optional[int] = ...) -> None: ...
 
+class WorkerResourceSnapshot(_message.Message):
+    __slots__ = ("timestamp", "cpu_percent", "memory_used_bytes", "memory_total_bytes", "disk_used_bytes", "disk_total_bytes", "running_task_count", "total_process_count")
+    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
+    DISK_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
+    DISK_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
+    RUNNING_TASK_COUNT_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_PROCESS_COUNT_FIELD_NUMBER: _ClassVar[int]
+    timestamp: _time_pb2.Timestamp
+    cpu_percent: int
+    memory_used_bytes: int
+    memory_total_bytes: int
+    disk_used_bytes: int
+    disk_total_bytes: int
+    running_task_count: int
+    total_process_count: int
+    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., cpu_percent: _Optional[int] = ..., memory_used_bytes: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., disk_used_bytes: _Optional[int] = ..., disk_total_bytes: _Optional[int] = ..., running_task_count: _Optional[int] = ..., total_process_count: _Optional[int] = ...) -> None: ...
+
 class BuildMetrics(_message.Message):
     __slots__ = ("build_started", "build_finished", "from_cache", "image_tag")
     BUILD_STARTED_FIELD_NUMBER: _ClassVar[int]
@@ -337,16 +357,16 @@ class TpuDevice(_message.Message):
     def __init__(self, variant: _Optional[str] = ..., topology: _Optional[str] = ..., count: _Optional[int] = ...) -> None: ...
 
 class ResourceSpecProto(_message.Message):
-    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "device")
-    CPU_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("cpu_millicores", "memory_bytes", "disk_bytes", "device")
+    CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
     MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
     DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
     DEVICE_FIELD_NUMBER: _ClassVar[int]
-    cpu: int
+    cpu_millicores: int
     memory_bytes: int
     disk_bytes: int
     device: DeviceConfig
-    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
     __slots__ = ("pip_packages", "env_vars", "extras", "python_version", "dockerfile")
@@ -603,34 +623,25 @@ class Controller(_message.Message):
         metadata: WorkerMetadata
         registered_at: _time_pb2.Timestamp
         def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., registered_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
-    class RunningTaskEntry(_message.Message):
-        __slots__ = ("task_id", "attempt_id", "state", "log_directory")
+    class WorkerTaskStatus(_message.Message):
+        __slots__ = ("task_id", "attempt_id", "state", "exit_code", "error", "finished_at", "log_directory", "resource_usage")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
-        STATE_FIELD_NUMBER: _ClassVar[int]
-        LOG_DIRECTORY_FIELD_NUMBER: _ClassVar[int]
-        task_id: str
-        attempt_id: int
-        state: TaskState
-        log_directory: str
-        def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., state: _Optional[_Union[TaskState, str]] = ..., log_directory: _Optional[str] = ...) -> None: ...
-    class CompletedTaskEntry(_message.Message):
-        __slots__ = ("task_id", "state", "exit_code", "error", "finished_at", "attempt_id", "log_directory")
-        TASK_ID_FIELD_NUMBER: _ClassVar[int]
         STATE_FIELD_NUMBER: _ClassVar[int]
         EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
         ERROR_FIELD_NUMBER: _ClassVar[int]
         FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
-        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         LOG_DIRECTORY_FIELD_NUMBER: _ClassVar[int]
+        RESOURCE_USAGE_FIELD_NUMBER: _ClassVar[int]
         task_id: str
+        attempt_id: int
         state: TaskState
         exit_code: int
         error: str
         finished_at: _time_pb2.Timestamp
-        attempt_id: int
         log_directory: str
-        def __init__(self, task_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., attempt_id: _Optional[int] = ..., log_directory: _Optional[str] = ...) -> None: ...
+        resource_usage: ResourceUsage
+        def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., log_directory: _Optional[str] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ...) -> None: ...
     class WorkerHealthStatus(_message.Message):
         __slots__ = ("worker_id", "healthy", "consecutive_failures", "last_heartbeat", "running_job_ids", "address", "metadata", "status_message")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -753,22 +764,6 @@ class Controller(_message.Message):
         STATUS_FIELD_NUMBER: _ClassVar[int]
         status: _vm_pb2.AutoscalerStatus
         def __init__(self, status: _Optional[_Union[_vm_pb2.AutoscalerStatus, _Mapping]] = ...) -> None: ...
-    class GetVmLogsRequest(_message.Message):
-        __slots__ = ("vm_id", "tail")
-        VM_ID_FIELD_NUMBER: _ClassVar[int]
-        TAIL_FIELD_NUMBER: _ClassVar[int]
-        vm_id: str
-        tail: int
-        def __init__(self, vm_id: _Optional[str] = ..., tail: _Optional[int] = ...) -> None: ...
-    class GetVmLogsResponse(_message.Message):
-        __slots__ = ("logs", "vm_id", "state")
-        LOGS_FIELD_NUMBER: _ClassVar[int]
-        VM_ID_FIELD_NUMBER: _ClassVar[int]
-        STATE_FIELD_NUMBER: _ClassVar[int]
-        logs: str
-        vm_id: str
-        state: _vm_pb2.VmState
-        def __init__(self, logs: _Optional[str] = ..., vm_id: _Optional[str] = ..., state: _Optional[_Union[_vm_pb2.VmState, str]] = ...) -> None: ...
     class TransactionAction(_message.Message):
         __slots__ = ("timestamp", "action", "entity_id", "details")
         TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
@@ -790,6 +785,27 @@ class Controller(_message.Message):
         ACTIONS_FIELD_NUMBER: _ClassVar[int]
         actions: _containers.RepeatedCompositeFieldContainer[Controller.TransactionAction]
         def __init__(self, actions: _Optional[_Iterable[_Union[Controller.TransactionAction, _Mapping]]] = ...) -> None: ...
+    class GetClusterSummaryRequest(_message.Message):
+        __slots__ = ()
+        def __init__(self) -> None: ...
+    class GetClusterSummaryResponse(_message.Message):
+        __slots__ = ("job_state_counts", "total_jobs", "total_workers", "healthy_workers")
+        class JobStateCountsEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        JOB_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
+        TOTAL_JOBS_FIELD_NUMBER: _ClassVar[int]
+        TOTAL_WORKERS_FIELD_NUMBER: _ClassVar[int]
+        HEALTHY_WORKERS_FIELD_NUMBER: _ClassVar[int]
+        job_state_counts: _containers.ScalarMap[str, int]
+        total_jobs: int
+        total_workers: int
+        healthy_workers: int
+        def __init__(self, job_state_counts: _Optional[_Mapping[str, int]] = ..., total_jobs: _Optional[int] = ..., total_workers: _Optional[int] = ..., healthy_workers: _Optional[int] = ...) -> None: ...
     class GetTaskLogsRequest(_message.Message):
         __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "regex", "attempt_id")
         ID_FIELD_NUMBER: _ClassVar[int]
@@ -817,14 +833,16 @@ class Controller(_message.Message):
         worker_id: str
         def __init__(self, task_id: _Optional[str] = ..., logs: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ..., error: _Optional[str] = ..., worker_id: _Optional[str] = ...) -> None: ...
     class GetTaskLogsResponse(_message.Message):
-        __slots__ = ("task_logs", "last_timestamp_ms", "truncated")
+        __slots__ = ("task_logs", "last_timestamp_ms", "truncated", "child_job_statuses")
         TASK_LOGS_FIELD_NUMBER: _ClassVar[int]
         LAST_TIMESTAMP_MS_FIELD_NUMBER: _ClassVar[int]
         TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+        CHILD_JOB_STATUSES_FIELD_NUMBER: _ClassVar[int]
         task_logs: _containers.RepeatedCompositeFieldContainer[Controller.TaskLogBatch]
         last_timestamp_ms: int
         truncated: bool
-        def __init__(self, task_logs: _Optional[_Iterable[_Union[Controller.TaskLogBatch, _Mapping]]] = ..., last_timestamp_ms: _Optional[int] = ..., truncated: _Optional[bool] = ...) -> None: ...
+        child_job_statuses: _containers.RepeatedCompositeFieldContainer[JobStatus]
+        def __init__(self, task_logs: _Optional[_Iterable[_Union[Controller.TaskLogBatch, _Mapping]]] = ..., last_timestamp_ms: _Optional[int] = ..., truncated: _Optional[bool] = ..., child_job_statuses: _Optional[_Iterable[_Union[JobStatus, _Mapping]]] = ...) -> None: ...
     class GetProcessLogsRequest(_message.Message):
         __slots__ = ("prefix", "limit")
         PREFIX_FIELD_NUMBER: _ClassVar[int]
@@ -837,6 +855,30 @@ class Controller(_message.Message):
         RECORDS_FIELD_NUMBER: _ClassVar[int]
         records: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
         def __init__(self, records: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
+    class GetWorkerStatusRequest(_message.Message):
+        __slots__ = ("id",)
+        ID_FIELD_NUMBER: _ClassVar[int]
+        id: str
+        def __init__(self, id: _Optional[str] = ...) -> None: ...
+    class GetWorkerStatusResponse(_message.Message):
+        __slots__ = ("vm", "scale_group", "worker", "bootstrap_logs", "worker_logs", "recent_tasks", "current_resources", "resource_history")
+        VM_FIELD_NUMBER: _ClassVar[int]
+        SCALE_GROUP_FIELD_NUMBER: _ClassVar[int]
+        WORKER_FIELD_NUMBER: _ClassVar[int]
+        BOOTSTRAP_LOGS_FIELD_NUMBER: _ClassVar[int]
+        WORKER_LOGS_FIELD_NUMBER: _ClassVar[int]
+        RECENT_TASKS_FIELD_NUMBER: _ClassVar[int]
+        CURRENT_RESOURCES_FIELD_NUMBER: _ClassVar[int]
+        RESOURCE_HISTORY_FIELD_NUMBER: _ClassVar[int]
+        vm: _vm_pb2.VmInfo
+        scale_group: str
+        worker: Controller.WorkerHealthStatus
+        bootstrap_logs: str
+        worker_logs: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
+        recent_tasks: _containers.RepeatedCompositeFieldContainer[TaskStatus]
+        current_resources: WorkerResourceSnapshot
+        resource_history: _containers.RepeatedCompositeFieldContainer[WorkerResourceSnapshot]
+        def __init__(self, vm: _Optional[_Union[_vm_pb2.VmInfo, _Mapping]] = ..., scale_group: _Optional[str] = ..., worker: _Optional[_Union[Controller.WorkerHealthStatus, _Mapping]] = ..., bootstrap_logs: _Optional[str] = ..., worker_logs: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ..., recent_tasks: _Optional[_Iterable[_Union[TaskStatus, _Mapping]]] = ..., current_resources: _Optional[_Union[WorkerResourceSnapshot, _Mapping]] = ..., resource_history: _Optional[_Iterable[_Union[WorkerResourceSnapshot, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class Worker(_message.Message):
@@ -941,13 +983,13 @@ class HeartbeatRequest(_message.Message):
     EXPECTED_TASKS_FIELD_NUMBER: _ClassVar[int]
     tasks_to_run: _containers.RepeatedCompositeFieldContainer[Worker.RunTaskRequest]
     tasks_to_kill: _containers.RepeatedScalarFieldContainer[str]
-    expected_tasks: _containers.RepeatedCompositeFieldContainer[Controller.RunningTaskEntry]
-    def __init__(self, tasks_to_run: _Optional[_Iterable[_Union[Worker.RunTaskRequest, _Mapping]]] = ..., tasks_to_kill: _Optional[_Iterable[str]] = ..., expected_tasks: _Optional[_Iterable[_Union[Controller.RunningTaskEntry, _Mapping]]] = ...) -> None: ...
+    expected_tasks: _containers.RepeatedCompositeFieldContainer[Controller.WorkerTaskStatus]
+    def __init__(self, tasks_to_run: _Optional[_Iterable[_Union[Worker.RunTaskRequest, _Mapping]]] = ..., tasks_to_kill: _Optional[_Iterable[str]] = ..., expected_tasks: _Optional[_Iterable[_Union[Controller.WorkerTaskStatus, _Mapping]]] = ...) -> None: ...
 
 class HeartbeatResponse(_message.Message):
-    __slots__ = ("running_tasks", "completed_tasks")
-    RUNNING_TASKS_FIELD_NUMBER: _ClassVar[int]
-    COMPLETED_TASKS_FIELD_NUMBER: _ClassVar[int]
-    running_tasks: _containers.RepeatedCompositeFieldContainer[Controller.RunningTaskEntry]
-    completed_tasks: _containers.RepeatedCompositeFieldContainer[Controller.CompletedTaskEntry]
-    def __init__(self, running_tasks: _Optional[_Iterable[_Union[Controller.RunningTaskEntry, _Mapping]]] = ..., completed_tasks: _Optional[_Iterable[_Union[Controller.CompletedTaskEntry, _Mapping]]] = ...) -> None: ...
+    __slots__ = ("tasks", "resource_snapshot")
+    TASKS_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_SNAPSHOT_FIELD_NUMBER: _ClassVar[int]
+    tasks: _containers.RepeatedCompositeFieldContainer[Controller.WorkerTaskStatus]
+    resource_snapshot: WorkerResourceSnapshot
+    def __init__(self, tasks: _Optional[_Iterable[_Union[Controller.WorkerTaskStatus, _Mapping]]] = ..., resource_snapshot: _Optional[_Union[WorkerResourceSnapshot, _Mapping]] = ...) -> None: ...

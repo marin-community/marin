@@ -176,6 +176,7 @@ def get_current_tpu_is_preempted() -> bool:
         response.raise_for_status()
         return response.text.lower() == "true"
     except Exception:
+        logger.exception("Error checking TPU preemption status; assuming not preempted")
         return False
 
 

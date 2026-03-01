@@ -40,7 +40,6 @@ Add an `AutoscalerConfig` message to `config.proto`:
 ```protobuf
 message AutoscalerConfig {
   float evaluation_interval_seconds = 1;  // Default: 10.0
-  float requesting_timeout_seconds = 2;   // Default: 120.0
 }
 ```
 
@@ -65,8 +64,8 @@ Track pending requests in `ScalingGroup`:
 # In ScalingGroup.__init__:
 self._requesting_until_ms: int = 0
 
-def mark_requesting(self, ts: int, timeout_ms: int) -> None:
-    self._requesting_until_ms = ts + timeout_ms
+def mark_requesting(self, ts: int) -> None:
+    self._requesting_until_ms = ts
 
 def availability(self, ts: int) -> AvailabilityState:
     # ... existing checks ...
@@ -82,8 +81,7 @@ Offload `_execute_scale_up` to a `ThreadPoolExecutor` in the `Autoscaler`:
 self._scale_up_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="scale-up")
 
 def _execute_scale_up(self, group, ts, reason=""):
-    timeout_ms = int(self._config.requesting_timeout_seconds * 1000)
-    group.mark_requesting(ts, timeout_ms)
+    group.mark_requesting(ts)
     self._scale_up_executor.submit(self._do_scale_up, group, ts, reason)
 
 def _do_scale_up(self, group, ts, reason):

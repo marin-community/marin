@@ -29,7 +29,7 @@ from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
-    cpu=64,
+    cpu_millicores=64000,
     memory_bytes=64 * 1024**3,
     disk_bytes=100 * 1024**3,
     gpu_count=0,
@@ -126,7 +126,7 @@ def make_mock_platform(slice_handles_to_discover: list[MagicMock] | None = None)
 
     create_count = [0]
 
-    def create_slice_side_effect(config: config_pb2.SliceConfig, bootstrap_config=None) -> MagicMock:
+    def create_slice_side_effect(config: config_pb2.SliceConfig, worker_config=None) -> MagicMock:
         create_count[0] += 1
         slice_id = f"new-slice-{create_count[0]}"
         return make_mock_slice_handle(slice_id)
@@ -166,7 +166,7 @@ def _tracked_scale_up(group: ScalingGroup, timestamp: Timestamp | None = None, *
     no longer tracks state internally.
     """
     timestamp = timestamp or Timestamp.from_ms(1000000)
-    group.begin_scale_up()
+    group.begin_scale_up(timestamp=timestamp)
     handle = group.scale_up(timestamp=timestamp, **kwargs)
     group.complete_scale_up(handle, timestamp)
     return handle
@@ -816,7 +816,7 @@ class TestScalingGroupAvailability:
         group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(60_000))
 
         ts = Timestamp.from_ms(1000)
-        group.begin_scale_up()
+        group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()
@@ -842,7 +842,7 @@ class TestScalingGroupAvailability:
         group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(300_000))
 
         ts1 = Timestamp.from_ms(1000)
-        group.begin_scale_up()
+        group.begin_scale_up(timestamp=ts1)
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts1)
         group.cancel_scale_up()
@@ -851,7 +851,7 @@ class TestScalingGroupAvailability:
 
         # Second attempt succeeds via complete_scale_up, which clears quota state
         ts2 = Timestamp.from_ms(3000)
-        group.begin_scale_up()
+        group.begin_scale_up(timestamp=ts2)
         handle = group.scale_up(timestamp=ts2)
         group.complete_scale_up(handle, ts2)
         assert group.can_accept_demand(timestamp=Timestamp.from_ms(4000))
@@ -870,7 +870,7 @@ class TestScalingGroupAvailability:
         group.record_failure(timestamp=ts)
 
         # Then trigger quota exceeded via failed scale-up
-        group.begin_scale_up()
+        group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()
@@ -972,10 +972,12 @@ class TestCanScaleUpQuotaExhausted:
         platform.list_slices.return_value = []
         platform.create_slice.side_effect = QuotaExhaustedError("no quota")
 
-        group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(5000))
+        group = ScalingGroup(
+            unbounded_config, platform, quota_timeout=Duration.from_ms(5000), scale_up_cooldown=Duration.from_ms(0)
+        )
 
         ts = Timestamp.from_ms(1000000)
-        group.begin_scale_up()
+        group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
             group.scale_up(timestamp=ts)
         group.cancel_scale_up()

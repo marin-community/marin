@@ -18,11 +18,34 @@ too many concurrent uv sync operations.
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
+
+
+class ContainerErrorKind(StrEnum):
+    """Structured category for container/runtime errors."""
+
+    NONE = "none"
+    USER_CODE = "user_code"
+    INFRA_NOT_FOUND = "infra_not_found"
+    RUNTIME_ERROR = "runtime_error"
+
+
+class ContainerPhase(StrEnum):
+    """Lifecycle phase of a container from the runtime's perspective.
+
+    PENDING: container created but not yet executing (K8s pod scheduling, image pull).
+    RUNNING: container is executing the main command.
+    STOPPED: container has exited (check exit_code/error for details).
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    STOPPED = "stopped"
 
 
 @dataclass
@@ -38,13 +61,14 @@ class ContainerConfig:
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     network_mode: str = "host"  # e.g. "host" for --network=host
     task_id: str | None = None
+    attempt_id: int | None = None
     job_id: str | None = None
     worker_metadata: cluster_pb2.WorkerMetadata | None = None
 
     def get_cpu_millicores(self) -> int | None:
-        if not self.resources or not self.resources.cpu:
+        if not self.resources or not self.resources.cpu_millicores:
             return None
-        return self.resources.cpu * 1000
+        return self.resources.cpu_millicores
 
     def get_memory_mb(self) -> int | None:
         if not self.resources or not self.resources.memory_bytes:
@@ -80,9 +104,10 @@ class ContainerStats:
 class ContainerStatus:
     """Container state from runtime inspection."""
 
-    running: bool
+    phase: ContainerPhase
     exit_code: int | None = None
     error: str | None = None
+    error_kind: ContainerErrorKind = ContainerErrorKind.NONE
     oom_killed: bool = False
 
 

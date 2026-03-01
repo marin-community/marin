@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import sys
 import threading
 import time
 from contextlib import contextmanager
-from typing import Callable, Optional
+from typing import Optional
 
 import jax
 from tqdm_loggable.auto import tqdm
@@ -20,6 +19,8 @@ from levanter.callbacks._metrics import (
     logger,
     pbar_logger,
 )
+from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
+from levanter.callbacks.profiler import _flush_while_waiting, profile
 from levanter.data import DataLoader
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
@@ -126,52 +127,6 @@ def wandb_xla_logger(config: WandbConfig):
         return log_xla_to_wandb
     else:
         return lambda x: None
-
-
-def profile(path: str, start_step: int, num_steps: int, create_perfetto_link: bool) -> Callable[[StepInfo], None]:
-    def profiler_callback_fn(step: StepInfo):
-        # -1 b/c step is the finished step
-        if step.step == start_step - 1:
-            _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
-            logger.info(f"Starting profiler until step {start_step + num_steps}.")
-            jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
-        elif step.step == start_step + num_steps - 1:
-            if create_perfetto_link:
-                logger.info(
-                    f"Stopping profiler. Process 0 will open a perfetto link. I am process {jax.process_index()}"
-                )
-            else:
-                logger.info("Stopping profiler.")
-            # so, annoyingly, gcloud ssh doesn't reliably flush stdout here, so we need to spin up
-            # a thread to flush and print periodically until we make it past stop_trace
-            # (note: stop_trace blocks if perfetto is enabled)
-            event = threading.Event()
-            if create_perfetto_link and jax.process_index() == 0:
-                _flush_while_waiting(event)
-
-            jax.profiler.stop_trace()
-
-            if create_perfetto_link and jax.process_index() == 0:
-                event.set()
-
-            levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
-            barrier_sync()
-
-    return profiler_callback_fn
-
-
-def _flush_while_waiting(event):
-    def flush_stdout():
-        sys.stdout.flush()
-        sys.stderr.flush()
-        time.sleep(5)
-        while not event.is_set():
-            print("Waiting...", flush=True)
-            print("\n", file=sys.stderr, flush=True)
-            time.sleep(5)
-
-    thread = threading.Thread(target=flush_stdout)
-    thread.start()
 
 
 @contextmanager
@@ -295,4 +250,6 @@ __all__ = [
     "log_performance_stats",
     "log_step_info",
     "pbar_logger",
+    "CallbackStateView",
+    "StateCallbackRunner",
 ]
