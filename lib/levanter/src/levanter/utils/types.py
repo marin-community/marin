@@ -26,6 +26,12 @@ except ImportError:
         pass
 
 
+try:
+    from haliax.partitioning import ResourceMapping
+except ImportError:
+    ResourceMapping = dict[str, Any]  # type: ignore[assignment]
+
+
 class ValAndGradFn(Protocol[M, X]):
     def __call__(self, model: M, *inputs: X, **input_kwargs) -> Tuple[Scalar, M]: ...
 

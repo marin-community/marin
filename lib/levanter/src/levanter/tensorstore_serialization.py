@@ -20,12 +20,12 @@ import jax.tree_util as jtu
 import numpy as np
 import tensorstore as ts
 from haliax.jax_utils import is_jax_array_like
-from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
 from levanter.utils import fsspec_utils, jax_utils
+from levanter.utils.types import ResourceMapping
 
 logger = logging.getLogger(__name__)
 
