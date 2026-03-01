@@ -63,7 +63,7 @@ from iris.cluster.platform.base import (
     find_free_port,
 )
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -1515,33 +1515,53 @@ def _coreweave_tunnel(
     local_port: int | None = None,
     timeout: float = 30.0,
 ) -> Iterator[str]:
-    """kubectl port-forward to a K8s Service, yielding the local URL."""
+    """kubectl port-forward to a K8s Service, yielding the local URL.
+
+    Uses a single deadline with exponential backoff to handle freshly
+    provisioned nodes whose konnectivity agent may not be ready when
+    the pod first passes its readiness probe.  If the kubectl process
+    exits (e.g. konnectivity timeout), it is relaunched automatically.
+    """
     if local_port is None:
         local_port = find_free_port(start=10000)
 
-    proc = kubectl.popen(
-        ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
-        namespaced=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
+    deadline = Deadline.from_seconds(timeout)
+    backoff = ExponentialBackoff(initial=1.0, maximum=10.0, factor=2.0)
+    proc: subprocess.Popen | None = None
 
-    try:
-        deadline = Deadline.from_seconds(timeout)
-        while not deadline.expired():
-            try:
-                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
-                    break
-            except OSError:
-                time.sleep(0.5)
-        else:
+    while not deadline.expired():
+        # (Re-)launch kubectl port-forward when needed.
+        if proc is None:
+            proc = kubectl.popen(
+                ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
+                namespaced=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+
+        # Process died — log, back off, and relaunch on next iteration.
+        if proc.poll() is not None:
             stderr = proc.stderr.read() if proc.stderr else ""
+            logger.warning("Port-forward exited (retrying): %s", stderr.strip())
+            proc = None
+            time.sleep(min(backoff.next_interval(), max(0, deadline.remaining_seconds())))
+            continue
+
+        # Try to connect to the forwarded port.
+        try:
+            with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                break
+        except OSError:
+            time.sleep(0.5)
+    else:
+        if proc is not None:
             proc.terminate()
             proc.wait()
-            raise RuntimeError(f"kubectl port-forward failed to establish: {stderr}")
+        raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
 
+    try:
         logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
         yield f"http://127.0.0.1:{local_port}"
     finally:
