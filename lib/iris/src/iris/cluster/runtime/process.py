@@ -508,6 +508,10 @@ class ProcessContainerHandle:
                 return Path(output_path).read_bytes()
         except FileNotFoundError:
             logger.warning("py-spy not found; falling back to stub profile for PID %s", pid)
+        except subprocess.TimeoutExpired:
+            logger.warning("py-spy timed out; falling back to stub profile for PID %s", pid)
+        except PermissionError:
+            logger.warning("py-spy lacks permission to attach; falling back to stub profile for PID %s", pid)
         finally:
             if output_path is not None:
                 Path(output_path).unlink(missing_ok=True)
@@ -548,6 +552,10 @@ class ProcessContainerHandle:
 
         except FileNotFoundError:
             logger.warning("memray not found; falling back to stub profile for PID %s", pid)
+        except subprocess.TimeoutExpired:
+            logger.warning("memray timed out; falling back to stub profile for PID %s", pid)
+        except PermissionError:
+            logger.warning("memray lacks permission to attach; falling back to stub profile for PID %s", pid)
         finally:
             if trace_path is not None:
                 Path(trace_path).unlink(missing_ok=True)
