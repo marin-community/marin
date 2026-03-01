@@ -3,7 +3,6 @@
 
 import logging
 import os
-import typing
 from dataclasses import dataclass, field
 
 import equinox as eqx
@@ -116,7 +115,7 @@ def main(config: VizLmConfig):
                 model = load_checkpoint(model, config.checkpoint_path, subpath="model")
             model = hax.shard(model, parameter_axis_mapping)
 
-        model = typing.cast(ArrayLmHeadModel, inference_mode(model, True))
+        model = inference_mode(model, True)
 
         if config.comparison_model_path is not None:
             if config.comparison_is_hf:
@@ -134,7 +133,7 @@ def main(config: VizLmConfig):
                     comparison_model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
                     comparison_model = load_checkpoint(comparison_model, config.comparison_model_path, subpath="model")
                 comparison_model = hax.shard(comparison_model, parameter_axis_mapping)
-            comparison_model = typing.cast(ArrayLmHeadModel, inference_mode(comparison_model, True))
+            comparison_model = inference_mode(comparison_model, True)
         else:
             comparison_model = None
 
