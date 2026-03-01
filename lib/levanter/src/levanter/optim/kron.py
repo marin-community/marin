@@ -21,6 +21,7 @@ from optax._src.combine import chain
 from optax._src.numerics import safe_int32_increment
 from optax._src.utils import canonicalize_dtype
 
+from levanter.models.scan_layers import is_scan_container
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.mesh import DATA_AXIS
 
@@ -284,9 +285,9 @@ def scale_by_kron(
                 # this does not support nested stacks
                 if scanned_layers_ is None:
                     scanned_layers_ = jax.tree.map(
-                        lambda x: (jax.tree.map(lambda _: True, x) if isinstance(x, hax.nn.Stacked) else False),
+                        lambda x: (jax.tree.map(lambda _: True, x) if is_scan_container(x) else False),
                         params,
-                        is_leaf=lambda x: isinstance(x, hax.nn.Stacked),
+                        is_leaf=lambda x: is_scan_container(x),
                     )
                 if params_sharding_ is None:
                     params_sharding_ = hax.partitioning.infer_resource_partitions(params)
@@ -501,9 +502,9 @@ def scale_by_kron(
                 # this does not support nested stacks
                 if scanned_layers_ is None:
                     scanned_layers_ = jax.tree.map(
-                        lambda x: (jax.tree.map(lambda _: True, x) if isinstance(x, hax.nn.Stacked) else False),
+                        lambda x: (jax.tree.map(lambda _: True, x) if is_scan_container(x) else False),
                         updates,
-                        is_leaf=lambda x: isinstance(x, hax.nn.Stacked),
+                        is_leaf=lambda x: is_scan_container(x),
                     )
                 if params_sharding_ is None:
                     params_sharding_ = hax.partitioning.infer_resource_partitions(updates)

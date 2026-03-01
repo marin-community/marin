@@ -16,6 +16,13 @@ def _scan_stack_cls(scan_layers: bool):
     return BlockSeq
 
 
+def is_scan_container(x: object) -> bool:
+    """Return True for Haliax scan containers used for stacked transformer blocks."""
+    from haliax.nn.scan import BlockSeq, Stacked
+
+    return isinstance(x, (Stacked, BlockSeq))
+
+
 def init_scan_foldable(
     Layers: Axis,
     BlockType: Any,
