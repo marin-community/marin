@@ -15,7 +15,6 @@ import haliax.partitioning
 import jax
 import numpy as np
 from haliax import is_named_array
-from haliax._src.util import index_where
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
@@ -25,6 +24,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
 
 from levanter.utils.mesh import create_mesh_from_axis_specs
+from levanter.utils.py_utils import index_where
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
 
 X = TypeVar("X")
