@@ -144,8 +144,6 @@ def test_compute_next_token_loss_array_matches_named_for_grug_example():
     grug_loss = model.compute_next_token_loss_array(grug_example, batch_axis=Batch, reduction=None, reduction_axis=())
 
     np.testing.assert_allclose(grug_loss, named_loss, rtol=1e-5, atol=1e-6)
-
-
 def test_logits_from_token_ids_array_matches_named_logits():
     Vocab = Axis("vocab", 32)
     cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
