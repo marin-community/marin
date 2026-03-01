@@ -78,7 +78,7 @@ from levanter.callbacks import StepInfo
 from levanter.checkpoint import load_checkpoint
 from levanter.data import batched
 from levanter.data.loader import stack_batches
-from levanter.models.lm_model import ArrayLmHarnessModel, ArrayLmHeadModel, LmConfig, LmExample
+from levanter.models.lm_model import ArrayLmHarnessModel, LmConfig, LmExample
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
@@ -245,7 +245,7 @@ class _LmEvalHarnessWorker:
         self._dummy_batch = _make_dummy_batch(EvalBatch, EvalPos)
 
         def _eval_loglikelihood(
-            model: ArrayLmHeadModel, packed_example: LmExample
+            model: ArrayLmHarnessModel, packed_example: LmExample
         ) -> tuple[NamedArray, NamedArray, NamedArray]:
             """
             Returns:
