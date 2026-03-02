@@ -11,10 +11,10 @@
 ## Entry-point guide
 
 - Start in `base/launch.py` for normal run edits.
-- Each variant `<variant>/launch.py` exposes its own `*LaunchConfig` as the user-facing knob surface.
+- `GrugBaseLaunchConfig` is the user-facing knob surface (model/data/optimizer/trainer/eval/run metadata).
 - `versioned(...)` marks config values that should affect executor step version/hash.
 - `this_output_path()` resolves to the current step's output root.
-- `run_grug(...)` in each variant's `train.py` is the runtime entry point used by the `ExecutorStep`.
+- `run_grug(...)` in `base/train.py` is the runtime entry point used by the `ExecutorStep`.
 - `P` in train/model code is the usual JAX alias for `PartitionSpec`; see the JAX explicit sharding tutorial: [Explicit Sharding (JAX)](https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html).
 
 ## How to use it
@@ -39,6 +39,32 @@ uv run lib/marin/src/marin/run/ray_run.py \
   --env_vars WANDB_API_KEY=${WANDB_API_KEY} \
   -- python experiments/grug/base/launch.py
 ```
+
+## Visual diff for template variants
+
+When template-copying `experiments/grug/base/` to a new variant, use the HTML diff tool to review changes:
+
+```bash
+uv run python scripts/grug_dir_diff.py \
+  experiments/grug/base \
+  experiments/grug/<variant> \
+  --out /tmp/grug-diff
+```
+
+What it does:
+
+- Recursively compares both directories (default extensions: `.py`, `.md`)
+- Builds one `/tmp/grug-diff/index.html` report with top-level summary + file table
+- Renders inline side-by-side diffs on that same page (changed/added/removed by default)
+- PRs that add a new `experiments/grug/<variant>/` also get this diff posted automatically by CI.
+
+Useful flags:
+
+- `--extensions .py,.md`: restrict file types
+- `--all-files`: include everything instead of extension filtering
+- `--show-unchanged`: generate pages for unchanged files too
+- `--context-lines 5`: tune context around edits
+- `--no-open`: generate the report without launching a browser
 
 ## Common edit points
 
@@ -123,10 +149,6 @@ enforces these minimum interfaces:
   `eqx.filter_eval_shape`.
 - Escape hatch: add `# GRUG NOVERIFY` anywhere in `<variant>/train.py` to exclude that variant from these contract
   checks.
-
-## Current variants
-
-- `base`: `experiments/grug/base/`
 
 ## Further guidance
 

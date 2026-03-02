@@ -41,9 +41,26 @@ Keep each pass scoped to one bucket:
 Update `docs/reports/grug-archive.md` with:
 
 - path
+- origin (`base`, `moe`, or another source variant)
 - commit SHA (when known)
 - purpose
 - status (`active`, `superseded`, `deleted`)
+- diff link (prefer the CI-posted PR comment link; fallback to local report path)
+
+For PRs that add a new `experiments/grug/<variant>/`, CI posts a visual diff
+comment automatically. Copy that link into the archive entry.
+
+If you need a local fallback, generate the diff report manually:
+
+```bash
+uv run python scripts/grug_dir_diff.py \
+  experiments/grug/base \
+  experiments/grug/<variant> \
+  --out /tmp/grug-diff
+```
+
+Then include a link to the report in the archive entry so reviewers can inspect
+template-copy changes quickly.
 
 ### 4) Upstream to base if it wins
 

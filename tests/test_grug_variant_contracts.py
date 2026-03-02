@@ -27,6 +27,7 @@ from jax._src import config as jax_config
 from jax.sharding import NamedSharding, PartitionSpec as P, use_abstract_mesh
 
 from levanter.checkpoint import CheckpointerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
@@ -34,6 +35,22 @@ from levanter.distributed import DistributedConfig, RayConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+
+
+class DummyModel(eqx.Module):
+    w: jax.Array
+
+    def next_token_loss(
+        self,
+        token_ids: jax.Array,
+        loss_weight: jax.Array,
+        *,
+        mask=None,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+    ) -> jax.Array:
+        del token_ids, loss_weight, mask, reduction, logsumexp_weight
+        return jnp.mean(jnp.square(self.w))
 
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
@@ -83,6 +100,14 @@ def _discover_grug_variants_with_model_and_train() -> list[str]:
     if not variants:
         raise AssertionError("No grug variants with both model.py and train.py found")
     return variants
+
+
+def _make_abstract_mesh(*, data: int, model: int) -> jax.sharding.AbstractMesh:
+    return jax.sharding.AbstractMesh(
+        axis_sizes=(data, model),
+        axis_names=("data", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit, jax.sharding.AxisType.Explicit),
+    )
 
 
 @pytest.mark.parametrize(
@@ -262,3 +287,89 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_grug_base_train_step_with_watch_matches_base_step():
+    train_module = importlib.import_module("experiments.grug.base.train")
+
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+
+    def build_state(params: DummyModel):
+        return train_module.GrugTrainState(
+            step=jnp.array(0, dtype=jnp.int32),
+            params=params,
+            opt_state=optimizer.init(params),
+            ema_params=params,
+        )
+
+    state_for_base = build_state(DummyModel(jnp.array([1.0, -2.0], dtype=jnp.float32)))
+    state_for_watch = build_state(DummyModel(jnp.array([1.0, -2.0], dtype=jnp.float32)))
+    batch = GrugLmExample(
+        tokens=jnp.zeros((1, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((1, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    base_step = train_module._make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    watch_step = train_module._make_train_step(
+        optimizer,
+        mp,
+        z_loss_weight=0.0,
+        ema_beta=None,
+        watch_config=WatchConfig(
+            watch_targets=["grads", "params", "updates"],
+            include_norms=True,
+            include_per_parameter_norms=True,
+            include_histograms=False,
+            split_scan_layers=True,
+            interval=1,
+        ),
+    )
+
+    next_base, metrics_base, base_watch_stats = base_step(state_for_base, batch, compute_watch=False)
+    next_watch, metrics_watch, watch_stats = watch_step(state_for_watch, batch, compute_watch=True)
+
+    assert int(next_base.step) == 1
+    assert int(next_watch.step) == 1
+    assert jnp.allclose(next_base.params.w, next_watch.params.w)
+    assert jnp.allclose(next_base.ema_params.w, next_watch.ema_params.w)
+    assert jnp.allclose(metrics_base["train/loss"], metrics_watch["train/loss"])
+    assert base_watch_stats is None
+    assert watch_stats
+    assert any(key.startswith("grad/") for key in watch_stats)
+    assert any(key.startswith("params/") for key in watch_stats)
+    assert any(key.startswith("updates/") for key in watch_stats)
+
+
+@pytest.mark.parametrize(("data", "model"), [(4, 1), (2, 2)])
+def test_grug_base_loss_lowers_on_abstract_mesh_layouts(data: int, model: int):
+    model_module = importlib.import_module("experiments.grug.base.model")
+    seq = 256 if jax.default_backend() == "tpu" else 16
+    cfg = model_module.GrugModelConfig(
+        vocab_size=256,
+        hidden_dim=128,
+        intermediate_dim=256,
+        num_layers=1,
+        num_heads=8,
+        num_kv_heads=8,
+        max_seq_len=seq,
+    )
+
+    mesh = _make_abstract_mesh(data=data, model=model)
+    token_pspec = P(("data",), None)
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        key = jax.ShapeDtypeStruct(shape=(2,), dtype=jnp.uint32, sharding=NamedSharding(mesh, P()))
+        params = jax.eval_shape(lambda k: model_module.Transformer.init(cfg, key=k), key)
+
+        def loss_fn(p):
+            token_ids = jnp.zeros((8, seq), dtype=jnp.int32)
+            token_ids = jax.sharding.reshard(token_ids, token_pspec)
+            loss_weight = jnp.ones((8, seq), dtype=jnp.float32)
+            loss_weight = jax.sharding.reshard(loss_weight, token_pspec)
+            return p.next_token_loss(token_ids, loss_weight, mask=GrugAttentionMask.causal(), reduction="mean")
+
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = jax.jit(loss_fn).trace(params).lower(lowering_platforms=(platform,))
+
+    assert lowered is not None
