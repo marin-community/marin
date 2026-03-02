@@ -499,3 +499,55 @@ def _validate_cluster_health(controller_url: str) -> None:
     click.echo("  Waiting for job (workers may need to scale up)...")
     status = job.wait(timeout=600, raise_on_failure=True)
     click.echo(f"  Job completed: {cluster_pb2.JobState.Name(status.state)}")
+
+
+# =============================================================================
+# Controller subcommands (RPC-based controller operations)
+# =============================================================================
+
+
+@cluster.group()
+@click.pass_context
+def controller(ctx):
+    """Controller management commands."""
+    pass
+
+
+@controller.command("checkpoint")
+@click.option("--stop", is_flag=True, default=False, help="Stop the controller after taking a checkpoint")
+@click.pass_context
+def controller_checkpoint(ctx, stop: bool):
+    """Take a checkpoint of the controller state.
+
+    Calls BeginCheckpoint on the running controller, which pauses scheduling
+    briefly and writes a consistent snapshot to storage.
+    """
+    controller_url = require_controller_url(ctx)
+    client = cluster_connect.ControllerServiceClientSync(controller_url)
+    try:
+        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+    except Exception as e:
+        click.echo(f"Checkpoint failed: {e}", err=True)
+        raise SystemExit(1) from e
+
+    click.echo(f"Snapshot written: {resp.snapshot_path}")
+    click.echo(f"  Jobs:    {resp.job_count}")
+    click.echo(f"  Tasks:   {resp.task_count}")
+    click.echo(f"  Workers: {resp.worker_count}")
+
+    if stop:
+        click.echo("Stopping controller...")
+        config = ctx.obj.get("config")
+        if not config:
+            click.echo("--stop requires --config", err=True)
+            raise SystemExit(1)
+        from iris.cluster.config import IrisConfig
+
+        iris_config = IrisConfig(config)
+        platform = iris_config.platform()
+        try:
+            platform.stop_controller(config)
+            click.echo("Controller stopped.")
+        except Exception as e:
+            click.echo(f"Failed to stop controller: {e}", err=True)
+            raise SystemExit(1) from e

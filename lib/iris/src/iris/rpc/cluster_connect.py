@@ -79,6 +79,12 @@ class ControllerService(Protocol):
     async def get_worker_status(self, request: cluster__pb2.Controller.GetWorkerStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetWorkerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def begin_checkpoint(self, request: cluster__pb2.Controller.BeginCheckpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.BeginCheckpointResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def load_checkpoint(self, request: cluster__pb2.Controller.LoadCheckpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.LoadCheckpointResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
     def __init__(self, service: ControllerService | AsyncGenerator[ControllerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
@@ -294,6 +300,26 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_worker_status,
+                ),
+                "/iris.cluster.ControllerService/BeginCheckpoint": Endpoint.unary(
+                    method=MethodInfo(
+                        name="BeginCheckpoint",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.BeginCheckpointRequest,
+                        output=cluster__pb2.Controller.BeginCheckpointResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.begin_checkpoint,
+                ),
+                "/iris.cluster.ControllerService/LoadCheckpoint": Endpoint.unary(
+                    method=MethodInfo(
+                        name="LoadCheckpoint",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.LoadCheckpointRequest,
+                        output=cluster__pb2.Controller.LoadCheckpointResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.load_checkpoint,
                 ),
             },
             interceptors=interceptors,
@@ -727,6 +753,46 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def begin_checkpoint(
+        self,
+        request: cluster__pb2.Controller.BeginCheckpointRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.BeginCheckpointResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="BeginCheckpoint",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.BeginCheckpointRequest,
+                output=cluster__pb2.Controller.BeginCheckpointResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def load_checkpoint(
+        self,
+        request: cluster__pb2.Controller.LoadCheckpointRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.LoadCheckpointResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="LoadCheckpoint",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.LoadCheckpointRequest,
+                output=cluster__pb2.Controller.LoadCheckpointResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 
 class WorkerService(Protocol):
@@ -1023,6 +1089,10 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_worker_status(self, request: cluster__pb2.Controller.GetWorkerStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetWorkerStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def begin_checkpoint(self, request: cluster__pb2.Controller.BeginCheckpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.BeginCheckpointResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def load_checkpoint(self, request: cluster__pb2.Controller.LoadCheckpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.LoadCheckpointResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
 class ControllerServiceWSGIApplication(ConnectWSGIApplication):
@@ -1238,6 +1308,26 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_worker_status,
+                ),
+                "/iris.cluster.ControllerService/BeginCheckpoint": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="BeginCheckpoint",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.BeginCheckpointRequest,
+                        output=cluster__pb2.Controller.BeginCheckpointResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.begin_checkpoint,
+                ),
+                "/iris.cluster.ControllerService/LoadCheckpoint": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="LoadCheckpoint",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.LoadCheckpointRequest,
+                        output=cluster__pb2.Controller.LoadCheckpointResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.load_checkpoint,
                 ),
             },
             interceptors=interceptors,
@@ -1665,6 +1755,46 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.GetWorkerStatusRequest,
                 output=cluster__pb2.Controller.GetWorkerStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def begin_checkpoint(
+        self,
+        request: cluster__pb2.Controller.BeginCheckpointRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.BeginCheckpointResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="BeginCheckpoint",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.BeginCheckpointRequest,
+                output=cluster__pb2.Controller.BeginCheckpointResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def load_checkpoint(
+        self,
+        request: cluster__pb2.Controller.LoadCheckpointRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.LoadCheckpointResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="LoadCheckpoint",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.LoadCheckpointRequest,
+                output=cluster__pb2.Controller.LoadCheckpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

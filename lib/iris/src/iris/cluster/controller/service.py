@@ -29,6 +29,7 @@ from iris.cluster.controller.pending_diagnostics import (
     is_active_scale_up_hint,
 )
 from iris.cluster.controller.scheduler import SchedulingContext
+from iris.cluster.controller.snapshot import SnapshotResult, read_latest_snapshot
 from iris.cluster.controller.state import (
     ControllerEndpoint,
     ControllerJob,
@@ -39,7 +40,7 @@ from iris.cluster.controller.state import (
 from iris.cluster import task_logging
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
-from iris.rpc import cluster_pb2, vm_pb2
+from iris.rpc import cluster_pb2, snapshot_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.proto_utils import job_state_name, task_state_name
@@ -204,6 +205,10 @@ class ControllerProtocol(Protocol):
     def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext: ...
 
     def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str: ...
+
+    def begin_checkpoint(self) -> tuple[str, SnapshotResult]: ...
+
+    def restore_from_snapshot(self, proto: snapshot_pb2.ControllerSnapshot | None = None) -> bool: ...
 
     @property
     def autoscaler(self) -> AutoscalerProtocol | None: ...
@@ -1285,3 +1290,41 @@ class ControllerServiceImpl:
                 for snapshot in worker.resource_history:
                     resp.resource_history.append(snapshot)
             return resp
+
+    def begin_checkpoint(
+        self,
+        request: cluster_pb2.Controller.BeginCheckpointRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.BeginCheckpointResponse:
+        with rpc_error_handler("begin checkpoint"):
+            path, result = self._controller.begin_checkpoint()
+            resp = cluster_pb2.Controller.BeginCheckpointResponse(
+                snapshot_path=path,
+                job_count=result.job_count,
+                task_count=result.task_count,
+                worker_count=result.worker_count,
+            )
+            resp.created_at.CopyFrom(result.proto.created_at)
+            return resp
+
+    def load_checkpoint(
+        self,
+        request: cluster_pb2.Controller.LoadCheckpointRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.LoadCheckpointResponse:
+        with rpc_error_handler("load checkpoint"):
+            # Read the snapshot
+            bundle_prefix = self._bundle_store._prefix
+            proto = read_latest_snapshot(bundle_prefix)
+            if proto is None:
+                raise ConnectError(Code.NOT_FOUND, "No snapshot found")
+
+            restored = self._controller.restore_from_snapshot(proto)
+            if not restored:
+                raise ConnectError(Code.INTERNAL, "Failed to restore snapshot")
+
+            return cluster_pb2.Controller.LoadCheckpointResponse(
+                jobs_restored=len(proto.jobs),
+                tasks_restored=sum(len(j.tasks) for j in proto.jobs),
+                workers_restored=len(proto.workers),
+            )

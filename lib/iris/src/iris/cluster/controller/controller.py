@@ -33,6 +33,7 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerWorker,
     HeartbeatSnapshot,
+    ReservationClaim,
 )
 from iris.cluster.types import (
     REGION_ATTRIBUTE_KEY,
@@ -47,11 +48,20 @@ from iris.cluster.types import (
     get_device_variant,
     normalize_constraints,
 )
+from iris.cluster.controller.snapshot import (
+    SnapshotResult,
+    create_snapshot,
+    read_latest_snapshot,
+    restore_scaling_group,
+    restore_snapshot,
+    restore_tracked_workers,
+    write_snapshot,
+)
 from iris.logging import get_global_buffer
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, snapshot_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, Timer
+from iris.time_utils import Duration, ExponentialBackoff, Timer, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -244,19 +254,6 @@ def _build_reservation_budget(job: ControllerJob) -> Counter[tuple[DeviceType, s
         dv = get_device_variant(device) if dt != DeviceType.CPU else None
         budget[(dt, dv)] += 1
     return budget
-
-
-@dataclass(frozen=True)
-class ReservationClaim:
-    """A claim binding a worker to a specific reservation entry.
-
-    The controller assigns unclaimed workers to unsatisfied reservation entries
-    each scheduling cycle. Once every entry for a job is claimed, the
-    reservation gate opens and the job's tasks can be scheduled.
-    """
-
-    job_id: str
-    entry_idx: int
 
 
 def _worker_matches_reservation_entry(
@@ -527,6 +524,10 @@ class ControllerConfig:
     autoscaler_enabled: bool = False
     worker_access_address: str = ""
 
+    checkpoint_interval: Duration | None = None
+    """If set, take a periodic best-effort snapshot this often.
+    Runs in the autoscaler loop thread; does not pause scheduling."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -616,6 +617,13 @@ class Controller:
 
         self._heartbeat_iteration = 0
 
+        # Checkpoint coordination flag. When set, scheduling and autoscaler
+        # loops skip their work so the snapshot captures a quiescent state.
+        self._checkpoint_in_progress = False
+
+        # Wall-clock time of the last periodic (best-effort) checkpoint write.
+        self._last_periodic_checkpoint: Timestamp = Timestamp.from_ms(0)
+
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
 
@@ -691,6 +699,9 @@ class Controller:
             if stop_event.is_set():
                 break
 
+            if self._checkpoint_in_progress:
+                continue
+
             self._run_scheduling()
 
     def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
@@ -700,10 +711,14 @@ class Controller:
             stop_event.wait(timeout=self._autoscaler.evaluation_interval.to_seconds())
             if stop_event.is_set():
                 break
+            if self._checkpoint_in_progress:
+                continue
             try:
                 self._run_autoscaler_once()
             except Exception:
                 logger.exception("Autoscaler loop iteration failed")
+
+            self._maybe_periodic_checkpoint()
 
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
@@ -1164,6 +1179,147 @@ class Controller:
                 running_task_ids=frozenset(tid.to_wire() for tid in list(worker.running_tasks)),
             )
         return result
+
+    @property
+    def _snapshot_storage_prefix(self) -> str:
+        return self._config.bundle_prefix or ""
+
+    def _maybe_periodic_checkpoint(self) -> None:
+        """Write a best-effort periodic snapshot if the configured interval has elapsed.
+
+        Unlike begin_checkpoint(), this does NOT set _checkpoint_in_progress — it
+        captures a point-in-time snapshot without pausing scheduling or heartbeats.
+        Suitable for crash recovery; not guaranteed to be fully quiescent.
+        """
+        interval = self._config.checkpoint_interval
+        if interval is None:
+            return
+        prefix = self._snapshot_storage_prefix
+        if not prefix:
+            return
+        elapsed_ms = Timestamp.now().epoch_ms() - self._last_periodic_checkpoint.epoch_ms()
+        if elapsed_ms < interval.to_ms():
+            return
+        try:
+            result = create_snapshot(
+                self._state,
+                autoscaler=self._autoscaler,
+                reservation_claims=self._reservation_claims,
+            )
+            path = write_snapshot(result.proto, prefix)
+            self._last_periodic_checkpoint = Timestamp.now()
+            logger.info(
+                "Periodic checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                path,
+                result.job_count,
+                result.task_count,
+                result.worker_count,
+            )
+        except Exception:
+            logger.exception("Periodic checkpoint failed")
+
+    def begin_checkpoint(self) -> tuple[str, SnapshotResult]:
+        """Pause loops, snapshot state, write to storage. Returns (path, result).
+
+        Sets _checkpoint_in_progress so the scheduling and autoscaler loops
+        idle, waits for in-flight heartbeat dispatches to drain, then takes
+        a consistent snapshot and writes it to remote storage.
+        """
+        prefix = self._snapshot_storage_prefix
+        if not prefix:
+            raise ValueError("Cannot checkpoint: no storage prefix configured (bundle_prefix is empty)")
+
+        self._checkpoint_in_progress = True
+        try:
+            # Wait for dispatch executor to drain in-flight heartbeats.
+            # Submit a no-op and wait for it to complete — this ensures all
+            # previously submitted work has finished.
+            self._dispatch_executor.submit(lambda: None).result(timeout=10.0)
+
+            result = create_snapshot(
+                self._state,
+                autoscaler=self._autoscaler,
+                reservation_claims=self._reservation_claims,
+            )
+            path = write_snapshot(result.proto, prefix)
+            logger.info(
+                "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                path,
+                result.job_count,
+                result.task_count,
+                result.worker_count,
+            )
+            return path, result
+        finally:
+            self._checkpoint_in_progress = False
+
+    def restore_from_snapshot(self, proto: snapshot_pb2.ControllerSnapshot | None = None) -> bool:
+        """Restore full controller state from a snapshot proto or from storage.
+
+        When proto is None, reads the latest snapshot from storage.
+        Called during startup, before background loops are started.
+        Returns True if a snapshot was found and restored.
+        """
+        if proto is None:
+            prefix = self._snapshot_storage_prefix
+            if not prefix:
+                return False
+            proto = read_latest_snapshot(prefix)
+            if proto is None:
+                logger.info("No snapshot found at %s, starting fresh", prefix)
+                return False
+
+        result = restore_snapshot(proto, self._state)
+        logger.info(
+            "Restored snapshot: jobs=%d tasks=%d workers=%d endpoints=%d",
+            result.job_count,
+            result.task_count,
+            result.worker_count,
+            result.endpoint_count,
+        )
+
+        # Restore autoscaler scaling groups
+        if self._autoscaler is not None:
+            for group_snap in proto.scaling_groups:
+                group = self._autoscaler.groups.get(group_snap.name)
+                if group is None:
+                    logger.warning(
+                        "Snapshot references scaling group %s which does not exist in config, skipping",
+                        group_snap.name,
+                    )
+                    continue
+                restore_result = restore_scaling_group(
+                    group_snap,
+                    group._platform,
+                    group._config,
+                    group._label_prefix,
+                )
+                # Apply restored state to the ScalingGroup
+                with group._slices_lock:
+                    group._slices = restore_result.slices
+                group._consecutive_failures = restore_result.consecutive_failures
+                group._last_scale_up = restore_result.last_scale_up
+                group._last_scale_down = restore_result.last_scale_down
+                if restore_result.backoff_until is not None:
+                    group._backoff_until = restore_result.backoff_until
+                if restore_result.quota_exceeded_until is not None:
+                    group._quota_exceeded_until = restore_result.quota_exceeded_until
+                    group._quota_reason = restore_result.quota_reason
+
+            # Restore tracked workers into the autoscaler
+            restored_workers = restore_tracked_workers(proto)
+            self._autoscaler._workers.update(restored_workers)
+            logger.info("Restored %d tracked workers", len(restored_workers))
+
+        # Restore reservation claims
+        for claim_snap in proto.reservation_claims:
+            worker_id = WorkerId(claim_snap.worker_id)
+            self._reservation_claims[worker_id] = ReservationClaim(
+                job_id=claim_snap.job_id,
+                entry_idx=claim_snap.entry_idx,
+            )
+
+        return True
 
     def launch_job(
         self,
