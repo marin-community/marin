@@ -17,8 +17,12 @@ from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
 
-# Empirical GB10 launch guardrail from repeated Triton shared-memory launch failures.
+# Empirical launch guardrails from Triton shared-memory launch failures.
+# GB10 limit from repeated failures; NVIDIA generic limit is conservative at
+# ~44% of the H100's 232,448 byte per-SM shared memory budget, leaving room
+# for input tiles, temporaries, and Triton metadata.
 _GB10_WEIGHT_TILE_BYTES_LIMIT = 101_376
+_NVIDIA_WEIGHT_TILE_BYTES_LIMIT = 101_376
 # Compile-time safety cap observed to avoid pathological GB10 H-tiling compile behavior.
 _GB10_MAX_H_TILES = 512
 _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
@@ -58,6 +62,8 @@ def _gb10_native_forward_opt_in_enabled() -> bool:
 def _max_weight_tile_bytes_for_device(device_kind: str) -> Optional[int]:
     if "gb10" in device_kind:
         return _GB10_WEIGHT_TILE_BYTES_LIMIT
+    if "nvidia" in device_kind:
+        return _NVIDIA_WEIGHT_TILE_BYTES_LIMIT
     return None
 
 
