@@ -143,9 +143,10 @@ class ActorPool(Generic[T]):
                 return self._cached_result
 
         result = self._resolver.resolve(self._name)
-        with self._lock:
-            self._cached_result = result
-            self._last_resolve_time = time.monotonic()
+        if result.endpoints:
+            with self._lock:
+                self._cached_result = result
+                self._last_resolve_time = time.monotonic()
         return result
 
     def _invalidate_resolve_cache(self) -> None:

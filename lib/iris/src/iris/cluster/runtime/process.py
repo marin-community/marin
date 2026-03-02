@@ -556,6 +556,8 @@ class ProcessContainerHandle:
             logger.warning("memray timed out; falling back to stub profile for PID %s", pid)
         except PermissionError:
             logger.warning("memray lacks permission to attach; falling back to stub profile for PID %s", pid)
+        except RuntimeError:
+            logger.warning("memray failed for PID %s; falling back to stub", pid, exc_info=True)
         finally:
             if trace_path is not None:
                 Path(trace_path).unlink(missing_ok=True)
