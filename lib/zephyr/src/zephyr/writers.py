@@ -15,8 +15,7 @@ import itertools
 import os
 from typing import Any
 
-import fsspec
-from iris.marin_fs import url_to_fs
+from iris.marin_fs import open_url, url_to_fs
 import msgspec
 import logging
 
@@ -360,7 +359,7 @@ def write_levanter_cache(
     logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
 
     # write success sentinel
-    with fsspec.open(f"{output_path}/.success", "w") as f:
+    with open_url(f"{output_path}/.success", "w") as f:
         f.write("")
 
     return {"path": output_path, "count": count}

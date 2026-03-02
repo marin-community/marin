@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import fsspec
-from iris.marin_fs import url_to_fs
+from iris.marin_fs import open_url, url_to_fs
 import msgspec
 import numpy as np
 import pyarrow as pa
@@ -355,7 +355,7 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         >>> output_files = list(ctx.execute(ds))
     """
     spec = _as_spec(source)
-    with fsspec.open(spec.path, "rb") as f:
+    with open_url(spec.path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
             for member_name in zf.namelist():
                 if not member_name.endswith("/") and fnmatch.fnmatch(member_name, pattern):
