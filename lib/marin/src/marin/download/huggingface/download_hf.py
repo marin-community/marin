@@ -10,6 +10,7 @@ using HfFileSystem for direct streaming of data transfer.
 import logging
 import os
 import random
+import socket
 import time
 from dataclasses import dataclass, field
 
@@ -57,6 +58,12 @@ class DownloadConfig:
     zephyr_max_parallelism: int = 32
     """Maximum parallelism of the Zephyr download job"""
 
+    read_timeout_seconds: float = 120.0
+    """Socket read timeout while streaming each HF file. Timeout failures trigger retries."""
+
+    progress_log_interval_seconds: float = 60.0
+    """Log a heartbeat for each in-flight shard every N seconds while bytes are flowing."""
+
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
@@ -71,7 +78,14 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
-def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path: str, expected_size: int | None = None):
+def stream_file_to_fsspec(
+    gcs_output_path: str,
+    file_path: str,
+    fsspec_file_path: str,
+    expected_size: int | None = None,
+    read_timeout_seconds: float = 120.0,
+    progress_log_interval_seconds: float = 60.0,
+):
     """Stream a file from HfFileSystem to another fsspec path using atomic write.
 
     Uses atomic_rename to write to a temp file first, then rename on success.
@@ -101,10 +115,35 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
             target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
             bytes_written = 0
             with atomic_rename(fsspec_file_path) as temp_path:
-                with hf_fs.open(file_path, "rb") as src_file, fsspec.open(temp_path, "wb") as dest_file:
-                    while chunk := src_file.read(chunk_size):
-                        dest_file.write(chunk)
-                        bytes_written += len(chunk)
+                previous_socket_timeout = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(read_timeout_seconds)
+                try:
+                    with hf_fs.open(file_path, "rb") as src_file, fsspec.open(temp_path, "wb") as dest_file:
+                        start_time = time.monotonic()
+                        next_progress_log = start_time + progress_log_interval_seconds
+                        while True:
+                            try:
+                                chunk = src_file.read(chunk_size)
+                            except TimeoutError as timeout_error:
+                                raise TimeoutError(
+                                    f"Timed out reading from {file_path} after "
+                                    f"{read_timeout_seconds:.1f}s with {bytes_written} bytes written"
+                                ) from timeout_error
+                            if not chunk:
+                                break
+                            dest_file.write(chunk)
+                            bytes_written += len(chunk)
+                            now = time.monotonic()
+                            if progress_log_interval_seconds > 0 and now >= next_progress_log:
+                                elapsed = max(now - start_time, 1e-9)
+                                speed_mib_s = (bytes_written / (1024**2)) / elapsed
+                                logger.info(
+                                    f"Streaming {file_path}: {bytes_written / (1024**2):.1f} MiB written "
+                                    f"in {elapsed:.1f}s ({speed_mib_s:.2f} MiB/s)"
+                                )
+                                next_progress_log = now + progress_log_interval_seconds
+                finally:
+                    socket.setdefaulttimeout(previous_socket_timeout)
 
                 # Validate file size BEFORE atomic_rename commits the file
                 if expected_size is not None and bytes_written != expected_size:
@@ -201,7 +240,16 @@ def download_hf(cfg: DownloadConfig) -> None:
             fsspec_file_path = os.path.join(output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
             expected_size = file_sizes.get(file)
-            download_tasks.append((output_path, file, fsspec_file_path, expected_size))
+            download_tasks.append(
+                (
+                    output_path,
+                    file,
+                    fsspec_file_path,
+                    expected_size,
+                    cfg.read_timeout_seconds,
+                    cfg.progress_log_interval_seconds,
+                )
+            )
         except Exception as e:
             logging.exception(f"Error preparing task for {file}: {e}")
 
@@ -216,7 +264,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    ctx = ZephyrContext(name="download-hf")
+    ctx = ZephyrContext(name="download-hf", max_workers=cfg.zephyr_max_parallelism)
     ctx.execute(pipeline)
 
     # Write Provenance JSON
