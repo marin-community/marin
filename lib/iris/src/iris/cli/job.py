@@ -8,11 +8,9 @@ Usage:
     iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
-import getpass
 import json
 import logging
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -32,7 +30,9 @@ from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
     JobName,
+    ReservationEntry,
     ResourceSpec,
+    get_tpu_topology,
     gpu_device,
     region_constraint,
     zone_constraint,
@@ -173,32 +173,61 @@ def add_standard_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
     return result
 
 
+KNOWN_GPU_VARIANTS: frozenset[str] = frozenset(
+    {
+        "A100",
+        "A10G",
+        "B100",
+        "B200",
+        "GB200",
+        "H100",
+        "H200",
+        "L4",
+        "L40",
+        "L40S",
+        "RTX4090",
+        "T4",
+        "V100",
+    }
+)
+
+_GPU_VARIANT_LOOKUP: dict[str, str] = {v.lower(): v for v in KNOWN_GPU_VARIANTS}
+
+
 def parse_gpu_spec(spec: str) -> tuple[str, int]:
     """Parse a GPU spec string into (variant, count).
 
     Accepts: 'H100x8' → ("H100", 8), '8' → ("", 8), 'H100' → ("H100", 1).
-    Only a trailing 'x<digits>' is treated as a count separator, so variants
-    like 'rtx4090' are not misinterpreted.
+    The variant must be a known GPU name from KNOWN_GPU_VARIANTS (case-insensitive).
     """
     if not spec:
         raise ValueError("GPU spec must not be empty")
 
-    # Only treat 'x' as a count separator for trailing x<1-3 digits>,
-    # so model names like 'rtx4090' (4+ digit suffix) aren't misinterpreted.
-    m = re.fullmatch(r"(\w+)x(\d{1,3})", spec)
-    if m:
-        variant, count = m.group(1), int(m.group(2))
-        if count <= 0:
-            raise ValueError(f"GPU count must be positive, got {count}")
-        return variant, count
     if spec.isdigit():
         count = int(spec)
         if count <= 0:
             raise ValueError(f"GPU count must be positive, got {count}")
         return "", count
-    if not spec.isalnum():
-        raise ValueError(f"Invalid GPU spec: {spec!r}")
-    return spec, 1
+
+    spec_lower = spec.lower()
+    for known_lower, canonical in _GPU_VARIANT_LOOKUP.items():
+        if not spec_lower.startswith(known_lower):
+            continue
+        rest = spec[len(known_lower) :]
+        if not rest:
+            return canonical, 1
+        if rest[0] == "x" and rest[1:].isdigit():
+            count = int(rest[1:])
+            if count <= 0:
+                raise ValueError(f"GPU count must be positive, got {count}")
+            return canonical, count
+
+    known = ", ".join(sorted(KNOWN_GPU_VARIANTS))
+    raise ValueError(
+        f"Unknown GPU spec: {spec!r}. "
+        f"Expected a known variant (e.g., H100), VARIANTxCOUNT (e.g., H100x8), "
+        f"or a bare count (e.g., 8). Known variants: {known}"
+    )
 
 
 def build_resources(
@@ -220,6 +249,32 @@ def build_resources(
     return spec
 
 
+def parse_reservation_spec(spec: str) -> list[ReservationEntry]:
+    """Parse a reservation spec like '4:H100x8' or 'v5litepod-16'.
+
+    Format: [COUNT:]DEVICE_SPEC
+    Tries to resolve DEVICE_SPEC as a known TPU variant first, then falls back
+    to GPU parsing via parse_gpu_spec.
+    """
+    count = 1
+    device_spec = spec
+    if ":" in spec:
+        count_str, device_spec = spec.split(":", 1)
+        count = int(count_str)
+        if count < 1:
+            raise ValueError(f"Reservation count must be >= 1, got {count}")
+
+    try:
+        get_tpu_topology(device_spec)
+        device = tpu_device(device_spec)
+    except ValueError:
+        variant, gpu_count = parse_gpu_spec(device_spec)
+        device = gpu_device(variant, gpu_count)
+
+    resources = ResourceSpec(device=device)
+    return [ReservationEntry(resources=resources) for _ in range(count)]
+
+
 def generate_job_name(command: list[str]) -> str:
     """Generate a job name from the command."""
     script_name = "job"
@@ -230,8 +285,7 @@ def generate_job_name(command: list[str]) -> str:
             break
 
     timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    username = getpass.getuser()
-    return f"iris-run-{username}-{script_name}-{timestamp}"
+    return f"iris-run-{script_name}-{timestamp}"
 
 
 def run_iris_job(
@@ -253,6 +307,8 @@ def run_iris_job(
     terminate_on_exit: bool = True,
     regions: tuple[str, ...] | None = None,
     zone: str | None = None,
+    user: str | None = None,
+    reserve: tuple[str, ...] | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -262,6 +318,7 @@ def run_iris_job(
             (KeyboardInterrupt, unexpected exceptions). Normal completion is unaffected.
         regions: If provided, restrict the job to workers in these regions.
         zone: If provided, restrict the job to workers in this zone.
+        reserve: Reservation specs (e.g., ("4:H100x8", "v5litepod-16")).
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -277,6 +334,12 @@ def run_iris_job(
     if zone:
         constraints.append(zone_constraint(zone))
 
+    reservation: list[ReservationEntry] | None = None
+    if reserve:
+        reservation = []
+        for spec in reserve:
+            reservation.extend(parse_reservation_spec(spec))
+
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
     logger.info(f"Resources: cpu={resources.cpu:g}, memory={resources.memory}, disk={resources.disk}")
@@ -289,6 +352,8 @@ def run_iris_job(
         logger.info(f"Region constraint: {', '.join(regions)}")
     if zone:
         logger.info(f"Zone constraint: {zone}")
+    if reservation:
+        logger.info(f"Reservation: {len(reservation)} entries")
 
     logger.info(f"Using controller: {controller_url}")
     return _submit_and_wait_job(
@@ -305,6 +370,8 @@ def run_iris_job(
         include_children_logs=include_children_logs,
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
+        user=user,
+        reservation=reservation,
     )
 
 
@@ -322,6 +389,8 @@ def _submit_and_wait_job(
     include_children_logs: bool = True,
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
+    user: str | None = None,
+    reservation: list[ReservationEntry] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -341,6 +410,8 @@ def _submit_and_wait_job(
         replicas=replicas,
         max_retries_failure=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
+        user=user,
+        reservation=reservation,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -412,12 +483,18 @@ Examples:
 )
 @click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
 @click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
+@click.option("--user", type=str, help="Override the user prefix for the submitted job.")
 @click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
+@click.option(
+    "--reserve",
+    multiple=True,
+    help="Reserve workers before scheduling. Format: [COUNT:]DEVICE (e.g., 4:H100x8, v5litepod-16). Can be repeated.",
+)
 @click.option(
     "--include-children-logs/--no-include-children-logs",
     default=True,
@@ -440,12 +517,14 @@ def run(
     disk: str,
     no_wait: bool,
     job_name: str | None,
+    user: str | None,
     replicas: int,
     max_retries: int,
     timeout: int,
     region: tuple[str, ...],
     zone: str | None,
     extra: tuple[str, ...],
+    reserve: tuple[str, ...],
     include_children_logs: bool,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
@@ -456,6 +535,17 @@ def run(
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
+
+    # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
+    # instead of --reserve) into cmd. Catch any flags that leaked through
+    # before the actual command starts — these were meant for iris, not the
+    # user's program.
+    for arg in command:
+        if not arg.startswith("-"):
+            break
+        raise click.UsageError(
+            f"Unknown option {arg!r}. " f"Iris options must come before '--'. Did you mean a different flag?"
+        )
 
     env_vars_dict = load_env_vars(env_vars)
 
@@ -471,6 +561,7 @@ def run(
             disk=disk,
             wait=not no_wait,
             job_name=job_name,
+            user=user,
             replicas=replicas,
             max_retries=max_retries,
             timeout=timeout,
@@ -479,6 +570,7 @@ def run(
             terminate_on_exit=terminate_on_exit,
             regions=region or None,
             zone=zone,
+            reserve=reserve or None,
         )
     except Exception:
         platform = ctx.obj.get("platform")

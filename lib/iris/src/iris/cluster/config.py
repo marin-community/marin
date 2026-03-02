@@ -314,11 +314,9 @@ def _merge_proto_fields(target, source) -> None:
 
         value = getattr(source, field_name)
 
-        # For message types (Duration, nested messages), use CopyFrom
-        if hasattr(value, "CopyFrom"):
+        if field_desc.message_type is not None:
             target_field = getattr(target, field_name)
             target_field.CopyFrom(value)
-        # For scalar types (int, string, bool, enum), use direct assignment
         else:
             setattr(target, field_name, value)
 
@@ -881,6 +879,7 @@ class IrisConfig:
         Returns:
             Platform implementation (GCP, Manual, or Local)
         """
+        # Local import: platform.factory imports config.py, creating a circular dependency.
         from iris.cluster.platform.factory import create_platform
 
         return create_platform(
@@ -935,6 +934,7 @@ def create_autoscaler(
     Raises:
         ValueError: If autoscaler_config has invalid timing values
     """
+    # Local import: controller modules import config.py, creating a circular dependency.
     from iris.cluster.controller.autoscaler import Autoscaler
     from iris.cluster.controller.scaling_group import ScalingGroup
 

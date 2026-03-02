@@ -5,7 +5,6 @@
 
 from iris.actor.resolver import (
     FixedResolver,
-    GcsResolver,
     ResolvedEndpoint,
     Resolver,
     ResolveResult,
@@ -31,7 +30,6 @@ __all__ = [
     "ClusterResolver",
     "EndpointRegistry",
     "FixedResolver",
-    "GcsResolver",
     "IrisClient",
     "IrisContext",
     "Job",

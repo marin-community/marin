@@ -433,6 +433,15 @@ class ExponentialBackoff:
     def reset(self) -> None:
         self._attempt = 0
 
+    def copy(self) -> "ExponentialBackoff":
+        """Create a fresh instance with the same configuration."""
+        return ExponentialBackoff(
+            initial=self._initial,
+            maximum=self._maximum,
+            factor=self._factor,
+            jitter=self._jitter,
+        )
+
     def wait_until(self, condition: Callable[[], bool], timeout: Duration) -> bool:
         """Wait for a condition to become true with exponential backoff.
 
