@@ -163,13 +163,18 @@ def build_runtime_env(request: JobRequest) -> dict:
 
     env_vars = dict(environment.env_vars)
     extras = list(environment.extras)
+    skip_runtime_extras = (
+        os.environ.get("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in ("1", "true", "yes")
+        or env_vars.get("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in ("1", "true", "yes")
+    )
 
-    if isinstance(request.resources.device, TpuConfig):
-        if "tpu" not in extras:
-            extras.append("tpu")
-    elif isinstance(request.resources.device, GpuConfig):
-        if "gpu" not in extras:
-            extras.append("gpu")
+    if not skip_runtime_extras:
+        if isinstance(request.resources.device, TpuConfig):
+            if "tpu" not in extras:
+                extras.append("tpu")
+        elif isinstance(request.resources.device, GpuConfig):
+            if "gpu" not in extras:
+                extras.append("gpu")
 
     for key, value in request.resources.device.default_env_vars().items():
         env_vars.setdefault(key, value)

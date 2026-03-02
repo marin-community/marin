@@ -88,6 +88,24 @@ DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
 
 
+def _runtime_extras_for_device(device: CpuConfig | TpuConfig | GpuConfig) -> list[str]:
+    """Resolve runtime dependency groups for the submitted job environment.
+
+    Set MARIN_SKIP_RUNTIME_EXTRAS=1 to bypass dynamic extras installation when
+    cluster images already contain the needed dependencies.
+    """
+    if os.getenv("MARIN_SKIP_RUNTIME_EXTRAS", "").lower() in {"1", "true", "yes"}:
+        logger.info("Skipping runtime dependency extras due to MARIN_SKIP_RUNTIME_EXTRAS.")
+        return []
+
+    extras: list[str] = []
+    if isinstance(device, TpuConfig):
+        extras.append("tpu")
+    elif isinstance(device, GpuConfig):
+        extras.append("gpu")
+    return extras
+
+
 def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     """
     Update the config to use the out_path as the base output directory for training.
@@ -254,16 +272,12 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     client = current_client()
 
-    extras = []
-    if isinstance(config.resources.device, TpuConfig):
-        extras.append("tpu")
-    elif isinstance(config.resources.device, GpuConfig):
-        extras.append("gpu")
+    extras = _runtime_extras_for_device(config.resources.device)
 
-    # Note: Using a constant job name allows restarts to adopt the existing job handle
-    # instead of raising a duplicate name error (adopt_existing=True is the default).
+    # Use a run-scoped job name so retries for the same run can adopt the same
+    # handle while avoiding collisions with stale jobs from other runs.
     job_request = JobRequest(
-        name="train_lm",
+        name=f"train_lm_{config.train_config.trainer.id}",
         entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
         resources=config.resources,
         environment=create_environment(env_vars=env, extras=extras),
@@ -317,14 +331,10 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
 
     client = current_client()
 
-    extras = []
-    if isinstance(config.resources.device, TpuConfig):
-        extras.append("tpu")
-    elif isinstance(config.resources.device, GpuConfig):
-        extras.append("gpu")
+    extras = _runtime_extras_for_device(config.resources.device)
 
     job_request = JobRequest(
-        name="train_dpo",
+        name=f"train_dpo_{config.train_config.trainer.id}",
         entrypoint=Entrypoint.from_callable(train_dpo.main, args=[train_config]),
         resources=config.resources,
         environment=create_environment(env_vars=env, extras=extras),
