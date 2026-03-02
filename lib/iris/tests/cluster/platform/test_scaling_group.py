@@ -1067,7 +1067,7 @@ class TestMarkSliceLockDiscipline:
     """Tests that mark_slice_ready/mark_slice_failed hold the lock during mutation."""
 
     def test_mark_slice_ready_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """lifecycle, vm_addresses, and vm_worker_ids are all set while holding the lock."""
+        """lifecycle and vm_addresses are set while holding the lock."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         handle = _tracked_scale_up(group)
@@ -1078,15 +1078,13 @@ class TestMarkSliceLockDiscipline:
         assert state.vm_addresses == []
 
         addresses = ["10.0.0.1", "10.0.0.2"]
-        worker_ids = ["worker-0", "worker-1"]
-        group.mark_slice_ready(handle.slice_id, addresses, vm_worker_ids=worker_ids)
+        group.mark_slice_ready(handle.slice_id, addresses)
 
         # All fields should be set atomically
         with group._slices_lock:
             state = group._slices[handle.slice_id]
             assert state.lifecycle == SliceLifecycleState.READY
             assert state.vm_addresses == addresses
-            assert state.vm_worker_ids == worker_ids
 
     def test_mark_slice_failed_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """lifecycle is set to FAILED while holding the lock."""
@@ -1113,8 +1111,8 @@ class TestMarkSliceLockDiscipline:
         group.mark_slice_failed("nonexistent")
 
 
-def test_slice_state_to_proto_uses_real_worker_ids():
-    """slice_state_to_proto uses vm_worker_ids when available instead of synthetic IDs."""
+def test_slice_state_to_proto_generates_synthetic_vm_ids():
+    """slice_state_to_proto generates synthetic VM IDs from slice_id and index."""
     from iris.cluster.controller.scaling_group import slice_state_to_proto
 
     handle = MagicMock()
@@ -1126,29 +1124,12 @@ def test_slice_state_to_proto_uses_real_worker_ids():
         handle=handle,
         lifecycle=SliceLifecycleState.READY,
         vm_addresses=["10.0.0.1", "10.0.0.2"],
-        vm_worker_ids=["real-worker-0", "real-worker-1"],
-    )
-    proto = slice_state_to_proto(state)
-    assert proto.vms[0].vm_id == "real-worker-0"
-    assert proto.vms[1].vm_id == "real-worker-1"
-
-
-def test_slice_state_to_proto_falls_back_to_synthetic_ids():
-    """slice_state_to_proto falls back to synthetic IDs when vm_worker_ids is empty."""
-    from iris.cluster.controller.scaling_group import slice_state_to_proto
-
-    handle = MagicMock()
-    handle.slice_id = "my-slice"
-    handle.scale_group = "sg"
-    handle.created_at = Timestamp.from_ms(1000)
-
-    state = SliceState(
-        handle=handle,
-        lifecycle=SliceLifecycleState.READY,
-        vm_addresses=["10.0.0.1"],
     )
     proto = slice_state_to_proto(state)
     assert proto.vms[0].vm_id == "my-slice-vm-0"
+    assert proto.vms[1].vm_id == "my-slice-vm-1"
+    assert proto.vms[0].address == "10.0.0.1"
+    assert proto.vms[1].address == "10.0.0.2"
 
 
 def _make_worker_handle(vm_id: str, cloud_state: CloudWorkerState, address: str = "10.0.0.1") -> MagicMock:

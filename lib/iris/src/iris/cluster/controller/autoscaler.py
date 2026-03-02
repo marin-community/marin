@@ -795,8 +795,7 @@ class Autoscaler:
 
                 if status.state == CloudSliceState.READY:
                     addrs = [w.internal_address for w in status.workers]
-                    worker_ids = [w.worker_id for w in status.workers]
-                    group.mark_slice_ready(slice_id, addrs, vm_worker_ids=worker_ids)
+                    group.mark_slice_ready(slice_id, addrs)
                     self._register_slice_workers(status.workers, slice_id, group.name)
                     self._log_action(
                         "slice_ready",

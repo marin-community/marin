@@ -226,62 +226,43 @@ def resolve_worker_identity(
     state: ControllerState,
     autoscaler: AutoscalerProtocol | None,
 ) -> ResolvedWorker:
-    """Resolve an identifier against both VM IDs and worker IDs.
+    """Resolve an identifier to a worker and optional VM info.
 
-    Tries VM ID first (via autoscaler), then falls back to worker ID.
-    Cross-references between the two when one is found to enrich the result.
+    Worker ID is the canonical lookup key. Falls back to autoscaler VM lookup
+    for pre-registration VMs (booting/initializing).
     """
     vm_info: vm_pb2.VmInfo | None = None
     scale_group = ""
     bootstrap_logs = ""
-    worker: ControllerWorker | None = None
 
-    # Try to resolve as VM ID first
+    # Primary path: look up by worker ID
+    worker = state.get_worker(identifier)
+    if worker:
+        # Enrich with VM info from autoscaler if available
+        if autoscaler:
+            vm_info = autoscaler.get_vm(identifier)
+            if vm_info:
+                scale_group = vm_info.scale_group
+                bootstrap_logs = autoscaler.get_init_log(identifier, tail=500)
+                vm_info.worker_id = worker.worker_id
+                vm_info.worker_healthy = worker.healthy
+        return ResolvedWorker(
+            vm_info=vm_info,
+            worker=worker,
+            scale_group=scale_group,
+            bootstrap_logs=bootstrap_logs,
+        )
+
+    # Fallback: try as VM ID (for VMs that haven't registered as workers yet)
     if autoscaler:
         vm_info = autoscaler.get_vm(identifier)
         if vm_info:
             scale_group = vm_info.scale_group
             bootstrap_logs = autoscaler.get_init_log(identifier, tail=500)
-            # Enrich with worker info
-            if vm_info.address:
-                for w in state.list_all_workers():
-                    vm_addr = w.metadata.vm_address if w.metadata else None
-                    w_host = w.address.split(":")[0] if w.address and ":" in w.address else w.address
-                    if vm_addr == vm_info.address or w_host == vm_info.address:
-                        worker = w
-                        vm_info.worker_id = w.worker_id
-                        vm_info.worker_healthy = w.healthy
-                        break
-
-    # If not found as VM, try as worker ID
-    if not vm_info:
-        worker = state.get_worker(identifier)
-        # If we found a worker, scan autoscaler status for its VM
-        if worker and autoscaler:
-            status = autoscaler.get_status()
-            found = False
-            for group in status.groups:
-                for slice_info in group.slices:
-                    for vm in slice_info.vms:
-                        if vm.address and worker.address:
-                            w_host = worker.address.split(":")[0] if ":" in worker.address else worker.address
-                            vm_addr = worker.metadata.vm_address if worker.metadata else None
-                            if vm.address == vm_addr or vm.address == w_host:
-                                vm_info = vm
-                                scale_group = group.name
-                                bootstrap_logs = autoscaler.get_init_log(vm.vm_id, tail=500)
-                                vm_info.worker_id = worker.worker_id
-                                vm_info.worker_healthy = worker.healthy
-                                found = True
-                                break
-                    if found:
-                        break
-                if found:
-                    break
 
     return ResolvedWorker(
         vm_info=vm_info,
-        worker=worker,
+        worker=None,
         scale_group=scale_group,
         bootstrap_logs=bootstrap_logs,
     )
