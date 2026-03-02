@@ -74,7 +74,7 @@ MODEL_CONFIGS = {
     # (model_config, learning_rate, resources)
     "6m": (qwen3_6m, 1e-3, ResourceConfig.with_tpu("v4-8")),
     "60m": (qwen3_60m, 1e-3, ResourceConfig.with_tpu("v4-8")),
-    "600m": (qwen3_600m, 8e-4, ResourceConfig.with_tpu("v4-8")),
+    "600m": (qwen3_600m, 1e-3, ResourceConfig.with_tpu("v4-8")),
 }
 
 # =============================================================================
@@ -107,7 +107,7 @@ BASE_TRAIN_CONFIG = SimpleTrainConfig(
     decay=0.1,
     steps_per_eval=1000,
     steps_per_task_eval=1000,
-    steps_per_export=5000,
+    steps_per_export=10000,
     data_seed=42,
 )
 
