@@ -157,6 +157,7 @@ def multi_turn_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    drop_roles: tuple[str, ...] | None = None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
@@ -169,6 +170,7 @@ def multi_turn_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        drop_roles=drop_roles or (),
     )
 
 
@@ -698,6 +700,14 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         adapter=multi_turn_adapter(),
         metadata_columns=["instance_id", "resolved", "model", "traj_id"],
         name="AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories",
+        max_parallelism=32,
+    ),
+    "AlienKevin/SWE-smith-rs-glm-4.6-trajectories": InstructionDatasetConfig(
+        hf_dataset_id="AlienKevin/SWE-smith-rs-glm-4.6-trajectories",
+        revision="c115108",
+        adapter=multi_turn_adapter(drop_roles=("exit",)),
+        metadata_columns=["instance_id", "resolved", "model", "traj_id"],
+        name="AlienKevin/SWE-smith-rs-glm-4.6-trajectories",
         max_parallelism=32,
     ),
 }
