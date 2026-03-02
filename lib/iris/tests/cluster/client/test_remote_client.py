@@ -26,7 +26,7 @@ def mock_client():
 
 def test_get_job_status_retries_on_unavailable(mock_client):
     """Verify get_job_status retries on UNAVAILABLE errors."""
-    job_id = JobName.root("test-job")
+    job_id = JobName.root("test-user", "test-job")
 
     # Mock: fail twice with UNAVAILABLE, then succeed
     mock_response = MagicMock()
@@ -56,7 +56,7 @@ def test_get_job_status_retries_on_unavailable(mock_client):
 
 def test_get_job_status_retries_on_internal_error(mock_client):
     """Verify get_job_status retries on INTERNAL errors (network errors)."""
-    job_id = JobName.root("test-job")
+    job_id = JobName.root("test-user", "test-job")
 
     # Mock: fail once with INTERNAL, then succeed
     mock_response = MagicMock()
@@ -80,7 +80,7 @@ def test_get_job_status_retries_on_internal_error(mock_client):
 
 def test_get_job_status_fails_after_max_retries(mock_client):
     """Verify get_job_status gives up after max_attempts."""
-    job_id = JobName.root("test-job")
+    job_id = JobName.root("test-user", "test-job")
 
     # Mock: always fail with UNAVAILABLE
     mock_client._client.get_job_status.side_effect = ConnectError(Code.UNAVAILABLE, "Controller down")
@@ -95,7 +95,7 @@ def test_get_job_status_fails_after_max_retries(mock_client):
 
 def test_get_job_status_no_retry_on_not_found(mock_client):
     """Verify get_job_status does not retry on NOT_FOUND."""
-    job_id = JobName.root("test-job")
+    job_id = JobName.root("test-user", "test-job")
 
     # Mock: return NOT_FOUND (not retryable)
     mock_client._client.get_job_status.side_effect = ConnectError(Code.NOT_FOUND, "Job not found")
@@ -111,7 +111,7 @@ def test_get_job_status_no_retry_on_not_found(mock_client):
 
 def test_fetch_task_logs_retries_on_connection_error(mock_client):
     """Verify fetch_task_logs retries the GetTaskLogs RPC on connection errors."""
-    job_id = JobName.root("test-job")
+    job_id = JobName.root("test-user", "test-job")
 
     logs_response = cluster_pb2.Controller.GetTaskLogsResponse(
         task_logs=[],

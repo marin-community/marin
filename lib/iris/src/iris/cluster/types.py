@@ -30,21 +30,22 @@ from iris.rpc import cluster_pb2
 class JobName:
     """Structured hierarchical job name.
 
-    Canonical form: /namespace/parent/child
-    Tasks are job names with numeric suffix: /namespace/parent/child/0
+    Canonical form: /user/root-job/child
+    Tasks are job names with numeric suffix: /user/root-job/child/0
 
-    Job names form a tree rooted at the namespace:
-        /root-job
-        /root-job/child-1
-        /root-job/child-1/grandchild
-        /root-job/0
+    The first path component identifies the submitting user. Job hierarchy starts
+    at the second component:
+        /alice/root-job
+        /alice/root-job/child-1
+        /alice/root-job/child-1/grandchild
+        /alice/root-job/0
     """
 
     _parts: tuple[str, ...]
 
     def __post_init__(self):
-        if not self._parts:
-            raise ValueError("JobName cannot be empty")
+        if len(self._parts) < 2:
+            raise ValueError("JobName must use canonical '/<user>/<job>[...]' format")
         for part in self._parts:
             if "/" in part:
                 raise ValueError(f"JobName component cannot contain '/': {part}")
@@ -53,26 +54,28 @@ class JobName:
 
     @classmethod
     def from_string(cls, s: str) -> "JobName":
-        """Parse a job name string like '/root/child/grandchild'.
+        """Parse a job name string like '/user/root/child/grandchild'.
 
         Examples:
-            JobName.from_string("/my-job") -> JobName(("my-job",))
-            JobName.from_string("/parent/child") -> JobName(("parent", "child"))
-            JobName.from_string("/job/0") -> JobName(("job", "0"))
+            JobName.from_string("/alice/my-job") -> JobName(("alice", "my-job"))
+            JobName.from_string("/alice/parent/child") -> JobName(("alice", "parent", "child"))
+            JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
         if not s:
-            raise ValueError("Job name cannot be empty")
+            raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
         if not s.startswith("/"):
-            raise ValueError(f"Job name must start with '/': {s}")
+            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
         parts = tuple(s[1:].split("/"))
+        if len(parts) < 2:
+            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
         if any(not part or not part.strip() for part in parts):
             raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
         return cls(parts)
 
     @classmethod
-    def root(cls, name: str) -> "JobName":
+    def root(cls, user: str, name: str) -> "JobName":
         """Create a root job name (no parent)."""
-        return cls((name,))
+        return cls((user, name))
 
     def child(self, name: str) -> "JobName":
         """Create a child job name."""
@@ -84,21 +87,31 @@ class JobName:
         Tasks are job names with a numeric suffix.
 
         Example:
-            JobName.from_string("/my-job").task(0) -> JobName(("my-job", "0"))
+            JobName.from_string("/alice/my-job").task(0) -> JobName(("alice", "my-job", "0"))
         """
         return JobName((*self._parts, str(index)))
 
     @property
     def parent(self) -> "JobName | None":
         """Get parent job name, or None if this is a root job."""
-        if len(self._parts) == 1:
+        if self.is_root:
             return None
         return JobName(self._parts[:-1])
 
     @property
-    def namespace(self) -> str:
-        """Get the namespace (root component) for actor isolation."""
+    def user(self) -> str:
+        """Get the submitting user."""
         return self._parts[0]
+
+    @property
+    def root_job(self) -> "JobName":
+        """Get the root job for this hierarchy."""
+        return JobName(self._parts[:2])
+
+    @property
+    def namespace(self) -> str:
+        """Get the actor namespace (user/root job) for actor isolation."""
+        return "/".join(self.root_job._parts)
 
     @property
     def name(self) -> str:
@@ -108,11 +121,13 @@ class JobName:
     @property
     def is_root(self) -> bool:
         """True if this is a root job (no parent)."""
-        return len(self._parts) == 1
+        return len(self._parts) == 2
 
     @property
     def task_index(self) -> int | None:
         """If this is a task (last component is numeric), return the index."""
+        if len(self._parts) < 3:
+            return None
         try:
             return int(self._parts[-1])
         except ValueError:
@@ -131,15 +146,15 @@ class JobName:
         is not counted as a depth level).
 
         Examples:
-            /root -> 1
-            /root/child -> 2
-            /root/child/grandchild -> 3
-            /root/0 (task) -> 1
-            /root/child/0 (task) -> 2
+            /alice/root -> 1
+            /alice/root/child -> 2
+            /alice/root/child/grandchild -> 3
+            /alice/root/0 (task) -> 1
+            /alice/root/child/0 (task) -> 2
         """
         if self.is_task:
-            return len(self._parts) - 1
-        return len(self._parts)
+            return len(self._parts) - 2
+        return len(self._parts) - 1
 
     def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
         """True if this job name is an ancestor of another job name."""
@@ -167,7 +182,7 @@ class JobName:
         return (self.parent, task_index)
 
     def __str__(self) -> str:
-        """Canonical wire format: '/root/child/grandchild'."""
+        """Canonical wire format: '/user/root/child/grandchild'."""
         return "/" + "/".join(self._parts)
 
     def __repr__(self) -> str:
@@ -579,9 +594,9 @@ class Namespace(str):
     Namespaces provide isolation between different jobs/environments.
     Actors in one namespace cannot discover actors in another namespace.
 
-    The namespace is derived from the root job ID: all jobs in a hierarchy
-    share the same namespace. This ensures automatic isolation without
-    explicit configuration.
+    The namespace is derived from the user/root job pair: all jobs in a hierarchy
+    share the same namespace. This preserves actor isolation between unrelated
+    jobs from the same user.
     """
 
     def __repr__(self) -> str:
@@ -593,7 +608,7 @@ class Namespace(str):
 
         The namespace is the first component of the job ID hierarchy.
         For example:
-            JobName.from_string("/abc123/worker-0") -> Namespace("abc123")
+            JobName.from_string("/alice/abc123/worker-0") -> Namespace("alice/abc123")
 
         Args:
             job_id: Hierarchical job ID

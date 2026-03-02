@@ -25,6 +25,11 @@ from zephyr.expr import Expr
 
 logger = logging.getLogger(__name__)
 
+# 16 MB read blocks with background prefetch for S3/remote reads.
+_READ_BLOCK_SIZE = 16_000_000
+_READ_CACHE_TYPE = "background"
+_READ_MAX_BLOCKS = 2
+
 
 @dataclass
 class InputFileSpec:
@@ -77,13 +82,18 @@ def open_file(file_path: str, mode: str = "rb"):
     elif file_path.endswith(".xz"):
         compression = "xz"
 
-    with fsspec.open(
-        file_path,
+    # Use url_to_fs + fs.open so that block_size/cache_type reach the file
+    # opener (AbstractBufferedFile) rather than the filesystem constructor.
+    # fsspec.open() routes all **kwargs to the FS constructor, where S3's
+    # AioSession rejects unknown kwargs like block_size.
+    fs, resolved_path = fsspec.core.url_to_fs(file_path)
+    with fs.open(
+        resolved_path,
         mode,
+        block_size=_READ_BLOCK_SIZE,
+        cache_type=_READ_CACHE_TYPE,
+        cache_options={"maxblocks": _READ_MAX_BLOCKS},
         compression=compression,
-        block_size=16_000_000,
-        cache_type="background",
-        maxblocks=2,
     ) as f:
         yield f
 
