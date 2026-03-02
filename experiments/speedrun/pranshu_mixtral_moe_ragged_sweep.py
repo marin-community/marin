@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Sweep configs for ragged-dot Mixtral MoE runs based on the original 300M setup."""

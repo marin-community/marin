@@ -1,4 +1,4 @@
-# Copyright 2026 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence

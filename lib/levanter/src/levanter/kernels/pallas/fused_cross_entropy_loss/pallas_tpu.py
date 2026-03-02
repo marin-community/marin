@@ -1,4 +1,4 @@
-# Copyright 2026 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 #
 # This implementation is heavily based on Tokamax's linear softmax
