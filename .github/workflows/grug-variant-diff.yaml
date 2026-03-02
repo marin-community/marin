@@ -2,7 +2,6 @@ name: Grug Variant Diff
 
 on:
   pull_request:
-    branches: [main]
     paths:
       - experiments/grug/**
       - scripts/grug_dir_diff.py
