@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "9dd7654fe466",
+  "strategy": "manual-commit",
+  "branch": "kevin/agentic-sft",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/marin/src/marin/transform/conversation/adapters.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9d/d7654fe466/0/metadata.json",
+      "transcript": "/9d/d7654fe466/0/full.jsonl",
+      "context": "/9d/d7654fe466/0/context.md",
+      "content_hash": "/9d/d7654fe466/0/content_hash.txt",
+      "prompt": "/9d/d7654fe466/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 118,
+    "cache_creation_tokens": 51599,
+    "cache_read_tokens": 2621282,
+    "output_tokens": 4063,
+    "api_call_count": 49
+  }
+}
