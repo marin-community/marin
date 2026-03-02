@@ -733,6 +733,14 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="AlienKevin/SWE-smith-rs-glm-4.6-trajectories",
         max_parallelism=32,
     ),
+    "AlienKevin/SWE-bench-multilingual-minimax-m2.5-trajectories": InstructionDatasetConfig(
+        hf_dataset_id="AlienKevin/SWE-bench-multilingual-minimax-m2.5-trajectories",
+        revision="479f2e1",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["instance_id", "resolved", "model", "traj_id"],
+        name="AlienKevin/SWE-bench-multilingual-minimax-m2.5-trajectories",
+        max_parallelism=32,
+    ),
 }
 
 for split_name in SMOLTALK2_SPLITS:
