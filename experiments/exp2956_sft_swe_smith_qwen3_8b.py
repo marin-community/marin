@@ -19,6 +19,7 @@ Supports multiple teacher models:
   - gpt-5-mini:     AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories     (3953 samples)
   - minimax-m2.5:   AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories   (5251 samples)
   - gemini-3-flash: AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories (1449 samples)
+  - glm-4.6:        AlienKevin/SWE-smith-rs-glm-4.6-trajectories        (369 samples)
 
 Each dataset has a JSON-serialized "messages" column in OpenAI chat format
 plus metadata like instance_id, resolved, model, traj_id, and patch.
@@ -27,6 +28,7 @@ Usage:
     python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher gpt-5-mini
     python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher minimax-m2.5
     python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher gemini-3-flash
+    python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher glm-4.6
 
 Full command for minimax-m2.5:
 RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
@@ -81,6 +83,10 @@ TEACHER_CONFIGS: dict[str, TeacherConfig] = {
         hf_dataset_id="AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories",
         num_samples=1449,
     ),
+    "glm-4.6": TeacherConfig(
+        hf_dataset_id="AlienKevin/SWE-smith-rs-glm-4.6-trajectories",
+        num_samples=369,
+    ),
 }
 
 TARGET_EPOCHS = 7
@@ -112,7 +118,7 @@ def build_swe_smith_sft(teacher: str) -> tuple[ExecutorStep, ExecutorStep]:
     """Build SFT experiment and checkpoint steps for a given teacher model.
 
     Args:
-        teacher: One of "gpt-5-mini", "minimax-m2.5", "gemini-3-flash".
+        teacher: One of "gpt-5-mini", "minimax-m2.5", "gemini-3-flash", "glm-4.6".
 
     Returns:
         (sft_step, checkpoint_step) tuple.
@@ -180,6 +186,7 @@ def build_swe_smith_sft(teacher: str) -> tuple[ExecutorStep, ExecutorStep]:
 exp2956_sft_swe_smith_qwen3_8b, exp2956_checkpoint = build_swe_smith_sft("gpt-5-mini")
 exp2956_sft_swe_smith_minimax_qwen3_8b, exp2956_minimax_checkpoint = build_swe_smith_sft("minimax-m2.5")
 exp2956_sft_swe_smith_gemini_qwen3_8b, exp2956_gemini_checkpoint = build_swe_smith_sft("gemini-3-flash")
+exp2956_sft_swe_smith_glm_qwen3_8b, exp2956_glm_checkpoint = build_swe_smith_sft("glm-4.6")
 
 
 if __name__ == "__main__":

@@ -80,6 +80,7 @@ class TransformAdapter:
     system_value: str = "system"
     content_key: str = "content"
     tool_value: str = "tool"
+    drop_roles: tuple[str, ...] = ()
 
     # If specified, the key will be used to select the message with
     # best metric in multiple turn conversations
@@ -121,7 +122,10 @@ class TransformAdapter:
             }
             conversation = row[self.conversation_column]
             for conv in conversation:
-                role = role_to_openai_role[conv[self.role_key]]
+                raw_role = conv[self.role_key]
+                if raw_role in self.drop_roles:
+                    continue
+                role = role_to_openai_role[raw_role]
                 messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
