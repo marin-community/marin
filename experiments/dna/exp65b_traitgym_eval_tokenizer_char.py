@@ -17,9 +17,11 @@ from experiments.defaults import default_tokenize, default_train
 from experiments.dna.defaults import (
     DNA_WINDOW_SIZE_BYTES_V1,
     SHORT_RUN_CONFIG_V1,
+    dna_effective_seq_len,
 )
 from experiments.llama import llama_50m
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2
+from fray.v2 import ResourceConfig
 from levanter.data.text import DNALmDatasetFormat
 from marin.execution.executor import executor_main
 
@@ -29,8 +31,7 @@ from marin.execution.executor import executor_main
 
 TOKENIZER = "bolinas-dna/tokenizer-char"
 DNA_SEQ_LEN = 256
-# tokenizer-char adds BOS + EOS, so model context = DNA_SEQ_LEN + 2
-MODEL_SEQ_LEN = DNA_SEQ_LEN + 2
+MODEL_SEQ_LEN = dna_effective_seq_len(DNA_SEQ_LEN, TOKENIZER)
 
 DATASET = "bolinas-dna/genomes-v4-genome_set-humans-intervals-v1_256_128"
 
@@ -50,8 +51,12 @@ tokenized = default_tokenize(
 # Train config: 20 steps total, eval every 10 steps
 # =============================================================================
 
+# Available TPU types by region:
+#   us-central1: v5p-8 (DNA_RESOURCES_V1 default)
+#   us-central2: v4-8, v4-16, v4-32, v4-64
 train_config = dataclasses.replace(
     SHORT_RUN_CONFIG_V1,
+    resources=ResourceConfig.with_tpu("v4-8"),
     num_train_steps=20,
     train_batch_size=32,
     steps_per_eval=10,
