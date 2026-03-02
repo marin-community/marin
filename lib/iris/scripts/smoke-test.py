@@ -443,7 +443,7 @@ def _reservation_child():
     return 1
 
 
-def _reservation_parent_job(num_children: int):
+def _reservation_parent_job(num_children: int, device_variant: str):
     """Parent job that spawns children consuming the reservation.
 
     The parent itself runs on CPU. Children inherit region constraints
@@ -459,7 +459,7 @@ def _reservation_parent_job(num_children: int):
         child = ctx.client.submit(
             entrypoint=Entrypoint.from_callable(_reservation_child),
             name=f"reserved-child-{i}",
-            resources=RS(device=_tpu_device("v5litepod-16")),
+            resources=RS(device=_tpu_device(device_variant)),
         )
         children.append(child)
 
@@ -1052,7 +1052,7 @@ class SmokeTestRunner:
         return self._run_job_test(
             client=client,
             test_name=f"Reserved job ({a.label()})",
-            entrypoint=Entrypoint.from_callable(_reservation_parent_job, 2),
+            entrypoint=Entrypoint.from_callable(_reservation_parent_job, 2, a.variant),
             job_name=f"smoke-reserved-{self._run_id}",
             resources=ResourceSpec(cpu=1, memory="1GB", disk="1GB"),
             reservation=[

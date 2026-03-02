@@ -21,6 +21,7 @@ from iris.cluster.controller.controller import (
     _inject_reservation_taints,
     _inject_taint_constraints,
     _preference_pass,
+    _reservation_region_constraints,
     _worker_matches_reservation_entry,
 )
 from iris.cluster.controller.events import (
@@ -838,3 +839,128 @@ def test_preference_pass_deducts_capacity():
     assert assignments[0] == (task_id_0, WorkerId("w1"))
     assert task_id_0 not in context.pending_tasks
     assert task_id_1 in context.pending_tasks
+
+
+# =============================================================================
+# _reservation_region_constraints
+# =============================================================================
+
+
+def test_region_constraint_injected_from_claimed_workers():
+    """Region constraint is injected when claimed workers have a region attribute."""
+    ctrl = _make_controller()
+    w1 = _register_worker(ctrl.state, "w1")
+    # Set region attribute on worker
+    worker = ctrl.state.get_worker(w1)
+    worker.attributes["region"] = AttributeValue("us-central1")
+
+    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
+    jid = _submit_job(ctrl.state, "j1", req)
+    ctrl._claim_workers_for_reservations()
+
+    result = _reservation_region_constraints(
+        jid.to_wire(),
+        ctrl.reservation_claims,
+        ctrl.state,
+        [],
+    )
+
+    assert len(result) == 1
+    assert result[0].key == "region"
+    assert result[0].op == cluster_pb2.CONSTRAINT_OP_EQ
+    assert result[0].value.string_value == "us-central1"
+
+
+def test_region_constraint_not_injected_when_already_present():
+    """Existing region constraint prevents injection."""
+    ctrl = _make_controller()
+    w1 = _register_worker(ctrl.state, "w1")
+    worker = ctrl.state.get_worker(w1)
+    worker.attributes["region"] = AttributeValue("us-central1")
+
+    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
+    jid = _submit_job(ctrl.state, "j1", req)
+    ctrl._claim_workers_for_reservations()
+
+    existing = cluster_pb2.Constraint(
+        key="region",
+        op=cluster_pb2.CONSTRAINT_OP_EQ,
+        value=cluster_pb2.AttributeValue(string_value="us-east1"),
+    )
+    result = _reservation_region_constraints(
+        jid.to_wire(),
+        ctrl.reservation_claims,
+        ctrl.state,
+        [existing],
+    )
+
+    assert len(result) == 1
+    assert result[0] is existing
+
+
+def test_region_constraint_not_injected_when_no_region_attr():
+    """No injection when claimed workers lack region attributes."""
+    ctrl = _make_controller()
+    _register_worker(ctrl.state, "w1")
+
+    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
+    jid = _submit_job(ctrl.state, "j1", req)
+    ctrl._claim_workers_for_reservations()
+
+    result = _reservation_region_constraints(
+        jid.to_wire(),
+        ctrl.reservation_claims,
+        ctrl.state,
+        [],
+    )
+
+    assert result == []
+
+
+def test_region_constraint_multiple_regions():
+    """IN constraint injected when claimed workers span multiple regions."""
+    ctrl = _make_controller()
+    w1 = _register_worker(ctrl.state, "w1")
+    w2 = _register_worker(ctrl.state, "w2")
+    ctrl.state.get_worker(w1).attributes["region"] = AttributeValue("us-central1")
+    ctrl.state.get_worker(w2).attributes["region"] = AttributeValue("us-east1")
+
+    req = _make_job_request_with_reservation(
+        reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
+    )
+    jid = _submit_job(ctrl.state, "j1", req)
+    ctrl._claim_workers_for_reservations()
+
+    result = _reservation_region_constraints(
+        jid.to_wire(),
+        ctrl.reservation_claims,
+        ctrl.state,
+        [],
+    )
+
+    assert len(result) == 1
+    assert result[0].key == "region"
+    assert result[0].op == cluster_pb2.CONSTRAINT_OP_IN
+    regions = {v.string_value for v in result[0].values}
+    assert regions == {"us-central1", "us-east1"}
+
+
+def test_no_injection_for_non_reservation_job():
+    """No claims for this job → constraints returned unchanged."""
+    ctrl = _make_controller()
+    w1 = _register_worker(ctrl.state, "w1")
+    ctrl.state.get_worker(w1).attributes["region"] = AttributeValue("us-central1")
+
+    # Claim w1 for a different job
+    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
+    _submit_job(ctrl.state, "other-job", req)
+    ctrl._claim_workers_for_reservations()
+
+    result = _reservation_region_constraints(
+        "/test-user/unrelated-job",
+        ctrl.reservation_claims,
+        ctrl.state,
+        [],
+    )
+
+    assert result == []

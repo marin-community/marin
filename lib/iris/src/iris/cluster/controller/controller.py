@@ -35,6 +35,7 @@ from iris.cluster.controller.state import (
     HeartbeatSnapshot,
 )
 from iris.cluster.types import (
+    REGION_ATTRIBUTE_KEY,
     AttributeValue,
     DeviceType,
     JobName,
@@ -173,6 +174,12 @@ def _demand_from_reservations(state: ControllerState) -> list[DemandEntry]:
     Each reservation entry maps 1:1 to a DemandEntry. All entries always
     generate demand, which prevents the autoscaler from scaling down
     reserved capacity regardless of whether tasks are running.
+
+    TODO: Reservation entries should be locked to the same scaling group so the
+    autoscaler doesn't scatter them across regions. Currently each entry is an
+    independent DemandEntry, which means the autoscaler can provision workers in
+    different scaling groups for the same reservation. This will be addressed
+    when reservations become top-level objects (see GitHub issue).
     """
     entries: list[DemandEntry] = []
     for job in state.list_all_jobs():
@@ -334,6 +341,54 @@ def _inject_taint_constraints(
                 constraints=[*list(req.constraints), taint_constraint],
             )
     return modified
+
+
+def _reservation_region_constraints(
+    job_id_wire: str,
+    claims: dict[WorkerId, ReservationClaim],
+    state: ControllerState,
+    existing_constraints: list[cluster_pb2.Constraint],
+) -> list[cluster_pb2.Constraint]:
+    """Derive region constraints from claimed reservation workers.
+
+    When a reservation job has no explicit region constraint, this function
+    extracts the region attributes of claimed workers and returns the existing
+    constraints plus an injected region constraint.  If the job already has a
+    region constraint, or if claimed workers lack region attributes, the
+    existing constraints are returned unchanged.
+    """
+    if any(c.key == REGION_ATTRIBUTE_KEY for c in existing_constraints):
+        return existing_constraints
+
+    regions: set[str] = set()
+    for worker_id, claim in claims.items():
+        if claim.job_id != job_id_wire:
+            continue
+        worker = state.get_worker(worker_id)
+        if worker is None:
+            continue
+        region_attr = worker.attributes.get(REGION_ATTRIBUTE_KEY)
+        if region_attr is not None:
+            regions.add(str(region_attr.value))
+
+    if not regions:
+        return existing_constraints
+
+    region_list = sorted(regions)
+    if len(region_list) == 1:
+        region_constraint = cluster_pb2.Constraint(
+            key=REGION_ATTRIBUTE_KEY,
+            op=cluster_pb2.CONSTRAINT_OP_EQ,
+            value=cluster_pb2.AttributeValue(string_value=region_list[0]),
+        )
+    else:
+        region_constraint = cluster_pb2.Constraint(
+            key=REGION_ATTRIBUTE_KEY,
+            op=cluster_pb2.CONSTRAINT_OP_IN,
+            values=[cluster_pb2.AttributeValue(string_value=r) for r in region_list],
+        )
+
+    return [*existing_constraints, region_constraint]
 
 
 def _preference_pass(
@@ -828,7 +883,19 @@ class Controller:
                     )
                 )
 
-                # Build the run request
+                # Build the run request.
+                # For reservation jobs, inject region constraints derived from
+                # the claimed workers so child tasks inherit the region lock.
+                task_constraints = (
+                    _reservation_region_constraints(
+                        job_id.to_wire(),
+                        self._reservation_claims,
+                        self._state,
+                        list(job.request.constraints),
+                    )
+                    if job.request.HasField("reservation")
+                    else list(job.request.constraints)
+                )
                 request = cluster_pb2.Worker.RunTaskRequest(
                     task_id=task_id.to_wire(),
                     num_tasks=len(self._state.get_job_tasks(job_id)),
@@ -838,7 +905,7 @@ class Controller:
                     resources=job.request.resources,
                     ports=list(job.request.ports),
                     attempt_id=task.current_attempt_id,
-                    constraints=list(job.request.constraints),
+                    constraints=task_constraints,
                 )
                 # Copy timeout if set (check milliseconds field > 0)
                 if job.request.timeout.milliseconds > 0:
