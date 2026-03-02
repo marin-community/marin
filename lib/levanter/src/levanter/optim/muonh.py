@@ -1,6 +1,7 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -10,17 +11,10 @@ import optax
 from optax import tree_utils as otu
 
 import haliax
+from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import (
-    CoefficientType,
-    is_linear_like_module,
-    label_linear_like_module,
-    linear_like_weight_array,
-    map_flattened_linear_layers,
-    replace_linear_like_weight_array,
-    zeropower_via_newtonschulz5,
-)
+from levanter.optim.util import CoefficientType, map_flattened_linear_layers, zeropower_via_newtonschulz5
 from levanter.utils.jax_utils import leaf_key_paths
 from levanter.optim.adamh import scale_by_adamh
 
@@ -120,13 +114,13 @@ class MuonHConfig(OptimizerConfig):
                 return "adam"
             elif "lm_head" in path_str:
                 return "adamh"
-            elif is_linear_like_module(param):
+            elif isinstance(param, Linear):
                 # muonh for linear layers
-                return label_linear_like_module(param, weight_label="muonh", bias_label="adam")
+                return dataclasses.replace(param, weight="muonh", bias="adam" if param.bias is not None else None)
             else:
                 return "adam"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
 
 
 class ScaleByMuonHState(NamedTuple):
@@ -163,14 +157,17 @@ def scale_with_muonh(
         else:
             updates = buf
 
-        def transform_linear_layer(layer):
-            array = linear_like_weight_array(layer)
-            assert array.ndim == 2
+        def transform_linear_layer(layer: haliax.nn.Linear):
+            assert layer.weight.ndim == 2
             # steps is now a concrete int
+            array = layer.weight.array
             updated_weight_array = zeropower_via_newtonschulz5(
                 array, steps=steps, eps=muon_eps, coefficient_type=coefficient_type
             )
-            return replace_linear_like_weight_array(layer, updated_weight_array)
+
+            updated_weight = dataclasses.replace(layer.weight, array=updated_weight_array)
+
+            return dataclasses.replace(layer, weight=updated_weight)  # type: ignore
 
         muon_updates = map_flattened_linear_layers(transform_linear_layer, updates)
 
