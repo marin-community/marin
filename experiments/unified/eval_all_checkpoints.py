@@ -3,17 +3,23 @@
 
 """Evaluate validation loss for every checkpoint in a folder.
 
-Discovers all Levanter checkpoints under a GCS (or local) directory,
-evaluates each on the unified validation datasets, and logs per-step
-results to a new wandb run.
+Discovers all Levanter (or HuggingFace) checkpoints under a GCS (or local)
+directory, evaluates each on the unified validation datasets, and logs
+per-step results to a new wandb run.
 
 Usage:
-    # Full eval on all checkpoints
+    # Full eval on all Levanter checkpoints
     uv run experiments/unified/eval_all_checkpoints.py \
         --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a \
         --model_size 1.7b \
         --wandb_project marin \
         --wandb_name "eval-demo6-all-ckpts"
+
+    # Eval HuggingFace checkpoints
+    uv run experiments/unified/eval_all_checkpoints.py \
+        --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a/hf \
+        --model_size 1.7b \
+        --checkpoint_is_hf
 
     # Quick smoke test (2 batches per dataset)
     uv run experiments/unified/eval_all_checkpoints.py \
@@ -32,6 +38,7 @@ import argparse
 import json
 import logging
 import os
+import re
 
 import equinox as eqx
 import fsspec
@@ -44,6 +51,7 @@ from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
 from levanter.checkpoint import load_checkpoint
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.eval import TaggedEvaluator, eval_model
 from levanter.distributed import RayConfig
 from levanter.trainer import TrainerConfig
@@ -56,7 +64,7 @@ from experiments.unified.unified_pretrain_demo import (
     DEFAULT_TEXT_EVAL_BENCHMARKS,
     unified_data_config,
 )
-from marin.evaluation.utils import discover_levanter_checkpoints
+from marin.evaluation.utils import discover_hf_checkpoints, discover_levanter_checkpoints
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +75,26 @@ MODEL_CONFIGS = {
 }
 
 
-def _load_checkpoint_step(ckpt_path: str) -> int:
-    """Read the training step from a checkpoint's metadata.json."""
+def _load_levanter_checkpoint_step(ckpt_path: str) -> int:
+    """Read the training step from a Levanter checkpoint's metadata.json."""
     fs, _, _ = fsspec.get_fs_token_paths(ckpt_path)
     with fs.open(os.path.join(ckpt_path, "metadata.json")) as f:
         metadata = json.load(f)
     return metadata["step"]
+
+
+def _parse_step_from_path(ckpt_path: str) -> int:
+    """Parse the training step from a checkpoint path like '.../step-6000/'.
+
+    HF checkpoints don't have metadata.json, so we extract the step number
+    from the directory name.
+    """
+    parts = ckpt_path.rstrip("/").split("/")
+    for part in reversed(parts):
+        m = re.match(r"step[-_](\d+)$", part)
+        if m:
+            return int(m.group(1))
+    raise ValueError(f"Cannot parse step number from checkpoint path: {ckpt_path}")
 
 
 def main():
@@ -125,6 +147,11 @@ def main():
         help="Skip text eval benchmarks (hellaswag, mmlu, etc.)",
     )
     parser.add_argument(
+        "--checkpoint_is_hf",
+        action="store_true",
+        help="Treat checkpoints as HuggingFace format (config.json) instead of Levanter format (metadata.json)",
+    )
+    parser.add_argument(
         "--no_wandb",
         action="store_true",
         help="Disable wandb logging (dry run)",
@@ -158,16 +185,26 @@ def main():
 
     # --- Discover checkpoints ---
     logger.info("Discovering checkpoints in %s ...", args.checkpoint_folder)
-    ckpt_paths = discover_levanter_checkpoints(args.checkpoint_folder)
+    if args.checkpoint_is_hf:
+        ckpt_paths = discover_hf_checkpoints(args.checkpoint_folder)
+        ckpt_format = "HuggingFace"
+    else:
+        ckpt_paths = discover_levanter_checkpoints(args.checkpoint_folder)
+        ckpt_format = "Levanter"
+
     if not ckpt_paths:
-        logger.error("No Levanter checkpoints found in %s", args.checkpoint_folder)
+        logger.error("No %s checkpoints found in %s", ckpt_format, args.checkpoint_folder)
         return
 
-    ckpt_steps = [(path, _load_checkpoint_step(path)) for path in ckpt_paths]
+    if args.checkpoint_is_hf:
+        ckpt_steps = [(path, _parse_step_from_path(path)) for path in ckpt_paths]
+    else:
+        ckpt_steps = [(path, _load_levanter_checkpoint_step(path)) for path in ckpt_paths]
     ckpt_steps.sort(key=lambda x: x[1])
     logger.info(
-        "Found %d checkpoints: steps %s",
+        "Found %d %s checkpoints: steps %s",
         len(ckpt_steps),
+        ckpt_format,
         [s for _, s in ckpt_steps],
     )
 
@@ -220,16 +257,27 @@ def main():
         if vocab_size != Vocab.size:
             logger.info("Rounded vocab size from %d to %d for partitioning", vocab_size, Vocab.size)
 
-        # Build model shape once (no actual weights allocated)
-        with use_cpu_device():
-            model_shape = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
+        if not args.checkpoint_is_hf:
+            # Build model shape once for Levanter checkpoints (no actual weights allocated)
+            with use_cpu_device():
+                model_shape = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
 
         for ckpt_path, step in ckpt_steps:
             logger.info("=== Evaluating step %d  (%s) ===", step, ckpt_path)
 
-            with use_cpu_device():
-                model = load_checkpoint(model_shape, ckpt_path, subpath="model")
-            model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
+            if args.checkpoint_is_hf:
+                converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
+                converter = converter.replaced(reference_checkpoint=ckpt_path, tokenizer=tokenizer)
+                model = converter.load_pretrained(
+                    model_config.model_type,
+                    ref=ckpt_path,
+                    dtype=trainer_config.mp.compute_dtype,
+                    axis_mapping=parameter_axis_mapping,
+                )
+            else:
+                with use_cpu_device():
+                    model = load_checkpoint(model_shape, ckpt_path, subpath="model")
+                model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
 
             log_dict = eval_model(evaluator, model, prefix="eval")
             levanter.tracker.log(log_dict, step=step)
