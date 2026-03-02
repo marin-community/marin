@@ -21,6 +21,13 @@ Usage:
         --model_size 1.7b \
         --checkpoint_is_hf
 
+    # Use EU data caches (gs://marin-vlm-eu)
+    uv run experiments/unified/eval_all_checkpoints.py \
+        --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a/hf \
+        --model_size 1.7b \
+        --checkpoint_is_hf \
+        --region eu
+
     # Quick smoke test (2 batches per dataset)
     uv run experiments/unified/eval_all_checkpoints.py \
         --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a \
@@ -62,7 +69,15 @@ from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
 from experiments.unified.unified_pretrain_demo import (
     DEFAULT_EVAL_BENCHMARKS,
     DEFAULT_TEXT_EVAL_BENCHMARKS,
+    UNIFIED_CACHE_PATH,
+    UNIFIED_EVAL_CACHE_PATH,
+    TEXT_EVAL_CACHE_PATH,
     unified_data_config,
+)
+from experiments.unified.unified_pretrain_demo_eu import (
+    UNIFIED_CACHE_PATH as EU_UNIFIED_CACHE_PATH,
+    UNIFIED_EVAL_CACHE_PATH as EU_UNIFIED_EVAL_CACHE_PATH,
+    TEXT_EVAL_CACHE_PATH as EU_TEXT_EVAL_CACHE_PATH,
 )
 from marin.evaluation.utils import discover_hf_checkpoints, discover_levanter_checkpoints
 
@@ -72,6 +87,19 @@ MODEL_CONFIGS = {
     "0.6b": qwen3_0_6b,
     "1.7b": qwen3_1_7b,
     "4b": qwen3_4b,
+}
+
+REGION_CACHE_PATHS = {
+    "us": {
+        "multimodal_cache_path": UNIFIED_CACHE_PATH,
+        "eval_cache_path": UNIFIED_EVAL_CACHE_PATH,
+        "text_eval_cache_path": TEXT_EVAL_CACHE_PATH,
+    },
+    "eu": {
+        "multimodal_cache_path": EU_UNIFIED_CACHE_PATH,
+        "eval_cache_path": EU_UNIFIED_EVAL_CACHE_PATH,
+        "text_eval_cache_path": EU_TEXT_EVAL_CACHE_PATH,
+    },
 }
 
 
@@ -152,6 +180,13 @@ def main():
         help="Treat checkpoints as HuggingFace format (config.json) instead of Levanter format (metadata.json)",
     )
     parser.add_argument(
+        "--region",
+        type=str,
+        default="us",
+        choices=list(REGION_CACHE_PATHS.keys()),
+        help="Region for eval data caches: 'us' (gs://marin-vlm) or 'eu' (gs://marin-vlm-eu) (default: us)",
+    )
+    parser.add_argument(
         "--no_wandb",
         action="store_true",
         help="Disable wandb logging (dry run)",
@@ -212,10 +247,12 @@ def main():
     eval_benchmarks = None if args.no_eval_benchmarks else DEFAULT_EVAL_BENCHMARKS
     text_eval_benchmarks = None if args.no_text_eval_benchmarks else DEFAULT_TEXT_EVAL_BENCHMARKS
 
+    cache_paths = REGION_CACHE_PATHS[args.region]
     data_config = unified_data_config(
         eval_benchmarks=eval_benchmarks,
         text_eval_benchmarks=text_eval_benchmarks,
         include_text_data=False,
+        **cache_paths,
     )
 
     Pos = model_config.max_Pos
