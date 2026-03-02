@@ -129,6 +129,52 @@ def test_worker_detail_metric_cards(cluster, page, screenshot):
     screenshot("worker-detail-metric-cards")
 
 
+def test_worker_detail_page_by_vm_id(cluster, page, screenshot):
+    """Worker detail page resolves both worker ID and VM ID from autoscaler status."""
+    job = cluster.submit(_quick, "worker-detail-vm-id")
+    cluster.wait(job, timeout=30)
+
+    task_status = cluster.task_status(job)
+    worker_id = task_status.worker_id
+    assert worker_id, "Expected task to be assigned to a worker"
+
+    # Get autoscaler status and find a VM ID for this worker
+    autoscaler_resp = cluster.controller_client.get_autoscaler_status(
+        cluster_pb2.Controller.GetAutoscalerStatusRequest()
+    )
+    vm_id = None
+    for group in autoscaler_resp.status.groups:
+        for slice_info in group.slices:
+            for vm in slice_info.vms:
+                if vm.worker_id == worker_id:
+                    vm_id = vm.vm_id
+                    break
+    assert vm_id, f"Expected to find a VM ID for worker {worker_id}"
+    assert vm_id != worker_id, "VM ID should differ from worker ID to test both lookup paths"
+
+    # Navigate using the VM ID (the path the fleet tab uses)
+    dashboard_goto(page, f"{cluster.url}/worker/{vm_id}")
+    if not _is_noop_page(page):
+        page.wait_for_function(
+            "() => document.querySelector('.worker-detail-grid') !== null"
+            " || document.querySelector('.error-message') !== null",
+            timeout=10000,
+        )
+    assert_visible(page, "text=Healthy")
+    screenshot("worker-detail-by-vm-id")
+
+    # Navigate using the worker ID
+    dashboard_goto(page, f"{cluster.url}/worker/{worker_id}")
+    if not _is_noop_page(page):
+        page.wait_for_function(
+            "() => document.querySelector('.worker-detail-grid') !== null"
+            " || document.querySelector('.error-message') !== null",
+            timeout=10000,
+        )
+    assert_visible(page, "text=Healthy")
+    screenshot("worker-detail-by-worker-id")
+
+
 def test_autoscaler_tab(cluster, page, screenshot):
     """Autoscaler tab shows scale groups."""
     wait_for_dashboard_ready(page)

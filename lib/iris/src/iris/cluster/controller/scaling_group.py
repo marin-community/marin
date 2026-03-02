@@ -104,6 +104,7 @@ class SliceState:
     last_active: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
     vm_addresses: list[str] = field(default_factory=list)
+    vm_worker_ids: list[str] = field(default_factory=list)
     error_message: str = ""
 
 
@@ -169,13 +170,14 @@ def slice_state_to_proto(state: SliceState) -> vm_pb2.SliceInfo:
     """Convert a SliceState to a SliceInfo proto for RPC APIs."""
     created_at = state.handle.created_at
     vm_state = _lifecycle_to_vm_state(state.lifecycle)
+    worker_ids = state.vm_worker_ids
     return vm_pb2.SliceInfo(
         slice_id=state.handle.slice_id,
         scale_group=state.handle.scale_group,
         created_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
         vms=[
             vm_pb2.VmInfo(
-                vm_id=f"{state.handle.slice_id}-vm-{i}",
+                vm_id=worker_ids[i] if i < len(worker_ids) else f"{state.handle.slice_id}-vm-{i}",
                 state=vm_state,
                 address=addr,
                 created_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
@@ -319,7 +321,13 @@ class ScalingGroup:
         with self._slices_lock:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
 
-    def mark_slice_ready(self, slice_id: str, vm_addresses: list[str], timestamp: Timestamp | None = None) -> None:
+    def mark_slice_ready(
+        self,
+        slice_id: str,
+        vm_addresses: list[str],
+        timestamp: Timestamp | None = None,
+        vm_worker_ids: list[str] | None = None,
+    ) -> None:
         """Mark a slice as READY with its VM addresses. Called after successful bootstrap.
 
         Initializes last_active to prevent the slice from appearing idle since epoch(0),
@@ -331,6 +339,7 @@ class ScalingGroup:
             if state is not None:
                 state.lifecycle = SliceLifecycleState.READY
                 state.vm_addresses = vm_addresses
+                state.vm_worker_ids = vm_worker_ids or []
                 state.last_active = timestamp
 
     def mark_slice_failed(self, slice_id: str, error_message: str = "") -> None:
