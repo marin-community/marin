@@ -9,7 +9,7 @@ import jax.numpy as jnp
 
 import equinox as eqx
 import jax
-from jax._src.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, KeyEntry, PyTreeDef, SequenceKey
+from jax.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, KeyEntry, PyTreeDef, SequenceKey
 from jaxtyping import PyTree
 from enum import Enum
 

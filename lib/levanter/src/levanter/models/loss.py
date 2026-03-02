@@ -10,7 +10,7 @@ import haliax as hax
 from haliax import NamedArray
 from haliax.core import flatten_all_axes_but
 from haliax.nn import cross_entropy_loss_and_log_normalizers
-from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_map
+from haliax.partitioning import current_thread_local_mapping, shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
@@ -273,8 +273,8 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         loss_flat = cast(jax.Array, kernel_output)
         return hax.named(loss_flat, batch_axis).unflatten_axis(batch_axis, shard_labels.axes)
 
-    mesh = _get_mesh()
-    if mesh is None or getattr(mesh, "empty", False):
+    mesh = jax.sharding.get_abstract_mesh()
+    if getattr(mesh, "empty", False):
         output = fused_impl(pred_embeddings, target_y, lm_head)
     else:
         axis_mapping = current_thread_local_mapping() or {}

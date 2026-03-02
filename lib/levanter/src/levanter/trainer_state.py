@@ -13,7 +13,6 @@ import haliax
 from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
 from haliax.types import IntScalar, Scalar
 from jax import numpy as jnp
-from jax._src.random import PRNGKey
 from jaxtyping import PRNGKeyArray, PyTree
 from optax import GradientTransformation, OptState
 
@@ -140,7 +139,7 @@ class TrainerState(eqx.Module, Generic[M]):
         *,
         obj_fun: Callable[[M], Scalar] | None = None,
         loss: float | None = None,
-        key: PRNGKey,
+        key: PRNGKeyArray,
     ) -> tuple[S, M]:
         assert isinstance(self, TrainerState)  # make mypy happy
         model, opt_state, updates = take_train_step(

@@ -7,13 +7,13 @@ from dataclasses import dataclass
 
 import equinox as eqx
 import jax
+from jax._src.mesh import get_concrete_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.sharding import NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import named_call
-from haliax.partitioning import _get_mesh
 
 
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
@@ -230,8 +230,8 @@ def _tpu_splash_attention(
 
     q_ = q_ * (1.0 / math.sqrt(D))
 
-    mesh = _get_mesh()
-    if mesh is None or getattr(mesh, "empty", False):
+    mesh = get_concrete_mesh()
+    if mesh is None or mesh.empty:
         raise RuntimeError("TPU splash attention requires a JAX mesh context.")
 
     def _named_sharding_of(x: jax.Array, *, label: str) -> NamedSharding:

@@ -12,7 +12,12 @@ import pathlib
 import sys
 import time
 import uuid
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
+from typing import TypeVar
+
+
+T = TypeVar("T")
 
 
 def logical_cpu_core_count() -> int:
@@ -31,6 +36,14 @@ def non_caching_cycle(iterable):
     """Like itertools.cycle, but doesn't cache the iterable."""
     while True:
         yield from iterable
+
+
+def index_where(pred: Callable[[T], bool], xs: Sequence[T], start: int = 0) -> int:
+    """Return the first index at or after ``start`` for which ``pred`` returns True."""
+    for i in range(start, len(xs)):
+        if pred(xs[i]):
+            return i
+    raise ValueError("No element satisfies predicate")
 
 
 # https://stackoverflow.com/a/58336722/1736826 CC-BY-SA 4.0

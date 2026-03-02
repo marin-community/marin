@@ -12,7 +12,7 @@ import jax.scipy as jsp
 import levanter.tracker
 from einops import rearrange
 from haliax.jax_utils import named_call
-from haliax.partitioning import _get_mesh
+from jax._src.mesh import get_concrete_mesh
 from jax import random
 from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec as P
@@ -159,7 +159,9 @@ class MOE(eqx.Module):
         router_logits = jnp.einsum("td,de->te", x_flat, self.router_w)
         topk_weights, topk_idx, router_probs = self._route(router_logits)
         topk_idx_flat = jnp.reshape(topk_idx, (B * S * self.cfg.num_experts_per_tok,))
-        mesh = _get_mesh()
+        mesh = get_concrete_mesh()
+        if mesh is None:
+            raise RuntimeError("MOE computation requires an active concrete mesh context.")
 
         @partial(
             shard_map,

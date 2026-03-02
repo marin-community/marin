@@ -5,7 +5,6 @@ import equinox
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax._src.state.indexing import dslice
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 from jaxtyping import ArrayLike, Scalar
@@ -185,7 +184,7 @@ def histogram_tile_kernel(a_ref, bin_edges_ref, counts_ref):
     # end = start + TILE_SIZE
 
     # Load tile of a
-    a_tile = a_ref[dslice(start, TILE_SIZE)]
+    a_tile = a_ref[pl.dslice(start, TILE_SIZE)]
     bin_edges = bin_edges_ref[...]
 
     # Compute which bin each a_tile[i] belongs to
