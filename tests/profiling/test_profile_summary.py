@@ -7,6 +7,7 @@ import gzip
 import json
 from pathlib import Path
 
+# Intentional private import: exercise the truncation-cap heuristic directly.
 from marin.profiling.ingest import _trace_quality_warnings, summarize_trace
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
@@ -311,6 +312,30 @@ def test_trace_quality_warning_flags_suspected_truncation_cap() -> None:
     suspected_small, warnings_small = _trace_quality_warnings(num_complete_events=999_999)
     assert suspected_small is False
     assert warnings_small == []
+
+
+def test_gap_marker_payload_resolution_does_not_cross_second_idle_gap(tmp_path: Path) -> None:
+    trace_path = tmp_path / "marker_second_gap_trace.json.gz"
+    payload = {
+        "displayTimeUnit": "ns",
+        "traceEvents": [
+            {"ph": "M", "pid": 1, "name": "process_name", "args": {"name": "/device:TPU:0"}},
+            {"ph": "M", "pid": 1, "tid": 2, "name": "thread_name", "args": {"name": "XLA Ops"}},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "fusion.0", "ts": 0, "dur": 10},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "iota.296", "ts": 100, "dur": 1},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "iota.297", "ts": 101, "dur": 1},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "dot.1", "ts": 130, "dur": 20},
+        ],
+    }
+    with gzip.open(trace_path, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+    summary = summarize_trace(trace_path, warmup_steps=0, hot_op_limit=10)
+    assert summary.gap_before_ops
+    top_gap = summary.gap_before_ops[0]
+    assert top_gap.name == "iota.296"
+    assert top_gap.payload_op == "iota.296"
+    assert top_gap.marker_op == "iota.296"
 
 
 def _write_trace(path: Path, *, step_durations: list[float], softmax_duration: float) -> None:

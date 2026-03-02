@@ -6,9 +6,25 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from dataclasses import dataclass, field
 
 from marin.profiling.schema import ProfileSummary
+
+
+@dataclass
+class _RegionGapStats:
+    count: int = 0
+    total_gap_duration: float = 0.0
+    payload_counts: Counter[str] = field(default_factory=Counter)
+
+
+@dataclass(frozen=True)
+class _RegionFirstGapRow:
+    region_path: str
+    count: int
+    total_gap_duration: float
+    avg_gap_duration: float
+    top_payload_ops: str
 
 
 def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
@@ -134,8 +150,8 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
     lines.append("|---|---:|---:|---:|---|")
     for row in _region_first_gap_rows(summary, top_k=top_k):
         lines.append(
-            f"| {_md_code(row['region_path'])} | {row['count']} | {_fmt(row['total_gap_duration'])} | "
-            f"{_fmt(row['avg_gap_duration'])} | {_md_code(row['top_payload_ops'])} |"
+            f"| {_md_code(row.region_path)} | {row.count} | {_fmt(row.total_gap_duration)} | "
+            f"{_fmt(row.avg_gap_duration)} | {_md_code(row.top_payload_ops)} |"
         )
     lines.append("")
     lines.append("## Optimization Candidates")
@@ -193,45 +209,33 @@ def _md_code(value: str) -> str:
     return f"`{escaped}`"
 
 
-def _region_first_gap_rows(summary: ProfileSummary, *, top_k: int) -> list[dict[str, Any]]:
-    aggregate: dict[str, dict[str, Any]] = {}
+def _region_first_gap_rows(summary: ProfileSummary, *, top_k: int) -> list[_RegionFirstGapRow]:
+    aggregate: dict[str, _RegionGapStats] = {}
     for context in summary.gap_region_contexts:
-        bucket = aggregate.setdefault(
-            context.region_path,
-            {
-                "count": 0,
-                "total_gap_duration": 0.0,
-                "payload_counts": Counter(),
-            },
-        )
-        bucket["count"] = int(bucket["count"]) + context.count
-        bucket["total_gap_duration"] = float(bucket["total_gap_duration"]) + context.total_gap_duration
-        cast_counter = bucket["payload_counts"]
-        if isinstance(cast_counter, Counter):
-            cast_counter[context.op_name] += context.count
+        bucket = aggregate.setdefault(context.region_path, _RegionGapStats())
+        bucket.count += context.count
+        bucket.total_gap_duration += context.total_gap_duration
+        bucket.payload_counts[context.op_name] += context.count
 
     ranked = sorted(
         aggregate.items(),
         key=lambda item: (
-            -float(item[1]["total_gap_duration"]),
+            -item[1].total_gap_duration,
             item[0],
         ),
     )
-    rows: list[dict[str, Any]] = []
+    rows: list[_RegionFirstGapRow] = []
     for region_path, stats in ranked[:top_k]:
-        count = int(stats["count"])
-        total = float(stats["total_gap_duration"])
-        payload_counts = stats["payload_counts"]
-        top_payloads = ""
-        if isinstance(payload_counts, Counter):
-            top_payloads = ", ".join(name for name, _ in payload_counts.most_common(3))
+        count = stats.count
+        total = stats.total_gap_duration
+        top_payloads = ", ".join(name for name, _ in stats.payload_counts.most_common(3))
         rows.append(
-            {
-                "region_path": region_path,
-                "count": count,
-                "total_gap_duration": total,
-                "avg_gap_duration": (total / count) if count else 0.0,
-                "top_payload_ops": top_payloads or "n/a",
-            }
+            _RegionFirstGapRow(
+                region_path=region_path,
+                count=count,
+                total_gap_duration=total,
+                avg_gap_duration=(total / count) if count else 0.0,
+                top_payload_ops=top_payloads or "n/a",
+            )
         )
     return rows

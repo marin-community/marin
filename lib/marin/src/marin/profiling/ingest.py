@@ -12,7 +12,7 @@ import logging
 import math
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
@@ -95,6 +95,7 @@ _HIERARCHY_SEGMENT_BLACKLIST_CONTAINS = {
     "thunk",
     "runtime",
 }
+# Calibrated to the known TensorFlow/XLA profiler export cap.
 _TRACE_COMPLETE_EVENT_TRUNCATION_THRESHOLD = 1_000_000
 _GAP_PAYLOAD_LOOKAHEAD_EVENTS = 8
 _GAP_MARKER_CANONICAL_NAMES = {
@@ -139,6 +140,14 @@ class _CompleteTraceEvent:
     run_id: str | None
     process_name: str | None
     thread_name: str | None
+
+
+@dataclass
+class _PreOpGapStats:
+    count: int = 0
+    total_gap_duration: float = 0.0
+    max_gap_duration: float = 0.0
+    marker_counts: Counter[str] = field(default_factory=Counter)
 
 
 def download_wandb_profile_artifact(
@@ -620,6 +629,8 @@ def _make_trace_overview(
 
 def _trace_quality_warnings(*, num_complete_events: int) -> tuple[bool, list[str]]:
     warnings: list[str] = []
+    # This first-pass heuristic intentionally keys off the known 1M default cap.
+    # Additional known caps can be added later if we observe them in production traces.
     suspected_truncation = num_complete_events == _TRACE_COMPLETE_EVENT_TRUNCATION_THRESHOLD
     if suspected_truncation:
         warnings.append(
@@ -985,7 +996,7 @@ def _summarize_communication(events: list[_CompleteTraceEvent], exclusive: list[
 
 
 def _summarize_pre_op_gaps(events: list[_CompleteTraceEvent], *, limit: int) -> list[GapBeforeOp]:
-    aggregate: dict[str, dict[str, Any]] = {}
+    aggregate: dict[str, _PreOpGapStats] = {}
 
     by_track: dict[tuple[int, int], list[_CompleteTraceEvent]] = defaultdict(list)
     for event in events:
@@ -1002,37 +1013,29 @@ def _summarize_pre_op_gaps(events: list[_CompleteTraceEvent], *, limit: int) -> 
             if previous_end is not None and event.ts > previous_end:
                 gap = event.ts - previous_end
                 marker_event, payload_event = _resolve_gap_payload_event(sorted_events, marker_index=index)
-                bucket = aggregate.setdefault(
-                    payload_event.name,
-                    {
-                        "count": 0,
-                        "total_gap_duration": 0.0,
-                        "max_gap_duration": 0.0,
-                        "marker_counts": Counter(),
-                    },
-                )
-                bucket["count"] = int(bucket["count"]) + 1
-                bucket["total_gap_duration"] = float(bucket["total_gap_duration"]) + gap
-                bucket["max_gap_duration"] = max(float(bucket["max_gap_duration"]), gap)
-                cast(Counter[str], bucket["marker_counts"])[marker_event.name] += 1
+                bucket = aggregate.setdefault(payload_event.name, _PreOpGapStats())
+                bucket.count += 1
+                bucket.total_gap_duration += gap
+                bucket.max_gap_duration = max(bucket.max_gap_duration, gap)
+                bucket.marker_counts[marker_event.name] += 1
             end = event.ts + event.dur
             previous_end = end if previous_end is None else max(previous_end, end)
 
     ranked = sorted(
         aggregate.items(),
         key=lambda item: (
-            -float(item[1]["total_gap_duration"]),
-            -float(item[1]["max_gap_duration"]),
+            -item[1].total_gap_duration,
+            -item[1].max_gap_duration,
             item[0],
         ),
     )
 
     result: list[GapBeforeOp] = []
     for name, stats in ranked[:limit]:
-        count = int(stats["count"])
-        total_gap_duration = float(stats["total_gap_duration"])
-        max_gap_duration = float(stats["max_gap_duration"])
-        marker_counts = cast(Counter[str], stats["marker_counts"])
+        count = stats.count
+        total_gap_duration = stats.total_gap_duration
+        max_gap_duration = stats.max_gap_duration
+        marker_counts = stats.marker_counts
         marker_op = sorted(marker_counts.items(), key=lambda item: (-item[1], item[0]))[0][0] if marker_counts else name
         result.append(
             GapBeforeOp(
@@ -1197,9 +1200,14 @@ def _resolve_gap_payload_event(
     if not _is_likely_gap_marker_op(marker_event):
         return marker_event, marker_event
 
+    marker_chain_end = marker_event.ts + marker_event.dur
     upper = min(len(sorted_events), marker_index + 1 + _GAP_PAYLOAD_LOOKAHEAD_EVENTS)
     for index in range(marker_index + 1, upper):
         candidate = sorted_events[index]
+        if candidate.ts > marker_chain_end:
+            # A second idle gap starts before we found payload work; do not bridge over it.
+            break
+        marker_chain_end = max(marker_chain_end, candidate.ts + candidate.dur)
         if _is_likely_gap_marker_op(candidate):
             continue
         return marker_event, candidate
