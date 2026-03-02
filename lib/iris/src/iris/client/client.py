@@ -49,6 +49,7 @@ from iris.cluster.types import (
     EnvironmentSpec,
     JobName,
     Namespace,
+    ReservationEntry,
     ResourceSpec,
     merge_constraints,
 )
@@ -600,6 +601,7 @@ class IrisClient:
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
         user: str | None = None,
+        reservation: list[ReservationEntry] | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -617,6 +619,7 @@ class IrisClient:
             max_retries_preemption: Max retries per task on preemption (default: 100)
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
+            reservation: Resource entries to pre-provision before scheduling (None = no reservation)
 
         Returns:
             Job handle for the submitted job
@@ -676,6 +679,11 @@ class IrisClient:
         environment_proto = environment.to_proto() if environment else None
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
+        reservation_proto = None
+        if reservation:
+            reservation_proto = cluster_pb2.ReservationConfig(
+                entries=[e.to_proto() for e in reservation],
+            )
 
         try:
             self._cluster_client.submit_job(
@@ -691,6 +699,7 @@ class IrisClient:
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
                 timeout=timeout,
+                reservation=reservation_proto,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:

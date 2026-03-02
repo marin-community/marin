@@ -10,7 +10,7 @@ from iris.cluster.controller.autoscaler import (
     ScalingDecision,
     UnmetDemand,
 )
-from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.controller import Controller, ControllerConfig, ReservationClaim
 from iris.cluster.controller.vm_lifecycle import (
     start_controller,
     stop_controller,
@@ -26,6 +26,7 @@ __all__ = [
     "DemandEntry",
     "GroupAvailability",
     "LocalController",
+    "ReservationClaim",
     "RoutingDecision",
     "ScalingAction",
     "ScalingDecision",
