@@ -31,7 +31,9 @@ from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
     JobName,
+    ReservationEntry,
     ResourceSpec,
+    get_tpu_topology,
     gpu_device,
     region_constraint,
     zone_constraint,
@@ -219,6 +221,32 @@ def build_resources(
     return spec
 
 
+def parse_reservation_spec(spec: str) -> list[ReservationEntry]:
+    """Parse a reservation spec like '4:H100x8' or 'v5litepod-16'.
+
+    Format: [COUNT:]DEVICE_SPEC
+    Tries to resolve DEVICE_SPEC as a known TPU variant first, then falls back
+    to GPU parsing via parse_gpu_spec.
+    """
+    count = 1
+    device_spec = spec
+    if ":" in spec:
+        count_str, device_spec = spec.split(":", 1)
+        count = int(count_str)
+        if count < 1:
+            raise ValueError(f"Reservation count must be >= 1, got {count}")
+
+    try:
+        get_tpu_topology(device_spec)
+        device = tpu_device(device_spec)
+    except ValueError:
+        variant, gpu_count = parse_gpu_spec(device_spec)
+        device = gpu_device(variant, gpu_count)
+
+    resources = ResourceSpec(device=device)
+    return [ReservationEntry(resources=resources) for _ in range(count)]
+
+
 def generate_job_name(command: list[str]) -> str:
     """Generate a job name from the command."""
     script_name = "job"
@@ -252,6 +280,7 @@ def run_iris_job(
     regions: tuple[str, ...] | None = None,
     zone: str | None = None,
     user: str | None = None,
+    reserve: tuple[str, ...] | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -261,6 +290,7 @@ def run_iris_job(
             (KeyboardInterrupt, unexpected exceptions). Normal completion is unaffected.
         regions: If provided, restrict the job to workers in these regions.
         zone: If provided, restrict the job to workers in this zone.
+        reserve: Reservation specs (e.g., ("4:H100x8", "v5litepod-16")).
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -276,6 +306,12 @@ def run_iris_job(
     if zone:
         constraints.append(zone_constraint(zone))
 
+    reservation: list[ReservationEntry] | None = None
+    if reserve:
+        reservation = []
+        for spec in reserve:
+            reservation.extend(parse_reservation_spec(spec))
+
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
     logger.info(f"Resources: cpu={resources.cpu:g}, memory={resources.memory}, disk={resources.disk}")
@@ -288,6 +324,8 @@ def run_iris_job(
         logger.info(f"Region constraint: {', '.join(regions)}")
     if zone:
         logger.info(f"Zone constraint: {zone}")
+    if reservation:
+        logger.info(f"Reservation: {len(reservation)} entries")
 
     logger.info(f"Using controller: {controller_url}")
     return _submit_and_wait_job(
@@ -305,6 +343,7 @@ def run_iris_job(
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
         user=user,
+        reservation=reservation,
     )
 
 
@@ -323,6 +362,7 @@ def _submit_and_wait_job(
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
     user: str | None = None,
+    reservation: list[ReservationEntry] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -343,6 +383,7 @@ def _submit_and_wait_job(
         max_retries_failure=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
+        reservation=reservation,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -422,6 +463,11 @@ Examples:
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
 @click.option(
+    "--reserve",
+    multiple=True,
+    help="Reserve workers before scheduling. Format: [COUNT:]DEVICE (e.g., 4:H100x8, v5litepod-16). Can be repeated.",
+)
+@click.option(
     "--include-children-logs/--no-include-children-logs",
     default=True,
     help="Stream logs from child jobs (nested submissions).",
@@ -450,6 +496,7 @@ def run(
     region: tuple[str, ...],
     zone: str | None,
     extra: tuple[str, ...],
+    reserve: tuple[str, ...],
     include_children_logs: bool,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
@@ -484,6 +531,7 @@ def run(
             terminate_on_exit=terminate_on_exit,
             regions=region or None,
             zone=zone,
+            reserve=reserve or None,
         )
     except Exception:
         platform = ctx.obj.get("platform")
