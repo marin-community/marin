@@ -536,6 +536,9 @@ MULTILINGUAL_LM_EVAL_LOGPROB_TASKS = (
 
 MULTILINGUAL_LM_EVAL_GENERATIVE_TASKS = MGSM_MULTILINGUAL_TASKS
 
+# DNA variant effect prediction (VEP) tasks
+TRAITGYM_MENDELIAN_V2 = EvalTaskConfig("traitgym_mendelian_v2", 0, task_alias="traitgym_mendelian_v2")
+
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """

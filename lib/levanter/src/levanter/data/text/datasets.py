@@ -39,6 +39,7 @@ from levanter.data.text.examples import (
 )
 from levanter.data.text.formats import (
     ChatLmDatasetFormat,
+    DNALmDatasetFormat,
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
@@ -492,6 +493,16 @@ def dataset_for_component(
             mask_user_turns=mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
         )  # type: ignore
+    elif isinstance(fmt, DNALmDatasetFormat):
+        return PrebuiltLmDataset(
+            cache,
+            Pos,
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weight",
+            loss_weight_transform=None,
+            eos_id=eos_id,
+            block_cross_document_attention=block_cross_document_attention,
+        )
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
         return PrebuiltLmDataset(
             cache,

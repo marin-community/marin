@@ -11,8 +11,9 @@ from draccus import ChoiceRegistry
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer
+from levanter.utils.hf_utils import HfTokenizer
 
-from ._batch_tokenizer import BatchTokenizer
+from ._batch_tokenizer import BatchTokenizer, DNABatchTokenizer
 
 
 class LmDatasetFormatBase(ChoiceRegistry):
@@ -92,6 +93,33 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     ) -> BatchProcessor[dict, dict]:
         del tokenizer, enforce_eos, enforce_bos
         return PrebuiltCacheProcessor(self.input_ids_key, self.loss_weights_key)
+
+
+@LmDatasetFormatBase.register_subclass("dna")
+@dataclass(frozen=True)
+class DNALmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for DNA sequences with soft-masking support.
+
+    Supports position-wise loss weighting based on character case:
+    - Uppercase nucleotides (ACGT): full loss weight (1.0)
+    - Lowercase nucleotides (acgt): reduced loss weight (soft_mask_weight)
+
+    This is useful for down-weighting repetitive elements in genomic data,
+    as pioneered by GPN and adopted by PlantCaduceus and Evo 2.
+
+    Attributes:
+        text_key: Field name containing the DNA sequence.
+        soft_mask_weight: Loss weight for lowercase (soft-masked) positions.
+    """
+
+    text_key: str = "seq"
+    soft_mask_weight: float = 1.0
+
+    def build_preprocessor(
+        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        del enforce_eos, enforce_bos
+        return DNABatchTokenizer(tokenizer, text_field=self.text_key, soft_mask_weight=self.soft_mask_weight)
 
 
 class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
