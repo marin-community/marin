@@ -64,8 +64,9 @@ class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
     max_workers: int = 4096
-    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
-    writer_batch_size: int = 65536
+    # NOTE: worker resources and writer_batch_size need to be tuned together
+    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+    writer_batch_size: int = 16_384
     """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
     overhead. Too large a value increases memory usage and delays progress checkpointing."""
 
@@ -375,7 +376,9 @@ def tokenize(config: TokenizeConfigBase):
             ds = ds.take_per_shard(config.sample_count)
 
         temp_shards = (
-            ds.window(config.writer_batch_size)
+            # NOTE: https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943
+            # Window set to 64 ^
+            ds.window(64)
             .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
             .write_levanter_cache(
                 f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}",
