@@ -717,10 +717,10 @@ class ScalingGroup:
         if group_type != device_type:
             return False
 
-        # None variant = any group of this type; specific variant = exact match
+        # None variant = any group of this type; specific variant = case-insensitive match
         if device_variant is None:
             return True
-        return self._config.accelerator_variant == device_variant
+        return self._config.accelerator_variant.lower() == device_variant.lower()
 
     def _get_device_type(self) -> DeviceType:
         """Get device type from config."""

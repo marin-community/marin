@@ -11,7 +11,6 @@ Usage:
 import json
 import logging
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -174,32 +173,61 @@ def add_standard_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
     return result
 
 
+KNOWN_GPU_VARIANTS: frozenset[str] = frozenset(
+    {
+        "A100",
+        "A10G",
+        "B100",
+        "B200",
+        "GB200",
+        "H100",
+        "H200",
+        "L4",
+        "L40",
+        "L40S",
+        "RTX4090",
+        "T4",
+        "V100",
+    }
+)
+
+_GPU_VARIANT_LOOKUP: dict[str, str] = {v.lower(): v for v in KNOWN_GPU_VARIANTS}
+
+
 def parse_gpu_spec(spec: str) -> tuple[str, int]:
     """Parse a GPU spec string into (variant, count).
 
     Accepts: 'H100x8' → ("H100", 8), '8' → ("", 8), 'H100' → ("H100", 1).
-    Only a trailing 'x<digits>' is treated as a count separator, so variants
-    like 'rtx4090' are not misinterpreted.
+    The variant must be a known GPU name from KNOWN_GPU_VARIANTS (case-insensitive).
     """
     if not spec:
         raise ValueError("GPU spec must not be empty")
 
-    # Only treat 'x' as a count separator for trailing x<1-3 digits>,
-    # so model names like 'rtx4090' (4+ digit suffix) aren't misinterpreted.
-    m = re.fullmatch(r"(\w+)x(\d{1,3})", spec)
-    if m:
-        variant, count = m.group(1), int(m.group(2))
-        if count <= 0:
-            raise ValueError(f"GPU count must be positive, got {count}")
-        return variant, count
     if spec.isdigit():
         count = int(spec)
         if count <= 0:
             raise ValueError(f"GPU count must be positive, got {count}")
         return "", count
-    if not spec.isalnum():
-        raise ValueError(f"Invalid GPU spec: {spec!r}")
-    return spec, 1
+
+    spec_lower = spec.lower()
+    for known_lower, canonical in _GPU_VARIANT_LOOKUP.items():
+        if not spec_lower.startswith(known_lower):
+            continue
+        rest = spec[len(known_lower) :]
+        if not rest:
+            return canonical, 1
+        if rest[0] == "x" and rest[1:].isdigit():
+            count = int(rest[1:])
+            if count <= 0:
+                raise ValueError(f"GPU count must be positive, got {count}")
+            return canonical, count
+
+    known = ", ".join(sorted(KNOWN_GPU_VARIANTS))
+    raise ValueError(
+        f"Unknown GPU spec: {spec!r}. "
+        f"Expected a known variant (e.g., H100), VARIANTxCOUNT (e.g., H100x8), "
+        f"or a bare count (e.g., 8). Known variants: {known}"
+    )
 
 
 def build_resources(
@@ -507,6 +535,17 @@ def run(
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
+
+    # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
+    # instead of --reserve) into cmd. Catch any flags that leaked through
+    # before the actual command starts — these were meant for iris, not the
+    # user's program.
+    for arg in command:
+        if not arg.startswith("-"):
+            break
+        raise click.UsageError(
+            f"Unknown option {arg!r}. " f"Iris options must come before '--'. Did you mean a different flag?"
+        )
 
     env_vars_dict = load_env_vars(env_vars)
 

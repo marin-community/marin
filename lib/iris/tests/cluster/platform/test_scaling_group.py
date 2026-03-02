@@ -892,8 +892,10 @@ class TestScalingGroupAvailability:
         # CPU matches any group
         assert group.matches_device_requirement(DeviceType.CPU, None)
 
-        # TPU with matching variant
+        # TPU with matching variant (case-insensitive)
         assert group.matches_device_requirement(DeviceType.TPU, "v5p-8")
+        assert group.matches_device_requirement(DeviceType.TPU, "V5P-8")
+        assert group.matches_device_requirement(DeviceType.TPU, "V5p-8")
         assert group.matches_device_requirement(DeviceType.TPU, None)  # None = any TPU
         assert not group.matches_device_requirement(DeviceType.TPU, "v5litepod-4")
 
