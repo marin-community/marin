@@ -9,7 +9,7 @@ Format your review as:
 2. **Specification check** (if a specification exists as a PR comment, linked design doc, or `.agents/projects/` file):
    - The implementation should follow the described approach. Flag significant deviations.
    - Described test scenarios should exist and test what they claim.
-   - If no specification exists and the PR exceeds ~500 lines of code changes, note that a specification is expected (see `docs/recipes/agent-coding.md`).
+   - If no specification exists and the PR exceeds ~500 lines of code changes, note that a specification is expected (see `docs/recipes/pull-request.md`).
 3. Tight bullets (if any) for:
    - Bugs or correctness issues
    - Violations of AGENTS.md or coding guidelines
