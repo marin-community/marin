@@ -1100,6 +1100,11 @@ class CoreweavePlatform:
         # Wait for Deployment to be available (returns immediately if already up)
         self._wait_for_deployment_ready()
 
+        # Wait for the rollout to fully complete (all old pods terminated).
+        # Without this, a port-forward through the Service can land on a
+        # dying pod from the previous ReplicaSet and get connection-refused.
+        self._kubectl.rollout_status("deployment", "iris-controller", namespaced=True)
+
         return self.discover_controller(config.controller)
 
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
