@@ -24,9 +24,9 @@ Results are split by benchmark afterward.
 
 Usage (standalone):
     uv run experiments/unified/vlm_mc_eval.py \
-        --checkpoint_path gs://marin-vlm/checkpoints/unified-qwen3-0.6b/step_10000 \
-        --benchmarks ai2d mmmu textvqa chartqa \
-        --eval_batch_size 16
+        --checkpoint_path gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo5-87244a/hf/step-6000/ \
+        --benchmarks ai2d mmmu \
+        --eval_batch_size 4 --checkpoint_is_hf
 
     # MC only
     uv run experiments/unified/vlm_mc_eval.py \
@@ -848,6 +848,8 @@ def build_vlm_prompt_completions(
         List of K PromptCompletion objects, one per option.
     """
     prompt_ids = _build_user_token_ids(messages, image_token_lists, tokenizer)
+    separator_ids = tokenizer.encode("\nAnswer: ", add_special_tokens=False)
+    prompt_with_sep = prompt_ids + separator_ids
 
     completions = []
     for opt_idx in range(len(choices)):
@@ -856,11 +858,11 @@ def build_vlm_prompt_completions(
         completion_text = f"{letter}. {choices[opt_idx]}"
         option_ids = tokenizer.encode(completion_text, add_special_tokens=False)
 
-        all_ids = prompt_ids + option_ids
+        all_ids = prompt_with_sep + option_ids
         completions.append(
             PromptCompletion(
                 ids=all_ids,
-                prompt_length=len(prompt_ids),
+                prompt_length=len(prompt_with_sep),
                 segment_id=segment_id_start + opt_idx,
             )
         )
@@ -881,11 +883,13 @@ def build_vlm_open_ended_completion(
     Metric: length-normalized log P(answer | prompt + image).
     """
     prompt_ids = _build_user_token_ids(messages, image_token_lists, tokenizer)
+    separator_ids = tokenizer.encode("\nAnswer: ", add_special_tokens=False)
+    prompt_with_sep = prompt_ids + separator_ids
     answer_ids = tokenizer.encode(answer, add_special_tokens=False)
-    all_ids = prompt_ids + answer_ids
+    all_ids = prompt_with_sep + answer_ids
     return PromptCompletion(
         ids=all_ids,
-        prompt_length=len(prompt_ids),
+        prompt_length=len(prompt_with_sep),
         segment_id=segment_id,
     )
 

@@ -84,7 +84,7 @@ def _format_hellaswag(example: dict) -> tuple[str, str] | None:
 
     correct_label = labels[label_idx] if label_idx < len(labels) else labels[0]
     correct_text = endings[label_idx] if label_idx < len(endings) else endings[0]
-    answer = f"Answer: {correct_label}. {correct_text}"
+    answer = f"{correct_label}. {correct_text}"
 
     return "\n".join(prompt_lines) + "\n", answer
 
@@ -104,9 +104,9 @@ def _format_winogrande(example: dict) -> tuple[str, str] | None:
 
     prompt_lines = [sentence, f"1. {option1}", f"2. {option2}"]
     if str(answer) == "1":
-        answer_text = f"Answer: 1. {option1}"
+        answer_text = f"1. {option1}"
     else:
-        answer_text = f"Answer: 2. {option2}"
+        answer_text = f"2. {option2}"
 
     return "\n".join(prompt_lines) + "\n", answer_text
 
@@ -133,7 +133,7 @@ def _format_arc(example: dict) -> tuple[str, str] | None:
         if label == answer_key:
             correct_text = text
 
-    answer = f"Answer: {answer_key}. {correct_text}"
+    answer = f"{answer_key}. {correct_text}"
     return "\n".join(prompt_lines) + "\n", answer
 
 
@@ -159,7 +159,7 @@ def _format_mmlu(example: dict) -> tuple[str, str] | None:
 
     correct_label = labels[answer_idx] if answer_idx < len(labels) else labels[0]
     correct_text = choices[answer_idx] if answer_idx < len(choices) else choices[0]
-    answer_text = f"Answer: {correct_label}. {correct_text}"
+    answer_text = f"{correct_label}. {correct_text}"
 
     return "\n".join(prompt_lines) + "\n", answer_text
 
@@ -221,13 +221,15 @@ def process_text_benchmark(
         prompt_text, answer_text = result
 
         prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+        separator_ids = tokenizer.encode("\nAnswer: ", add_special_tokens=False)
         answer_ids = tokenizer.encode(answer_text, add_special_tokens=False)
 
-        all_ids = prompt_ids + answer_ids + [ENDOFTEXT_ID]
+        all_ids = prompt_ids + separator_ids + answer_ids + [ENDOFTEXT_ID]
+        n_prompt = len(prompt_ids) + len(separator_ids)
 
         input_ids = np.array(all_ids, dtype=np.int32)
         loss_weights = np.zeros(len(all_ids), dtype=np.float32)
-        loss_weights[len(prompt_ids):] = 1.0  # answer + eos
+        loss_weights[n_prompt:] = 1.0  # answer + eos
 
         yield {"input_ids": input_ids, "loss_weights": loss_weights}
 

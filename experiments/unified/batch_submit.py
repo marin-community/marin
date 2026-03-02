@@ -46,6 +46,7 @@ TPU_TYPE = "v4-64"
 # Retry settings
 POLL_INTERVAL = 10  # seconds between status checks
 POLL_DURATION = 180  # total seconds to poll before considering job stable
+STABILIZE_DURATION = 180  # seconds to keep watching after RUNNING, to catch quick OOM crashes
 RETRY_WAIT = 600  # seconds to sleep before retrying after failure (10 min)
 MAX_RETRIES = 20
 
@@ -57,53 +58,53 @@ MAX_RETRIES = 20
 # ──────────────────────────────────────────────────────────────────────
 JOBS: list[dict] = [
     {
-        "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2",
+        "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo4",
         "TEXT_WEIGHT": "1.0",
         "MULTIMODAL_WEIGHT": "2.0",
-        "W_VISUAL": "0.1",
+        "W_VISUAL": "0.5",
         "UND_GEN_RATIO": "1",
         "LEARNING_RATE": "3e-4",
     },
     {
-        "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2",
+        "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w1-3e4-demo4",
         "TEXT_WEIGHT": "1.0",
         "MULTIMODAL_WEIGHT": "2.0",
-        "W_VISUAL": "0.2",
+        "W_VISUAL": "1",
         "UND_GEN_RATIO": "1",
         "LEARNING_RATE": "3e-4",
     },
-    {
-        "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2",
-        "TEXT_WEIGHT": "1.0",
-        "MULTIMODAL_WEIGHT": "2.0",
-        "W_VISUAL": "0.3",
-        "UND_GEN_RATIO": "1",
-        "LEARNING_RATE": "3e-4",
-    },
-    {
-        "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2",
-        "TEXT_WEIGHT": "1.0",
-        "MULTIMODAL_WEIGHT": "2.0",
-        "W_VISUAL": "0.2",
-        "UND_GEN_RATIO": "1",
-        "LEARNING_RATE": "1e-3",
-    },
-    {
-        "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2",
-        "TEXT_WEIGHT": "1.0",
-        "MULTIMODAL_WEIGHT": "2.0",
-        "W_VISUAL": "0.2",
-        "UND_GEN_RATIO": "1",
-        "LEARNING_RATE": "1e-4",
-    },
-    {
-        "EXP_NAME": "unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2",
-        "TEXT_WEIGHT": "2.0",
-        "MULTIMODAL_WEIGHT": "2.0",
-        "W_VISUAL": "0.2",
-        "UND_GEN_RATIO": "1",
-        "LEARNING_RATE": "1e-3",
-    },
+    # {
+    #     "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2",
+    #     "TEXT_WEIGHT": "1.0",
+    #     "MULTIMODAL_WEIGHT": "2.0",
+    #     "W_VISUAL": "0.3",
+    #     "UND_GEN_RATIO": "1",
+    #     "LEARNING_RATE": "3e-4",
+    # },
+    # {
+    #     "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2",
+    #     "TEXT_WEIGHT": "1.0",
+    #     "MULTIMODAL_WEIGHT": "2.0",
+    #     "W_VISUAL": "0.2",
+    #     "UND_GEN_RATIO": "1",
+    #     "LEARNING_RATE": "1e-3",
+    # },
+    # {
+    #     "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2",
+    #     "TEXT_WEIGHT": "1.0",
+    #     "MULTIMODAL_WEIGHT": "2.0",
+    #     "W_VISUAL": "0.2",
+    #     "UND_GEN_RATIO": "1",
+    #     "LEARNING_RATE": "1e-4",
+    # },
+    # {
+    #     "EXP_NAME": "unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2",
+    #     "TEXT_WEIGHT": "2.0",
+    #     "MULTIMODAL_WEIGHT": "2.0",
+    #     "W_VISUAL": "0.2",
+    #     "UND_GEN_RATIO": "1",
+    #     "LEARNING_RATE": "1e-3",
+    # },
     # ── Add more jobs below ──────────────────────────────────────────
 ]
 
@@ -160,25 +161,45 @@ def _poll_until_decided(
     submission_id: str,
     exp_name: str,
 ) -> JobStatus:
-    """Poll job status until it reaches RUNNING, FAILED, SUCCEEDED, or timeout."""
+    """Poll job status until it stabilizes or fails.
+
+    Two phases:
+      1. Wait up to POLL_DURATION for the job to leave PENDING.
+      2. Once RUNNING, keep polling for STABILIZE_DURATION more seconds.
+         If the job crashes back to FAILED during this window (e.g. OOM),
+         we return FAILED so the retry logic kicks in.
+    """
     start = time.time()
     last_status = None
+    running_since: float | None = None
 
-    while time.time() - start < POLL_DURATION:
+    while True:
+        elapsed = time.time() - start
         status = client.get_job_status(submission_id)
+
         if status != last_status:
-            logger.info("  %s status: %s (%.0fs)", exp_name, status, time.time() - start)
+            logger.info("  %s status: %s (%.0fs)", exp_name, status, elapsed)
             last_status = status
 
-        if status in (JobStatus.RUNNING, JobStatus.FAILED, JobStatus.SUCCEEDED):
+        # Terminal failures — return immediately.
+        if status in (JobStatus.FAILED, JobStatus.SUCCEEDED, JobStatus.STOPPED):
             return status
 
-        time.sleep(POLL_INTERVAL)
+        if status == JobStatus.RUNNING:
+            if running_since is None:
+                running_since = time.time()
+                logger.info("  %s entered RUNNING, stabilizing for %ds...", exp_name, STABILIZE_DURATION)
+            elif time.time() - running_since >= STABILIZE_DURATION:
+                logger.info("  %s has been RUNNING for %ds — looks stable.", exp_name, STABILIZE_DURATION)
+                return status
+        else:
+            # Still PENDING — check overall timeout.
+            running_since = None
+            if elapsed >= POLL_DURATION:
+                logger.info("  %s still %s after %ds — treating as stable enough.", exp_name, status, POLL_DURATION)
+                return status
 
-    # Timed out — return whatever state we last saw (likely PENDING).
-    final = client.get_job_status(submission_id)
-    logger.info("  %s final status after %ds: %s", exp_name, POLL_DURATION, final)
-    return final
+        time.sleep(POLL_INTERVAL)
 
 
 def submit_one_job(

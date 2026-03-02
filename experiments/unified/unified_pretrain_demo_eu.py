@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 # --- Constants ---
 
-LLAMA3_GCS_TOKENIZER = "gs://marin-us-central2/tokenizers/llama-3.1-8b"
+LLAMA3_GCS_TOKENIZER = "gs://marin-eu-west4/tokenizers/llama-3.1-8b"
 LLAMA3_VOCAB_SIZE = 128_256
 TOKLIP_CODEBOOK_SIZE = 16_384
 UNIFIED_VOCAB_SIZE = LLAMA3_VOCAB_SIZE + TOKLIP_CODEBOOK_SIZE  # 144,640
@@ -61,10 +61,10 @@ UNIFIED_VOCAB_SIZE = LLAMA3_VOCAB_SIZE + TOKLIP_CODEBOOK_SIZE  # 144,640
 VISION_START_ID = 128_004  # <|reserved_special_token_2|> → <|vision_start|>
 VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 
-UNIFIED_TOKENIZER_PATH = "gs://marin-us-central2/tokenizers/llama3-unified-144k"
-UNIFIED_CACHE_PATH = "gs://marin-vlm/hf_85m_levanter_cache_v2"
-UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm/unified_eval_cache"
-TEXT_EVAL_CACHE_PATH = "gs://marin-vlm/text_eval_cache"
+UNIFIED_TOKENIZER_PATH = "gs://marin-eu-west4/tokenizers/llama3-unified-144k"
+UNIFIED_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2"
+UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm-eu/unified_eval_cache"
+TEXT_EVAL_CACHE_PATH = "gs://marin-vlm-eu/text_eval_cache"
 
 # Eval benchmark categories (used for tagging in eval metrics)
 UNDERSTANDING_BENCHMARKS = {"textvqa", "chartqa", "ai2d", "mmmu"}
@@ -391,7 +391,7 @@ def _demo_train_config(learning_rate: float = 3e-4) -> SimpleTrainConfig:
         lr_schedule="cosine",
         weight_decay=0.1,
         max_grad_norm=1.0,
-        per_device_parallelism=4,
+        per_device_parallelism=1,
         steps_per_eval=500,
         steps_per_export=1000,
     )

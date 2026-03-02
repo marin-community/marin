@@ -1,363 +1,837 @@
-2026-03-01 12:44:06,517 - INFO - Submitting 6 job(s) to cluster infra/marin-us-central2.yaml
-2026-03-01 12:44:09,165 - INFO - Creating SSH proxy chain through marin-us-central2
-2026-03-01 12:44:09,166 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8270, gcs_port=6384, api_port=10006)}
-2026-03-01 12:44:09,171 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
-2026-03-01 12:44:10,407 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-01 12:44:10,558 - INFO - ==== [1/6] unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2 ======
-2026-03-01 12:44:10,558 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2
-2026-03-01 12:44:13,968 - INFO - Creating SSH proxy chain through marin-us-central2
-2026-03-01 12:44:13,969 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
-2026-03-01 12:44:13,973 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
-2026-03-01 12:44:15,048 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-01 12:44:15,209 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:44:15,209 - INFO - Extras: 
-2026-03-01 12:44:15,209 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "TPU_TYPE": "v4-64",
-    "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2",
-    "TEXT_WEIGHT": "1.0",
-    "MULTIMODAL_WEIGHT": "2.0",
-    "W_VISUAL": "0.1",
-    "UND_GEN_RATIO": "1",
-    "LEARNING_RATE": "3e-4",
-    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 535 packages in 23ms
-2026-03-01 12:44:15,326 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2", "TEXT_WEIGHT": "1.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.1", "UND_GEN_RATIO": "1", "LEARNING_RATE": "3e-4", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124411  --  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:44:15,334	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:44:15,396	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:44:15,455	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:44:15,455	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:44:15,462	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:44:15,624	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:44:15,624	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:44:15,701	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:44:15,709	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:44:15,715	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:44:15,776	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:44:15,834	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:44:15,834	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:44:15,840	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:44:16,002	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:44:16,003	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:44:16,078	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:44:16,085	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:44:16,166	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_5154e0973f1a4c35.zip.
-2026-03-01 12:44:16,167	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
-2026-03-01 12:44:16,168	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:44:16,255	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:44:16,345	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:44:16,345	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:44:16,353	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:44:16,583	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:44:16,584	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:44:16,758	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:44:16,774	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:44:17,918 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124411
-2026-03-01 12:44:17,918 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124411
-2026-03-01 12:44:18,014 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124411 ...
-2026-03-01 12:44:18,109 - INFO -   unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2 status: PENDING (0s)
-2026-03-01 12:44:28,193 - INFO -   unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2 status: RUNNING (10s)
-2026-03-01 12:44:28,193 - INFO -   Job unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2 is RUNNING.
-2026-03-01 12:44:28,193 - INFO - ==== [2/6] unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2 ======
-2026-03-01 12:44:28,194 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2
-2026-03-01 12:44:31,693 - INFO - Creating SSH proxy chain through marin-us-central2
-2026-03-01 12:44:31,693 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
-2026-03-01 12:44:31,698 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
-2026-03-01 12:44:32,773 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-01 12:44:32,933 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:44:32,933 - INFO - Extras: 
-2026-03-01 12:44:32,933 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "TPU_TYPE": "v4-64",
-    "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2",
-    "TEXT_WEIGHT": "1.0",
-    "MULTIMODAL_WEIGHT": "2.0",
-    "W_VISUAL": "0.2",
-    "UND_GEN_RATIO": "1",
-    "LEARNING_RATE": "3e-4",
-    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 535 packages in 23ms
-2026-03-01 12:44:33,049 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2", "TEXT_WEIGHT": "1.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.2", "UND_GEN_RATIO": "1", "LEARNING_RATE": "3e-4", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124428  --  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:44:33,056	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:44:33,117	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:44:33,176	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:44:33,176	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:44:33,183	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:44:33,344	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:44:33,345	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:44:33,422	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:44:33,429	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:44:33,435	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:44:33,497	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:44:33,555	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:44:33,555	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:44:33,561	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:44:33,723	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:44:33,724	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:44:33,798	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:44:33,805	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:44:33,886	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_6b134bffc2679ec0.zip.
-2026-03-01 12:44:33,887	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
-2026-03-01 12:44:33,888	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:44:33,975	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:44:34,064	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:44:34,065	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:44:34,073	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:44:34,303	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:44:34,304	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:44:34,468	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:44:34,483	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:44:35,608 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124428
-2026-03-01 12:44:35,608 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124428
-2026-03-01 12:44:35,706 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124428 ...
-2026-03-01 12:44:35,789 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2 status: PENDING (0s)
-2026-03-01 12:44:45,874 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2 status: RUNNING (10s)
-2026-03-01 12:44:45,874 - INFO -   Job unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2 is RUNNING.
-2026-03-01 12:44:45,874 - INFO - ==== [3/6] unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2 ======
-2026-03-01 12:44:45,874 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2
-2026-03-01 12:44:49,193 - INFO - Creating SSH proxy chain through marin-us-central2
-2026-03-01 12:44:49,193 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
-2026-03-01 12:44:49,197 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
-2026-03-01 12:44:50,271 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-01 12:44:50,430 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:44:50,431 - INFO - Extras: 
-2026-03-01 12:44:50,431 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "TPU_TYPE": "v4-64",
-    "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2",
-    "TEXT_WEIGHT": "1.0",
-    "MULTIMODAL_WEIGHT": "2.0",
-    "W_VISUAL": "0.3",
-    "UND_GEN_RATIO": "1",
-    "LEARNING_RATE": "3e-4",
-    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 535 packages in 23ms
-2026-03-01 12:44:50,547 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2", "TEXT_WEIGHT": "1.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.3", "UND_GEN_RATIO": "1", "LEARNING_RATE": "3e-4", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124446  --  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:44:50,555	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:44:50,617	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:44:50,675	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:44:50,675	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:44:50,682	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:44:50,843	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:44:50,844	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:44:50,921	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:44:50,928	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:44:50,934	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:44:50,995	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:44:51,052	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:44:51,053	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:44:51,059	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:44:51,220	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:44:51,221	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:44:51,294	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:44:51,301	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:44:51,381	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_62b37b435bee5027.zip.
-2026-03-01 12:44:51,381	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
-2026-03-01 12:44:51,382	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:44:51,469	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:44:51,559	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:44:51,560	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:44:51,568	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:44:51,795	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:44:51,796	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:44:51,968	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:44:51,983	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:44:53,121 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124446
-2026-03-01 12:44:53,121 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124446
-2026-03-01 12:44:53,220 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124446 ...
-2026-03-01 12:44:53,314 - INFO -   unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2 status: PENDING (0s)
-2026-03-01 12:45:03,406 - INFO -   unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2 status: RUNNING (10s)
-2026-03-01 12:45:03,406 - INFO -   Job unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2 is RUNNING.
-2026-03-01 12:45:03,406 - INFO - ==== [4/6] unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2 ======
-2026-03-01 12:45:03,406 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2
-2026-03-01 12:45:06,730 - INFO - Creating SSH proxy chain through marin-us-central2
-2026-03-01 12:45:06,730 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
-2026-03-01 12:45:06,735 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
-2026-03-01 12:45:07,809 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-01 12:45:07,970 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:45:07,970 - INFO - Extras: 
-2026-03-01 12:45:07,970 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "TPU_TYPE": "v4-64",
-    "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2",
-    "TEXT_WEIGHT": "1.0",
-    "MULTIMODAL_WEIGHT": "2.0",
-    "W_VISUAL": "0.2",
-    "UND_GEN_RATIO": "1",
-    "LEARNING_RATE": "1e-3",
-    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 535 packages in 23ms
-2026-03-01 12:45:08,087 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2", "TEXT_WEIGHT": "1.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.2", "UND_GEN_RATIO": "1", "LEARNING_RATE": "1e-3", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124504  --  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:45:08,094	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:45:08,156	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:45:08,215	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:45:08,215	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:45:08,222	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:45:08,385	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:45:08,386	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:45:08,462	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:45:08,470	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:45:08,476	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:45:08,538	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:45:08,595	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:45:08,596	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:45:08,602	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:45:08,764	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:45:08,764	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:45:08,839	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:45:08,846	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:45:10,242	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_8f9b61d9e0c28dc9.zip.
-2026-03-01 12:45:10,243	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
-2026-03-01 12:45:10,244	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:45:10,331	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:45:10,420	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:45:10,421	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:45:10,429	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:45:10,658	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:45:10,659	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:45:10,826	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:45:10,848	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:45:12,025 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124504
-2026-03-01 12:45:12,025 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124504
-2026-03-01 12:45:12,126 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124504 ...
-2026-03-01 12:45:12,234 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2 status: PENDING (0s)
-2026-03-01 12:45:22,318 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2 status: RUNNING (10s)
-2026-03-01 12:45:22,318 - INFO -   Job unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2 is RUNNING.
-2026-03-01 12:45:22,318 - INFO - ==== [5/6] unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2 ======
-2026-03-01 12:45:22,318 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2
-2026-03-01 12:45:25,684 - INFO - Creating SSH proxy chain through marin-us-central2
-2026-03-01 12:45:25,684 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
-2026-03-01 12:45:25,689 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
-2026-03-01 12:45:26,762 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-01 12:45:26,920 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:45:26,921 - INFO - Extras: 
-2026-03-01 12:45:26,921 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "TPU_TYPE": "v4-64",
-    "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2",
-    "TEXT_WEIGHT": "1.0",
-    "MULTIMODAL_WEIGHT": "2.0",
-    "W_VISUAL": "0.2",
-    "UND_GEN_RATIO": "1",
-    "LEARNING_RATE": "1e-4",
-    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 535 packages in 23ms
-2026-03-01 12:45:27,038 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2", "TEXT_WEIGHT": "1.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.2", "UND_GEN_RATIO": "1", "LEARNING_RATE": "1e-4", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124523  --  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:45:27,045	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:45:27,107	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:45:27,165	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:45:27,165	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:45:27,172	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:45:27,333	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:45:27,334	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:45:27,410	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:45:27,417	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:45:27,424	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:45:27,484	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:45:27,541	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:45:27,541	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:45:27,548	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:45:27,708	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:45:27,709	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:45:27,782	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:45:27,789	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:45:27,869	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_2ccb6d402bfe1193.zip.
-2026-03-01 12:45:27,870	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
-2026-03-01 12:45:27,871	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:45:27,957	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:45:28,046	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:45:28,047	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:45:28,055	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:45:28,282	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:45:28,283	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:45:28,447	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:45:28,464	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:45:29,588 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124523
-2026-03-01 12:45:29,589 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124523
-2026-03-01 12:45:29,685 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124523 ...
-2026-03-01 12:45:29,771 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2 status: PENDING (0s)
-2026-03-01 12:45:39,854 - INFO -   unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2 status: RUNNING (10s)
-2026-03-01 12:45:39,854 - INFO -   Job unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2 is RUNNING.
-2026-03-01 12:45:39,854 - INFO - ==== [6/6] unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2 ======
-2026-03-01 12:45:39,854 - INFO - [Attempt 1/20] Submitting unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2
-2026-03-01 12:45:43,294 - INFO - Creating SSH proxy chain through marin-us-central2
-2026-03-01 12:45:43,294 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-us-central2': RayPortMapping(dashboard_port=8272, gcs_port=6386, api_port=10008)}
-2026-03-01 12:45:43,298 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '35.186.135.131' (ED25519) to the list of known hosts.
-2026-03-01 12:45:44,372 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-01 12:45:44,531 - INFO - Submitting job with entrypoint:  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:45:44,532 - INFO - Extras: 
-2026-03-01 12:45:44,532 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "TPU_TYPE": "v4-64",
-    "EXP_NAME": "unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2",
-    "TEXT_WEIGHT": "2.0",
-    "MULTIMODAL_WEIGHT": "2.0",
-    "W_VISUAL": "0.2",
-    "UND_GEN_RATIO": "1",
-    "LEARNING_RATE": "1e-3",
-    "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 535 packages in 23ms
-2026-03-01 12:45:44,649 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "TPU_TYPE": "v4-64", "EXP_NAME": "unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2", "TEXT_WEIGHT": "2.0", "MULTIMODAL_WEIGHT": "2.0", "W_VISUAL": "0.2", "UND_GEN_RATIO": "1", "LEARNING_RATE": "1e-3", "GIT_COMMIT": "c0f8f7a93ee97c19b4e55b22e60efe8f8842ac63", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/iris/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_963c0a0b4e224f4f.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_scaling", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-unified_pretrain_demo-20260301-124540  --  python experiments/unified/unified_pretrain_demo.py
-2026-03-01 12:45:44,657	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:45:44,718	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:45:44,777	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:45:44,777	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:45:44,784	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:45:44,945	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:45:44,946	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:45:45,023	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:45:45,030	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:45:45,036	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:45:45,097	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:45:45,155	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:45:45,155	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:45:45,161	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:45:45,322	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:45:45,323	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:45:45,398	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:45:45,404	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:45:45,484	INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_7586921acad48a75.zip.
-2026-03-01 12:45:45,485	INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_scaling'.
-2026-03-01 12:45:45,486	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.gitignore')]
-2026-03-01 12:45:45,575	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.ruff_cache/.gitignore')]
-2026-03-01 12:45:45,664	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.gitignore')]
-2026-03-01 12:45:45,665	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.ruff_cache/.gitignore')]
-2026-03-01 12:45:45,673	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/levanter/.idea/.gitignore')]
-2026-03-01 12:45:45,901	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.gitignore')]
-2026-03-01 12:45:45,902	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/lib/haliax/.ruff_cache/.gitignore')]
-2026-03-01 12:45:46,071	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/data_browser/.gitignore')]
-2026-03-01 12:45:46,092	INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_scaling/.venv/.gitignore')]
-2026-03-01 12:45:47,235 - INFO - Job submitted with ID: ray-run-ruili-unified_pretrain_demo-20260301-124540
-2026-03-01 12:45:47,235 - INFO - Job URL: http://localhost:8272/#/jobs/ray-run-ruili-unified_pretrain_demo-20260301-124540
-2026-03-01 12:45:47,340 - INFO -   Polling status for job ray-run-ruili-unified_pretrain_demo-20260301-124540 ...
-2026-03-01 12:45:47,422 - INFO -   unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2 status: PENDING (0s)
-2026-03-01 12:45:57,505 - INFO -   unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2 status: RUNNING (10s)
-2026-03-01 12:45:57,505 - INFO -   Job unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2 is RUNNING.
-2026-03-01 12:45:57,506 - INFO - ==============================================
-2026-03-01 12:45:57,506 - INFO - Results: 6 succeeded, 0 failed out of 6 total
-2026-03-01 12:45:57,507 - INFO -   Succeeded: unified-qwen3-1.7b-1-1-1-w0.1-3e4-demo2, unified-qwen3-1.7b-1-1-1-w0.2-3e4-demo2, unified-qwen3-1.7b-1-1-1-w0.3-3e4-demo2, unified-qwen3-1.7b-1-1-1-w0.2-1e3-demo2, unified-qwen3-1.7b-1-1-1-w0.2-1e4-demo2, unified-qwen3-1.7b-2-1-1-w0.2-1e3-demo2
+6]{1,0:T(4,128)S(1)} parameter(2)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376549   25096 2a886c8_compiler_base.cc:2613] eq.36 = s32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_2.1384), dimensions={0,1}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376558   25096 2a886c8_compiler_base.cc:2613] broadcast.591 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(constant.1544), dimensions={}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376567   25096 2a886c8_compiler_base.cc:2613] iota.66 = s32[4,4096,144640]{2,1,0:T(8,128)} iota(), iota_dimension=2
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376579   25096 2a886c8_compiler_base.cc:2613] eq.35 = pred[4,4096,144640]{2,1,0:T(8,128)(4,1)} compare(eq.36, iota.66), direction=EQ
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376589   25096 2a886c8_compiler_base.cc:2613] mul.1874 = f32[4,4096,144640]{2,1,0:T(8,128)} multiply(broadcast_in_dim.423, exp.46)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376603   25096 2a886c8_compiler_base.cc:2613] sub.71 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_3.954), dimensions={0,1}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376613   25096 2a886c8_compiler_base.cc:2613] convert_element_type.808 = f32[4,4096,144640]{2,1,0:T(8,128)} convert(param_4.698)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376622   25096 2a886c8_compiler_base.cc:2613] sub.70 = f32[4,4096,144640]{2,1,0:T(8,128)} subtract(convert_element_type.808, sub.71)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376631   25096 2a886c8_compiler_base.cc:2613] exp.46 = f32[4,4096,144640]{2,1,0:T(8,128)} exponential(sub.70)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376642   25096 2a886c8_compiler_base.cc:2613] param_0.1501 = f32[4,4096]{1,0:T(4,128)S(1)} parameter(0)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376652   25096 2a886c8_compiler_base.cc:2613] broadcast_in_dim.423 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_0.1501), dimensions={0,1}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376661   25096 2a886c8_compiler_base.cc:2613] mul.1874 = f32[4,4096,144640]{2,1,0:T(8,128)} multiply(broadcast_in_dim.423, exp.46)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376673   25096 2a886c8_compiler_base.cc:2613] constant.1544 = f32[]{:T(128)} constant(0)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376683   25096 2a886c8_compiler_base.cc:2613] broadcast.591 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(constant.1544), dimensions={}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376694   25096 2a886c8_compiler_base.cc:2613] param_1.1713 = f32[4,4096]{1,0:T(4,128)S(1)} parameter(1)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376704   25096 2a886c8_compiler_base.cc:2613] dot_general.235 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_1.1713), dimensions={0,1}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376718   25096 2a886c8_compiler_base.cc:2613] iota.66 = s32[4,4096,144640]{2,1,0:T(8,128)} iota(), iota_dimension=2
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376727   25096 2a886c8_compiler_base.cc:2613] eq.36 = s32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_2.1384), dimensions={0,1}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376736   25096 2a886c8_compiler_base.cc:2613] eq.35 = pred[4,4096,144640]{2,1,0:T(8,128)(4,1)} compare(eq.36, iota.66), direction=EQ
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376753   25096 2a886c8_compiler_base.cc:2613] dot_general.234 = f32[4,4096,144640]{2,1,0:T(8,128)} select(eq.35, dot_general.235, broadcast.591)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376763   25096 2a886c8_compiler_base.cc:2613] neg.107 = f32[4,4096,144640]{2,1,0:T(8,128)} negate(dot_general.234)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376772   25096 2a886c8_compiler_base.cc:2613] add_any.202 = f32[4,4096,144640]{2,1,0:T(8,128)} add(neg.107, mul.1874)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377502   25096 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377520   25096 2a886c8_compiler_base.cc:2613] param_2.1624 = s32[4,4096]{1,0:T(4,128)S(1)} parameter(2)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377529   25096 2a886c8_compiler_base.cc:2613] eq.40 = s32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_2.1624), dimensions={0,1}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377538   25096 2a886c8_compiler_base.cc:2613] broadcast.609 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(constant.1815), dimensions={}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377547   25096 2a886c8_compiler_base.cc:2613] iota.76 = s32[4,4096,144640]{2,1,0:T(8,128)} iota(), iota_dimension=2
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377566   25096 2a886c8_compiler_base.cc:2613] eq.39 = pred[4,4096,144640]{2,1,0:T(8,128)(4,1)} compare(eq.40, iota.76), direction=EQ
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377575   25096 2a886c8_compiler_base.cc:2613] mul.2194 = f32[4,4096,144640]{2,1,0:T(8,128)} multiply(broadcast_in_dim.535, exp.64)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377585   25096 2a886c8_compiler_base.cc:2613] sub.81 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_3.1104), dimensions={0,1}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377597   25096 2a886c8_compiler_base.cc:2613] convert_element_type.1046 = f32[4,4096,144640]{2,1,0:T(8,128)} convert(param_4.805)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377607   25096 2a886c8_compiler_base.cc:2613] sub.80 = f32[4,4096,144640]{2,1,0:T(8,128)} subtract(convert_element_type.1046, sub.81)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377619   25096 2a886c8_compiler_base.cc:2613] exp.64 = f32[4,4096,144640]{2,1,0:T(8,128)} exponential(sub.80)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377629   25096 2a886c8_compiler_base.cc:2613] param_0.1921 = f32[4,4096]{1,0:T(4,128)S(1)} parameter(0)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377641   25096 2a886c8_compiler_base.cc:2613] broadcast_in_dim.535 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_0.1921), dimensions={0,1}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377650   25096 2a886c8_compiler_base.cc:2613] mul.2194 = f32[4,4096,144640]{2,1,0:T(8,128)} multiply(broadcast_in_dim.535, exp.64)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377660   25096 2a886c8_compiler_base.cc:2613] constant.1815 = f32[]{:T(128)} constant(0)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377671   25096 2a886c8_compiler_base.cc:2613] broadcast.609 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(constant.1815), dimensions={}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377681   25096 2a886c8_compiler_base.cc:2613] param_1.2007 = f32[4,4096]{1,0:T(4,128)S(1)} parameter(1)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377694   25096 2a886c8_compiler_base.cc:2613] dot_general.241 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_1.2007), dimensions={0,1}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377703   25096 2a886c8_compiler_base.cc:2613] iota.76 = s32[4,4096,144640]{2,1,0:T(8,128)} iota(), iota_dimension=2
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377712   25096 2a886c8_compiler_base.cc:2613] eq.40 = s32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_2.1624), dimensions={0,1}
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377724   25096 2a886c8_compiler_base.cc:2613] eq.39 = pred[4,4096,144640]{2,1,0:T(8,128)(4,1)} compare(eq.40, iota.76), direction=EQ
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377733   25096 2a886c8_compiler_base.cc:2613] dot_general.240 = f32[4,4096,144640]{2,1,0:T(8,128)} select(eq.39, dot_general.241, broadcast.609)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377742   25096 2a886c8_compiler_base.cc:2613] neg.137 = f32[4,4096,144640]{2,1,0:T(8,128)} negate(dot_general.240)
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377754   25096 2a886c8_compiler_base.cc:2613] add_any.214 = f32[4,4096,144640]{2,1,0:T(8,128)} add(neg.137, mul.2194)
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408595   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408609   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408673   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408730   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408785   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408849   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408907   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408981   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409047   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409112   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409175   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409232   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409299   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409356   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409412   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409513   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409568   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409629   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409685   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409748   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409805   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409860   24744 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.410189   24744 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.410246   24744 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.410320   24744 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.412224   24744 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.414502   24744 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.414627   24744 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.414730   24744 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.414961   24744 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.415024   24744 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.415170   24744 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.415980   24744 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.416127   24744 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.416160   24744 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.416207   24744 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.417206   24744 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496074   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496089   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496152   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496209   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496265   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496331   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496397   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496461   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496526   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496591   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496653   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496719   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496774   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496832   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496887   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496986   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497041   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497102   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497156   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497220   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497275   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497332   25133 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497647   25133 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497708   25133 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497774   25133 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.499601   25133 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.501873   25133 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.501973   25133 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.502075   25133 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.502323   25133 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.502391   25133 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.502556   25133 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.503363   25133 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.503511   25133 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.503543   25133 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.503592   25133 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.504573   25133 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568031   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568045   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568108   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568166   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568222   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568284   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568346   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568409   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568472   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568555   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568617   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568678   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568733   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568788   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568843   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568943   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568998   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569057   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569111   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569175   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569230   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569286   25282 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569616   25282 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569670   25282 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569739   25282 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.571541   25282 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.573616   25282 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.573717   25282 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.573816   25282 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.574045   25282 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.574107   25282 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.574244   25282 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.575067   25282 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.575212   25282 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.575240   25282 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.575284   25282 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.576263   25282 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579425   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579450   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579537   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579599   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579655   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579721   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579781   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579853   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579918   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579983   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580048   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580104   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580167   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580223   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580280   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580378   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580441   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580504   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580563   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580626   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580681   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580738   25141 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.581047   25141 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.581108   25141 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.581173   25141 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.583042   25141 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585316   25141 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585415   25141 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585524   25141 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585757   25141 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585820   25141 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585969   25141 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.586799   25141 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.586947   25141 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.586976   25141 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.587023   25141 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.588029   25141 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.661848   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.661862   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.661932   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.661988   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662043   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662108   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662166   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662242   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662306   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662368   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662429   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662485   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662549   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662604   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662660   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662756   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662810   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662872   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662924   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662985   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.663057   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.663110   27938 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.663428   27938 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.663488   27938 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.663560   27938 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.665428   27938 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.667688   27938 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.667785   27938 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.667886   27938 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.668113   27938 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.668174   27938 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.668309   27938 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.669147   27938 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.669292   27938 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.669324   27938 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.669371   27938 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.670360   27938 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658433   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658447   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658508   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658561   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658615   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658676   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658736   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658792   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658846   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658902   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658958   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659013   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659062   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659109   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659157   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659260   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659307   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659361   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659413   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659467   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659515   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659563   25245 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659876   25245 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659925   25245 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659992   25245 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.661876   25245 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.663996   25245 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.664082   25245 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.664175   25245 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.664402   25245 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.664464   25245 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.664588   25245 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.665401   25245 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.665534   25245 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.665565   25245 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.665608   25245 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.666585   25245 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679286   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679299   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679360   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679414   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679468   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679527   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679589   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679649   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679712   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679774   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679832   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679916   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679970   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680024   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680079   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680172   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680224   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680280   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680332   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680391   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680443   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680496   25564 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680831   25564 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680890   25564 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680956   25564 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.682829   25564 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685039   25564 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685132   25564 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685227   25564 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685453   25564 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685514   25564 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685647   25564 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.686463   25564 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.686610   25564 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.686641   25564 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.686710   25564 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.687689   25564 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.701924   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.701938   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702000   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702052   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702106   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702163   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702216   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702276   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702331   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702386   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702439   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702487   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702540   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702589   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702637   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702726   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702774   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702831   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702878   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702931   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702979   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.703028   25107 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.703358   25107 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.703413   25107 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.703480   25107 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.705332   25107 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.707491   25107 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.707579   25107 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.707686   25107 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.707911   25107 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.707970   25107 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.708099   25107 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.708906   25107 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.709033   25107 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.709065   25107 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.709109   25107 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.710057   25107 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699088   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699102   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699165   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699220   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699275   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699338   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699393   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699462   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699526   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699590   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699651   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699709   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699771   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699827   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699882   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699981   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700036   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700098   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700152   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700212   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700268   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700322   25117 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700640   25117 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700706   25117 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700768   25117 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.702650   25117 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.704911   25117 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.705012   25117 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.705114   25117 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.705338   25117 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.705400   25117 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.705541   25117 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.706349   25117 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.706496   25117 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.706528   25117 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.706576   25117 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.707543   25117 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759262   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759276   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759340   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759398   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759453   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759526   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759589   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759654   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759718   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759784   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759846   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759909   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759965   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760020   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760075   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760172   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760226   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760285   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760339   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760399   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760455   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760513   25204 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760823   25204 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760879   25204 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760949   25204 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.762810   25204 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765127   25204 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765230   25204 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765328   25204 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765555   25204 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765618   25204 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765760   25204 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.766571   25204 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.766721   25204 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.766761   25204 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.766810   25204 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.767793   25204 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.746839   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.746853   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.746917   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.746975   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747031   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747103   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747164   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747235   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747300   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747367   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747433   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747490   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747554   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747611   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747668   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747775   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747830   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747891   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747946   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748010   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748067   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748131   25298 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748469   25298 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748533   25298 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748601   25298 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.750521   25298 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.752836   25298 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.752937   25298 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.753035   25298 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.753272   25298 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.753338   25298 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.753481   25298 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.754306   25298 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.754457   25298 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.754490   25298 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.754539   25298 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.755556   25298 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.709755   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.709769   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.709831   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.709886   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.709940   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710000   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710055   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710115   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710170   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710224   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710277   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710324   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710378   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710425   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710473   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710562   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710613   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710665   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710713   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710766   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710814   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710862   25101 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.711175   25101 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.711232   25101 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.711299   25101 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.713145   25101 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715303   25101 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715388   25101 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715478   25101 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715731   25101 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715789   25101 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715919   25101 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.716729   25101 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.716856   25101 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.716889   25101 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.716936   25101 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.717901   25101 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846497   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846511   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846575   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846631   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846695   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846758   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846822   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846888   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846954   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847021   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847082   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847146   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847203   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847261   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847318   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847427   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847484   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847546   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847603   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847665   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847727   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847783   25194 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.848103   25194 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.848159   25194 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.848231   25194 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.850167   25194 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.852357   25194 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.852457   25194 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.852563   25194 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.852799   25194 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.852862   25194 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.853011   25194 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.853843   25194 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.853990   25194 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.854026   25194 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.854095   25194 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.855133   25194 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867405   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867419   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867482   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867540   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867597   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867662   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867735   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867801   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867866   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867931   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867994   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868058   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868114   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868170   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868226   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868321   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868376   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868437   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868494   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868556   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868611   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868667   25379 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868996   25379 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.869052   25379 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.869121   25379 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.870960   25379 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873104   25379 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873202   25379 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873302   25379 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873532   25379 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873593   25379 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873733   25379 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.874552   25379 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.874702   25379 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.874746   25379 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.874789   25379 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.875773   25379 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906351   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906365   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906429   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906485   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906543   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906605   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906668   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906734   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906798   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906865   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906927   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906990   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907047   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907104   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907160   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907271   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907328   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907388   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907443   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907506   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907563   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907620   25111 2a886c8_compiler_base.cc:2587] 
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907940   25111 2a886c8_compiler_base.cc:2608] region_8.11
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907999   25111 2a886c8_compiler_base.cc:2608] region_12.14
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.908068   25111 2a886c8_compiler_base.cc:2608] region_24.27
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.910012   25111 2a886c8_compiler_base.cc:2608] main.103_spmd
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912280   25111 2a886c8_compiler_base.cc:2608] fused_computation.325
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912381   25111 2a886c8_compiler_base.cc:2608] fused_computation.329
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912486   25111 2a886c8_compiler_base.cc:2608] fused_computation.349
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912718   25111 2a886c8_compiler_base.cc:2608] fused_computation.404
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912782   25111 2a886c8_compiler_base.cc:2608] fused_computation.408
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912925   25111 2a886c8_compiler_base.cc:2608] fused_computation.411
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.913792   25111 2a886c8_compiler_base.cc:2608] fused_computation.527
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.913946   25111 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.913984   25111 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.914032   25111 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
+(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.915054   25111 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
+(run_on_pod_ray pid=41604, ip=10.164.1.197) Task error ray::<lambda>() (pid=22825, ip=10.164.0.83)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     trainer.train(state, train_loader)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 541, in train
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     for info in self.training_steps(state, train_loader):
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     info = self.train_step(state, example)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 478, in train_step
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 753, in _maybe_save_jaxpr
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/haliax/src/haliax/partitioning.py", line 392, in __call__
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     return self._call(False, *args, **kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     return self.__func__(self.__self__, *args, **kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/haliax/src/haliax/partitioning.py", line 464, in _call
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197) jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm. Used 19.88G of 15.75G hbm. Exceeded hbm capacity by 4.13G.
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) Total hbm usage >= 20.13G:
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     reserved        258.03M 
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     program          19.88G 
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     arguments            0B 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) Output size 0B; shares 0B with arguments.
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) --------------------
+(run_on_pod_ray pid=41604, ip=10.164.1.197) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+(run_on_pod_ray pid=41604, ip=10.164.1.197) Traceback (most recent call last):
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=41604, ip=10.164.1.197)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     return func(*args, **kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=41604, ip=10.164.1.197)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=41604, ip=10.164.1.197) ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=22825, ip=10.164.0.83)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     trainer.train(state, train_loader)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 541, in train
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     for info in self.training_steps(state, train_loader):
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     info = self.train_step(state, example)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 478, in train_step
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 753, in _maybe_save_jaxpr
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/haliax/src/haliax/partitioning.py", line 392, in __call__
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     return self._call(False, *args, **kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     return self.__func__(self.__self__, *args, **kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/haliax/src/haliax/partitioning.py", line 464, in _call
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197) jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm. Used 19.88G of 15.75G hbm. Exceeded hbm capacity by 4.13G.
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) Total hbm usage >= 20.13G:
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     reserved        258.03M 
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     program          19.88G 
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     arguments            0B 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) Output size 0B; shares 0B with arguments.
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) --------------------
+(run_on_pod_ray pid=41604, ip=10.164.1.197) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+(run_on_pod_ray pid=41604, ip=10.164.1.197) --------------------
+(run_on_pod_ray pid=41604, ip=10.164.1.197) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+(SliceActor pid=24828, ip=10.164.0.79) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=22825, ip=10.164.0.83)
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(SliceActor pid=24828, ip=10.164.0.79) 
+(<lambda> pid=22825, ip=10.164.0.83) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f8de0118ea0>
+(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=22825, ip=10.164.0.83)     conn.teardown(hooks.exit_code)
+(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=22825, ip=10.164.0.83)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
+(<lambda> pid=22825, ip=10.164.0.83)     return future.result()
+(<lambda> pid=22825, ip=10.164.0.83)            ^^^^^^^^^^^^^^^
+(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=22825, ip=10.164.0.83)     return self.__get_result()
+(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=22825, ip=10.164.0.83)     raise self._exception
+(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=22825, ip=10.164.0.83)     return await fn()
+(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=22825, ip=10.164.0.83)     await self._client.close()
+(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=22825, ip=10.164.0.83)     await self._writer.wait_closed()
+(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=22825, ip=10.164.0.83)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=22825, ip=10.164.0.83) BrokenPipeError: [Errno 32] Broken pipe
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:56.677414   24816 slice_configuration.cc:637] tpu18:pe1:3:p1:x has unexpectedly gone down.
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:56.972831   24818 slice_configuration.cc:637] tpu18:pe1:2:p1:y has unexpectedly gone down.
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:56.985093   24819 slice_configuration.cc:637] tpu18:pe1:1:p2:y has unexpectedly gone down.
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.274673   24815 slice_configuration.cc:637] tpu18:pe1:0:p1:y has unexpectedly gone down.
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.279672   24815 slice_configuration.cc:637] tpu18:pe1:0:p2:x has unexpectedly gone down.
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.581329   24819 slice_configuration.cc:637] tpu18:pe1:1:p1:x has unexpectedly gone down.
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.598701   24818 slice_configuration.cc:637] tpu18:pe1:2:p2:x has unexpectedly gone down.
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.615923   24816 slice_configuration.cc:637] tpu18:pe1:3:p2:y has unexpectedly gone down.
+(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.800877   24393 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=22825, ip=10.164.0.83) F0301 18:28:57.800909   24393 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=22825, ip=10.164.0.83) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
+(<lambda> pid=22825, ip=10.164.0.83) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"}
+(run_on_pod_ray pid=41604, ip=10.164.1.197) Failed 2 times. Continuing to retry.
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     return func(*args, **kwargs)
+(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=41604, ip=10.164.1.197)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=41604, ip=10.164.1.197) ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=22825, ip=10.164.0.83)
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(run_on_pod_ray pid=41604, ip=10.164.1.197) 
