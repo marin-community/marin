@@ -19,6 +19,7 @@ from iris.cluster.types import (
     ZONE_ATTRIBUTE_KEY,
     Entrypoint,
     EnvironmentSpec,
+    ReservationEntry,
     ResourceSpec,
     zone_constraint,
 )
@@ -160,6 +161,13 @@ def _noop_task():
     time.sleep(1)
 
 
+def _long_noop_task():
+    """A task that sleeps long enough to stay pending during the test."""
+    import time
+
+    time.sleep(300)
+
+
 def test_autoscaler_tab_unmet_demand_shows_concise_reason(cluster, page, screenshot):
     """Unmet demand from a bad zone constraint renders a concise diagnostic, not a group dump."""
     job = cluster.client.submit(
@@ -197,3 +205,49 @@ def test_autoscaler_tab_unmet_demand_shows_concise_reason(cluster, page, screens
 
     # Clean up the job
     cluster.kill(job)
+
+
+def test_autoscaler_tab_demand_shows_job_sources(cluster, page, screenshot):
+    """Clicking the demand disclosure triangle reveals which jobs created the demand.
+
+    Uses reservation entries to create persistent demand that survives task scheduling.
+    Reservations always generate demand entries regardless of whether tasks are running,
+    making them ideal for testing the demand visibility feature.
+    """
+    job_a = cluster.client.submit(
+        entrypoint=Entrypoint.from_callable(_long_noop_task),
+        name="demand-vis-job-a",
+        resources=ResourceSpec(cpu=1, memory="1g"),
+        environment=EnvironmentSpec(),
+        reservation=[ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g"))],
+    )
+    job_b = cluster.client.submit(
+        entrypoint=Entrypoint.from_callable(_long_noop_task),
+        name="demand-vis-job-b",
+        resources=ResourceSpec(cpu=1, memory="1g"),
+        environment=EnvironmentSpec(),
+        reservation=[ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g"))],
+    )
+
+    # Give the autoscaler time to evaluate demand
+    time.sleep(3)
+
+    _click_autoscaler_tab(page, cluster)
+
+    if not _is_noop_page(page):
+        page.wait_for_selector(".scale-groups-table", timeout=10000)
+
+        # Find a demand cell with a disclosure triangle and click it
+        demand_toggle = page.locator(".demand-toggle").first
+        demand_toggle.wait_for(timeout=10000)
+        demand_toggle.click()
+
+        # The detail row should now be visible with job names
+        page.wait_for_selector(".demand-detail-row", timeout=5000)
+        detail_text = page.locator(".demand-detail-row").first.text_content()
+        assert "demand-vis-job" in detail_text, f"Expected job name in detail row, got: {detail_text}"
+
+    screenshot("autoscaler-demand-job-sources")
+
+    cluster.kill(job_a)
+    cluster.kill(job_b)
