@@ -215,6 +215,7 @@ def main():
     data_config = unified_data_config(
         eval_benchmarks=eval_benchmarks,
         text_eval_benchmarks=text_eval_benchmarks,
+        include_text_data=False,
     )
 
     Pos = model_config.max_Pos

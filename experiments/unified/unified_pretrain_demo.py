@@ -247,6 +247,7 @@ def unified_data_config(
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = None,
     text_eval_cache_path: str = TEXT_EVAL_CACHE_PATH,
+    include_text_data: bool = True,
 ) -> LmDataConfig:
     """Build data mixture with Nemotron text + multimodal cache for unified model training.
 
@@ -266,12 +267,22 @@ def unified_data_config(
         text_eval_benchmarks: List of text eval benchmark names (e.g. hellaswag, mmlu)
             to include as validation-only components. Set to None to disable.
         text_eval_cache_path: GCS path to text eval benchmark Levanter caches.
+        include_text_data: Whether to include the Nemotron text training component
+            and Paloma/uncheatable text validation sets. These are built from executor
+            steps and contain VersionedValue/InputName references that only work within
+            the Marin executor pipeline. Set to False for standalone eval scripts.
     """
     # Text: only hq_actual from Nemotron-CC
-    nemotron_steps = tokenize_nemotron()
-    hq_key = "nemotron_cc/hq_actual"
-    text_components = {hq_key: step_to_lm_mixture_component(nemotron_steps[hq_key], include_raw_paths=True)}
-    text_weights = {hq_key: text_weight}
+    # These components come from executor steps and contain VersionedValue/InputName
+    # references, so they only work within the executor pipeline.
+    if include_text_data:
+        nemotron_steps = tokenize_nemotron()
+        hq_key = "nemotron_cc/hq_actual"
+        text_components = {hq_key: step_to_lm_mixture_component(nemotron_steps[hq_key], include_raw_paths=True)}
+        text_weights = {hq_key: text_weight}
+    else:
+        text_components = {}
+        text_weights = {}
 
     # Multimodal: pre-built cache with per-token loss weights.
     # pack=True to avoid wasting compute padding short sequences (~600 tokens) to 4096.
@@ -459,8 +470,10 @@ def unified_data_config(
     # Text-only validation sets (Paloma, uncheatable_eval) use the base Llama3
     # tokenizer since the unified tokenizer only adds visual tokens — text
     # tokenization is identical, so we reuse existing Llama3-tokenized caches.
-    validation_sets = default_validation_sets(tokenizer=llama3_tokenizer)
-    data_config = add_validation_sets_to_mixture(data_config, validation_sets)
+    # Skip when include_text_data=False (same executor-pipeline limitation).
+    if include_text_data:
+        validation_sets = default_validation_sets(tokenizer=llama3_tokenizer)
+        data_config = add_validation_sets_to_mixture(data_config, validation_sets)
 
     return data_config
 
