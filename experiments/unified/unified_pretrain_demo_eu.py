@@ -307,11 +307,15 @@ def unified_data_config(
 
     # Understanding: primary=text, secondary=visual
     components["val_understanding_text_only"] = DatasetComponent(
-        cache_dir=und_val_cache, format=fmt_primary_only, pack=True,
+        cache_dir=und_val_cache,
+        format=fmt_primary_only,
+        pack=True,
         tags=["multimodal", "understanding"],
     )
     components["val_understanding_visual_only"] = DatasetComponent(
-        cache_dir=und_val_cache, format=fmt_secondary_only, pack=True,
+        cache_dir=und_val_cache,
+        format=fmt_secondary_only,
+        pack=True,
         tags=["multimodal", "understanding"],
     )
     weights["val_understanding_text_only"] = 0.0
@@ -319,11 +323,15 @@ def unified_data_config(
 
     # Generation: primary=visual, secondary=text
     components["val_generation_text_only"] = DatasetComponent(
-        cache_dir=gen_val_cache, format=fmt_secondary_only, pack=True,
+        cache_dir=gen_val_cache,
+        format=fmt_secondary_only,
+        pack=True,
         tags=["multimodal", "generation"],
     )
     components["val_generation_visual_only"] = DatasetComponent(
-        cache_dir=gen_val_cache, format=fmt_primary_only, pack=True,
+        cache_dir=gen_val_cache,
+        format=fmt_primary_only,
+        pack=True,
         tags=["multimodal", "generation"],
     )
     weights["val_generation_text_only"] = 0.0
@@ -511,7 +519,15 @@ def make_unified_4b(
 
 if __name__ == "__main__":
     # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
-    steps = [make_unified_1_7b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
+    steps = [
+        make_unified_1_7b(
+            text_weight=TEXT_WEIGHT,
+            multimodal_weight=MULTIMODAL_WEIGHT,
+            learning_rate=LEARNING_RATE,
+            w_visual=W_VISUAL,
+            und_gen_ratio=UND_GEN_RATIO,
+        )
+    ]
     # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
     executor_main(
         steps,

@@ -38,7 +38,6 @@ Usage (standalone):
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import gc
 import hashlib
 import json
@@ -1254,8 +1253,9 @@ def main():
         help=f"Benchmarks to evaluate (default: {VLM_EVAL_BENCHMARKS})",
     )
     parser.add_argument("--eval_parquet_path", type=str, default=DEFAULT_EVAL_PARQUET_PATH)
-    parser.add_argument("--eval_batch_size", type=int, default=None,
-                        help="Eval batch size (default: 1 per device = data_axis_size)")
+    parser.add_argument(
+        "--eval_batch_size", type=int, default=None, help="Eval batch size (default: 1 per device = data_axis_size)"
+    )
     parser.add_argument("--max_length", type=int, default=4096, help="Maximum sequence length")
     parser.add_argument("--output_json", type=str, default=None, help="Path to write results JSON")
     parser.add_argument(
@@ -1264,15 +1264,17 @@ def main():
         default=None,
         help="Tokenizer path (default: inferred from checkpoint or unified tokenizer)",
     )
-    parser.add_argument("--wandb_project", type=str, default="marin",
-                        help="WandB project name (default: marin, same as training)")
+    parser.add_argument(
+        "--wandb_project", type=str, default="marin", help="WandB project name (default: marin, same as training)"
+    )
     parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity/team")
-    parser.add_argument("--wandb_run_id", type=str, default=None,
-                        help="WandB run ID (default: inferred from checkpoint path)")
-    parser.add_argument("--train_step", type=int, default=None,
-                        help="Training step (default: inferred from checkpoint path)")
-    parser.add_argument("--no_wandb", action="store_true",
-                        help="Disable WandB logging even if run_id can be inferred")
+    parser.add_argument(
+        "--wandb_run_id", type=str, default=None, help="WandB run ID (default: inferred from checkpoint path)"
+    )
+    parser.add_argument(
+        "--train_step", type=int, default=None, help="Training step (default: inferred from checkpoint path)"
+    )
+    parser.add_argument("--no_wandb", action="store_true", help="Disable WandB logging even if run_id can be inferred")
     args = parser.parse_args()
 
     import typing

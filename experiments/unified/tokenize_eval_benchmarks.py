@@ -284,20 +284,14 @@ def process_eval_rows(
 
         if task_type in GENERATION_TASK_TYPES:
             result = build_generation_sequence(messages, image_token_lists, tokenizer)
-        elif (
-            task_type == "multiple_choice"
-            and choices_col is not None
-            and answer_col is not None
-        ):
+        elif task_type == "multiple_choice" and choices_col is not None and answer_col is not None:
             answer_letter = answer_col[i].as_py()
             choices = choices_col[i].as_py()
             answer_idx = MC_LETTERS.index(answer_letter) if answer_letter in MC_LETTERS else -1
             if 0 <= answer_idx < len(choices):
                 question_text = _extract_user_text(messages)
                 answer_text = f"{answer_letter}. {choices[answer_idx]}"
-                result = build_mc_understanding_sequence(
-                    image_token_lists, question_text, answer_text, tokenizer
-                )
+                result = build_mc_understanding_sequence(image_token_lists, question_text, answer_text, tokenizer)
             else:
                 result = build_understanding_sequence(messages, image_token_lists, tokenizer)
         else:

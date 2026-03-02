@@ -1,3 +1,6 @@
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Batch job submission for unified pre-training experiments.
 
 Define jobs as a list of dicts, then run this script to submit them all.
@@ -121,11 +124,20 @@ def _build_ray_run_cmd(
         raise RuntimeError("WANDB_API_KEY is not set in the environment")
 
     cmd = [
-        "uv", "run", "python", "-m", "marin.run.ray_run",
-        "--cluster", cluster,
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "marin.run.ray_run",
+        "--cluster",
+        cluster,
         "--no_wait",
-        "-e", "WANDB_API_KEY", wandb_key,
-        "-e", "TPU_TYPE", tpu_type,
+        "-e",
+        "WANDB_API_KEY",
+        wandb_key,
+        "-e",
+        "TPU_TYPE",
+        tpu_type,
     ]
     for key, value in job.items():
         cmd.extend(["-e", key, str(value)])
@@ -238,7 +250,8 @@ def submit_one_job(
         if attempt < MAX_RETRIES:
             logger.warning(
                 "  Job %s FAILED on cluster. Sleeping %d seconds before retry...",
-                exp_name, RETRY_WAIT,
+                exp_name,
+                RETRY_WAIT,
             )
             time.sleep(RETRY_WAIT)
         else:
@@ -291,7 +304,9 @@ def main():
     logger.info("==============================================")
     logger.info(
         "Results: %d succeeded, %d failed out of %d total",
-        len(succeeded), len(failed), len(JOBS),
+        len(succeeded),
+        len(failed),
+        len(JOBS),
     )
     if succeeded:
         logger.info("  Succeeded: %s", ", ".join(succeeded))

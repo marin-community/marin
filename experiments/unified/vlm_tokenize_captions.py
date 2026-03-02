@@ -54,10 +54,10 @@ Usage:
         --start_shard 0 --end_shard 50 \
         --w_visual 0.3 --num_workers 16
 
- uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache_v2/understanding         --shuffle true --max_batch_gb 30 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 256 --dual_ordering false --generation_ratio 0 --w_visual 0.3 
+ uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache_v2/understanding         --shuffle true --max_batch_gb 30 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 256 --dual_ordering false --generation_ratio 0 --w_visual 0.3
 
 
-  uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache_v2/generation         --shuffle true --max_batch_gb 30 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 256 --dual_ordering false --generation_ratio 1.0 --w_visual 0.3 
+  uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache_v2/generation         --shuffle true --max_batch_gb 30 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 256 --dual_ordering false --generation_ratio 1.0 --w_visual 0.3
 """
 
 import dataclasses
@@ -429,9 +429,7 @@ def process_shard(
             val_gen_records = process_parquet_rows(
                 table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "val_generation"
             )
-            val_gen_result = write_levanter_cache(
-                val_gen_records, val_gen_path, {**metadata, "split": "val_generation"}
-            )
+            val_gen_result = write_levanter_cache(val_gen_records, val_gen_path, {**metadata, "split": "val_generation"})
             result["val_gen_count"] = val_gen_result["count"]
             if val_gen_result["count"] > 0:
                 result["val_gen_path"] = val_gen_path
@@ -1073,23 +1071,15 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
 
                 if batch_val_und and need_und:
                     local_val_und = os.path.join(staging_val_dir, "val_und")
-                    write_levanter_cache(
-                        iter(batch_val_und), local_val_und, {**metadata, "split": "val_understanding"}
-                    )
+                    write_levanter_cache(iter(batch_val_und), local_val_und, {**metadata, "split": "val_understanding"})
                     gcs_val_und = f"{config.output_path}/val_understanding/validation/batch-{batch_idx:06d}"
-                    gcs_upload(
-                        local_val_und, gcs_val_und if gcs_val_und.startswith("gs://") else f"gs://{gcs_val_und}"
-                    )
+                    gcs_upload(local_val_und, gcs_val_und if gcs_val_und.startswith("gs://") else f"gs://{gcs_val_und}")
 
                 if batch_val_gen and need_gen:
                     local_val_gen = os.path.join(staging_val_dir, "val_gen")
-                    write_levanter_cache(
-                        iter(batch_val_gen), local_val_gen, {**metadata, "split": "val_generation"}
-                    )
+                    write_levanter_cache(iter(batch_val_gen), local_val_gen, {**metadata, "split": "val_generation"})
                     gcs_val_gen = f"{config.output_path}/val_generation/validation/batch-{batch_idx:06d}"
-                    gcs_upload(
-                        local_val_gen, gcs_val_gen if gcs_val_gen.startswith("gs://") else f"gs://{gcs_val_gen}"
-                    )
+                    gcs_upload(local_val_gen, gcs_val_gen if gcs_val_gen.startswith("gs://") else f"gs://{gcs_val_gen}")
 
                 shutil.rmtree(staging_val_dir)
 

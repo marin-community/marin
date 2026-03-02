@@ -48,6 +48,11 @@ from marin.execution import executor_main
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
+from experiments.unified.vlm_tokenize_captions import (
+    ENDOFTEXT_ID,
+    VISUAL_TOKEN_OFFSET,
+)
+
 logger = logging.getLogger(__name__)
 
 # --- Constants ---
@@ -200,6 +205,38 @@ def _only_fractional_transform(weights: np.ndarray) -> np.ndarray:
     return result
 
 
+def _replace_visual_with_eos(input_ids: np.ndarray) -> np.ndarray:
+    """Replace visual tokens with EOS so block_cross_document_attention prevents
+    real tokens from attending to them.
+
+    Each replaced position becomes its own segment boundary, so the remaining
+    text tokens (in a later segment) cannot attend to any visual position.
+    """
+    result = input_ids.copy()
+    visual_mask = (result >= VISUAL_TOKEN_OFFSET) | (result == VISION_START_ID) | (result == VISION_END_ID)
+    result[visual_mask] = ENDOFTEXT_ID
+    return result
+
+
+def _replace_text_with_eos(input_ids: np.ndarray) -> np.ndarray:
+    """Replace text tokens with EOS so block_cross_document_attention prevents
+    real tokens from attending to them.
+
+    Each replaced position becomes its own segment boundary, so the remaining
+    visual tokens (in a later segment) cannot attend to any text position.
+    """
+    result = input_ids.copy()
+    text_mask = (
+        (result > 0)
+        & (result < VISUAL_TOKEN_OFFSET)
+        & (result != VISION_START_ID)
+        & (result != VISION_END_ID)
+        & (result != ENDOFTEXT_ID)
+    )
+    result[text_mask] = ENDOFTEXT_ID
+    return result
+
+
 def unified_data_config(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
@@ -307,11 +344,15 @@ def unified_data_config(
 
     # Understanding: primary=text, secondary=visual
     components["val_understanding_text_only"] = DatasetComponent(
-        cache_dir=und_val_cache, format=fmt_primary_only, pack=True,
+        cache_dir=und_val_cache,
+        format=fmt_primary_only,
+        pack=True,
         tags=["multimodal", "understanding"],
     )
     components["val_understanding_visual_only"] = DatasetComponent(
-        cache_dir=und_val_cache, format=fmt_secondary_only, pack=True,
+        cache_dir=und_val_cache,
+        format=fmt_secondary_only,
+        pack=True,
         tags=["multimodal", "understanding"],
     )
     weights["val_understanding_text_only"] = 0.0
@@ -319,15 +360,50 @@ def unified_data_config(
 
     # Generation: primary=visual, secondary=text
     components["val_generation_text_only"] = DatasetComponent(
-        cache_dir=gen_val_cache, format=fmt_secondary_only, pack=True,
+        cache_dir=gen_val_cache,
+        format=fmt_secondary_only,
+        pack=True,
         tags=["multimodal", "generation"],
     )
     components["val_generation_visual_only"] = DatasetComponent(
-        cache_dir=gen_val_cache, format=fmt_primary_only, pack=True,
+        cache_dir=gen_val_cache,
+        format=fmt_primary_only,
+        pack=True,
         tags=["multimodal", "generation"],
     )
     weights["val_generation_text_only"] = 0.0
     weights["val_generation_visual_only"] = 0.0
+
+    # Ablation val: replace one modality with EOS → segment-based attention blocking
+    # prevents real tokens from attending to the replaced positions.
+    fmt_und_wo_visual = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_zero_fractional_transform,
+        input_ids_transform=_replace_visual_with_eos,
+    )
+    fmt_gen_wo_language = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_zero_fractional_transform,
+        input_ids_transform=_replace_text_with_eos,
+    )
+
+    components["val_understanding_wo_visual"] = DatasetComponent(
+        cache_dir=und_val_cache,
+        format=fmt_und_wo_visual,
+        pack=True,
+        tags=["multimodal", "understanding"],
+    )
+    weights["val_understanding_wo_visual"] = 0.0
+
+    components["val_generation_wo_language"] = DatasetComponent(
+        cache_dir=gen_val_cache,
+        format=fmt_gen_wo_language,
+        pack=True,
+        tags=["multimodal", "generation"],
+    )
+    weights["val_generation_wo_language"] = 0.0
 
     # Eval benchmarks: weight 0.0 → eval-only (not used in training data).
     # Levanter's validation_sets() loads these for periodic eval during training.
@@ -370,6 +446,14 @@ def unified_data_config(
         shuffle=True,
         permutation_type="feistel",
         block_cross_document_attention=True,
+        metadata={
+            "text_weight": text_weight,
+            "multimodal_weight": multimodal_weight,
+            "w_visual": w_visual,
+            "und_gen_ratio": und_gen_ratio,
+            "und_weight": und_weight,
+            "gen_weight": gen_weight,
+        },
     )
 
     # Text-only validation sets (Paloma, uncheatable_eval) use the base Llama3
@@ -511,7 +595,15 @@ def make_unified_4b(
 
 if __name__ == "__main__":
     # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
-    steps = [make_unified_1_7b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
+    steps = [
+        make_unified_1_7b(
+            text_weight=TEXT_WEIGHT,
+            multimodal_weight=MULTIMODAL_WEIGHT,
+            learning_rate=LEARNING_RATE,
+            w_visual=W_VISUAL,
+            und_gen_ratio=UND_GEN_RATIO,
+        )
+    ]
     # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
     executor_main(
         steps,

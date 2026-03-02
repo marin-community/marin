@@ -10,7 +10,7 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Literal, TypeAlias, TypeVar
+from typing import Any, Literal, TypeAlias, TypeVar
 
 import equinox as eqx
 import haliax as hax
@@ -193,6 +193,10 @@ def _identity_loss_weight(loss_weight: np.ndarray) -> np.ndarray:
     return loss_weight
 
 
+def _identity_input_ids(input_ids: np.ndarray) -> np.ndarray:
+    return input_ids
+
+
 class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
     """
     A dataset that maps prebuilt cache entries to LmExample instances.
@@ -206,6 +210,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
         input_ids_key: str,
         loss_weights_key: str | None,
         loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None,
+        input_ids_transform: Callable[[np.ndarray], np.ndarray] | None = None,
         eos_id: int | None = None,
         block_cross_document_attention: bool = True,
     ):
@@ -216,6 +221,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
         self.input_ids_key = input_ids_key
         self.loss_weights_key = loss_weights_key
         self.loss_weight_transform = loss_weight_transform or _identity_loss_weight
+        self.input_ids_transform = input_ids_transform or _identity_input_ids
 
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
@@ -233,7 +239,8 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
                 return example
 
             def _map(example: dict) -> LmExample:
-                return _create_lm_example(example[input_ids_key])
+                input_ids = self.input_ids_transform(example[input_ids_key])
+                return _create_lm_example(input_ids)
 
         else:
 
@@ -251,9 +258,9 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
                 return example
 
             def _map(example: dict) -> LmExample:
-                loss_weight = example[loss_weights_key]
-                loss_weight = self.loss_weight_transform(loss_weight)
-                return _create_lm_example(example[input_ids_key], loss_weight)
+                input_ids = self.input_ids_transform(example[input_ids_key])
+                loss_weight = self.loss_weight_transform(example[loss_weights_key])
+                return _create_lm_example(input_ids, loss_weight)
 
         super().__init__(self.dataset, _map)
 
@@ -532,6 +539,7 @@ def dataset_for_component(
             input_ids_key=fmt.input_ids_key,
             loss_weights_key=fmt.loss_weights_key,
             loss_weight_transform=fmt.loss_weight_transform,
+            input_ids_transform=fmt.input_ids_transform,
             eos_id=eos_id,
             block_cross_document_attention=block_cross_document_attention,
         )
@@ -616,6 +624,9 @@ class LmDataConfig:
     experiment_budget: int | None = None
     mixture_block_size: int = 2048
     max_train_batches: dict[str, int] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """Optional metadata for logging custom hyperparameters (e.g. w_visual, data mix ratios).
+    Serialized by draccus and included in wandb config via log_configuration()."""
     num_validation_sequences: dict[str, int] | None = None
     shuffle_before_trainval_split: bool = True
     """Whether to shuffle the dataset before splitting off validation sequences.
