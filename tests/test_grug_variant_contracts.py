@@ -226,10 +226,12 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     for i in range(8):
         tokens = (jnp.arange(seq_len, dtype=jnp.int32) + i) % vocab_size
         examples.append(GrugLmExample.causal(tokens))
+    eval_examples = [GrugLmExample.causal((jnp.arange(seq_len, dtype=jnp.int32) + 100) % vocab_size)]
 
-    dataset = ListAsyncDataset(examples)
+    train_dataset = ListAsyncDataset(examples)
+    eval_dataset = ListAsyncDataset(eval_examples)
     data_config = LmDataConfig(
-        components={"direct": DirectDatasetComponent(datasets={"train": dataset})},
+        components={"direct": DirectDatasetComponent(datasets={"train": train_dataset, "validation": eval_dataset})},
         vocab_size=vocab_size,
         tokenizer="passthrough",
     )
@@ -263,7 +265,14 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
             model=_small_model_config(model_module.GrugModelConfig, vocab_size=vocab_size, seq_len=seq_len),
             data=data_config,
             trainer=train_module.GrugTrainerConfig(trainer=trainer_config, log_every=1),
-            eval=None,
+            eval=train_module.GrugEvalConfig(
+                eval_batch_size=1,
+                steps_per_eval=1,
+                max_eval_batches=1,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            ),
         )
         train_module.run_grug(run_cfg)
     finally:
@@ -284,6 +293,9 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
         "throughput/examples_per_second",
         "throughput/tokens_per_second",
         "throughput/flops_per_example_analytic",
+        "eval/loss",
+        "eval/loading_time",
+        "eval/total_time",
     ]
     for key in required_keys:
         assert key in summary
