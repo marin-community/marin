@@ -121,16 +121,19 @@ def stream_file_to_fsspec(
                 previous_socket_timeout = socket.getdefaulttimeout()
                 socket.setdefaulttimeout(read_timeout_seconds)
                 try:
-                    with (
-                        hf_fs.open(file_path, "rb", block_size=chunk_size) as src_file,
-                        fsspec.open(temp_path, "wb") as dest_file,
-                    ):
+                    # Some HfFileSystem-like mocks/adapters do not accept `block_size`.
+                    try:
+                        src_ctx = hf_fs.open(file_path, "rb", block_size=chunk_size)
+                    except TypeError:
+                        src_ctx = hf_fs.open(file_path, "rb")
+
+                    with src_ctx as src_file, fsspec.open(temp_path, "wb") as dest_file:
                         start_time = time.monotonic()
                         next_progress_log = start_time + progress_log_interval_seconds
                         while True:
                             try:
                                 chunk = src_file.read(chunk_size)
-                            except (TimeoutError, socket.timeout) as timeout_error:
+                            except TimeoutError as timeout_error:
                                 raise TimeoutError(
                                     f"Timed out reading from {file_path} after "
                                     f"{read_timeout_seconds:.1f}s with {bytes_written} bytes written"
