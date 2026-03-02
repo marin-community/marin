@@ -105,7 +105,6 @@ def dna_tokenize_std_v1(name: str, dataset: str) -> ExecutorStep:
         dataset=dataset,
         tokenizer=DNA_TOKENIZER_V1,
         format=TextLmDatasetFormat(text_key="seq"),
-        window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
     )
 
 
@@ -116,7 +115,6 @@ def dna_tokenize_rw_v1(name: str, dataset: str, soft_mask_weight: float = 0.01) 
         dataset=dataset,
         tokenizer=DNA_TOKENIZER_V1,
         format=DNALmDatasetFormat(soft_mask_weight=soft_mask_weight),
-        window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
     )
 
 
