@@ -499,11 +499,13 @@ class CrossRegionGuardedFS:
             return
 
         if size is not None and size > self._threshold_bytes:
-            raise CrossRegionReadError(
+            msg = (
                 f"Cross-region read blocked: gs://{path} is {size / (1024 * 1024):.1f}MB "
                 f"(threshold: {self._threshold_bytes / (1024 * 1024):.0f}MB). "
                 f"Set {MARIN_CROSS_REGION_OVERRIDE_ENV}=<your-username> to override."
             )
+            logger.warning(msg)
+            raise CrossRegionReadError(msg)
 
     # -- transparent delegation ----------------------------------------------
 

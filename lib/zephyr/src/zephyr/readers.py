@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import fsspec
+from iris.marin_fs import url_to_fs
 import msgspec
 import numpy as np
 import pyarrow as pa
@@ -86,7 +87,7 @@ def open_file(file_path: str, mode: str = "rb"):
     # opener (AbstractBufferedFile) rather than the filesystem constructor.
     # fsspec.open() routes all **kwargs to the FS constructor, where S3's
     # AioSession rejects unknown kwargs like block_size.
-    fs, resolved_path = fsspec.core.url_to_fs(file_path)
+    fs, resolved_path = url_to_fs(file_path)
     with fs.open(
         resolved_path,
         mode,

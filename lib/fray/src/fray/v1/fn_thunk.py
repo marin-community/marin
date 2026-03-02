@@ -29,7 +29,7 @@ from typing import Any
 
 import click
 import cloudpickle
-import fsspec
+from iris.marin_fs import open_url
 
 from fray.v1.cluster.base import Entrypoint
 
@@ -76,7 +76,7 @@ def main(path: str):
     )
     try:
         logger.info("Loading callable from %s", path)
-        with fsspec.open(path, "rb") as f:
+        with open_url(path, "rb") as f:
             payload = cloudpickle.load(f)
             if isinstance(payload, tuple) and len(payload) == 3:
                 callable_fn, args, kwargs = payload

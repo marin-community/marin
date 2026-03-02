@@ -8,8 +8,8 @@ import typing
 from dataclasses import dataclass
 from typing import Any, Optional
 
-import fsspec
 import jax
+from iris.marin_fs import url_to_fs
 import numpy as np
 
 from levanter.tracker import Tracker, TrackerConfig
@@ -97,7 +97,7 @@ class TensorboardTracker(Tracker):
         log_path = self.writer.logdir
         # sync the artifact to the logdir via fsspec
         try:
-            fs, fs_path = fsspec.core.url_to_fs(log_path)
+            fs, fs_path = url_to_fs(log_path)
             fs.put(artifact_path, os.path.join(fs_path, name or os.path.basename(artifact_path)), recursive=True)
         except Exception:
             pylogger.exception(f"Error logging artifact {artifact_path} to {log_path}")
