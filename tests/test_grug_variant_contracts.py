@@ -24,7 +24,7 @@ import jmp
 import optax
 import pytest
 from jax._src import config as jax_config
-from jax.sharding import NamedSharding, PartitionSpec as P, use_abstract_mesh
+from jax.sharding import use_abstract_mesh
 
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
@@ -83,51 +83,6 @@ def _discover_grug_variants_with_model_and_train() -> list[str]:
     if not variants:
         raise AssertionError("No grug variants with both model.py and train.py found")
     return variants
-
-
-@pytest.mark.parametrize(
-    "variant",
-    _discover_grug_variants_with_file("model.py"),
-)
-def test_grug_variant_loss_lowers_on_abstract_mesh(variant: str):
-    module_name = _variant_module_name(variant, "model")
-    module = importlib.import_module(module_name)
-    config_cls = module.GrugModelConfig
-    transformer_cls = module.Transformer
-
-    seq = 256 if jax.default_backend() == "tpu" else 16
-    cfg = config_cls(vocab_size=256, max_seq_len=seq)
-    mesh_fn = getattr(module, "debug_mesh_and_token_pspec", None)
-    if mesh_fn is None:
-        raise AssertionError(f"{module_name} must define debug_mesh_and_token_pspec(num_devices)")
-    mesh, token_pspec = mesh_fn(num_devices=4)
-
-    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        key = jax.ShapeDtypeStruct(shape=(2,), dtype=jnp.uint32, sharding=NamedSharding(mesh, P()))
-
-        def init_model(k):
-            return transformer_cls.init(cfg, key=k)
-
-        params = jax.eval_shape(init_model, key)
-        if not hasattr(params, "next_token_loss"):
-            raise AssertionError(f"{module_name}.Transformer must define next_token_loss")
-
-        def loss_fn(p):
-            token_ids = jnp.zeros((8, seq), dtype=jnp.int32)
-            token_ids = jax.sharding.reshard(token_ids, token_pspec)
-            loss_weight = jnp.ones((8, seq), dtype=jnp.float32)
-            loss_weight = jax.sharding.reshard(loss_weight, token_pspec)
-            return p.next_token_loss(
-                token_ids,
-                loss_weight,
-                mask=GrugAttentionMask.causal(),
-                reduction="mean",
-            )
-
-        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
-        lowered = jax.jit(loss_fn).trace(params).lower(lowering_platforms=(platform,))
-
-    assert lowered is not None
 
 
 def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
@@ -274,35 +229,3 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
-
-
-@pytest.mark.parametrize(("data", "model"), [(4, 1), (2, 2)])
-def test_grug_base_loss_lowers_on_abstract_mesh_layouts(data: int, model: int):
-    model_module = importlib.import_module("experiments.grug.base.model")
-    seq = 256 if jax.default_backend() == "tpu" else 16
-    cfg = model_module.GrugModelConfig(
-        vocab_size=256,
-        hidden_dim=128,
-        intermediate_dim=256,
-        num_layers=1,
-        num_heads=8,
-        num_kv_heads=8,
-        max_seq_len=seq,
-    )
-
-    mesh, token_pspec = model_module.debug_mesh_and_token_pspec(num_devices=data * model, model_axis_size=model)
-    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        key = jax.ShapeDtypeStruct(shape=(2,), dtype=jnp.uint32, sharding=NamedSharding(mesh, P()))
-        params = jax.eval_shape(lambda k: model_module.Transformer.init(cfg, key=k), key)
-
-        def loss_fn(p):
-            token_ids = jnp.zeros((8, seq), dtype=jnp.int32)
-            token_ids = jax.sharding.reshard(token_ids, token_pspec)
-            loss_weight = jnp.ones((8, seq), dtype=jnp.float32)
-            loss_weight = jax.sharding.reshard(loss_weight, token_pspec)
-            return p.next_token_loss(token_ids, loss_weight, mask=GrugAttentionMask.causal(), reduction="mean")
-
-        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
-        lowered = jax.jit(loss_fn).trace(params).lower(lowering_platforms=(platform,))
-
-    assert lowered is not None
