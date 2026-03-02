@@ -18,7 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import draccus
-import fsspec
+from iris.marin_fs import open_url
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
@@ -45,9 +45,9 @@ def process_shard(shard_task: dict) -> dict:
     file_list = shard_task["file_list"]
     gcs_path = f"{output_path}/{shard_id}.jsonl.gz"
 
-    with fsspec.open(str(input_path), "rb") as f:
+    with open_url(str(input_path), "rb") as f:
         with zipfile.ZipFile(f) as zf:
-            with atomic_rename(gcs_path) as temp_path, fsspec.open(temp_path, "wt", compression="gzip") as out_f:
+            with atomic_rename(gcs_path) as temp_path, open_url(temp_path, "wt", compression="gzip") as out_f:
                 for filename in file_list:
                     with zf.open(filename, "r") as file_handle:
                         content = file_handle.read()
@@ -72,7 +72,7 @@ def download(cfg: DownloadConfig) -> None:
     logger.info(f"Source: {cfg.input_path}")
 
     # Use fsspec+zipfile to list all files
-    with fsspec.open(str(cfg.input_path), "rb") as f:
+    with open_url(str(cfg.input_path), "rb") as f:
         with zipfile.ZipFile(f) as zf:
             all_files = zf.infolist()
 

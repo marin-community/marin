@@ -13,14 +13,16 @@ from iris.marin_fs import (
     CrossRegionGuardedFS,
     CrossRegionReadError,
     _fs_is_gcs,
+    _regions_match,
     check_gcs_paths_same_region,
-    guarded_open,
-    guarded_url_to_fs,
+    filesystem,
     marin_prefix,
     marin_region,
     marin_temp_bucket,
+    open_url,
     region_from_metadata,
     region_from_prefix,
+    url_to_fs,
 )
 
 
@@ -197,6 +199,41 @@ def test_check_gcs_paths_same_region_allows_unknown_region_for_local_runs():
 
 
 # ---------------------------------------------------------------------------
+# _regions_match tests
+# ---------------------------------------------------------------------------
+
+
+def test_regions_match_exact():
+    assert _regions_match("us-central1", "us-central1") is True
+
+
+def test_regions_match_case_insensitive():
+    assert _regions_match("US-Central1", "us-central1") is True
+
+
+def test_regions_match_different_regions():
+    assert _regions_match("us-central1", "eu-west4") is False
+
+
+def test_regions_match_multi_region_us():
+    assert _regions_match("us-central1", "us") is True
+    assert _regions_match("us-east1", "us") is True
+
+
+def test_regions_match_multi_region_eu():
+    assert _regions_match("europe-west4", "eu") is True
+
+
+def test_regions_match_multi_region_asia():
+    assert _regions_match("asia-northeast1", "asia") is True
+
+
+def test_regions_match_multi_region_mismatch():
+    assert _regions_match("eu-west4", "us") is False
+    assert _regions_match("us-central1", "asia") is False
+
+
+# ---------------------------------------------------------------------------
 # CrossRegionGuardedFS tests
 # ---------------------------------------------------------------------------
 
@@ -231,6 +268,9 @@ class _FakeGCSFS:
         return {p: self._files.get(p, b"") for p in path}
 
     def get_file(self, rpath: str, lpath: str, **kwargs) -> None:
+        pass
+
+    def get(self, rpath, lpath, recursive=False, **kwargs) -> None:
         pass
 
     def exists(self, path: str) -> bool:
@@ -351,6 +391,28 @@ def test_guarded_fs_get_file_blocked():
         guarded.get_file("remote-bucket/big-file.bin", "/tmp/local")
 
 
+def test_guarded_fs_get_blocked():
+    fs = _FakeGCSFS()
+    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
+    fs.add_file("remote-bucket/big-file.bin", large_data)
+
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+
+    with pytest.raises(CrossRegionReadError):
+        guarded.get("remote-bucket/big-file.bin", "/tmp/local")
+
+
+def test_guarded_fs_get_list_blocked():
+    fs = _FakeGCSFS()
+    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
+    fs.add_file("remote-bucket/big-file.bin", large_data)
+
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+
+    with pytest.raises(CrossRegionReadError):
+        guarded.get(["remote-bucket/big-file.bin"], "/tmp/local")
+
+
 def test_guarded_fs_custom_threshold():
     fs = _FakeGCSFS()
     data = b"x" * 500  # 500 bytes
@@ -378,22 +440,40 @@ def test_guarded_fs_delegates_non_read_methods():
     assert guarded.exists("bucket/nope.txt") is False
 
 
-def test_guarded_url_to_fs_returns_guarded_fs(tmp_path):
+def test_guarded_fs_caches_is_gcs():
+    """Verify that _is_gcs is determined at construction time, not per-read."""
+    fs = _FakeLocalFS()
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _: True)
+    assert guarded._is_gcs is False
+
+    gcs_fs = _FakeGCSFS()
+    guarded_gcs = CrossRegionGuardedFS(gcs_fs, cross_region_checker=lambda _: True)
+    assert guarded_gcs._is_gcs is True
+
+
+def test_url_to_fs_returns_guarded_for_local(tmp_path):
     test_file = tmp_path / "test.txt"
     test_file.write_text("hello")
 
-    guarded_fs, _path = guarded_url_to_fs(str(test_file))
-    assert isinstance(guarded_fs, CrossRegionGuardedFS)
+    fs, _path = url_to_fs(str(test_file))
+    # Local filesystems are not wrapped in CrossRegionGuardedFS
+    assert not isinstance(fs, CrossRegionGuardedFS)
 
 
-def test_guarded_open_local_file(tmp_path):
+def test_open_url_local_file(tmp_path):
     test_file = tmp_path / "test.txt"
     test_file.write_text("hello")
 
     # Local files should work fine
-    result = guarded_open(str(test_file), "r")
+    result = open_url(str(test_file), "r")
     with result as f:
         assert f.read() == "hello"
+
+
+def test_filesystem_local():
+    fs = filesystem("file")
+    # Local filesystems are not wrapped
+    assert not isinstance(fs, CrossRegionGuardedFS)
 
 
 def test_cross_region_read_error_message():

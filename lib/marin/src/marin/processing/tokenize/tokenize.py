@@ -17,8 +17,8 @@ import time
 from collections.abc import Iterator, Sequence
 
 import draccus
-import fsspec
 import transformers
+from iris.marin_fs import open_url
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
 from fray.v2.local_backend import LocalClient
@@ -411,7 +411,7 @@ def tokenize(config: TokenizeConfigBase):
         total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
 
         stats_path = os.path.join(prefix, ".stats.json")
-        with fsspec.open(stats_path, "w") as f:
+        with open_url(stats_path, "w") as f:
             json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
         pipeline_elapsed = time.monotonic() - pipeline_start

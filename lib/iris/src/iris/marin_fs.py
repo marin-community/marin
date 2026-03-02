@@ -16,9 +16,10 @@ Resolution chain for the storage prefix:
 Cross-region read guard:
   ``CrossRegionGuardedFS`` wraps an fsspec filesystem and blocks reads of
   large files from GCS buckets in a different region than the current VM.
-  Use ``guarded_url_to_fs()`` or ``guarded_open()`` instead of the raw
-  fsspec equivalents to opt in.  Set the ``MARIN_I_WILL_PAY_FOR_ALL_FEES``
-  env var to a username to override the guard.
+  Prefer the guarded helpers (``url_to_fs``, ``open_url``, ``filesystem``)
+  over the raw fsspec equivalents; they automatically wrap GCS filesystems
+  in the guard.  Set the ``MARIN_I_WILL_PAY_FOR_ALL_FEES`` env var to a
+  username to override the guard.
 """
 
 import dataclasses
@@ -327,9 +328,25 @@ def _normalize_path_like(path: str | os.PathLike) -> str:
 CROSS_REGION_READ_THRESHOLD_BYTES: int = 100 * 1024 * 1024  # 100 MB
 MARIN_CROSS_REGION_OVERRIDE_ENV: str = "MARIN_I_WILL_PAY_FOR_ALL_FEES"
 
+# GCS multi-region bucket locations are returned as "us", "eu", or "asia"
+# rather than a specific region like "us-central1".  European regions use the
+# prefix "europe-" (e.g. "europe-west4") so we map the multi-region label to
+# the set of region prefixes it covers.
+_MULTI_REGION_TO_PREFIXES: dict[str, tuple[str, ...]] = {
+    "us": ("us-",),
+    "eu": ("europe-", "eu-"),
+    "asia": ("asia-",),
+}
+
 
 class CrossRegionReadError(Exception):
     """Raised when a cross-region GCS read exceeds the size threshold."""
+
+
+@functools.lru_cache(maxsize=1)
+def _cached_marin_region() -> str | None:
+    """Return the current VM region, cached for the process lifetime."""
+    return marin_region()
 
 
 @functools.lru_cache(maxsize=256)
@@ -342,32 +359,50 @@ def _cached_bucket_location(bucket_name: str) -> str | None:
         return None
 
 
-def _is_cross_region_bucket(bucket_name: str) -> bool:
-    """Return True if *bucket_name* is in a different region than the current VM."""
-    current_region = marin_region()
-    if current_region is None:
-        return False
-    bucket_region = _cached_bucket_location(bucket_name)
-    if bucket_region is None:
-        return False
-    return current_region.lower() != bucket_region.lower()
+def _regions_match(vm_region: str, bucket_location: str) -> bool:
+    """Return True if *vm_region* and *bucket_location* are the same region.
+
+    Handles GCS multi-region buckets whose location is ``"us"``, ``"eu"``,
+    or ``"asia"`` rather than a specific zone.
+    """
+    vm = vm_region.lower()
+    bl = bucket_location.lower()
+    if vm == bl:
+        return True
+    prefixes = _MULTI_REGION_TO_PREFIXES.get(bl)
+    if prefixes is not None:
+        return any(vm.startswith(p) for p in prefixes)
+    return False
 
 
 def _fs_is_gcs(fs: Any) -> bool:
     """Return True if *fs* is a GCS-backed fsspec filesystem."""
-    proto = fs.protocol
+    proto = getattr(fs, "protocol", None)
     if isinstance(proto, tuple):
         return "gs" in proto or "gcs" in proto
     return proto in ("gs", "gcs")
 
 
+def _is_gcs_url(url: str) -> bool:
+    """Return True if *url* starts with a GCS scheme."""
+    return url.startswith("gs://") or url.startswith("gcs://")
+
+
+def _is_gcs_protocol(protocol: str) -> bool:
+    """Return True if *protocol* names a GCS filesystem."""
+    return protocol in ("gs", "gcs")
+
+
 class CrossRegionGuardedFS:
     """Wrapper around an fsspec filesystem that blocks large cross-region GCS reads.
 
-    Intercepts read operations (``open``, ``cat``, ``cat_file``, ``get_file``)
-    and checks whether the target file lives in a GCS bucket in a different
-    region than the current VM.  If the file exceeds *threshold_bytes*,
-    raises ``CrossRegionReadError``.
+    Caches the VM region and GCS detection at construction time so that
+    per-read overhead is minimal (no metadata-server round-trips).
+
+    Intercepts read operations (``open``, ``cat``, ``cat_file``, ``get_file``,
+    ``get``) and checks whether the target file lives in a GCS bucket in a
+    different region than the current VM.  If the file exceeds
+    *threshold_bytes*, raises ``CrossRegionReadError``.
 
     The guard is skipped when:
     * The ``MARIN_I_WILL_PAY_FOR_ALL_FEES`` env var is set.
@@ -378,12 +413,12 @@ class CrossRegionGuardedFS:
     Args:
         fs: The fsspec filesystem to wrap.
         threshold_bytes: Maximum allowed file size for cross-region reads.
-        cross_region_checker: Optional callback ``(bucket_name) -> bool``.
-            Defaults to ``_is_cross_region_bucket`` which queries the GCS API
-            (results are cached).  Useful for testing.
+        cross_region_checker: Optional callback ``(bucket_name) -> bool``
+            used **only** for testing.  When provided, bypasses the default
+            region-comparison logic.
     """
 
-    __slots__ = ("_cross_region_checker", "_fs", "_threshold_bytes")
+    __slots__ = ("_cross_region_checker", "_current_region", "_fs", "_is_gcs", "_threshold_bytes")
 
     def __init__(
         self,
@@ -394,7 +429,23 @@ class CrossRegionGuardedFS:
     ):
         object.__setattr__(self, "_fs", fs)
         object.__setattr__(self, "_threshold_bytes", threshold_bytes)
-        object.__setattr__(self, "_cross_region_checker", cross_region_checker or _is_cross_region_bucket)
+        object.__setattr__(self, "_is_gcs", _fs_is_gcs(fs))
+        object.__setattr__(self, "_cross_region_checker", cross_region_checker)
+        # Cache the VM region once at construction so _guard_read never
+        # hits the metadata server.
+        object.__setattr__(self, "_current_region", None if cross_region_checker else _cached_marin_region())
+
+    # -- cross-region detection ----------------------------------------------
+
+    def _is_cross_region(self, bucket_name: str) -> bool:
+        if self._cross_region_checker is not None:
+            return self._cross_region_checker(bucket_name)
+        if self._current_region is None:
+            return False
+        bucket_location = _cached_bucket_location(bucket_name)
+        if bucket_location is None:
+            return False
+        return not _regions_match(self._current_region, bucket_location)
 
     # -- read interception ---------------------------------------------------
 
@@ -419,18 +470,27 @@ class CrossRegionGuardedFS:
         self._guard_read(rpath)
         return self._fs.get_file(rpath, lpath, **kwargs)
 
+    def get(self, rpath: Any, lpath: Any, recursive: bool = False, **kwargs: Any) -> None:
+        """Guard each remote path before delegating the bulk download."""
+        if isinstance(rpath, str):
+            self._guard_read(rpath)
+        elif isinstance(rpath, list):
+            for p in rpath:
+                self._guard_read(p)
+        return self._fs.get(rpath, lpath, recursive=recursive, **kwargs)
+
     # -- guard logic ---------------------------------------------------------
 
     def _guard_read(self, path: str) -> None:
-        if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+        if not self._is_gcs:
             return
 
-        if not _fs_is_gcs(self._fs):
+        if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
             return
 
         # fsspec strips the protocol, so paths look like "bucket/key".
         bucket = path.split("/")[0] if "/" in path else path
-        if not self._cross_region_checker(bucket):
+        if not self._is_cross_region(bucket):
             return
 
         try:
@@ -453,42 +513,42 @@ class CrossRegionGuardedFS:
 
 # ---------------------------------------------------------------------------
 # Guarded fsspec entry points
+#
+# These are drop-in replacements for fsspec.core.url_to_fs, fsspec.open,
+# and fsspec.filesystem that automatically wrap GCS filesystems in a
+# CrossRegionGuardedFS.
 # ---------------------------------------------------------------------------
 
 
-def guarded_url_to_fs(
-    url: str,
-    *,
-    threshold_bytes: int = CROSS_REGION_READ_THRESHOLD_BYTES,
-    cross_region_checker: Callable[[str], bool] | None = None,
-    **kwargs: Any,
-) -> tuple[CrossRegionGuardedFS, str]:
-    """Like ``fsspec.core.url_to_fs`` but wraps the result in a cross-region guard.
+def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
+    """Like ``fsspec.core.url_to_fs`` but wraps GCS filesystems in a cross-region guard.
 
-    Returns ``(guarded_fs, path)`` where *guarded_fs* blocks reads of large
-    files from GCS buckets in a different region.
+    Returns ``(fs, path)``.  For non-GCS URLs the filesystem is returned
+    unwrapped.
     """
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
-    guarded = CrossRegionGuardedFS(fs, threshold_bytes=threshold_bytes, cross_region_checker=cross_region_checker)
-    return guarded, path
+    if _fs_is_gcs(fs):
+        fs = CrossRegionGuardedFS(fs)
+    return fs, path
 
 
-def guarded_open(
-    url: str,
-    mode: str = "rb",
-    *,
-    threshold_bytes: int = CROSS_REGION_READ_THRESHOLD_BYTES,
-    cross_region_checker: Callable[[str], bool] | None = None,
-    **kwargs: Any,
-) -> fsspec.core.OpenFile:
-    """Like ``fsspec.open`` but checks the cross-region guard before opening.
+def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
+    """Like ``fsspec.open`` but checks the cross-region guard for GCS reads.
 
-    For read modes, stats the file and raises ``CrossRegionReadError`` if it
-    exceeds *threshold_bytes* in a cross-region bucket.  Then delegates to
-    ``fsspec.open`` for the actual I/O.
+    For read modes on GCS URLs, eagerly stats the file and raises
+    ``CrossRegionReadError`` if it exceeds the size threshold in a
+    cross-region bucket.  Then delegates to ``fsspec.open`` for the actual I/O.
     """
-    if "r" in mode:
+    if "r" in mode and _is_gcs_url(url):
         fs, path = fsspec.core.url_to_fs(url)
-        guarded = CrossRegionGuardedFS(fs, threshold_bytes=threshold_bytes, cross_region_checker=cross_region_checker)
+        guarded = CrossRegionGuardedFS(fs)
         guarded._guard_read(path)
     return fsspec.open(url, mode, **kwargs)
+
+
+def filesystem(protocol: str, **kwargs: Any) -> Any:
+    """Like ``fsspec.filesystem`` but wraps GCS filesystems in a cross-region guard."""
+    fs = fsspec.filesystem(protocol, **kwargs)
+    if _is_gcs_protocol(protocol):
+        fs = CrossRegionGuardedFS(fs)
+    return fs
