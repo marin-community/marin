@@ -520,6 +520,35 @@ def test_fused_cross_entropy_pallas_gpu_custom_backward_grad_matches_xla():
     assert gw_max_abs <= 5e-3
 
 
+def test_fused_cross_entropy_pallas_gpu_grad_tracing_non_gb10_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    if jax.default_backend() != "gpu":
+        pytest.skip("requires GPU backend")
+
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+
+    batch, hidden, vocab = 13, 19, 37
+    key = jax.random.PRNGKey(31)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+    x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
+    block_sizes = fused_api.BlockSizes(b_block_size=16, h_block_size=16, v_block_size=16)
+
+    def loss_fn(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        loss, _ = pallas_gpu.linear_softmax_cross_entropy_loss_pallas_gpu(
+            x_raw,
+            y,
+            w_raw,
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+        )
+        return loss.sum()
+
+    jax.make_jaxpr(jax.grad(loss_fn, argnums=(0, 1)))(x, w)
+
+
 def test_fused_cross_entropy_pallas_bwd_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")

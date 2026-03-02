@@ -7,7 +7,8 @@ import gzip
 import json
 from pathlib import Path
 
-from marin.profiling.ingest import summarize_trace
+# Intentional private import: exercise the truncation-cap heuristic directly.
+from marin.profiling.ingest import _trace_quality_warnings, summarize_trace
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
 from marin.profiling.schema import PROFILE_SUMMARY_SCHEMA_VERSION, profile_summary_from_dict
@@ -70,9 +71,10 @@ def test_query_and_compare_helpers(tmp_path: Path) -> None:
 
     report = build_markdown_report(before, top_k=2)
     assert "# Profile Report (profile_summary.v1)" in report
+    assert "## Trace Overview" in report
     assert "## Time Breakdown (`exclusive_duration_per_track`)" in report
     assert "## Pre-Op Gaps" in report
-    assert "## Gap Context (By Region)" in report
+    assert "## Gap Context (Region-First)" in report
     assert "## Hierarchical Regions" in report
     assert "Inclusive %" in report
     assert "Exclusive %" in report
@@ -269,6 +271,71 @@ def test_copy_gap_context_does_not_double_wrap_copy_label(tmp_path: Path) -> Non
     assert summary.gap_region_contexts
     assert summary.gap_region_contexts[0].op_name == "copy.1"
     assert summary.gap_region_contexts[0].region_path == "copy"
+
+
+def test_gap_before_marker_iota_is_attributed_to_payload_op(tmp_path: Path) -> None:
+    trace_path = tmp_path / "marker_iota_trace.json.gz"
+    payload = {
+        "displayTimeUnit": "ns",
+        "traceEvents": [
+            {"ph": "M", "pid": 1, "name": "process_name", "args": {"name": "/device:TPU:0"}},
+            {"ph": "M", "pid": 1, "tid": 2, "name": "thread_name", "args": {"name": "XLA Ops"}},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "fusion.0", "ts": 0, "dur": 10},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "iota.296", "ts": 100, "dur": 1},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "dot.1", "ts": 101, "dur": 20},
+        ],
+    }
+    with gzip.open(trace_path, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+    summary = summarize_trace(trace_path, warmup_steps=0, hot_op_limit=10)
+    assert summary.gap_before_ops
+    top_gap = summary.gap_before_ops[0]
+    assert top_gap.name == "dot.1"
+    assert top_gap.payload_op == "dot.1"
+    assert top_gap.marker_op == "iota.296"
+    assert top_gap.total_gap_duration == 90.0
+
+    gap_query = query_profile_summary(summary, "what is the gap before iota.296?", top_k=3)
+    assert gap_query["query_type"] == "pre_op_gap"
+    assert gap_query["match"] is not None
+    assert gap_query["match"]["name"] == "dot.1"
+    assert gap_query["match"]["marker_op"] == "iota.296"
+
+
+def test_trace_quality_warning_flags_suspected_truncation_cap() -> None:
+    suspected, warnings = _trace_quality_warnings(num_complete_events=1_000_000)
+    assert suspected is True
+    assert warnings
+    assert "1,000,000" in warnings[0]
+
+    suspected_small, warnings_small = _trace_quality_warnings(num_complete_events=999_999)
+    assert suspected_small is False
+    assert warnings_small == []
+
+
+def test_gap_marker_payload_resolution_does_not_cross_second_idle_gap(tmp_path: Path) -> None:
+    trace_path = tmp_path / "marker_second_gap_trace.json.gz"
+    payload = {
+        "displayTimeUnit": "ns",
+        "traceEvents": [
+            {"ph": "M", "pid": 1, "name": "process_name", "args": {"name": "/device:TPU:0"}},
+            {"ph": "M", "pid": 1, "tid": 2, "name": "thread_name", "args": {"name": "XLA Ops"}},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "fusion.0", "ts": 0, "dur": 10},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "iota.296", "ts": 100, "dur": 1},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "iota.297", "ts": 101, "dur": 1},
+            {"ph": "X", "pid": 1, "tid": 2, "name": "dot.1", "ts": 130, "dur": 20},
+        ],
+    }
+    with gzip.open(trace_path, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+    summary = summarize_trace(trace_path, warmup_steps=0, hot_op_limit=10)
+    assert summary.gap_before_ops
+    top_gap = summary.gap_before_ops[0]
+    assert top_gap.name == "iota.296"
+    assert top_gap.payload_op == "iota.296"
+    assert top_gap.marker_op == "iota.296"
 
 
 def _write_trace(path: Path, *, step_durations: list[float], softmax_duration: float) -> None:

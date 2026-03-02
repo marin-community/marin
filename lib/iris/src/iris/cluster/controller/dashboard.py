@@ -16,7 +16,6 @@ The Python layer only serves HTML shells; all rendering is done client-side.
 
 import logging
 
-import uvicorn
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -51,11 +50,14 @@ class ControllerDashboard:
         self._host = host
         self._port = port
         self._app = self._create_app()
-        self._server: uvicorn.Server | None = None
 
     @property
     def port(self) -> int:
         return self._port
+
+    @property
+    def app(self) -> Starlette:
+        return self._app
 
     def _create_app(self) -> Starlette:
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=[RequestTimingInterceptor()])
@@ -94,15 +96,3 @@ class ControllerDashboard:
         }
 
         return JSONResponse(response)
-
-    def run(self) -> None:
-        uvicorn.run(self._app, host=self._host, port=self._port)
-
-    async def run_async(self) -> None:
-        config = uvicorn.Config(self._app, host=self._host, port=self._port)
-        self._server = uvicorn.Server(config)
-        await self._server.serve()
-
-    async def shutdown(self) -> None:
-        if self._server:
-            self._server.should_exit = True

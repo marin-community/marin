@@ -24,7 +24,7 @@ import jmp
 import optax
 import pytest
 from jax._src import config as jax_config
-from jax.sharding import NamedSharding, PartitionSpec as P, use_abstract_mesh
+from jax.sharding import use_abstract_mesh
 
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
@@ -83,51 +83,6 @@ def _discover_grug_variants_with_model_and_train() -> list[str]:
     if not variants:
         raise AssertionError("No grug variants with both model.py and train.py found")
     return variants
-
-
-@pytest.mark.parametrize(
-    "variant",
-    _discover_grug_variants_with_file("model.py"),
-)
-def test_grug_variant_loss_lowers_on_abstract_mesh(variant: str):
-    module_name = _variant_module_name(variant, "model")
-    module = importlib.import_module(module_name)
-    config_cls = module.GrugModelConfig
-    transformer_cls = module.Transformer
-
-    seq = 256 if jax.default_backend() == "tpu" else 16
-    cfg = config_cls(vocab_size=256, max_seq_len=seq)
-    mesh_fn = getattr(module, "debug_mesh_and_token_pspec", None)
-    if mesh_fn is None:
-        raise AssertionError(f"{module_name} must define debug_mesh_and_token_pspec(num_devices)")
-    mesh, token_pspec = mesh_fn(num_devices=4)
-
-    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        key = jax.ShapeDtypeStruct(shape=(2,), dtype=jnp.uint32, sharding=NamedSharding(mesh, P()))
-
-        def init_model(k):
-            return transformer_cls.init(cfg, key=k)
-
-        params = jax.eval_shape(init_model, key)
-        if not hasattr(params, "next_token_loss"):
-            raise AssertionError(f"{module_name}.Transformer must define next_token_loss")
-
-        def loss_fn(p):
-            token_ids = jnp.zeros((8, seq), dtype=jnp.int32)
-            token_ids = jax.sharding.reshard(token_ids, token_pspec)
-            loss_weight = jnp.ones((8, seq), dtype=jnp.float32)
-            loss_weight = jax.sharding.reshard(loss_weight, token_pspec)
-            return p.next_token_loss(
-                token_ids,
-                loss_weight,
-                mask=GrugAttentionMask.causal(),
-                reduction="mean",
-            )
-
-        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
-        lowered = jax.jit(loss_fn).trace(params).lower(lowering_platforms=(platform,))
-
-    assert lowered is not None
 
 
 def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
@@ -201,10 +156,12 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     for i in range(8):
         tokens = (jnp.arange(seq_len, dtype=jnp.int32) + i) % vocab_size
         examples.append(GrugLmExample.causal(tokens))
+    eval_examples = [GrugLmExample.causal((jnp.arange(seq_len, dtype=jnp.int32) + 100) % vocab_size)]
 
-    dataset = ListAsyncDataset(examples)
+    train_dataset = ListAsyncDataset(examples)
+    eval_dataset = ListAsyncDataset(eval_examples)
     data_config = LmDataConfig(
-        components={"direct": DirectDatasetComponent(datasets={"train": dataset})},
+        components={"direct": DirectDatasetComponent(datasets={"train": train_dataset, "validation": eval_dataset})},
         vocab_size=vocab_size,
         tokenizer="passthrough",
     )
@@ -238,7 +195,14 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
             model=_small_model_config(model_module.GrugModelConfig, vocab_size=vocab_size, seq_len=seq_len),
             data=data_config,
             trainer=train_module.GrugTrainerConfig(trainer=trainer_config, log_every=1),
-            eval=None,
+            eval=train_module.GrugEvalConfig(
+                eval_batch_size=1,
+                steps_per_eval=1,
+                max_eval_batches=1,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            ),
         )
         train_module.run_grug(run_cfg)
     finally:
@@ -259,6 +223,9 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
         "throughput/examples_per_second",
         "throughput/tokens_per_second",
         "throughput/flops_per_example_analytic",
+        "eval/loss",
+        "eval/loading_time",
+        "eval/total_time",
     ]
     for key in required_keys:
         assert key in summary

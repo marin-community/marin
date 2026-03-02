@@ -15,7 +15,7 @@ from iris.cluster.runtime.types import ContainerPhase, ContainerStatus
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
-from .conftest import TestCluster
+from .conftest import IrisTestCluster
 from .helpers import _quick
 
 pytestmark = pytest.mark.e2e
@@ -45,7 +45,7 @@ def single_worker_cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = TestCluster(url=url, client=client, controller_client=controller_client)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(1, timeout=30)
         yield tc
         controller_client.close()

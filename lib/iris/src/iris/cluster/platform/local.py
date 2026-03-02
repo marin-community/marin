@@ -425,7 +425,7 @@ class LocalPlatform:
         num_vms = config.num_vms or 1
 
         if self._controller_address is not None:
-            return self._create_slice_with_workers(slice_id, num_vms, config)
+            return self._create_slice_with_workers(slice_id, num_vms, config, worker_config)
 
         vm_ids = [f"{slice_id}-worker-{i}" for i in range(num_vms)]
         addresses = [f"localhost:{9000 + i}" for i in range(num_vms)]
@@ -446,6 +446,7 @@ class LocalPlatform:
         slice_id: str,
         num_vms: int,
         config: config_pb2.SliceConfig,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> LocalSliceHandle:
         """Spawn real Worker threads for a slice."""
         from iris.cluster.runtime.process import ProcessRuntime
@@ -493,6 +494,10 @@ class LocalPlatform:
             sg_name = config.labels.get(self._iris_labels.iris_scale_group, "")
             if sg_name and sg_name in self._worker_attributes_by_group:
                 for k, v in self._worker_attributes_by_group[sg_name].items():
+                    attributes.setdefault(k, v)
+
+            if worker_config is not None:
+                for k, v in worker_config.worker_attributes.items():
                     attributes.setdefault(k, v)
 
             worker_metadata = _build_local_worker_metadata(

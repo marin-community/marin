@@ -59,11 +59,12 @@ N_REPEAT_BENCHMARK_PATHS = {
     "AMC23": "eval/chat_benchmarks/AMC23/eval_instruct.py",
     "HMMT": "eval/chat_benchmarks/HMMT/eval_instruct.py",
     "LiveCodeBench": "eval/chat_benchmarks/LiveCodeBench/eval_instruct.py",
+    "LiveCodeBenchv5_official": "eval/chat_benchmarks/LiveCodeBenchv5_official/eval_instruct.py",
     "CodeForces": "eval/chat_benchmarks/CodeForces/eval_instruct.py",
     "CodeElo": "eval/chat_benchmarks/CodeElo/eval_instruct.py",
     "GPQADiamond": "eval/chat_benchmarks/GPQADiamond/eval_instruct.py",
     "JEEBench": "eval/chat_benchmarks/JEEBench/eval_instruct.py",
-    "HumanitysLastExam": "eval/chat_benchmarks/HLE/eval_instruct.py",
+    "HLE": "eval/chat_benchmarks/HLE/eval_instruct.py",
 }
 
 

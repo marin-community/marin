@@ -21,6 +21,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# 64 MB write blocks — controls S3 multipart upload part size.
+_WRITE_BLOCK_SIZE = 64 * 1024 * 1024
+
 
 def unique_temp_path(output_path: str) -> str:
     """Return a unique temporary path derived from ``output_path``.
@@ -81,22 +84,23 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     encoder = msgspec.json.Encoder()
 
     with atomic_rename(output_path) as temp_path:
+        fs, resolved_temp = fsspec.core.url_to_fs(temp_path)
         if output_path.endswith(".zst"):
             import zstandard as zstd
 
             cctx = zstd.ZstdCompressor(level=2, threads=1)
-            with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as raw_f:
+            with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
                 with cctx.stream_writer(raw_f) as f:
                     for record in records:
                         f.write(encoder.encode(record) + b"\n")
                         count += 1
         elif output_path.endswith(".gz"):
-            with fsspec.open(temp_path, "wb", compression="gzip", compresslevel=1, block_size=64 * 1024 * 1024) as f:
+            with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE, compression="gzip") as f:
                 for record in records:
                     f.write(encoder.encode(record) + b"\n")
                     count += 1
         else:
-            with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as f:
+            with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
                 for record in records:
                     f.write(encoder.encode(record) + b"\n")
                     count += 1
@@ -367,7 +371,8 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
 
     count = 0
     with atomic_rename(output_path) as temp_path:
-        with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as f:
+        fs, resolved_temp = fsspec.core.url_to_fs(temp_path)
+        with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
             for record in records:
                 f.write(record)
                 count += 1
