@@ -747,8 +747,8 @@ class TestScalingGroupAvailability:
         state = group.availability()
         assert state.status == GroupAvailability.AVAILABLE
 
-    def test_at_capacity_when_at_max_slices(self):
-        """Group is AT_CAPACITY when at max_slices."""
+    def test_at_max_slices_when_at_max_slices(self):
+        """Group is AT_MAX_SLICES when at max_slices."""
         from iris.cluster.controller.scaling_group import GroupAvailability
 
         config = _with_resources(
@@ -766,7 +766,7 @@ class TestScalingGroupAvailability:
         group.reconcile()
 
         state = group.availability()
-        assert state.status == GroupAvailability.AT_CAPACITY
+        assert state.status == GroupAvailability.AT_MAX_SLICES
 
     def test_backoff_when_in_backoff_period(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Group is in BACKOFF when backoff timer is active."""
@@ -788,8 +788,8 @@ class TestScalingGroupAvailability:
 
         assert group.can_accept_demand() is True
 
-    def test_can_accept_demand_true_when_at_capacity(self):
-        """AT_CAPACITY groups accept demand so ready slices keep current_demand accurate."""
+    def test_at_max_slices_rejects_demand(self):
+        """AT_MAX_SLICES groups reject demand so it falls through to lower-priority groups."""
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
                 name="test-group",
@@ -804,7 +804,7 @@ class TestScalingGroupAvailability:
         group = ScalingGroup(config, platform)
         group.reconcile()
 
-        assert group.can_accept_demand() is True
+        assert group.can_accept_demand() is False
 
     def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded state auto-expires after timeout."""
@@ -879,6 +879,86 @@ class TestScalingGroupAvailability:
         # Availability should report QUOTA_EXCEEDED, not BACKOFF
         state = group.availability(timestamp=Timestamp.from_ms(2000))
         assert state.status == GroupAvailability.QUOTA_EXCEEDED
+
+    def test_cooldown_availability_state(self):
+        """After scale-up + complete, availability() returns COOLDOWN until expiry, then AVAILABLE."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        config = _with_resources(
+            config_pb2.ScaleGroupConfig(
+                name="test-group",
+                min_slices=0,
+                max_slices=10,
+                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                accelerator_variant="v5p-8",
+            ),
+        )
+        config.slice_template.gcp.zone = "us-central1-a"
+        platform = make_mock_platform()
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(5000))
+
+        ts = Timestamp.from_ms(1_000_000)
+        group.begin_scale_up(timestamp=ts)
+        handle = group.scale_up(timestamp=ts)
+        group.complete_scale_up(handle, ts)
+
+        # During cooldown
+        state = group.availability(Timestamp.from_ms(1_003_000))
+        assert state.status == GroupAvailability.COOLDOWN
+        assert state.until is not None
+
+        # After cooldown expires
+        state = group.availability(Timestamp.from_ms(1_006_000))
+        assert state.status == GroupAvailability.AVAILABLE
+
+    def test_cooldown_accepts_demand(self):
+        """COOLDOWN groups still accept demand (demand stays, scale-up is deferred)."""
+        config = _with_resources(
+            config_pb2.ScaleGroupConfig(
+                name="test-group",
+                min_slices=0,
+                max_slices=10,
+                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                accelerator_variant="v5p-8",
+            ),
+        )
+        config.slice_template.gcp.zone = "us-central1-a"
+        platform = make_mock_platform()
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(5000))
+
+        ts = Timestamp.from_ms(1_000_000)
+        group.begin_scale_up(timestamp=ts)
+        handle = group.scale_up(timestamp=ts)
+        group.complete_scale_up(handle, ts)
+
+        # During cooldown, can_accept_demand should be True
+        assert group.can_accept_demand(Timestamp.from_ms(1_003_000)) is True
+
+    def test_at_max_slices_takes_precedence_over_cooldown(self):
+        """When both at max_slices and in cooldown, AT_MAX_SLICES takes precedence."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        config = _with_resources(
+            config_pb2.ScaleGroupConfig(
+                name="test-group",
+                min_slices=0,
+                max_slices=1,
+                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                accelerator_variant="v5p-8",
+            ),
+        )
+        config.slice_template.gcp.zone = "us-central1-a"
+        platform = make_mock_platform()
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(5000))
+
+        ts = Timestamp.from_ms(1_000_000)
+        group.begin_scale_up(timestamp=ts)
+        handle = group.scale_up(timestamp=ts)
+        group.complete_scale_up(handle, ts)
+
+        # At max_slices (1) AND in cooldown — AT_MAX_SLICES should win
+        state = group.availability(Timestamp.from_ms(1_003_000))
+        assert state.status == GroupAvailability.AT_MAX_SLICES
 
     def test_matches_device_requirement_filters_by_type_and_variant(
         self, scale_group_config: config_pb2.ScaleGroupConfig

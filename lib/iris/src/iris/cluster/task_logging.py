@@ -504,15 +504,18 @@ class LogReader:
 class ProcessLogSink:
     """Periodic sink for process logs using fsspec JSONL storage.
 
-    Writes logs for a single worker process to:
-    {prefix}/process/worker/{worker_id}/logs.jsonl
+    Writes logs for a process to:
+    {prefix}/process/{process_name}/logs.jsonl
+
+    For workers, process_name is "worker/{worker_id}".
+    For the controller, process_name is "controller".
     """
 
     def __init__(
         self,
         *,
         prefix: str,
-        worker_id: str,
+        process_name: str,
         log_buffer: LogBuffer,
         sync_interval: Duration | None = None,
         max_entries: int = 5000,
@@ -520,7 +523,7 @@ class ProcessLogSink:
         if "://" not in prefix:
             raise ValueError(f"log prefix must be a URL, got: {prefix}")
         self._prefix = prefix.rstrip("/")
-        self._worker_id = worker_id
+        self._process_name = process_name
         self._log_buffer = log_buffer
         self._sync_interval = sync_interval or Duration.from_seconds(10.0)
         self._max_entries = max_entries
@@ -531,7 +534,7 @@ class ProcessLogSink:
         self._stop_event = Event()
         self._sync_thread = Thread(
             target=self._sync_loop,
-            name=f"process-log-sync-{worker_id}",
+            name=f"process-log-sync-{process_name}",
             daemon=True,
         )
         self._sync_thread.start()
@@ -542,7 +545,7 @@ class ProcessLogSink:
 
     @property
     def _storage_log_path(self) -> str:
-        return f"{self._path_prefix}/process/worker/{self._worker_id}/logs.jsonl"
+        return f"{self._path_prefix}/process/{self._process_name}/logs.jsonl"
 
     def _sync_loop(self) -> None:
         interval_s = self._sync_interval.to_seconds()

@@ -34,7 +34,7 @@ from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_BUILDING_TASKS_PER_WORKER = 4
+DEFAULT_MAX_BUILDING_TASKS_PER_WORKER = 16
 """Default limit for concurrent BUILDING tasks per worker.
 
 When many tasks start simultaneously, their setup commands (uv sync, pip install)
@@ -931,6 +931,7 @@ class Scheduler:
         building_counts: dict[WorkerId, int] | None = None,
         pending_tasks: list[JobName] | None = None,
         jobs: dict[JobName, JobRequirements] | None = None,
+        max_building_tasks: int | None = None,
     ) -> SchedulingContext:
         """Create a scheduling context for the given workers.
 
@@ -942,11 +943,14 @@ class Scheduler:
             building_counts: Map of worker_id -> count of tasks in BUILDING state
             pending_tasks: Task IDs in scheduling priority order
             jobs: Job requirements indexed by job ID
+            max_building_tasks: Override for max building tasks per worker.
+                If None, uses the scheduler's configured default.
         """
+        limit = max_building_tasks if max_building_tasks is not None else self._max_building_tasks_per_worker
         return SchedulingContext.from_workers(
             workers,
             building_counts=building_counts,
-            max_building_tasks=self._max_building_tasks_per_worker,
+            max_building_tasks=limit,
             pending_tasks=pending_tasks,
             jobs=jobs,
         )
