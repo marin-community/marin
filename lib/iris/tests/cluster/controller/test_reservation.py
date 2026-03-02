@@ -18,11 +18,13 @@ from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
     ReservationClaim,
+    _find_reservation_ancestor,
     _inject_reservation_taints,
     _inject_taint_constraints,
     _preference_pass,
     _reservation_region_constraints,
     _worker_matches_reservation_entry,
+    job_requirements_from_job,
 )
 from iris.cluster.controller.events import (
     JobSubmittedEvent,
@@ -964,3 +966,373 @@ def test_no_injection_for_non_reservation_job():
     )
 
     assert result == []
+
+
+# =============================================================================
+# _find_reservation_ancestor
+# =============================================================================
+
+
+def test_find_reservation_ancestor_returns_parent_with_reservation():
+    """Direct parent with reservation is found."""
+    ctrl = _make_controller()
+    parent_req = _make_job_request_with_reservation(
+        reservation_entries=[_make_reservation_entry()],
+    )
+    parent_jid = _submit_job(ctrl.state, "res-parent", parent_req)
+
+    child_jid = JobName.from_string("/test-user/res-parent/child")
+    child_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=child_jid.to_wire(),
+        entrypoint=_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    ctrl.state.handle_event(
+        JobSubmittedEvent(
+            job_id=child_jid,
+            request=child_req,
+            timestamp=Timestamp.now(),
+        )
+    )
+
+    result = _find_reservation_ancestor(ctrl.state, child_jid)
+    assert result == parent_jid
+
+
+def test_find_reservation_ancestor_returns_grandparent():
+    """Grandparent with reservation is found when parent has none."""
+    ctrl = _make_controller()
+    # Grandparent with reservation
+    gp_req = _make_job_request_with_reservation(
+        reservation_entries=[_make_reservation_entry()],
+    )
+    gp_jid = _submit_job(ctrl.state, "gp", gp_req)
+
+    # Parent (no reservation)
+    parent_jid = JobName.from_string("/test-user/gp/parent")
+    parent_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=parent_jid.to_wire(),
+        entrypoint=_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    ctrl.state.handle_event(
+        JobSubmittedEvent(
+            job_id=parent_jid,
+            request=parent_req,
+            timestamp=Timestamp.now(),
+        )
+    )
+
+    # Grandchild
+    gc_jid = JobName.from_string("/test-user/gp/parent/gc")
+    gc_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=gc_jid.to_wire(),
+        entrypoint=_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    ctrl.state.handle_event(
+        JobSubmittedEvent(
+            job_id=gc_jid,
+            request=gc_req,
+            timestamp=Timestamp.now(),
+        )
+    )
+
+    result = _find_reservation_ancestor(ctrl.state, gc_jid)
+    assert result == gp_jid
+
+
+def test_find_reservation_ancestor_returns_none_for_root_job():
+    """Root job with no reservation returns None."""
+    ctrl = _make_controller()
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="no-res",
+        entrypoint=_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    jid = _submit_job(ctrl.state, "no-res", req)
+    assert _find_reservation_ancestor(ctrl.state, jid) is None
+
+
+def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation():
+    """Child of a non-reservation parent returns None."""
+    ctrl = _make_controller()
+    parent_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="plain-parent",
+        entrypoint=_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    _submit_job(ctrl.state, "plain-parent", parent_req)
+
+    child_jid = JobName.from_string("/test-user/plain-parent/child")
+    child_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=child_jid.to_wire(),
+        entrypoint=_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    ctrl.state.handle_event(
+        JobSubmittedEvent(
+            job_id=child_jid,
+            request=child_req,
+            timestamp=Timestamp.now(),
+        )
+    )
+
+    assert _find_reservation_ancestor(ctrl.state, child_jid) is None
+
+
+# =============================================================================
+# Ancestry-based taint exemption (integration)
+# =============================================================================
+
+
+def test_taint_exemption_for_children_of_reservation_job():
+    """Children of a reservation job are not blocked from claimed workers."""
+    ctrl = _make_controller()
+    _register_worker(ctrl.state, "w1", _gpu_metadata("H100"))
+    _register_worker(ctrl.state, "w2", _gpu_metadata("H100"))
+
+    # Parent job with reservation claiming both GPU workers
+    parent_req = _make_job_request_with_reservation(
+        reservation_entries=[
+            _make_reservation_entry(_gpu_device("H100")),
+            _make_reservation_entry(_gpu_device("H100")),
+        ],
+    )
+    _submit_job(ctrl.state, "res-parent", parent_req)
+    ctrl._claim_workers_for_reservations()
+    assert len(ctrl.reservation_claims) == 2
+
+    # Child job (NO reservation) requesting GPU
+    child_jid = JobName.from_string("/test-user/res-parent/child")
+    child_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=child_jid.to_wire(),
+        entrypoint=_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_gpu_device("H100"),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    ctrl.state.handle_event(
+        JobSubmittedEvent(
+            job_id=child_jid,
+            request=child_req,
+            timestamp=Timestamp.now(),
+        )
+    )
+
+    # Build scheduling state — child should be in has_reservation
+    pending = ctrl.state.peek_pending_tasks()
+    jobs: dict[JobName, JobRequirements] = {}
+    has_reservation: set[JobName] = set()
+    for task in pending:
+        job = ctrl.state.get_job(task.job_id)
+        if job and not job.is_finished():
+            jobs[task.job_id] = job_requirements_from_job(job)
+            if job.request.HasField("reservation"):
+                has_reservation.add(task.job_id)
+            elif _find_reservation_ancestor(ctrl.state, task.job_id) is not None:
+                has_reservation.add(task.job_id)
+
+    assert child_jid in has_reservation
+
+    # Child does NOT get NOT_EXISTS constraint
+    modified_jobs = _inject_taint_constraints(jobs, has_reservation)
+    child_constraints = modified_jobs[child_jid].constraints
+    not_exists = [c for c in child_constraints if c.key == RESERVATION_TAINT_KEY]
+    assert len(not_exists) == 0
+
+
+def test_grandchildren_inherit_reservation_from_ancestor():
+    """Grandchildren of a reservation job inherit taint exemption."""
+    ctrl = _make_controller()
+    _register_worker(ctrl.state, "h1", _gpu_metadata("H100"))
+    _register_worker(ctrl.state, "h2", _gpu_metadata("H100"))
+    _register_worker(ctrl.state, "a1", _gpu_metadata("A100"))
+    _register_worker(ctrl.state, "a2", _gpu_metadata("A100"))
+
+    # Root job (CPU, no reservation)
+    root_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="root",
+        entrypoint=_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    _submit_job(ctrl.state, "root", root_req)
+
+    # Child-A reserves 2 H100
+    child_a_jid = JobName.from_string("/test-user/root/child-a")
+    child_a_req = _make_job_request_with_reservation(
+        reservation_entries=[
+            _make_reservation_entry(_gpu_device("H100")),
+            _make_reservation_entry(_gpu_device("H100")),
+        ],
+    )
+    child_a_req.name = child_a_jid.to_wire()
+    ctrl.state.handle_event(
+        JobSubmittedEvent(
+            job_id=child_a_jid,
+            request=child_a_req,
+            timestamp=Timestamp.now(),
+        )
+    )
+
+    # Child-B reserves 2 A100
+    child_b_jid = JobName.from_string("/test-user/root/child-b")
+    child_b_req = _make_job_request_with_reservation(
+        reservation_entries=[
+            _make_reservation_entry(_gpu_device("A100")),
+            _make_reservation_entry(_gpu_device("A100")),
+        ],
+    )
+    child_b_req.name = child_b_jid.to_wire()
+    ctrl.state.handle_event(
+        JobSubmittedEvent(
+            job_id=child_b_jid,
+            request=child_b_req,
+            timestamp=Timestamp.now(),
+        )
+    )
+
+    ctrl._claim_workers_for_reservations()
+    assert len(ctrl.reservation_claims) == 4
+
+    # Grandchild-A (under child-A) requesting H100
+    gc_a_jid = JobName.from_string("/test-user/root/child-a/gc-a")
+    gc_a_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=gc_a_jid.to_wire(),
+        entrypoint=_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_gpu_device("H100"),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    ctrl.state.handle_event(
+        JobSubmittedEvent(
+            job_id=gc_a_jid,
+            request=gc_a_req,
+            timestamp=Timestamp.now(),
+        )
+    )
+
+    # Grandchild-B (under child-B) requesting A100
+    gc_b_jid = JobName.from_string("/test-user/root/child-b/gc-b")
+    gc_b_req = cluster_pb2.Controller.LaunchJobRequest(
+        name=gc_b_jid.to_wire(),
+        entrypoint=_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_gpu_device("A100"),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    ctrl.state.handle_event(
+        JobSubmittedEvent(
+            job_id=gc_b_jid,
+            request=gc_b_req,
+            timestamp=Timestamp.now(),
+        )
+    )
+
+    # Build scheduling state
+    pending = ctrl.state.peek_pending_tasks()
+    jobs: dict[JobName, JobRequirements] = {}
+    has_reservation: set[JobName] = set()
+    for task in pending:
+        job = ctrl.state.get_job(task.job_id)
+        if job and not job.is_finished():
+            jobs[task.job_id] = job_requirements_from_job(job)
+            if job.request.HasField("reservation"):
+                has_reservation.add(task.job_id)
+            elif _find_reservation_ancestor(ctrl.state, task.job_id) is not None:
+                has_reservation.add(task.job_id)
+
+    # Both grandchildren inherit taint exemption
+    assert gc_a_jid in has_reservation
+    assert gc_b_jid in has_reservation
+
+    # Neither gets NOT_EXISTS constraint
+    modified_jobs = _inject_taint_constraints(jobs, has_reservation)
+    for gc_jid in [gc_a_jid, gc_b_jid]:
+        gc_constraints = modified_jobs[gc_jid].constraints
+        not_exists = [c for c in gc_constraints if c.key == RESERVATION_TAINT_KEY]
+        assert len(not_exists) == 0
+
+    # Unrelated job DOES get NOT_EXISTS constraint
+    unrelated_jid = JobName.root("test-user", "unrelated")
+    unrelated_req = JobRequirements(
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_gpu_device("H100"),
+        ),
+        constraints=[],
+        is_coscheduled=False,
+        coscheduling_group_by=None,
+    )
+    jobs[unrelated_jid] = unrelated_req
+    modified_jobs = _inject_taint_constraints(jobs, has_reservation)
+    unrelated_constraints = modified_jobs[unrelated_jid].constraints
+    not_exists = [c for c in unrelated_constraints if c.key == RESERVATION_TAINT_KEY]
+    assert len(not_exists) == 1
+    assert not_exists[0].op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
+
+
+def test_unrelated_job_blocked_when_all_workers_claimed():
+    """A job with no reservation ancestor gets NOT_EXISTS and is blocked from claimed workers."""
+    ctrl = _make_controller()
+    _register_worker(ctrl.state, "w1", _gpu_metadata("H100"))
+    _register_worker(ctrl.state, "w2", _gpu_metadata("H100"))
+
+    parent_req = _make_job_request_with_reservation(
+        reservation_entries=[
+            _make_reservation_entry(_gpu_device("H100")),
+            _make_reservation_entry(_gpu_device("H100")),
+        ],
+    )
+    _submit_job(ctrl.state, "res-parent", parent_req)
+    ctrl._claim_workers_for_reservations()
+    assert len(ctrl.reservation_claims) == 2
+
+    # Unrelated job requesting GPU
+    unrelated_jid = JobName.root("test-user", "unrelated")
+    unrelated_req = JobRequirements(
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_gpu_device("H100"),
+        ),
+        constraints=[],
+        is_coscheduled=False,
+        coscheduling_group_by=None,
+    )
+
+    jobs = {unrelated_jid: unrelated_req}
+    has_reservation: set[JobName] = set()
+
+    modified_jobs = _inject_taint_constraints(jobs, has_reservation)
+    constraints = modified_jobs[unrelated_jid].constraints
+    not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
+    assert len(not_exists) == 1
+    assert not_exists[0].op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS

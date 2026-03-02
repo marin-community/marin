@@ -219,9 +219,6 @@ message JobStatus {
 
   // Diagnostic message for pending/failed jobs (e.g., "No workers match constraint: gpu=true")
   string pending_reason = 31;
-
-  // Reservation status (only set when job has a reservation).
-  ReservationStatus reservation = 32;
 }
 
 // JobAttempt message removed: Jobs don't have attempts - tasks do.
@@ -246,13 +243,6 @@ message ReservationEntry {
 message ReservationConfig {
   // Resource entries to reserve. Each entry = one worker.
   repeated ReservationEntry entries = 1;
-}
-
-// Status of a job's reservation (included in JobStatus).
-message ReservationStatus {
-  int32 total_entries = 1;     // len(entries)
-  int32 fulfilled = 2;         // workers alive with reservation tag
-  bool satisfied = 3;          // fulfilled >= total_entries
 }
 
 // ============================================================================

@@ -343,6 +343,20 @@ def _inject_taint_constraints(
     return modified
 
 
+def _find_reservation_ancestor(state: ControllerState, job_id: JobName) -> JobName | None:
+    """Walk up the job hierarchy to find the nearest ancestor with a reservation.
+
+    Returns the ancestor's JobName, or None if no ancestor has a reservation.
+    """
+    current = job_id.parent
+    while current is not None:
+        ancestor = state.get_job(current)
+        if ancestor is not None and ancestor.request.HasField("reservation"):
+            return current
+        current = current.parent
+    return None
+
+
 def _reservation_region_constraints(
     job_id_wire: str,
     claims: dict[WorkerId, ReservationClaim],
@@ -813,6 +827,8 @@ class Controller:
                 jobs[task.job_id] = job_requirements_from_job(job)
                 if job.request.HasField("reservation"):
                     has_reservation.add(task.job_id)
+                elif _find_reservation_ancestor(self._state, task.job_id) is not None:
+                    has_reservation.add(task.job_id)
 
         if not schedulable_task_ids:
             return
@@ -1171,10 +1187,6 @@ class Controller:
         """Terminate a running job."""
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
         return self._service.terminate_job(request, None)
-
-    def count_reservation_claims(self, job_id_wire: str) -> int:
-        """Count workers claimed for the given job."""
-        return self._count_reservation_claims(job_id_wire)
 
     # Properties
 
