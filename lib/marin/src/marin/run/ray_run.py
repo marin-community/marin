@@ -202,8 +202,8 @@ async def submit_and_track_job(
         raise RuntimeError(f"Ray job {submission_id} ended with status: {status}")
 
 
-def main():
-    """Parse command-line arguments and submit the job."""
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for ray_run CLI."""
     parser = argparse.ArgumentParser(description="Submit Ray jobs using the command-line.")
     parser.add_argument("--no_wait", action="store_true", help="Do not wait for the job to finish.")
     parser.add_argument(
@@ -224,8 +224,8 @@ def main():
     parser.add_argument(
         "--entrypoint-num-cpus",
         type=float,
-        default=None,
-        help="Number of CPUs to reserve for the entrypoint command.",
+        default=1,
+        help="Number of CPUs to reserve for the entrypoint command (default: 1).",
     )
     parser.add_argument(
         "--entrypoint-num-gpus",
@@ -271,6 +271,12 @@ def main():
         help="Automatically stop the submitted job on exit (including ctrl+c interrupt).",
     )
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
+    return parser
+
+
+def main():
+    """Parse command-line arguments and submit the job."""
+    parser = build_parser()
 
     args = parser.parse_args()
 
