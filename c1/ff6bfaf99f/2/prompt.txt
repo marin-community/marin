@@ -1,0 +1,544 @@
+Implement the following plan:
+
+# Plan: StepRunner shouldn't launch tasks with Fray by default (#3035)
+
+## Context
+
+Every step in a Marin pipeline is currently submitted as a separate Fray job. In Iris, each Fray job creates a new container with RAM/CPU/Disk budgets, adding significant startup overhead. Most steps (downloads, orchestration, evals) don't need isolated containers — only steps with explicit resource requirements (tokenization with specific CPU/RAM, training on TPU, etc.) should go through Fray.
+
+This plan makes Fray submission opt-in: steps without explicit `resources` run locally in-thread; steps with `resources` set go through Fray as before.
+
+## Phase 1: Local execution by default
+
+### 1.1 `lib/marin/src/marin/execution/step_spec.py`
+
+Change `resources` from required-with-default to optional:
+
+```python
+# Before
+resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
+
+# After
+resources: ResourceConfig | None = None
+```
+
+Remove the `ResourceConfig` import if it becomes unused (it will still be needed as a type annotation, so change to `TYPE_CHECKING` guard).
+
+### 1.2 `lib/marin/src/marin/execution/step_runner.py`
+
+Add a local execution path in `_launch_step()`:
+
+```python
+# In __init__:
+from concurrent.futures import ThreadPoolExecutor
+self._local_pool = ThreadPoolExecutor(max_workers=8)
+
+# In _launch_step(), replace the unconditional fray_exec call:
+if step.resources is not None:
+    return fray_exec(
+        worker_fn, name=step_name, resources=step.resources,
+        env_vars=step.env_vars, pip_dependency_groups=step.pip_dependency_groups,
+        client=self.client,
+    )
+else:
+    from fray.v2.local_backend import LocalJobHandle
+    future = self._local_pool.submit(worker_fn)
+    return LocalJobHandle(f"local-{step_name}", future)
+```
+
+In `fray_exec()`, remove the `ResourceConfig.with_cpu()` fallback since it will only be called with non-None resources:
+
+```python
+# Before
+resources=resources or ResourceConfig.with_cpu(),
+
+# After
+resources=resources,
+```
+
+### 1.3 `lib/marin/src/marin/execution/executor.py`
+
+In `resolve_executor_step()`, pass through resources without defaulting:
+
+```python
+# Before
+resources=step.resources if step.resources is not None else ResourceConfig.with_cpu(),
+
+# After
+resources=step.resources,
+```
+
+### Impact on existing code
+
+| Step | `ExecutorStep.resources` | After change |
+|------|-------------------------|--------------|
+| `default_download` | `None` | Runs locally (was Fray CPU) |
+| `default_tokenize` | `ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g")` | Still Fray (explicit) |
+| `default_train` | `None` (TPU alloc inside fn) | Runs locally; fn handles its own Fray/Ray dispatch |
+| `default_eval` | `None` (GPU alloc inside fn) | Runs locally; fn handles its own Fray/Ray dispatch |
+| Experiment-specific steps with explicit resources | `ResourceConfig.with_tpu(...)` etc. | Still Fray (explicit) |
+
+No experiment files need modification.
+
+### Tests for Phase 1
+
+In `tests/execution/test_step_runner.py`:
+
+- Add test: step with `resources=None` runs locally (not through Fray client)
+- Add test: step with explicit `resources` still goes through `fray_exec`
+- Verify existing pipeline tests pass (they already use `LocalClient`, and `StepSpec` defaults will change to `None` which now means local thread execution — same observable behavior)
+
+## Phase 2: `@remote` decorator
+
+### 2.1 Create `lib/marin/src/marin/execution/remote.py`
+
+```python
+from fray.v2.types import ResourceConfig
+
+def remote(fn=None, *, resources=None):
+    """Mark a step function for remote execution via Fray.
+
+    Without @remote, steps run locally in-thread. With @remote,
+    they are submitted as Fray jobs with the specified resources.
+
+    Usage:
+        @remote
+        def tokenize(config): ...          # CPU defaults
+
+        @remote(resources=ResourceConfig.with_tpu("v4-128"))
+        def train(config): ...             # explicit resources
+    """
+    if resources is None:
+        resources = ResourceConfig.with_cpu()
+
+    def decorator(f):
+        f.__fray_resources__ = resources
+        return f
+
+    if fn is not None:
+        return decorator(fn)
+    return decorator
+```
+
+### 2.2 Update `lib/marin/src/marin/execution/executor.py`
+
+In `resolve_executor_step()`, detect `@remote` on the original function:
+
+```python
+step_fn = step.fn
+# ... existing ray.remote handling ...
+
+# Resolve resources: explicit ExecutorStep.resources > @remote decorator > None (local)
+resources = step.resources
+if resources is None and hasattr(step_fn, '__fray_resources__'):
+    resources = step_fn.__fray_resources__
+
+return StepSpec(..., resources=resources, ...)
+```
+
+### 2.3 Tests for Phase 2
+
+In `tests/execution/test_step_runner.py`:
+
+- Add test: `@remote` decorated function gets `resources` from decorator
+- Add test: `@remote(resources=...)` overrides with custom resources
+- Add test: explicit `ExecutorStep.resources` takes precedence over `@remote`
+
+## Files modified (summary)
+
+| File | Change |
+|------|--------|
+| `lib/marin/src/marin/execution/step_spec.py` | `resources` default → `None` |
+| `lib/marin/src/marin/execution/step_runner.py` | Add local thread pool, branch in `_launch_step()` |
+| `lib/marin/src/marin/execution/executor.py` | Pass through resources; detect `@remote` |
+| `lib/marin/src/marin/execution/remote.py` | **New** — `@remote` decorator |
+| `tests/execution/test_step_runner.py` | Tests for local execution + `@remote` |
+
+## Verification
+
+```bash
+# Run step_runner tests
+uv run pytest tests/execution/test_step_runner.py -v
+
+# Run all non-slow tests to check nothing breaks
+uv run pytest -m 'not slow'
+
+# Pre-commit checks
+./infra/pre-commit.py --all-files
+```
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+
+---
+
+ok, I'm looking through the code, in the remote decorator, could we attach the fray resource to the dynamically created function instead of the original one?
+
+---
+
+add ParamSpec
+
+---
+
+in the StepSpec remove the `resources`
+
+---
+
+In the remote decorator, would it be cleaner to instead create a "RemoteCallable" instance, that is callable, and has the resources field. Then we could simply check if the fn is `RemoteCallable` instead of hasattr//getattr etc. Wdyt?
+
+---
+
+should we move the `env_vars` and `pip_dependency_groups` to the RemoteCallable as well? is that a bad idea?
+
+---
+
+yes
+
+---
+
+could RemoteCallable be a dataclass?
+
+---
+
+in the StepRunner, should we create the local pool instead of `run` and take into account the `max_concurrenct`?
+
+---
+
+do we need to address the comment https://github.com/marin-community/marin/issues/3035#issuecomment-3963669943 ?
+
+---
+
+what is a good git commnet for your last change?
+
+---
+
+why is that important?
+
+---
+
+ok, can we change the design such that the remote creates a wrapper that submits via fray and then use it in the executor if necessary to create RemoteCallable. Step runner should just execute functions via async executor so we don't need to worry about thread pool
+
+---
+
+is this better?
+
+---
+
+Ok, can we make it even simpler, the StepRunner should just execute function and get future them wrapped in the local handle, no check if something is a RemoteCallable
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically trace through the conversation:
+
+1. **Initial Plan**: User provided a detailed plan for making Fray submission opt-in in StepRunner (#3035). The plan had two phases: Phase 1 (local execution by default) and Phase 2 (@remote decorator).
+
+2. **Phase 1 Implementation**:
+   - Changed `StepSpec.resources` from `ResourceConfig` default to `None`
+   - Added `ThreadPoolExecutor` to `StepRunner.__init__`
+   - Added branching in `_launch_step()` for local vs Fray execution
+   - Removed `ResourceConfig.with_cpu()` fallback in `fray_exec`
+   - Updated `resolve_executor_step()` to pass through resources without defaulting
+
+3. **User interrupted**: "before you create remote decorator, I want to commit stuff" — committed Phase 1 only.
+
+4. **Phase 2 Implementation**: Created `@remote` decorator in `remote.py`, wired into `resolve_executor_step`.
+
+5. **User feedback: "add ParamSpec"** — Changed from `TypeVar F` to `ParamSpec P + TypeVar R` for proper type preservation.
+
+6. **User feedback: "in the StepSpec remove the resources"** — Removed `resources` field from `StepSpec`. Resource info now lives on the fn via `__fray_resources__` attribute. Updated `_launch_step` to check `getattr(step_fn, "__fray_resources__", None)` and `resolve_executor_step` to attach `__fray_resources__` to resolved fn.
+
+7. **User feedback: RemoteCallable instead of hasattr/getattr** — Created `RemoteCallable` class, changed to `isinstance` checks. Tests updated.
+
+8. **User feedback: "should we move env_vars and pip_dependency_groups to RemoteCallable?"** — Moved both fields from `StepSpec` to `RemoteCallable`. Updated all call sites. Added merging logic in `resolve_executor_step`.
+
+9. **User feedback: "could RemoteCallable be a dataclass?"** — Converted to `@dataclass` with `field(default_factory=...)`.
+
+10. **User feedback: "should it be a frozen dataclass?"** — Changed to `@dataclass(frozen=True)`.
+
+11. **User feedback: "in the StepRunner, should we create the local pool instead of run"** — Moved `ThreadPoolExecutor` from `__init__` to `run()`, using `max_concurrent or 8` as `max_workers`. Passed pool through to `_launch_step` as parameter.
+
+12. **User feedback: address GitHub comment** — The comment said executor shouldn't inspect @remote, it's just a thunk. Simplified `resolve_executor_step` to just propagate `RemoteCallable` from original fn (no merging), and wrap in RemoteCallable when `ExecutorStep.resources` is set.
+
+13. **User feedback: "what is a good git comment for your last change?" / "why is that important?"** — User pointed out it's not a separate concern, should be one commit for all Phase 2 work.
+
+14. **User feedback: "can we change the design such that the remote creates a wrapper that submits via fray..."** — Added `submit` method to `RemoteCallable`, moved `fray_exec`/`_sanitize_job_name`/`DEFAULT_JOB_NAME` from `step_runner.py` to `remote.py`. `_launch_step` calls `step_fn.submit(worker_fn)` instead of `fray_exec` directly.
+
+15. **User: "is this better?"** — Confirmed the cleaner separation of responsibilities.
+
+16. **User: "make it even simpler, StepRunner should just execute function and get future wrapped in local handle, no check if something is RemoteCallable"** — This is the MOST RECENT change. Changed `RemoteCallable.__call__` to submit to Fray and block (using result_holder pattern for return values). Removed isinstance check from `_launch_step` — it always submits to local thread pool now. The `submit` method was removed from `RemoteCallable` (the Fray submission logic moved into `__call__`).
+
+Current state of files:
+- `step_spec.py` — Minimal: just identity + fn, no resources/env_vars/pip_dependency_groups
+- `remote.py` — `RemoteCallable` frozen dataclass with `__call__` that submits to Fray, `remote()` decorator, `_sanitize_job_name`, `DEFAULT_JOB_NAME`
+- `step_runner.py` — `StepRunner` with no Fray awareness, always uses local thread pool
+- `executor.py` — `resolve_executor_step` propagates RemoteCallable from original fn or wraps when ExecutorStep.resources is set
+
+The most recent edit was to `_launch_step` to remove the isinstance check and always use the local thread pool. But we haven't run tests yet after this last change! The `RemoteCallable.__call__` was also just changed to submit to Fray internally. Tests need to be run.
+
+Also, the `Any` import was removed from remote.py but it's no longer needed since `submit` method was removed. Let me check... actually the `Any` import might still be there, and `JobHandle` was removed. Need to verify the file is clean.
+
+Additionally, the test `test_step_without_resources_runs_locally` uses `patch.object(RemoteCallable, "submit")` which no longer exists since submit was removed. This test will need updating.
+
+And `test_step_with_remote_fn_uses_fray` tests that a remote fn works — this should still work with the new design where __call__ submits to Fray.
+
+Errors encountered:
+1. Ruff linter: unused `MagicMock` import — fixed by removing
+2. Ruff linter: forward reference `"StepSpec"` → `StepSpec` after adding `from __future__ import annotations` — auto-fixed by ruff
+3. Black formatter: trailing blank line in step_spec.py after removing fields — fixed by removing extra newline
+4. Pre-commit hook failures on commits — re-staged and re-committed
+
+The `fray_client` import in step_runner.py is still needed for `StepRunner.__init__`. But `JobHandle` might no longer be needed... actually it's used in `_launch_step` return type and in `run()` method's `running` dict. Let me check... `running: dict[str, JobHandle]` — yes, still needed.
+
+Wait, after removing the isinstance check, `_launch_step` always returns `LocalJobHandle`, but the type annotation says `JobHandle | None`. `LocalJobHandle` should implement `JobHandle` protocol, so that's fine.
+
+Let me also check if `fray_client` is still imported in step_runner.py after our changes... Yes, it's used in `__init__`: `self.client = client or fray_client.current_client()`. But wait, `self.client` is no longer used anywhere in the class! It was only used to pass to `fray_exec` / `step_fn.submit`. Now that _launch_step doesn't use it... we might have a dangling `self.client`.
+
+Actually, `self.client` was used in `step_fn.submit(worker_fn, name=step_name, client=self.client)` but that's now removed. So `self.client` and the `fray_client` import might be unused now. This could cause linting issues.
+
+The `JobHandle` import is used in `running: dict[str, JobHandle]` and `_launch_step` return type, and `JobStatus` is used for polling. So those are still needed.
+
+Pending work: run tests, fix any issues with the latest changes (especially the test that mocks `RemoteCallable.submit` which no longer exists, and potentially unused `self.client`).
+
+Summary:
+1. Primary Request and Intent:
+   The user asked to implement GitHub issue #3035: "StepRunner shouldn't launch tasks with Fray by default." The goal is to make Fray submission opt-in — steps without explicit resources run locally in-thread, while steps marked with `@remote` or explicit `ExecutorStep.resources` go through Fray. Throughout the conversation, the user iteratively refined the design through feedback, pushing toward a simpler architecture where:
+   - `RemoteCallable` is a frozen dataclass that handles its own Fray submission in `__call__`
+   - `StepSpec` is minimal (no resources/env_vars/pip_dependency_groups)
+   - `StepRunner` has zero Fray awareness — just submits everything to a local thread pool
+   - The `@remote` decorator is the single way to mark functions for Fray execution
+
+2. Key Technical Concepts:
+   - Fray: Job submission framework (with `LocalClient` for dev, `IrisClient` for production)
+   - `StepRunner`: DAG scheduler that runs `StepSpec` objects respecting dependencies
+   - `StepSpec`: Step identity, dependencies, and a callable `fn`
+   - `ExecutorStep`: Legacy pipeline step type, converted to `StepSpec` via `resolve_executor_step`
+   - `RemoteCallable`: Frozen dataclass wrapping a function with Fray config, submits to Fray when called
+   - `@remote` decorator: Creates `RemoteCallable` instances
+   - `disk_cache` / `distributed_lock`: Function wrappers for caching and locking (GCS-based)
+   - `LocalJobHandle`: Thread-backed job handle from fray's local backend
+   - `ParamSpec`/`TypeVar` for proper generic typing on the decorator
+   - Result capture via shared memory (`result_holder` list) for in-process Fray clients
+
+3. Files and Code Sections:
+
+   - **`lib/marin/src/marin/execution/step_spec.py`**
+     - Stripped down to minimal: removed `resources`, `env_vars`, `pip_dependency_groups` fields
+     - Added `from __future__ import annotations`, removed `ResourceConfig` import
+     ```python
+     @dataclass(frozen=True)
+     class StepSpec:
+         name: str
+         output_path_prefix: str | None = None
+         deps: list[StepSpec] = dataclasses.field(default_factory=list)
+         hash_attrs: dict[str, Any] = dataclasses.field(default_factory=dict)
+         override_output_path: str | None = None
+         fn: Callable[[str], Any] | None = None
+         # cached properties: dep_paths, hash_id, name_with_hash, output_path
+     ```
+
+   - **`lib/marin/src/marin/execution/remote.py`** (NEW FILE)
+     - Contains `RemoteCallable` frozen dataclass, `remote()` decorator, `_sanitize_job_name`, `DEFAULT_JOB_NAME`
+     - Most recent state has `__call__` that submits to Fray and blocks:
+     ```python
+     @dataclass(frozen=True)
+     class RemoteCallable(Generic[P, R]):
+         fn: Callable[P, R]
+         resources: ResourceConfig
+         env_vars: dict[str, str] = field(default_factory=dict)
+         pip_dependency_groups: list[str] = field(default_factory=list)
+
+         def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
+             from fray.v2.types import Entrypoint, JobRequest, create_environment
+             result_holder: list[R] = []
+             def thunk():
+                 r = self.fn(*args, **kwargs)
+                 result_holder.append(r)
+             name = getattr(self.fn, "__name__", None) or DEFAULT_JOB_NAME
+             c = fray_client.current_client()
+             handle = c.submit(
+                 JobRequest(
+                     name=_sanitize_job_name(name),
+                     entrypoint=Entrypoint.from_callable(thunk),
+                     resources=self.resources,
+                     environment=create_environment(
+                         extras=self.pip_dependency_groups,
+                         env_vars=self.env_vars,
+                     ),
+                 )
+             )
+             handle.wait(raise_on_failure=True)
+             return result_holder[0] if result_holder else None
+     ```
+
+   - **`lib/marin/src/marin/execution/step_runner.py`**
+     - Removed `fray_exec`, `_sanitize_job_name`, `DEFAULT_JOB_NAME` (moved to remote.py)
+     - Removed imports: `re`, `Callable`, `Any`, `TYPE_CHECKING`, `ResourceConfig`
+     - Removed `self._local_pool` from `__init__`; thread pool created in `run()` with `max_workers=max_concurrent or 8`
+     - `_launch_step` now ALWAYS uses local thread pool, no isinstance check:
+     ```python
+     def _launch_step(self, step, *, force_run_failed, dry_run, local_pool):
+         # ... status checks, disk_cache/distributed_lock wrapping ...
+         step_fn = step.fn
+         cached_step = disk_cache(
+             distributed_lock(step_fn, force_run_failed=force_run_failed),
+             output_path=output_path, save_fn=Artifact.save, load_fn=Artifact.load,
+         )
+         def worker_fn():
+             cached_step(output_path)
+         worker_fn.__qualname__ = step_name
+         worker_fn.__name__ = step_name
+
+         from fray.v2.local_backend import LocalJobHandle
+         future = local_pool.submit(worker_fn)
+         return LocalJobHandle(f"local-{step_name}", future)
+     ```
+
+   - **`lib/marin/src/marin/execution/executor.py`**
+     - `resolve_executor_step` propagates `RemoteCallable` from original fn or wraps when `ExecutorStep.resources` is set:
+     ```python
+     from marin.execution.remote import RemoteCallable
+     def resolved_fn(output_path):
+         return captured_fn(captured_config)
+     # Determine Fray config: explicit ExecutorStep.resources wins,
+     # then @remote on the original fn, then None (run locally).
+     final_fn: Callable = resolved_fn
+     if step.resources is not None:
+         final_fn = RemoteCallable(
+             fn=resolved_fn, resources=step.resources,
+             env_vars=step.env_vars or {},
+             pip_dependency_groups=step.pip_dependency_groups or [],
+         )
+     elif isinstance(step.fn, RemoteCallable):
+         final_fn = RemoteCallable(
+             fn=resolved_fn, resources=step.fn.resources,
+             env_vars=step.fn.env_vars,
+             pip_dependency_groups=step.fn.pip_dependency_groups,
+         )
+     return StepSpec(name=step.name, deps=deps or [],
+                     override_output_path=output_path, fn=final_fn)
+     ```
+
+   - **`tests/execution/test_step_runner.py`**
+     - 18 tests total (11 original + 7 new)
+     - New tests cover: local execution (no RemoteCallable), remote fn uses Fray, @remote decorator creates RemoteCallable, custom resources, precedence, plain fn has no RemoteCallable
+     - Test `test_step_without_resources_runs_locally` uses `patch.object(RemoteCallable, "submit")` — **this will break** since `submit` was removed in the latest change
+
+4. Errors and fixes:
+   - **Ruff: unused `MagicMock` import**: Removed the import
+   - **Ruff: forward reference `"StepSpec"` not needed with `from __future__ import annotations`**: Auto-fixed by ruff, re-staged
+   - **Black: trailing blank line in step_spec.py after removing fields**: Removed extra newline
+   - **Pre-commit hook failures**: Re-staged files after auto-fixes and re-committed
+   - **User feedback "add ParamSpec"**: Changed from `TypeVar F` bound to `Callable` to `ParamSpec P + TypeVar R`
+   - **User feedback "attach to wrapper not original"**: Changed from mutating original fn to using `functools.wraps` wrapper
+   - **User feedback "RemoteCallable instead of hasattr"**: Created class with `isinstance` checks replacing `getattr`/`hasattr`
+   - **User feedback "move env_vars/pip_dependency_groups to RemoteCallable"**: Moved fields, removed from StepSpec
+   - **User feedback "dataclass? frozen?"**: Converted to `@dataclass(frozen=True)`
+   - **User feedback "create pool in run()"**: Moved ThreadPoolExecutor from `__init__` to `run()` with `max_concurrent`
+   - **User feedback on GitHub comment**: Simplified `resolve_executor_step` — no merging, just propagation
+   - **User feedback "submit should be on RemoteCallable"**: Moved `fray_exec` logic into `RemoteCallable.submit`
+   - **User feedback "no isinstance check in StepRunner"**: Changed `__call__` to handle Fray submission, removed isinstance branch
+
+5. Problem Solving:
+   - Solved the separation of concerns: Fray config lives on `RemoteCallable`, `StepRunner` is Fray-agnostic
+   - Solved return value problem for in-process Fray clients using `result_holder` shared memory pattern
+   - Known limitation: for out-of-process Fray clients (IrisClient), the return value from `RemoteCallable.__call__` will be None since the thunk runs in a separate container
+
+6. All user messages:
+   - "Implement the following plan: [detailed plan for #3035]"
+   - "before you create remote decorator, I want to commit stuff"
+   - "Phase 1 only" (commit scope selection)
+   - "add ParamSpec"
+   - "in the StepSpec remove the `resources`"
+   - "in the remote decorator, could we attach the fray resource to the dynamically created function instead of the original one?"
+   - "could RemoteCallable be a dataclass?"
+   - "should it be a frozen dataclass?"
+   - "should we move the `env_vars` and `pip_dependency_groups` to the RemoteCallable as well? is that a bad idea?"
+   - "yes" (confirming move of env_vars/pip_dependency_groups)
+   - "in the StepRunner, should we create the local pool instead of `run` and take into account the `max_concurrent`?"
+   - "do we need to address the comment https://github.com/marin-community/marin/issues/3035#issuecomment-3963669943 ?"
+   - "what is a good git comment for your last change?"
+   - "why is that important?"
+   - "ok, can we change the design such that the remote creates a wrapper that submits via fray and then use it in the executor if necessary to create RemoteCallable. Step runner should just execute functions via async executor so we don't need to worry about thread pool"
+   - "is this better?"
+   - "Ok, can we make it even simpler, the StepRunner should just execute function and get future them wrapped in the local handle, no check if something is a RemoteCallable"
+
+7. Pending Tasks:
+   - Run tests after the latest changes (`RemoteCallable.__call__` now submits to Fray; `_launch_step` no longer has isinstance check)
+   - Fix test `test_step_without_resources_runs_locally` which mocks `RemoteCallable.submit` — that method no longer exists
+   - Check for unused `self.client` in `StepRunner.__init__` and potentially unused `fray_client` import in step_runner.py (since `_launch_step` no longer passes client to RemoteCallable)
+   - Run pre-commit checks
+   - Commit Phase 2 changes (all uncommitted work: remote.py, executor.py, step_runner.py, step_spec.py, tests)
+
+8. Current Work:
+   Just completed editing `_launch_step` to remove the isinstance check per user's request: "the StepRunner should just execute function and get future them wrapped in the local handle, no check if something is a RemoteCallable". Also changed `RemoteCallable.__call__` to submit to Fray internally using `result_holder` pattern. Have NOT yet run tests or pre-commit after these latest changes.
+
+9. Optional Next Step:
+   Run tests (`uv run pytest tests/execution/test_step_runner.py -v`) to verify the latest changes work. The test `test_step_without_resources_runs_locally` will likely fail because it mocks `RemoteCallable.submit` which no longer exists — needs to be updated. Also need to check if `self.client` in `StepRunner.__init__` is now unused (it was only passed to `step_fn.submit()`/`fray_exec()`), which would cause linting failures.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+would it be simpler if we have the RemoteCallable return a handle?
+
+---
+
+let's go with the alternative
+
+---
+
+why do we need the `result_holder` weirdness?
+
+---
+
+yes, the disk_cache runs inside the container (inside RemoteCallable), so we don't need to return the result? Am I missing something?
+
+---
+
+no - no, the RemoteCallable wraps the disk_cache and disributed, so we don't need to return anything from RemoteCallabe
+
+---
+
+ok, here's the thing, I don't want StepRunner to do any kind of re-wrapping or instance checks. I want it to just invoke functions. How about this: can we have the StepSpec always wrap the function in `disk_cache` and `distributed_lock` + optionally `remote` (if resources are non None). And have the StepRunner just execute functions?
+
+---
+
+run tests
+
+---
+
+In Step Runner do we need the `max_concurrent` checks, or would we just queue up work in the thread?
+
+---
+
+yep
+
+---
+
+in executor, is:
+
+---
+
+```
+    elif isinstance(step.fn, RemoteCallable):
+        final_fn = RemoteCallable(
+            fn=resolved_fn,
+            resources=step.fn.resources,
+            env_vars=step.fn.env_vars,
+            pip_dependency_groups=step.fn.pip_dependency_groups,
+        )
+```
+
+needed?
+
+---
+
+ok, check the diff vs main, is there a way to simplify this change?
+
+---
+
+sure
