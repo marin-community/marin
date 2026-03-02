@@ -17,7 +17,7 @@ from enum import Enum, StrEnum
 
 from iris.cluster.platform.base import Labels, Platform, SliceHandle
 from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
-from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, time_pb2, vm_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -247,6 +247,16 @@ class ScalingGroup:
         self._quota_exceeded_until: Deadline | None = None
         self._quota_reason: str = ""
         self._quota_timeout = quota_timeout
+
+    @property
+    def platform(self) -> Platform:
+        """Platform instance for this scale group."""
+        return self._platform
+
+    @property
+    def label_prefix(self) -> str:
+        """Label prefix used for slice labels."""
+        return self._label_prefix
 
     @property
     def config(self) -> config_pb2.ScaleGroupConfig:
@@ -806,6 +816,71 @@ class ScalingGroup:
             self._pending_scale_ups = 0
         for handle in snapshot:
             handle.terminate()
+
+    def to_snapshot(self, created_at: Timestamp) -> snapshot_pb2.ScalingGroupSnapshot:
+        """Serialize this group's state for checkpointing.
+
+        Captures slice inventory and timing state under lock. Deadlines are
+        converted to wall-clock timestamps for portability across restarts.
+        """
+
+        snap = snapshot_pb2.ScalingGroupSnapshot(
+            name=self.name,
+            consecutive_failures=self._consecutive_failures,
+        )
+
+        with self._slices_lock:
+            for slice_id, slice_state in self._slices.items():
+                slice_snap = snapshot_pb2.SliceSnapshot(
+                    slice_id=slice_id,
+                    scale_group=self.name,
+                    lifecycle=slice_state.lifecycle.value,
+                    error_message=slice_state.error_message,
+                )
+                slice_snap.vm_addresses.extend(slice_state.vm_addresses)
+                slice_snap.created_at.CopyFrom(slice_state.handle.created_at.to_proto())
+                slice_snap.last_active.CopyFrom(slice_state.last_active.to_proto())
+                snap.slices.append(slice_snap)
+
+        if self._backoff_until is not None:
+            remaining_ms = self._backoff_until.remaining_ms()
+            backoff_ts = Timestamp.from_ms(created_at.epoch_ms() + remaining_ms)
+            snap.backoff_until.CopyFrom(backoff_ts.to_proto())
+
+        if self._last_scale_up.epoch_ms() > 0:
+            snap.last_scale_up.CopyFrom(self._last_scale_up.to_proto())
+        if self._last_scale_down.epoch_ms() > 0:
+            snap.last_scale_down.CopyFrom(self._last_scale_down.to_proto())
+
+        if self._quota_exceeded_until is not None:
+            remaining_ms = self._quota_exceeded_until.remaining_ms()
+            quota_ts = Timestamp.from_ms(created_at.epoch_ms() + remaining_ms)
+            snap.quota_exceeded_until.CopyFrom(quota_ts.to_proto())
+        snap.quota_reason = self._quota_reason
+
+        return snap
+
+    def restore_from_snapshot(
+        self,
+        slices: dict[str, SliceState],
+        consecutive_failures: int,
+        last_scale_up: Timestamp,
+        last_scale_down: Timestamp,
+        backoff_until: Deadline | None,
+        quota_exceeded_until: Deadline | None,
+        quota_reason: str,
+    ) -> None:
+        """Restore state from a snapshot. Called before the autoscaler loop starts."""
+        with self._slices_lock:
+            self._slices = slices
+        self._consecutive_failures = consecutive_failures
+        self._last_scale_up = last_scale_up
+        self._last_scale_down = last_scale_down
+        if backoff_until is not None:
+            self._backoff_until = backoff_until
+        if quota_exceeded_until is not None:
+            self._quota_exceeded_until = quota_exceeded_until
+            self._quota_reason = quota_reason
 
     def to_status(self) -> vm_pb2.ScaleGroupStatus:
         """Build a ScaleGroupStatus proto for the status API."""

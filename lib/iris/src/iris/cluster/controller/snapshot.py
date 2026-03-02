@@ -25,7 +25,7 @@ import fsspec
 from google.protobuf import json_format
 
 from iris.cluster.controller.autoscaler import Autoscaler, TrackedWorker
-from iris.cluster.controller.scaling_group import ScalingGroup, SliceLifecycleState, SliceState
+from iris.cluster.controller.scaling_group import SliceLifecycleState, SliceState
 from iris.cluster.controller.state import (
     ControllerEndpoint,
     ControllerJob,
@@ -234,61 +234,6 @@ def _snapshot_endpoint(endpoint: ControllerEndpoint) -> snapshot_pb2.EndpointSna
     return snap
 
 
-def _snapshot_scaling_group(
-    group: ScalingGroup,
-    created_at: Timestamp,
-) -> snapshot_pb2.ScalingGroupSnapshot:
-    """Snapshot a scaling group's slice inventory and timing state."""
-    snap = snapshot_pb2.ScalingGroupSnapshot(
-        name=group.name,
-        consecutive_failures=group.consecutive_failures,
-    )
-
-    # Snapshot slices under lock to avoid RuntimeError from concurrent mutation
-    with group._slices_lock:
-        for slice_id, slice_state in group._slices.items():
-            slice_snap = snapshot_pb2.SliceSnapshot(
-                slice_id=slice_id,
-                scale_group=group.name,
-                lifecycle=slice_state.lifecycle.value,
-                error_message=slice_state.error_message,
-            )
-            slice_snap.vm_addresses.extend(slice_state.vm_addresses)
-            slice_snap.created_at.CopyFrom(slice_state.handle.created_at.to_proto())
-            slice_snap.last_active.CopyFrom(slice_state.last_active.to_proto())
-            snap.slices.append(slice_snap)
-
-    # Snapshot timing state as wall-clock timestamps.
-    # Deadlines are monotonic internally; we store the absolute wall-clock time
-    # they expire at so the restore side can recompute relative offsets.
-    if group._backoff_until is not None:
-        remaining_ms = group._backoff_until.remaining_ms()
-        backoff_ts = Timestamp.from_ms(created_at.epoch_ms() + remaining_ms)
-        snap.backoff_until.CopyFrom(backoff_ts.to_proto())
-
-    if group._last_scale_up.epoch_ms() > 0:
-        snap.last_scale_up.CopyFrom(group._last_scale_up.to_proto())
-    if group._last_scale_down.epoch_ms() > 0:
-        snap.last_scale_down.CopyFrom(group._last_scale_down.to_proto())
-
-    if group._quota_exceeded_until is not None:
-        remaining_ms = group._quota_exceeded_until.remaining_ms()
-        quota_ts = Timestamp.from_ms(created_at.epoch_ms() + remaining_ms)
-        snap.quota_exceeded_until.CopyFrom(quota_ts.to_proto())
-    snap.quota_reason = group._quota_reason
-
-    return snap
-
-
-def _snapshot_tracked_worker(tw: TrackedWorker) -> snapshot_pb2.TrackedWorkerSnapshot:
-    return snapshot_pb2.TrackedWorkerSnapshot(
-        worker_id=tw.worker_id,
-        slice_id=tw.slice_id,
-        scale_group=tw.scale_group,
-        internal_address=tw.handle.internal_address,
-    )
-
-
 def _restore_tracked_worker(snap: snapshot_pb2.TrackedWorkerSnapshot) -> TrackedWorker:
     handle = _RestoredWorkerHandle(
         worker_id=snap.worker_id,
@@ -345,9 +290,9 @@ def create_snapshot(
     # Snapshot autoscaler state
     if autoscaler is not None:
         for group in autoscaler.groups.values():
-            proto.scaling_groups.append(_snapshot_scaling_group(group, created_at))
-        for tw in autoscaler._workers.values():
-            proto.tracked_workers.append(_snapshot_tracked_worker(tw))
+            proto.scaling_groups.append(group.to_snapshot(created_at))
+        for tw_snap in autoscaler.to_tracked_worker_snapshots():
+            proto.tracked_workers.append(tw_snap)
 
     # Snapshot reservation claims
     if reservation_claims is not None:

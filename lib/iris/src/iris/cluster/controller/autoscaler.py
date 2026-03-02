@@ -36,7 +36,7 @@ from iris.cluster.platform.base import (
 from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap, ZONE_ATTRIBUTE_KEY
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -855,6 +855,23 @@ class Autoscaler:
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
         self.refresh(vm_status_map, timestamp)
         return self.update(demand_entries, timestamp)
+
+    def to_tracked_worker_snapshots(self) -> list[snapshot_pb2.TrackedWorkerSnapshot]:
+        """Serialize tracked worker state for checkpointing."""
+
+        return [
+            snapshot_pb2.TrackedWorkerSnapshot(
+                worker_id=tw.worker_id,
+                slice_id=tw.slice_id,
+                scale_group=tw.scale_group,
+                internal_address=tw.handle.internal_address,
+            )
+            for tw in self._workers.values()
+        ]
+
+    def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
+        """Restore tracked worker state from a snapshot. Called before loops start."""
+        self._workers.update(workers)
 
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get worker info by ID from the centralized worker registry."""

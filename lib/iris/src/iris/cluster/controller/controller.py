@@ -617,6 +617,10 @@ class Controller:
 
         self._heartbeat_iteration = 0
 
+        # Set to True once start() is called. Used to gate operations that
+        # are only valid before the controller loops begin (e.g. LoadCheckpoint).
+        self._started = False
+
         # Checkpoint coordination flag. When set, scheduling and autoscaler
         # loops skip their work so the snapshot captures a quiescent state.
         self._checkpoint_in_progress = False
@@ -634,8 +638,14 @@ class Controller:
         """
         self._wake_event.set()
 
+    @property
+    def started(self) -> bool:
+        """Whether the controller loops have been started."""
+        return self._started
+
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
+        self._started = True
         self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
         self._heartbeat_thread = self._threads.spawn(self._run_heartbeat_loop, name="heartbeat-loop")
 
@@ -727,6 +737,8 @@ class Controller:
             self._heartbeat_event.clear()
             if stop_event.is_set():
                 break
+            if self._checkpoint_in_progress:
+                continue
             self._heartbeat_all_workers()
 
     def _is_reservation_satisfied(self, job: ControllerJob) -> bool:
@@ -1290,25 +1302,23 @@ class Controller:
                     continue
                 restore_result = restore_scaling_group(
                     group_snap,
-                    group._platform,
-                    group._config,
-                    group._label_prefix,
+                    group.platform,
+                    group.config,
+                    group.label_prefix,
                 )
-                # Apply restored state to the ScalingGroup
-                with group._slices_lock:
-                    group._slices = restore_result.slices
-                group._consecutive_failures = restore_result.consecutive_failures
-                group._last_scale_up = restore_result.last_scale_up
-                group._last_scale_down = restore_result.last_scale_down
-                if restore_result.backoff_until is not None:
-                    group._backoff_until = restore_result.backoff_until
-                if restore_result.quota_exceeded_until is not None:
-                    group._quota_exceeded_until = restore_result.quota_exceeded_until
-                    group._quota_reason = restore_result.quota_reason
+                group.restore_from_snapshot(
+                    slices=restore_result.slices,
+                    consecutive_failures=restore_result.consecutive_failures,
+                    last_scale_up=restore_result.last_scale_up,
+                    last_scale_down=restore_result.last_scale_down,
+                    backoff_until=restore_result.backoff_until,
+                    quota_exceeded_until=restore_result.quota_exceeded_until,
+                    quota_reason=restore_result.quota_reason,
+                )
 
             # Restore tracked workers into the autoscaler
             restored_workers = restore_tracked_workers(proto)
-            self._autoscaler._workers.update(restored_workers)
+            self._autoscaler.restore_tracked_workers(restored_workers)
             logger.info("Restored %d tracked workers", len(restored_workers))
 
         # Restore reservation claims
