@@ -68,7 +68,7 @@ Actor Client
   │
   │ resolve(actor_name)
   v
-Resolver (ClusterResolver / GcsResolver / FixedResolver)
+Resolver (ClusterResolver / FixedResolver)
   │
   │ endpoints (url + actor_id)
   v
@@ -81,8 +81,6 @@ Worker VM
 Resolver options:
 - **ClusterResolver** (in `iris.client.resolver`): query the controller for
   namespace-aware actor endpoints (best for Iris clusters).
-- **GcsResolver**: discover endpoints via GCP VM metadata tags
-  (`iris_actor_<name>`).
 - **FixedResolver**: static endpoint mapping (tests or fixed deployments).
 
 The actor system also provides `ActorPool` for round-robin calls and broadcast

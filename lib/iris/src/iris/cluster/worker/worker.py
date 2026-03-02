@@ -184,7 +184,7 @@ class Worker:
         # causing TCP resets on idle connections.
         self._server = uvicorn.Server(
             uvicorn.Config(
-                self._dashboard._app,
+                self._dashboard.app,
                 host=self._config.host,
                 port=self._config.port,
                 log_level="error",
@@ -232,16 +232,6 @@ class Worker:
         self._threads.stop()
         if self._process_log_sink:
             self._process_log_sink.close()
-
-        # Remove any remaining containers (tasks already killed above via stop_event)
-        with self._lock:
-            tasks = list(self._tasks.values())
-        for task in tasks:
-            if task.container_id:
-                try:
-                    self._runtime.remove(task.container_id)
-                except RuntimeError:
-                    pass
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
         """Main lifecycle: register, serve, reset, repeat.
@@ -613,13 +603,6 @@ class Worker:
             except Exception as e:
                 logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 
-        terminal_states = {
-            cluster_pb2.TASK_STATE_SUCCEEDED,
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-        }
-
         tasks: list[cluster_pb2.Controller.WorkerTaskStatus] = []
 
         with self._lock:
@@ -655,7 +638,7 @@ class Worker:
                         error=task_proto.error or "",
                         log_directory=task.log_directory,
                     )
-                    if task.status in terminal_states:
+                    if task.status in self._TERMINAL_STATES:
                         entry.finished_at.CopyFrom(task_proto.finished_at)
                     if task_proto.resource_usage.ByteSize() > 0:
                         entry.resource_usage.CopyFrom(task_proto.resource_usage)
@@ -666,7 +649,7 @@ class Worker:
             expected_keys = {(entry.task_id, entry.attempt_id) for entry in request.expected_tasks}
             tasks_to_kill: list[tuple[str, int]] = []
             for key, task in self._tasks.items():
-                if key not in expected_keys and task.status not in terminal_states:
+                if key not in expected_keys and task.status not in self._TERMINAL_STATES:
                     tasks_to_kill.append(key)
 
         # Kill removed tasks outside lock to avoid deadlock
@@ -708,11 +691,10 @@ class Worker:
         # Set flag to signal thread to stop
         task.should_stop = True
 
-        # If container handle exists, try to stop it
-        if task._container_handle:
+        if task.has_container:
             try:
                 # Send SIGTERM (graceful stop)
-                task._container_handle.stop(force=False)
+                task.stop(force=False)
 
                 # Wait for shutdown
                 running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
@@ -724,7 +706,7 @@ class Worker:
                 # Force kill if graceful shutdown timed out
                 if not stopped:
                     try:
-                        task._container_handle.stop(force=True)
+                        task.stop(force=True)
                     except RuntimeError:
                         pass
             except RuntimeError:
@@ -747,9 +729,7 @@ class Worker:
             raise ValueError(f"Task {task_id} not found")
         if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
             raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
-        if not attempt._container_handle:
-            raise ValueError(f"Task {task_id} has no container handle")
-        return attempt._container_handle.profile(duration_seconds, profile_type)
+        return attempt.profile(duration_seconds, profile_type)
 
     def get_logs(
         self,

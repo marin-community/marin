@@ -1917,8 +1917,6 @@ class ControllerState:
 
         Must be called with _lock held.
         """
-        from iris.cluster.controller.events import TaskStateChangedEvent
-
         event = TaskStateChangedEvent(
             task_id=task_id,
             new_state=new_state,

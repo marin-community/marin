@@ -17,6 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from google.protobuf import json_format
+
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.runtime.types import (
     ContainerConfig,
@@ -26,8 +28,6 @@ from iris.cluster.runtime.types import (
     ContainerRuntime,
     RuntimeLogReader,
 )
-from google.protobuf import json_format
-
 from iris.cluster.types import (
     JobName,
     is_task_finished,
@@ -306,6 +306,28 @@ class TaskAttempt:
         self.should_stop = True
         if self._container_handle:
             self._container_handle.stop(force=force)
+
+    @property
+    def has_container(self) -> bool:
+        """Whether this attempt has an active container handle."""
+        return self._container_handle is not None
+
+    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+        """Profile the running container process.
+
+        Args:
+            duration_seconds: How long to sample
+            profile_type: ProfileType message with oneof cpu/memory profiler config
+
+        Returns:
+            Raw profile output
+
+        Raises:
+            ValueError: If no container handle is available
+        """
+        if not self._container_handle:
+            raise ValueError(f"Task {self.task_id} has no container handle")
+        return self._container_handle.profile(duration_seconds, profile_type)
 
     def transition_to(
         self,
@@ -680,7 +702,7 @@ class TaskAttempt:
                 if self.workdir:
                     self.disk_mb = collect_workdir_size_mb(self.workdir)
             except Exception:
-                pass  # Don't fail task on stats collection errors
+                logger.debug("Stats collection failed for task %s", self.task_id, exc_info=True)
 
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
@@ -691,7 +713,7 @@ class TaskAttempt:
             for log_line in reader.read():
                 self._log_sink.append(source=log_line.source, data=log_line.data)
         except Exception:
-            pass  # Don't fail task on log streaming errors
+            logger.debug("Log streaming failed for task %s", self.task_id, exc_info=True)
 
     def _cleanup(self) -> None:
         """Clean up task resources: container, ports, image protection, workdir.
