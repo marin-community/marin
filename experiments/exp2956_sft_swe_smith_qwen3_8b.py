@@ -16,10 +16,11 @@
 Fine-tunes Qwen/Qwen3-8B on SWE-smith agentic trajectories (Rust/ripgrep tasks).
 
 Supports multiple teacher models:
-  - gpt-5-mini:     AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories     (3953 samples)
-  - minimax-m2.5:   AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories   (5251 samples)
-  - gemini-3-flash: AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories (1449 samples)
-  - glm-4.6:        AlienKevin/SWE-smith-rs-glm-4.6-trajectories        (369 samples)
+  - gpt-5-mini:          AlienKevin/SWE-smith-rs-gpt-5-mini-trajectories                (3953 samples)
+  - minimax-m2.5:        AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories              (5251 samples)
+  - gemini-3-flash:      AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories            (1449 samples)
+  - glm-4.6:             AlienKevin/SWE-smith-rs-glm-4.6-trajectories                    (369 samples)
+  - swebm-minimax-m2.5:  AlienKevin/SWE-bench-multilingual-minimax-m2.5-trajectories     (299 samples)
 
 Each dataset has a JSON-serialized "messages" column in OpenAI chat format
 plus metadata like instance_id, resolved, model, traj_id, and patch.
@@ -29,6 +30,7 @@ Usage:
     python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher minimax-m2.5
     python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher gemini-3-flash
     python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher glm-4.6
+    python -m experiments.exp2956_sft_swe_smith_qwen3_8b --teacher swebm-minimax-m2.5
 
 Full command for minimax-m2.5:
 RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
@@ -86,6 +88,10 @@ TEACHER_CONFIGS: dict[str, TeacherConfig] = {
     "glm-4.6": TeacherConfig(
         hf_dataset_id="AlienKevin/SWE-smith-rs-glm-4.6-trajectories",
         num_samples=369,
+    ),
+    "swebm-minimax-m2.5": TeacherConfig(
+        hf_dataset_id="AlienKevin/SWE-bench-multilingual-minimax-m2.5-trajectories",
+        num_samples=299,
     ),
 }
 
@@ -187,6 +193,9 @@ exp2956_sft_swe_smith_qwen3_8b, exp2956_checkpoint = build_swe_smith_sft("gpt-5-
 exp2956_sft_swe_smith_minimax_qwen3_8b, exp2956_minimax_checkpoint = build_swe_smith_sft("minimax-m2.5")
 exp2956_sft_swe_smith_gemini_qwen3_8b, exp2956_gemini_checkpoint = build_swe_smith_sft("gemini-3-flash")
 exp2956_sft_swe_smith_glm_qwen3_8b, exp2956_glm_checkpoint = build_swe_smith_sft("glm-4.6")
+exp2956_sft_swe_smith_swebm_minimax_qwen3_8b, exp2956_swebm_minimax_checkpoint = build_swe_smith_sft(
+    "swebm-minimax-m2.5"
+)
 
 
 if __name__ == "__main__":
