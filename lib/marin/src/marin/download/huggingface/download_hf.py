@@ -55,7 +55,7 @@ class DownloadConfig:
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
-    zephyr_max_parallelism: int = 32
+    zephyr_max_parallelism: int = 8
     """Maximum parallelism of the Zephyr download job"""
 
     read_timeout_seconds: float = 120.0
@@ -63,6 +63,9 @@ class DownloadConfig:
 
     progress_log_interval_seconds: float = 60.0
     """Log a heartbeat for each in-flight shard every N seconds while bytes are flowing."""
+
+    read_chunk_size_mib: int = 8
+    """Chunk size for each streaming read from HF."""
 
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
@@ -85,6 +88,7 @@ def stream_file_to_fsspec(
     expected_size: int | None = None,
     read_timeout_seconds: float = 120.0,
     progress_log_interval_seconds: float = 60.0,
+    read_chunk_size_mib: int = 8,
 ):
     """Stream a file from HfFileSystem to another fsspec path using atomic write.
 
@@ -100,8 +104,7 @@ def stream_file_to_fsspec(
     """
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
-    # Use 256 MB chunk size for large files
-    chunk_size = 256 * 1024 * 1024
+    chunk_size = max(1, int(read_chunk_size_mib)) * 1024 * 1024
     max_retries = 20
     # 15 minutes max sleep
     max_sleep = 15 * 60
@@ -118,13 +121,16 @@ def stream_file_to_fsspec(
                 previous_socket_timeout = socket.getdefaulttimeout()
                 socket.setdefaulttimeout(read_timeout_seconds)
                 try:
-                    with hf_fs.open(file_path, "rb") as src_file, fsspec.open(temp_path, "wb") as dest_file:
+                    with (
+                        hf_fs.open(file_path, "rb", block_size=chunk_size) as src_file,
+                        fsspec.open(temp_path, "wb") as dest_file,
+                    ):
                         start_time = time.monotonic()
                         next_progress_log = start_time + progress_log_interval_seconds
                         while True:
                             try:
                                 chunk = src_file.read(chunk_size)
-                            except TimeoutError as timeout_error:
+                            except (TimeoutError, socket.timeout) as timeout_error:
                                 raise TimeoutError(
                                     f"Timed out reading from {file_path} after "
                                     f"{read_timeout_seconds:.1f}s with {bytes_written} bytes written"
@@ -248,6 +254,7 @@ def download_hf(cfg: DownloadConfig) -> None:
                     expected_size,
                     cfg.read_timeout_seconds,
                     cfg.progress_log_interval_seconds,
+                    cfg.read_chunk_size_mib,
                 )
             )
         except Exception as e:

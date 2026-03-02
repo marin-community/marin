@@ -3,7 +3,7 @@
 
 import json
 from typing import TypeVar, overload, Any
-from dataclasses import dataclass, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from marin.execution.step_spec import StepSpec
 
 import fsspec
@@ -46,7 +46,9 @@ class Artifact:
             if isinstance(artifact, BaseModel):
                 fd.write(artifact.model_dump_json().encode("utf-8"))
             elif is_dataclass(artifact):
-                fd.write(json.dumps(artifact.__dict__).encode("utf-8"))
+                # `asdict` recursively converts nested dataclasses (for example ResourceConfig),
+                # avoiding non-serializable objects in `__dict__`.
+                fd.write(json.dumps(asdict(artifact)).encode("utf-8"))
             else:
                 # TODO: should the error to serialize be ignored/logged instead of raising an exception?
                 fd.write(json.dumps(artifact).encode("utf-8"))
