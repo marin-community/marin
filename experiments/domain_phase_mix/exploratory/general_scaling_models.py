@@ -2462,6 +2462,246 @@ def _fit_isceq_toxic(
 
 
 # ---------------------------------------------------------------------------
+# Model: DS-RE-CEQ (Domain-Specific Recurrent-Exposure CEQ)
+# ---------------------------------------------------------------------------
+def _fit_dsre_ceq(
+    spec: DatasetSpec,
+    *,
+    gate: bool = True,
+    n_restarts: int = 8,
+    seed: int = 0,
+    maxiter: int = 500,
+    reg: float = 1e-4,
+):
+    """DS-RE-CEQ: satiety memory + conflict-gated interference.
+
+    Forward pass (per run r):
+      E_{k,d} = W_{k,d} * C_{k,d}                              epochs
+      Cum_{k,d} = sum_{i<k} E_{i,d}                             prior exposure
+      z_{k,d} = log(1 + phi_d*Cum + E) - log(1 + phi_d*Cum)    signal extraction
+      r_{k,d} = exp(- sum_{j>k} g_j * lam_{j,d} * (1-W_{j,d})) retention
+      S_d = sum_k pi^(d)_k * r_{k,d} * z_{k,d}                 retained state
+      X_d = sum_k pi^(d)_k * r_{k,d} * E_{k,d}                 retained exposure
+      U = CES(S; a, rho)
+      P = softplus(sum_{d in small} X_d - tau)^2                integrated penalty
+      y_hat = c0 - A*U + B*P
+
+    Parameters (gate=True):
+      c0, logA, logB                          3
+      (M-1) domain logits                     M-1
+      rho                                     1
+      M*(N-1) pi logits (per-domain)          M*(N-1)
+      (N-1)*M lambda logits                   (N-1)*M
+      M phi logits (sigmoid -> satiety mem)   M
+      N gate logits (sigmoid, g_0 forced 0)   N
+      log tau                                 1
+    Total: 2*M*N + N + 4     (gate=False: 2*M*N + 4)
+    """
+    rng = np.random.default_rng(seed)
+    W = spec.weights
+    y = spec.y
+    R, N, M = W.shape
+
+    C = _broadcast_epoch_mult(spec.epoch_multipliers, N, M)
+    E = _compute_epochs(W, C)
+
+    S_list = _parse_small(spec.small_domains, M)
+
+    huber_d = _huber_delta(y)
+
+    n_params = (
+        3
+        + (M - 1)
+        + 1
+        + M * max(N - 1, 0)
+        + max(N - 1, 0) * M
+        + M
+        + (N if gate else 0)
+        + 1
+    )
+
+    # Precompute cumulative prior exposure: Cum[:, k, :] = sum_{i<k} E[:, i, :]
+    Cum = np.zeros_like(E)
+    if N > 1:
+        Cum[:, 1:, :] = np.cumsum(E[:, :-1, :], axis=1)
+
+    med_tau = float(np.median(E[:, :, S_list].sum(axis=(1, 2))) + 1e-6)
+
+    def _softmax_logits(logits: np.ndarray) -> np.ndarray:
+        z = logits - np.max(logits)
+        e = np.exp(z)
+        return e / e.sum()
+
+    def _sigmoid(x: float) -> float:
+        return 1.0 / (1.0 + np.exp(-np.clip(x, -50.0, 50.0)))
+
+    def unpack(p: np.ndarray):
+        idx = 0
+        c0 = float(p[idx])
+        logA = float(p[idx + 1])
+        logB = float(p[idx + 2])
+        idx += 3
+
+        logits = np.zeros(M)
+        if M > 1:
+            logits[: M - 1] = p[idx : idx + (M - 1)]
+            idx += M - 1
+        a = _softmax_logits(logits)
+
+        rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+        idx += 1
+
+        # Per-domain phase importance: M sets of (N-1) logits -> M simplex vectors
+        pi_dom = np.zeros((M, N))
+        for d in range(M):
+            if N > 1:
+                logits_free = p[idx : idx + (N - 1)]
+                idx += N - 1
+            else:
+                logits_free = np.array([])
+            full = np.zeros(N)
+            if N > 1:
+                full[: N - 1] = logits_free
+            pi_dom[d] = _softmax_logits(full)
+
+        # Per-domain per-phase interference lambda: phases 1..N-1, per domain
+        lam = np.zeros((N, M))
+        if N > 1:
+            raw = p[idx : idx + (N - 1) * M].reshape(N - 1, M)
+            idx += (N - 1) * M
+            lam[1:] = np.exp(np.clip(raw, -8.0, 8.0))
+
+        # Per-domain satiety memory phi_d in (0, 1) via sigmoid
+        phi = np.array([_sigmoid(float(p[idx + d])) for d in range(M)])
+        idx += M
+
+        # Conflict gate g_k in (0, 1); g_0 forced to 0
+        if gate:
+            g = np.array([_sigmoid(float(p[idx + k])) for k in range(N)])
+            idx += N
+            g[0] = 0.0
+        else:
+            g = np.ones(N)
+            g[0] = 0.0
+
+        tau = float(np.exp(np.clip(p[idx], -8.0, 8.0)))
+        idx += 1
+
+        return c0, logA, logB, a, rho, pi_dom, lam, phi, g, tau
+
+    def forward(p: np.ndarray, W_in: np.ndarray) -> np.ndarray:
+        c0, logA, logB, a, rho, pi_dom, lam, phi, g, tau = unpack(p)
+        A_coef = float(np.exp(np.clip(logA, -10.0, 10.0)))
+        B_coef = float(np.exp(np.clip(logB, -10.0, 10.0)))
+
+        R_in = W_in.shape[0]
+        E_in = _compute_epochs(W_in, C)
+        invW = 1.0 - W_in
+
+        # Cumulative prior exposure
+        Cum_in = np.zeros_like(E_in)
+        if N > 1:
+            Cum_in[:, 1:, :] = np.cumsum(E_in[:, :-1, :], axis=1)
+
+        # Signal extraction: z_{k,d} with satiety memory
+        # phi is (M,), broadcast to (R_in, N, M)
+        prior = phi[None, None, :] * Cum_in  # (R_in, N, M)
+        z = np.log1p(prior + E_in) - np.log1p(prior)  # (R_in, N, M)
+
+        # Retention: r_{k,d} = exp(- sum_{j>k} g_j * lam_{j,d} * (1 - W_{j,d}))
+        # gated interference per phase-domain
+        lam_eff = lam * g[:, None]  # (N, M)
+        c = invW * lam_eff[None, :, :]  # (R_in, N, M)
+        # suffix sum: for each k, sum c over j > k
+        suffix = np.cumsum(c[:, ::-1, :], axis=1)[:, ::-1]  # (R_in, N, M)
+        exp_term = np.zeros_like(c)
+        if N > 1:
+            exp_term[:, :-1, :] = suffix[:, 1:, :]
+        r = np.exp(-exp_term)  # (R_in, N, M)
+
+        # Retained state S_d and retained exposure X_d
+        S = np.zeros((R_in, M))
+        X_ret = np.zeros((R_in, M))
+        for d in range(M):
+            pi = pi_dom[d][None, :]  # (1, N)
+            S[:, d] = np.sum(pi * r[:, :, d] * z[:, :, d], axis=1)
+            X_ret[:, d] = np.sum(pi * r[:, :, d] * E_in[:, :, d], axis=1)
+
+        U = _ces_mean_stable(np.maximum(S, 1e-12), a[None, :], rho)
+
+        # Integrated state penalty on retained small-domain exposure
+        X_small = X_ret[:, S_list].sum(axis=1)
+        P = _softplus_scaled(X_small - tau, 1.0) ** 2
+
+        return c0 - A_coef * U + B_coef * P
+
+    def obj(p: np.ndarray) -> float:
+        yhat = forward(p, W)
+        loss = float(np.sum(_pseudo_huber(yhat - y, huber_d)))
+        loss += float(reg) * float(np.sum(p * p))
+        return loss
+
+    best_val, best_p = np.inf, None
+
+    for _ in range(n_restarts):
+        p0 = np.zeros(n_params)
+        idx = 0
+        p0[idx] = float(np.median(y))
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))   # logB
+        idx += 3
+        if M > 1:
+            p0[idx : idx + (M - 1)] = rng.normal(0.0, 0.5, M - 1)
+            idx += M - 1
+        p0[idx] = float(rng.normal(0.0, 0.7))  # rho raw
+        idx += 1
+        # Per-domain pi logits
+        if N > 1:
+            p0[idx : idx + M * (N - 1)] = rng.normal(0.0, 0.5, M * (N - 1))
+            idx += M * (N - 1)
+        # Per-domain per-phase lambda logits
+        if N > 1:
+            p0[idx : idx + (N - 1) * M] = rng.normal(-1.0, 0.5, (N - 1) * M)
+            idx += (N - 1) * M
+        # Phi init: near 1 (remember satiety) — sigmoid(2.0) ~ 0.88
+        p0[idx : idx + M] = rng.normal(2.0, 0.6, M)
+        idx += M
+        # Gate init: increasing with phase index
+        if gate:
+            t = np.linspace(-2.0, 2.0, N)
+            p0[idx : idx + N] = t + rng.normal(0.0, 0.6, N)
+            idx += N
+        # log tau
+        p0[idx] = float(np.log(med_tau) + rng.normal(0.0, 0.3))
+        idx += 1
+
+        try:
+            res = minimize(
+                obj, p0, method="L-BFGS-B",
+                options={"maxiter": maxiter, "ftol": 1e-10},
+            )
+            if np.isfinite(res.fun) and res.fun < best_val:
+                best_val, best_p = float(res.fun), res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        raise RuntimeError("DS-RE-CEQ optimization failed to converge")
+
+    final_p = best_p.copy()
+
+    def predict(W_new: np.ndarray) -> np.ndarray:
+        return forward(final_p, _as_3d(W_new))
+
+    return predict, {"n_params": n_params}
+
+
+def _fit_dsre_ceq_nogate(spec: DatasetSpec, **kw):
+    """DS-RE-CEQ without the conflict gate (g_k = 1 for k>0)."""
+    return _fit_dsre_ceq(spec, gate=False, **kw)
+
+
+# ---------------------------------------------------------------------------
 # Model: PCEQ (Phase CES utility + entropy + epoch-overfit quadratic)
 # ---------------------------------------------------------------------------
 def _ces_utility_features_general(
@@ -2675,6 +2915,10 @@ GENERAL_MODELS: list[GeneralModelSpec] = [
     GeneralModelSpec("IS-CEQ(quad)", _fit_isceq_quad, lambda _: True, "IS-CEQ + quadratic phase weights"),
     GeneralModelSpec("IS-CEQ(beta)", _fit_isceq_beta, lambda _: True, "IS-CEQ + beta-distribution phase weights"),
     GeneralModelSpec("IS-CEQ-Toxic", _fit_isceq_toxic, lambda _: True, "IS-CEQ + source-toxicity asymmetric forgetting"),
+    GeneralModelSpec("DS-RE-CEQ", _fit_dsre_ceq, lambda _: True, "Satiety-memory + conflict-gated interference"),
+    GeneralModelSpec(
+        "DS-RE-CEQ(ng)", _fit_dsre_ceq_nogate, lambda _: True, "DS-RE-CEQ without conflict gate"
+    ),
     # Hybrid models: mixture design + economics utility + information theory
     GeneralModelSpec("SHEQ", _fit_sheq, lambda _: True, "Scheffé+log + epoch-entropy + epoch-overfit quadratic"),
     GeneralModelSpec("PCEQ", _fit_pceq, _applicable_pceq, "Phase CES utility + entropy + epoch-overfit quadratic"),

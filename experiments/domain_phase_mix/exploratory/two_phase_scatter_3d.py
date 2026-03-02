@@ -115,11 +115,13 @@ def main():
     #     )
     # )
 
-    # Scatter points
+    # Scatter points with wandb links
+    wandb_ids = df["wandb_run_id"].values
     hover_text = [
-        f"p0_sc={xi:.4f}<br>p1_sc={yi:.4f}<br>BPB={zi:.4f}<br>src={src}"
-        for xi, yi, zi, src in zip(x, y, z, df["_source"])
+        f"p0_sc={xi:.4f}<br>p1_sc={yi:.4f}<br>BPB={zi:.4f}"
+        for xi, yi, zi in zip(x, y, z)
     ]
+    # customdata carries the wandb run id for the click-to-open JS
     fig.add_trace(
         go.Scatter3d(
             x=x,
@@ -135,6 +137,7 @@ def main():
                 showscale=False,
                 line=dict(width=0.5, color="rgba(0,0,0,0.3)"),
             ),
+            customdata=wandb_ids,
             text=hover_text,
             hoverinfo="text",
             name="Runs",
@@ -188,6 +191,54 @@ def main():
     out_path = SCRIPT_DIR / "two_phase_plots" / "scatter_3d_all.html"
     out_path.parent.mkdir(exist_ok=True)
     fig.write_html(str(out_path), include_plotlyjs="cdn")
+
+    # Append JS: clicking a point shows a panel with a clickable wandb link.
+    # Panel is fixed in the top-right; close via [x] button or Escape.
+    click_js = """\
+<script>
+(function() {
+  var WANDB = "https://wandb.ai/marin-community/marin/runs/";
+  var box = document.createElement("div");
+  box.id = "pinned-tip";
+  box.style.cssText =
+    "display:none;position:fixed;top:16px;right:16px;z-index:9999;" +
+    "background:#fff;border:1px solid #888;border-radius:6px;" +
+    "padding:12px 16px;box-shadow:2px 2px 8px rgba(0,0,0,.25);" +
+    "font:13px/1.6 monospace;min-width:260px;";
+  document.body.appendChild(box);
+
+  function hide() { box.style.display = "none"; }
+
+  var gd = document.querySelectorAll(".plotly-graph-div")[0];
+  gd.on("plotly_click", function(ev) {
+    try {
+      var pt = ev.points[0];
+      if (!pt || pt.customdata === undefined) return;
+      var rid = pt.customdata;
+      var url = WANDB + rid;
+      box.innerHTML =
+        '<div style="float:right;cursor:pointer;font-size:16px;' +
+        'color:#888;margin:-4px -4px 0 8px" id="tip-close">&times;</div>' +
+        "p0_sc=" + pt.x.toFixed(4) + "<br>" +
+        "p1_sc=" + pt.y.toFixed(4) + "<br>" +
+        "BPB=" + pt.z.toFixed(4) + "<br>" +
+        '<a href="' + url + '" target="_blank" ' +
+        'style="color:#1a0dab;word-break:break-all">' + rid + "</a>";
+      box.style.display = "block";
+      document.getElementById("tip-close").onclick = hide;
+    } catch(e) { console.error("plotly_click handler:", e); }
+  });
+
+  document.addEventListener("keydown", function(ev) {
+    if (ev.key === "Escape") hide();
+  });
+})();
+</script>
+"""
+    # Inject before closing </body>
+    html = out_path.read_text()
+    html = html.replace("</body>", click_js + "</body>")
+    out_path.write_text(html)
     print(f"Saved: {out_path}")
 
 

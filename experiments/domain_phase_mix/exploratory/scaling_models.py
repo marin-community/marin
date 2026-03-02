@@ -1483,6 +1483,168 @@ def label_ceq_washpen(params):
 
 
 # =========================================================================
+# DS-RE-CEQ: Satiety memory + conflict-gated interference (2-phase)
+# =========================================================================
+
+def _dsre_ceq_core(X, p):
+    """Forward pass for DS-RE-CEQ (2-phase, 2-domain).
+
+    Parameters (13 total):
+      c0, logA, logB,                                     3
+      logit_a,                                             1   (domain weight)
+      rho_raw,                                             1   (CES elasticity)
+      pi_sc_logit, pi_nem_logit,                           2   (per-domain phase importance)
+      lam_sc_raw, lam_nem_raw,                             2   (per-domain interference lambda)
+      phi_sc_raw, phi_nem_raw,                             2   (satiety memory)
+      gate_raw,                                            1   (conflict gate for phase 1)
+      logtau                                               1   (overfit threshold)
+    = 13
+    """
+    e_sc0, e_sc1, e_nem0, e_nem1 = _epochs_from_weights(X)
+    N = 2
+    M = 2
+
+    idx = 0
+    c0 = p[idx]; idx += 1
+    logA = p[idx]; idx += 1
+    logB = p[idx]; idx += 1
+
+    # Domain weights via sigmoid
+    a_sc = 1.0 / (1.0 + np.exp(-p[idx])); idx += 1
+    a = np.array([a_sc, 1.0 - a_sc])
+
+    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99)); idx += 1
+
+    # Per-domain phase importance: softmax over 2 phases (1 logit each)
+    # pi_d = softmax([0, logit]) → [1/(1+e^l), e^l/(1+e^l)]
+    pi_sc_logit = p[idx]; idx += 1
+    pi_nem_logit = p[idx]; idx += 1
+    pi_sc = np.array([1.0, np.exp(pi_sc_logit)]) / (1.0 + np.exp(pi_sc_logit))
+    pi_nem = np.array([1.0, np.exp(pi_nem_logit)]) / (1.0 + np.exp(pi_nem_logit))
+
+    # Per-domain interference lambda (phase 1 only; phase 0 has lam=0)
+    lam_sc = float(np.exp(np.clip(p[idx], -8.0, 8.0))); idx += 1
+    lam_nem = float(np.exp(np.clip(p[idx], -8.0, 8.0))); idx += 1
+
+    # Satiety memory phi_d in (0, 1)
+    phi_sc = 1.0 / (1.0 + np.exp(-np.clip(p[idx], -50, 50))); idx += 1
+    phi_nem = 1.0 / (1.0 + np.exp(-np.clip(p[idx], -50, 50))); idx += 1
+
+    # Conflict gate for phase 1 (g_0 = 0 always)
+    g1 = 1.0 / (1.0 + np.exp(-np.clip(p[idx], -50, 50))); idx += 1
+
+    tau = float(np.exp(np.clip(p[idx], -8.0, 8.0))); idx += 1
+
+    A = np.exp(np.clip(logA, -10.0, 10.0))
+    B = np.exp(np.clip(logB, -10.0, 10.0))
+
+    # Build (R, N=2, M=2) arrays: M=0 is StarCoder, M=1 is Nemotron
+    E = np.stack([
+        np.column_stack([e_sc0, e_nem0]),
+        np.column_stack([e_sc1, e_nem1]),
+    ], axis=1)  # (R, 2, 2)
+
+    W = np.stack([
+        np.column_stack([X[:, 0], 1.0 - X[:, 0]]),
+        np.column_stack([X[:, 1], 1.0 - X[:, 1]]),
+    ], axis=1)  # (R, 2, 2)
+
+    # Cumulative prior exposure: Cum[:, 0, :] = 0, Cum[:, 1, :] = E[:, 0, :]
+    Cum = np.zeros_like(E)
+    Cum[:, 1, :] = E[:, 0, :]
+
+    # Signal extraction: z_{k,d} = log(1 + phi_d * Cum + E) - log(1 + phi_d * Cum)
+    phi = np.array([phi_sc, phi_nem])  # (2,)
+    prior = phi[None, None, :] * Cum  # (R, 2, 2)
+    z = np.log1p(prior + E) - np.log1p(prior)  # (R, 2, 2)
+
+    # Retention: r_{k,d} = exp(- sum_{j>k} g_j * lam_{j,d} * (1 - W_{j,d}))
+    # Phase 0: r_{0,d} = exp(-g1 * lam_d * (1 - W_{1,d}))
+    # Phase 1: r_{1,d} = 1 (nothing after)
+    lam_vec = np.array([lam_sc, lam_nem])  # (2,)
+    invW1 = 1.0 - W[:, 1, :]  # (R, 2)
+    r = np.ones((len(X), N, M))
+    r[:, 0, :] = np.exp(-g1 * lam_vec[None, :] * invW1)
+
+    # Retained state and exposure
+    pi_dom = np.stack([pi_sc, pi_nem], axis=0)  # (M=2, N=2)
+    S = np.zeros((len(X), M))
+    X_ret = np.zeros((len(X), M))
+    for d in range(M):
+        pi = pi_dom[d][None, :]  # (1, N)
+        S[:, d] = np.sum(pi * r[:, :, d] * z[:, :, d], axis=1)
+        X_ret[:, d] = np.sum(pi * r[:, :, d] * E[:, :, d], axis=1)
+
+    # CES aggregation
+    inner = a[0] * np.power(np.maximum(S[:, 0], 1e-12), rho) + \
+            a[1] * np.power(np.maximum(S[:, 1], 1e-12), rho)
+    U = np.power(np.maximum(inner, 1e-12), 1.0 / rho)
+
+    # Integrated state penalty on retained StarCoder exposure
+    P = _softplus(X_ret[:, 0] - tau) ** 2
+
+    return c0 - A * U + B * P
+
+
+def fit_dsre_ceq(X, y, n_restarts=12, seed=0):
+    """DS-RE-CEQ: satiety memory + conflict-gated interference (2-phase).
+
+    13 parameters: c0, logA, logB, logit_a, rho_raw, pi_sc, pi_nem,
+                   lam_sc, lam_nem, phi_sc, phi_nem, gate, logtau.
+    Features: weight.
+    """
+    rng = np.random.default_rng(seed)
+    n_params = 13
+    E_sc_med = float(np.median(SC_EPOCH_MULT * (X[:, 0] + X[:, 1])) + 1e-6)
+
+    def loss(p):
+        r = _dsre_ceq_core(X, p) - y
+        return float(np.sum(np.clip(r * r, 0, 1e10)))
+
+    best_l, best_p = np.inf, None
+    for _ in range(n_restarts):
+        p0 = np.array([
+            y.max() + rng.normal(0, 0.05),                # c0
+            rng.normal(0, 1),                               # logA
+            rng.normal(-2, 1),                              # logB
+            rng.normal(0, 1),                               # logit_a
+            rng.normal(0, 0.7),                             # rho_raw
+            rng.normal(0, 0.5),                             # pi_sc_logit
+            rng.normal(0, 0.5),                             # pi_nem_logit
+            rng.normal(-1, 0.5),                            # lam_sc_raw
+            rng.normal(-1, 0.5),                            # lam_nem_raw
+            rng.normal(2.0, 0.6),                           # phi_sc_raw
+            rng.normal(2.0, 0.6),                           # phi_nem_raw
+            rng.normal(0.0, 1.0),                           # gate_raw
+            np.log(E_sc_med) + rng.normal(0, 0.3),         # logtau
+        ])
+        try:
+            res = minimize(loss, p0, method="L-BFGS-B",
+                           options={"maxiter": 800, "ftol": 1e-10})
+            if np.isfinite(res.fun) and res.fun < best_l:
+                best_l, best_p = res.fun, res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        best_p = np.zeros(n_params)
+        best_p[0] = np.mean(y)
+
+    return lambda Xn: _dsre_ceq_core(Xn, best_p), best_p
+
+
+def label_dsre_ceq(params):
+    a_sc = 1.0 / (1.0 + np.exp(-params[3]))
+    rho = np.clip(5.0 * np.tanh(params[4]), -10, 0.99)
+    phi_sc = 1.0 / (1.0 + np.exp(-params[9]))
+    phi_nem = 1.0 / (1.0 + np.exp(-params[10]))
+    g1 = 1.0 / (1.0 + np.exp(-params[11]))
+    tau = np.exp(np.clip(params[12], -8, 8))
+    return (rf"$\rho$={rho:.2f}, $a_{{sc}}$={a_sc:.2f}, "
+            rf"$\phi$=({phi_sc:.2f},{phi_nem:.2f}), $g_1$={g1:.2f}, $\tau$={tau:.1f}")
+
+
+# =========================================================================
 # PCEQ: Phase CES utility + epoch-entropy + epoch-overfit quadratic
 # =========================================================================
 
@@ -1949,6 +2111,7 @@ MODELS: list[ModelSpec] = [
     ModelSpec("NCEQ", fit_nceq, "weight", label_nceq, "royalblue", "-"),
     ModelSpec("FM-CEQ", fit_fm_ceq, "weight", label_fm_ceq, "darkorchid", "-"),
     ModelSpec("CEQ-Washpen", fit_ceq_washpen, "weight", label_ceq_washpen, "darkgoldenrod", "-"),
+    ModelSpec("DS-RE-CEQ", fit_dsre_ceq, "weight", label_dsre_ceq, "maroon", "-"),
 ]
 
 
