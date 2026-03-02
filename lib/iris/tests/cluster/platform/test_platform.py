@@ -449,7 +449,10 @@ def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
         cache_dir="/var/cache/iris",
     )
 
-    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+    with (
+        unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake),
+        unittest.mock.patch("iris.cluster.platform.gcp.threading.Thread"),
+    ):
         platform.create_slice(cfg, worker_config=wc)
 
     assert wc.docker_image == "europe-docker.pkg.dev/my-proj/ghcr-mirror/marin-community/iris-worker:latest"
