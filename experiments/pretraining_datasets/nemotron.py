@@ -7,7 +7,7 @@ import os.path
 
 
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -22,7 +22,8 @@ downloads = {
     )
 }
 
-_nemotron_cc_path = output_path_of(downloads["nemotron_cc"], "contrib/Nemotron/Nemotron-CC/data-jsonl/")
+# TODO: temp fix to avoid new install
+_nemotron_cc_path = "gs://marin-eu-west4/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/"
 
 NEMOTRON_DATASETS = {
     "hq_actual": ["quality=high/kind=actual/**/*.jsonl.gz"],
@@ -60,7 +61,7 @@ NEMOTRON_LLAMA3_OVERRIDES = {
 def _get_nemotron_split_paths(split: str):
     """Helper to get file paths for a nemotron split."""
     patterns = NEMOTRON_DATASETS[split]
-    return [_nemotron_cc_path / pattern for pattern in patterns]
+    return [os.path.join(_nemotron_cc_path, pattern) for pattern in patterns]
 
 
 def tokenize_nemotron(
