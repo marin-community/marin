@@ -95,6 +95,21 @@ _HIERARCHY_SEGMENT_BLACKLIST_CONTAINS = {
     "thunk",
     "runtime",
 }
+_TRACE_COMPLETE_EVENT_TRUNCATION_THRESHOLD = 1_000_000
+_GAP_PAYLOAD_LOOKAHEAD_EVENTS = 8
+_GAP_MARKER_CANONICAL_NAMES = {
+    "iota",
+    "constant",
+    "bitcast",
+    "get-tuple-element",
+    "parameter",
+    "tuple",
+    "after-all",
+}
+_GAP_MARKER_PREFIXES = (
+    "copy-start",
+    "copy-done",
+)
 
 
 @dataclass(frozen=True)
@@ -587,6 +602,7 @@ def _make_trace_overview(
     else:
         start = None
         end = None
+    suspected_truncation, quality_warnings = _trace_quality_warnings(num_complete_events=len(complete_events))
 
     return TraceOverview(
         display_time_unit=display_time_unit,
@@ -597,7 +613,20 @@ def _make_trace_overview(
         profile_start_ts=start,
         profile_end_ts=end,
         duration_basis="exclusive_duration_per_track",
+        suspected_truncation=suspected_truncation,
+        quality_warnings=quality_warnings,
     )
+
+
+def _trace_quality_warnings(*, num_complete_events: int) -> tuple[bool, list[str]]:
+    warnings: list[str] = []
+    suspected_truncation = num_complete_events == _TRACE_COMPLETE_EVENT_TRUNCATION_THRESHOLD
+    if suspected_truncation:
+        warnings.append(
+            "Trace contains exactly 1,000,000 complete events; "
+            "this often indicates export truncation at a collector cap."
+        )
+    return suspected_truncation, warnings
 
 
 def _make_trace_provenance(events: list[_CompleteTraceEvent], *, trace_sha256: str) -> TraceProvenance:
@@ -956,7 +985,7 @@ def _summarize_communication(events: list[_CompleteTraceEvent], exclusive: list[
 
 
 def _summarize_pre_op_gaps(events: list[_CompleteTraceEvent], *, limit: int) -> list[GapBeforeOp]:
-    aggregate: dict[str, dict[str, float | int]] = {}
+    aggregate: dict[str, dict[str, Any]] = {}
 
     by_track: dict[tuple[int, int], list[_CompleteTraceEvent]] = defaultdict(list)
     for event in events:
@@ -969,16 +998,23 @@ def _summarize_pre_op_gaps(events: list[_CompleteTraceEvent], *, limit: int) -> 
     for track_events in by_track.values():
         sorted_events = sorted(track_events, key=lambda event: (event.ts, event.ts + event.dur))
         previous_end: float | None = None
-        for event in sorted_events:
+        for index, event in enumerate(sorted_events):
             if previous_end is not None and event.ts > previous_end:
                 gap = event.ts - previous_end
+                marker_event, payload_event = _resolve_gap_payload_event(sorted_events, marker_index=index)
                 bucket = aggregate.setdefault(
-                    event.name,
-                    {"count": 0, "total_gap_duration": 0.0, "max_gap_duration": 0.0},
+                    payload_event.name,
+                    {
+                        "count": 0,
+                        "total_gap_duration": 0.0,
+                        "max_gap_duration": 0.0,
+                        "marker_counts": Counter(),
+                    },
                 )
                 bucket["count"] = int(bucket["count"]) + 1
                 bucket["total_gap_duration"] = float(bucket["total_gap_duration"]) + gap
                 bucket["max_gap_duration"] = max(float(bucket["max_gap_duration"]), gap)
+                cast(Counter[str], bucket["marker_counts"])[marker_event.name] += 1
             end = event.ts + event.dur
             previous_end = end if previous_end is None else max(previous_end, end)
 
@@ -996,6 +1032,8 @@ def _summarize_pre_op_gaps(events: list[_CompleteTraceEvent], *, limit: int) -> 
         count = int(stats["count"])
         total_gap_duration = float(stats["total_gap_duration"])
         max_gap_duration = float(stats["max_gap_duration"])
+        marker_counts = cast(Counter[str], stats["marker_counts"])
+        marker_op = sorted(marker_counts.items(), key=lambda item: (-item[1], item[0]))[0][0] if marker_counts else name
         result.append(
             GapBeforeOp(
                 name=name,
@@ -1003,6 +1041,8 @@ def _summarize_pre_op_gaps(events: list[_CompleteTraceEvent], *, limit: int) -> 
                 total_gap_duration=total_gap_duration,
                 max_gap_duration=max_gap_duration,
                 avg_gap_duration=(total_gap_duration / count) if count else 0.0,
+                payload_op=name,
+                marker_op=marker_op,
             )
         )
     return result
@@ -1106,12 +1146,13 @@ def _summarize_gap_region_contexts(events: list[_CompleteTraceEvent], *, limit: 
     for track_events in by_track.values():
         sorted_events = sorted(track_events, key=lambda event: (event.ts, event.ts + event.dur))
         previous_end: float | None = None
-        for event in sorted_events:
+        for index, event in enumerate(sorted_events):
             if previous_end is not None and event.ts > previous_end:
                 gap = event.ts - previous_end
-                region_path = _event_gap_region_path(event, preferred_paths=preferred_paths)
-                region_path = _format_gap_region_context_label(event.name, region_path)
-                key = (event.name, region_path)
+                _, payload_event = _resolve_gap_payload_event(sorted_events, marker_index=index)
+                region_path = _event_gap_region_path(payload_event, preferred_paths=preferred_paths)
+                region_path = _format_gap_region_context_label(payload_event.name, region_path)
+                key = (payload_event.name, region_path)
                 bucket = aggregate.setdefault(
                     key,
                     {
@@ -1147,6 +1188,29 @@ def _summarize_gap_region_contexts(events: list[_CompleteTraceEvent], *, limit: 
             )
         )
     return result
+
+
+def _resolve_gap_payload_event(
+    sorted_events: list[_CompleteTraceEvent], *, marker_index: int
+) -> tuple[_CompleteTraceEvent, _CompleteTraceEvent]:
+    marker_event = sorted_events[marker_index]
+    if not _is_likely_gap_marker_op(marker_event):
+        return marker_event, marker_event
+
+    upper = min(len(sorted_events), marker_index + 1 + _GAP_PAYLOAD_LOOKAHEAD_EVENTS)
+    for index in range(marker_index + 1, upper):
+        candidate = sorted_events[index]
+        if _is_likely_gap_marker_op(candidate):
+            continue
+        return marker_event, candidate
+    return marker_event, marker_event
+
+
+def _is_likely_gap_marker_op(event: _CompleteTraceEvent) -> bool:
+    canonical = event.canonical_name.lower()
+    if canonical in _GAP_MARKER_CANONICAL_NAMES:
+        return True
+    return any(canonical.startswith(prefix) for prefix in _GAP_MARKER_PREFIXES)
 
 
 def _derive_optimization_candidates(summary: ProfileSummary) -> list[OptimizationCandidate]:
@@ -1219,16 +1283,19 @@ def _derive_optimization_candidates(summary: ProfileSummary) -> list[Optimizatio
         if top_gap.total_gap_duration > 0:
             gap_share = top_gap.total_gap_duration / total_duration
             if gap_share >= 0.05 or top_gap.max_gap_duration >= 1_000.0:
+                payload_name = top_gap.payload_op or top_gap.name
+                marker_name = top_gap.marker_op or payload_name
                 candidates.append(
                     OptimizationCandidate(
                         candidate_id="pre-op-gap",
                         title="Large idle gaps appear before specific ops",
                         rationale=(
-                            f"Op '{top_gap.name}' accumulates significant pre-op idle gap "
+                            f"Op '{payload_name}' accumulates significant pre-op idle gap "
                             f"({gap_share:.1%} of total profiled exclusive duration)."
                         ),
                         evidence=[
-                            f"Op with largest pre-gap: {top_gap.name}",
+                            f"Payload op with largest pre-gap: {payload_name}",
+                            f"Observed first op after gap (marker): {marker_name}",
                             f"Total pre-gap: {top_gap.total_gap_duration:.3f}",
                             f"Max pre-gap: {top_gap.max_gap_duration:.3f}",
                             f"Occurrences: {top_gap.count}",

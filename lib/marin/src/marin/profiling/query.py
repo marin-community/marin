@@ -442,12 +442,23 @@ def _extract_target_after_keyword(question: str, keyword: str) -> str | None:
 def _find_gap_match(gaps: list[GapBeforeOp], target: str) -> GapBeforeOp | None:
     normalized_target = target.lower()
     for gap in gaps:
-        if gap.name.lower() == normalized_target:
+        if _gap_name_candidates(gap, exact=True).intersection({normalized_target}):
             return gap
     for gap in gaps:
-        if normalized_target in gap.name.lower():
+        if any(normalized_target in candidate for candidate in _gap_name_candidates(gap)):
             return gap
     return None
+
+
+def _gap_name_candidates(gap: GapBeforeOp, *, exact: bool = False) -> set[str]:
+    candidates = {gap.name.lower()}
+    if gap.payload_op:
+        candidates.add(gap.payload_op.lower())
+    if gap.marker_op:
+        candidates.add(gap.marker_op.lower())
+    if exact:
+        return candidates
+    return {candidate for candidate in candidates if candidate}
 
 
 def _region_to_dict(
