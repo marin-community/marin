@@ -9,7 +9,6 @@ import time
 import pytest
 
 from iris.client.client import IrisClient, Job
-from iris.cluster.client.local_client import LocalClusterClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
 from iris.rpc import cluster_pb2
 
@@ -24,11 +23,17 @@ def extract_log_text(response: cluster_pb2.Controller.GetTaskLogsResponse) -> st
 
 
 @pytest.fixture
-def client():
-    """Create a local cluster client for testing."""
-    client = LocalClusterClient.create()
+def iris_client():
+    """Create a local IrisClient for testing."""
+    client = IrisClient.local()
     yield client
     client.shutdown()
+
+
+@pytest.fixture
+def client(iris_client):
+    """Expose the underlying ClusterClient for tests that use low-level APIs."""
+    return iris_client._cluster_client
 
 
 def test_command_entrypoint_preserves_env_vars(client):
@@ -121,9 +126,9 @@ def test_command_entrypoint_with_custom_env_var(client):
     assert "CUSTOM_VAR=custom_value" in log_text
 
 
-def test_job_wait_with_stream_logs(client, caplog):
+def test_job_wait_with_stream_logs(client, iris_client, caplog):
     """Verify Job.wait(stream_logs=True) fetches and streams logs."""
-    iris = IrisClient(client)
+    iris = iris_client
     job_id = JobName.root("test-user", "test-stream-logs")
 
     entrypoint = Entrypoint.from_command("sh", "-c", "echo 'hello from streaming'")
@@ -225,9 +230,9 @@ def test_child_job_logs_sorted_by_timestamp(client):
     ), f"worker_id missing in batches: {[(b.task_id, b.worker_id) for b in batches_with_logs]}"
 
 
-def test_wait_stream_logs_discovers_child_tasks(client, caplog):
+def test_wait_stream_logs_discovers_child_tasks(client, iris_client, caplog):
     """Streaming discovers and emits logs for child tasks created after wait starts."""
-    iris = IrisClient(client)
+    iris = iris_client
     parent_id = JobName.root("test-user", "test-stream-child-discovery")
     entrypoint = Entrypoint.from_callable(_parent_with_delayed_child)
     resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
@@ -263,9 +268,9 @@ def _parent_with_failing_child():
     time.sleep(2.0)
 
 
-def test_stream_logs_surfaces_child_failure(client, caplog):
+def test_stream_logs_surfaces_child_failure(client, iris_client, caplog):
     """Streaming logs surfaces a warning when a child job terminates with failure."""
-    iris = IrisClient(client)
+    iris = iris_client
     parent_id = JobName.root("test-user", "test-child-failure-surfaced")
     entrypoint = Entrypoint.from_callable(_parent_with_failing_child)
     resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)

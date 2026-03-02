@@ -11,6 +11,7 @@ aggregated from task states.
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from connectrpc.code import Code
@@ -85,6 +86,60 @@ USER_JOB_STATES = (
 )
 
 
+def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2.TaskStatus:
+    """Convert a ControllerTask to a TaskStatus proto.
+
+    Handles attempt conversion, timestamps, log_directory, and resource_usage.
+    The caller is responsible for resolving worker_address from worker_id if needed.
+    """
+    current_attempt = task.current_attempt
+
+    attempts = []
+    for attempt in task.attempts:
+        proto_attempt = cluster_pb2.TaskAttempt(
+            attempt_id=attempt.attempt_id,
+            worker_id=str(attempt.worker_id) if attempt.worker_id else "",
+            state=attempt.state,
+            exit_code=attempt.exit_code or 0,
+            error=attempt.error or "",
+            is_worker_failure=attempt.is_worker_failure,
+        )
+        if attempt.started_at is not None:
+            proto_attempt.started_at.CopyFrom(attempt.started_at.to_proto())
+        if attempt.finished_at is not None:
+            proto_attempt.finished_at.CopyFrom(attempt.finished_at.to_proto())
+        attempts.append(proto_attempt)
+
+    proto = cluster_pb2.TaskStatus(
+        task_id=task.task_id.to_wire(),
+        state=task.state,
+        worker_id=str(task.worker_id) if task.worker_id else "",
+        worker_address=worker_address,
+        exit_code=task.exit_code or 0,
+        error=task.error or "",
+        current_attempt_id=task.current_attempt_id,
+        attempts=attempts,
+        log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
+    )
+    if current_attempt and current_attempt.started_at:
+        proto.started_at.CopyFrom(current_attempt.started_at.to_proto())
+    if current_attempt and current_attempt.finished_at:
+        proto.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
+    if task.resource_usage:
+        proto.resource_usage.CopyFrom(task.resource_usage)
+    return proto
+
+
+def worker_status_message(w: ControllerWorker) -> str:
+    """Build a human-readable status message for unhealthy workers."""
+    if w.healthy:
+        return ""
+    if w.consecutive_failures > 0:
+        age = w.last_heartbeat.age_ms()
+        return f"Heartbeat timeout ({w.consecutive_failures} failures, last seen {age // 1000}s ago)"
+    return "Unhealthy (no failures recorded)"
+
+
 def _task_state_key(state: int) -> str:
     """Return the lowercase RPC key for a task state enum."""
     return task_state_name(state).removeprefix("TASK_STATE_").lower()
@@ -154,6 +209,82 @@ class ControllerProtocol(Protocol):
     def autoscaler(self) -> AutoscalerProtocol | None: ...
 
     stub_factory: StubFactoryProtocol
+
+
+@dataclass
+class ResolvedWorker:
+    """Result of resolving a worker/VM identifier against controller and autoscaler state."""
+
+    vm_info: vm_pb2.VmInfo | None
+    worker: ControllerWorker | None
+    scale_group: str
+    bootstrap_logs: str
+
+
+def resolve_worker_identity(
+    identifier: str,
+    state: ControllerState,
+    autoscaler: AutoscalerProtocol | None,
+) -> ResolvedWorker:
+    """Resolve an identifier against both VM IDs and worker IDs.
+
+    Tries VM ID first (via autoscaler), then falls back to worker ID.
+    Cross-references between the two when one is found to enrich the result.
+    """
+    vm_info: vm_pb2.VmInfo | None = None
+    scale_group = ""
+    bootstrap_logs = ""
+    worker: ControllerWorker | None = None
+
+    # Try to resolve as VM ID first
+    if autoscaler:
+        vm_info = autoscaler.get_vm(identifier)
+        if vm_info:
+            scale_group = vm_info.scale_group
+            bootstrap_logs = autoscaler.get_init_log(identifier, tail=500)
+            # Enrich with worker info
+            if vm_info.address:
+                for w in state.list_all_workers():
+                    vm_addr = w.metadata.vm_address if w.metadata else None
+                    w_host = w.address.split(":")[0] if w.address and ":" in w.address else w.address
+                    if vm_addr == vm_info.address or w_host == vm_info.address:
+                        worker = w
+                        vm_info.worker_id = w.worker_id
+                        vm_info.worker_healthy = w.healthy
+                        break
+
+    # If not found as VM, try as worker ID
+    if not vm_info:
+        worker = state.get_worker(identifier)
+        # If we found a worker, scan autoscaler status for its VM
+        if worker and autoscaler:
+            status = autoscaler.get_status()
+            found = False
+            for group in status.groups:
+                for slice_info in group.slices:
+                    for vm in slice_info.vms:
+                        if vm.address and worker.address:
+                            w_host = worker.address.split(":")[0] if ":" in worker.address else worker.address
+                            vm_addr = worker.metadata.vm_address if worker.metadata else None
+                            if vm.address == vm_addr or vm.address == w_host:
+                                vm_info = vm
+                                scale_group = group.name
+                                bootstrap_logs = autoscaler.get_init_log(vm.vm_id, tail=500)
+                                vm_info.worker_id = worker.worker_id
+                                vm_info.worker_healthy = worker.healthy
+                                found = True
+                                break
+                    if found:
+                        break
+                if found:
+                    break
+
+    return ResolvedWorker(
+        vm_info=vm_info,
+        worker=worker,
+        scale_group=scale_group,
+        bootstrap_logs=bootstrap_logs,
+    )
 
 
 class ControllerServiceImpl:
@@ -291,41 +422,7 @@ class ControllerServiceImpl:
                 if worker:
                     worker_address = worker.address
 
-            # Convert task attempts to proto
-            attempts = []
-            for attempt in task.attempts:
-                proto_attempt = cluster_pb2.TaskAttempt(
-                    attempt_id=attempt.attempt_id,
-                    worker_id=str(attempt.worker_id) if attempt.worker_id else "",
-                    state=attempt.state,
-                    exit_code=attempt.exit_code or 0,
-                    error=attempt.error or "",
-                    is_worker_failure=attempt.is_worker_failure,
-                )
-                if attempt.started_at is not None:
-                    proto_attempt.started_at.CopyFrom(attempt.started_at.to_proto())
-                if attempt.finished_at is not None:
-                    proto_attempt.finished_at.CopyFrom(attempt.finished_at.to_proto())
-                attempts.append(proto_attempt)
-
-            current_attempt = task.current_attempt
-
-            proto_task_status = cluster_pb2.TaskStatus(
-                task_id=task.task_id.to_wire(),
-                state=task.state,
-                worker_id=str(task.worker_id) if task.worker_id else "",
-                worker_address=worker_address,
-                exit_code=task.exit_code or 0,
-                error=task.error or "",
-                current_attempt_id=task.current_attempt_id,
-                attempts=attempts,
-                log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
-            )
-            if current_attempt and current_attempt.started_at:
-                proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
-            if current_attempt and current_attempt.finished_at:
-                proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
-            task_statuses.append(proto_task_status)
+            task_statuses.append(task_to_proto(task, worker_address=worker_address))
 
         # Get scheduling diagnostics for pending jobs
         pending_reason = ""
@@ -590,24 +687,9 @@ class ControllerServiceImpl:
             if worker:
                 worker_address = worker.address
 
-        current_attempt = task.current_attempt
-
-        proto_task_status = cluster_pb2.TaskStatus(
-            task_id=task.task_id.to_wire(),
-            state=task.state,
-            worker_id=str(task.worker_id) if task.worker_id else "",
-            worker_address=worker_address,
-            exit_code=task.exit_code or 0,
-            error=task.error or "",
-            current_attempt_id=task.current_attempt_id,
-            log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
+        return cluster_pb2.Controller.GetTaskStatusResponse(
+            task=task_to_proto(task, worker_address=worker_address),
         )
-        if current_attempt and current_attempt.started_at:
-            proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
-        if current_attempt and current_attempt.finished_at:
-            proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
-
-        return cluster_pb2.Controller.GetTaskStatusResponse(task=proto_task_status)
 
     def list_tasks(
         self,
@@ -633,52 +715,13 @@ class ControllerServiceImpl:
                 if worker:
                     worker_address = worker.address
 
+            proto_task_status = task_to_proto(task, worker_address=worker_address)
+
             # Don't add scheduling diagnostics in list view - too expensive
             # Users should check job detail page for scheduling diagnostics
-            pending_reason = ""
-            can_be_scheduled = False
             if task.state == cluster_pb2.TASK_STATE_PENDING:
-                can_be_scheduled = task.can_be_scheduled()
+                proto_task_status.can_be_scheduled = task.can_be_scheduled()
 
-            # Use attempt timestamps since task-level timestamps are not set
-            current_attempt = task.current_attempt
-
-            # Convert task attempts to proto
-            attempts = []
-            for attempt in task.attempts:
-                proto_attempt = cluster_pb2.TaskAttempt(
-                    attempt_id=attempt.attempt_id,
-                    worker_id=str(attempt.worker_id) if attempt.worker_id else "",
-                    state=attempt.state,
-                    exit_code=attempt.exit_code or 0,
-                    error=attempt.error or "",
-                    is_worker_failure=attempt.is_worker_failure,
-                )
-                if attempt.started_at is not None:
-                    proto_attempt.started_at.CopyFrom(attempt.started_at.to_proto())
-                if attempt.finished_at is not None:
-                    proto_attempt.finished_at.CopyFrom(attempt.finished_at.to_proto())
-                attempts.append(proto_attempt)
-
-            proto_task_status = cluster_pb2.TaskStatus(
-                task_id=task.task_id.to_wire(),
-                state=task.state,
-                worker_id=str(task.worker_id) if task.worker_id else "",
-                worker_address=worker_address,
-                exit_code=task.exit_code or 0,
-                error=task.error or "",
-                current_attempt_id=task.current_attempt_id,
-                pending_reason=pending_reason,
-                can_be_scheduled=can_be_scheduled,
-                attempts=attempts,
-                log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
-            )
-            if current_attempt and current_attempt.started_at:
-                proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
-            if current_attempt and current_attempt.finished_at:
-                proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
-            if task.resource_usage:
-                proto_task_status.resource_usage.CopyFrom(task.resource_usage)
             task_statuses.append(proto_task_status)
 
         return cluster_pb2.Controller.ListTasksResponse(tasks=task_statuses)
@@ -736,16 +779,6 @@ class ControllerServiceImpl:
         """List all workers with their running task counts."""
         workers = []
         for w in self._state.list_all_workers():
-            # Generate status message for unhealthy workers
-            status_message = ""
-            if not w.healthy:
-                if w.consecutive_failures > 0:
-                    time_since_last_hb = w.last_heartbeat.age_ms()
-                    time_since_str = f"{time_since_last_hb // 1000}s ago" if time_since_last_hb else "never"
-                    status_message = f"Heartbeat timeout ({w.consecutive_failures} failures, last seen {time_since_str})"
-                else:
-                    status_message = "Unhealthy (no failures recorded)"
-
             workers.append(
                 cluster_pb2.Controller.WorkerHealthStatus(
                     worker_id=w.worker_id,
@@ -755,7 +788,7 @@ class ControllerServiceImpl:
                     running_job_ids=[task_id.to_wire() for task_id in w.running_tasks],
                     address=w.address,
                     metadata=w.metadata,
-                    status_message=status_message,
+                    status_message=worker_status_message(w),
                 )
             )
         return cluster_pb2.Controller.ListWorkersResponse(workers=workers)
@@ -1193,72 +1226,18 @@ class ControllerServiceImpl:
             if not request.id:
                 raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
 
-            identifier = request.id
-            autoscaler = self._controller.autoscaler
-            vm_info: vm_pb2.VmInfo | None = None
-            scale_group = ""
-            bootstrap_logs = ""
-            worker: Any = None  # ControllerWorker
-
-            # Try to resolve as VM ID first
-            if autoscaler:
-                vm_info = autoscaler.get_vm(identifier)
-                if vm_info:
-                    scale_group = vm_info.scale_group
-                    bootstrap_logs = autoscaler.get_init_log(identifier, tail=500)
-                    # Enrich with worker info
-                    if vm_info.address:
-                        for w in self._state.list_all_workers():
-                            vm_addr = w.metadata.vm_address if w.metadata else None
-                            w_host = w.address.split(":")[0] if w.address and ":" in w.address else w.address
-                            if vm_addr == vm_info.address or w_host == vm_info.address:
-                                worker = w
-                                vm_info.worker_id = w.worker_id
-                                vm_info.worker_healthy = w.healthy
-                                break
-
-            # If not found as VM, try as worker ID
-            if not vm_info:
-                worker = self._state.get_worker(identifier)
-                # If we found a worker, scan autoscaler status for its VM
-                if worker and autoscaler:
-                    status = autoscaler.get_status()
-                    found = False
-                    for group in status.groups:
-                        for slice_info in group.slices:
-                            for vm in slice_info.vms:
-                                if vm.address and worker.address:
-                                    w_host = worker.address.split(":")[0] if ":" in worker.address else worker.address
-                                    vm_addr = worker.metadata.vm_address if worker.metadata else None
-                                    if vm.address == vm_addr or vm.address == w_host:
-                                        vm_info = vm
-                                        scale_group = group.name
-                                        bootstrap_logs = autoscaler.get_init_log(vm.vm_id, tail=500)
-                                        vm_info.worker_id = worker.worker_id
-                                        vm_info.worker_healthy = worker.healthy
-                                        found = True
-                                        break
-                            if found:
-                                break
-                        if found:
-                            break
+            resolved = resolve_worker_identity(request.id, self._state, self._controller.autoscaler)
+            vm_info = resolved.vm_info
+            worker = resolved.worker
+            scale_group = resolved.scale_group
+            bootstrap_logs = resolved.bootstrap_logs
 
             if not vm_info and not worker:
-                raise ConnectError(Code.NOT_FOUND, f"No VM or worker found for '{identifier}'")
+                raise ConnectError(Code.NOT_FOUND, f"No VM or worker found for '{request.id}'")
 
             # Build worker health status proto
             worker_health: cluster_pb2.Controller.WorkerHealthStatus | None = None
             if worker:
-                status_message = ""
-                if not worker.healthy:
-                    if worker.consecutive_failures > 0:
-                        age = worker.last_heartbeat.age_ms()
-                        status_message = (
-                            f"Heartbeat timeout ({worker.consecutive_failures} failures, last seen {age // 1000}s ago)"
-                        )
-                    else:
-                        status_message = "Unhealthy (no failures recorded)"
-
                 worker_health = cluster_pb2.Controller.WorkerHealthStatus(
                     worker_id=worker.worker_id,
                     healthy=worker.healthy,
@@ -1267,7 +1246,7 @@ class ControllerServiceImpl:
                     running_job_ids=[tid.to_wire() for tid in worker.running_tasks],
                     address=worker.address,
                     metadata=worker.metadata,
-                    status_message=status_message,
+                    status_message=worker_status_message(worker),
                 )
 
             # Fetch worker daemon logs if worker is healthy
@@ -1281,32 +1260,14 @@ class ControllerServiceImpl:
                     )
                     worker_logs = list(resp.records)
                 except Exception:
-                    logger.debug("Failed to fetch worker logs for %s", identifier, exc_info=True)
+                    logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
 
             # Collect recent task history for this worker
             recent_tasks: list[cluster_pb2.TaskStatus] = []
             if worker:
                 tasks = self._state.get_tasks_for_worker(worker.worker_id, limit=50)
                 for task in tasks:
-                    current_attempt = task.current_attempt
-                    entry = cluster_pb2.TaskStatus(
-                        task_id=task.task_id.to_wire(),
-                        state=task.state,
-                        worker_id=str(task.worker_id) if task.worker_id else "",
-                        exit_code=task.exit_code or 0,
-                        error=task.error or "",
-                        current_attempt_id=task.current_attempt_id,
-                        log_directory=(
-                            current_attempt.log_directory if current_attempt and current_attempt.log_directory else ""
-                        ),
-                    )
-                    if current_attempt and current_attempt.started_at:
-                        entry.started_at.CopyFrom(current_attempt.started_at.to_proto())
-                    if current_attempt and current_attempt.finished_at:
-                        entry.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
-                    if task.resource_usage:
-                        entry.resource_usage.CopyFrom(task.resource_usage)
-                    recent_tasks.append(entry)
+                    recent_tasks.append(task_to_proto(task))
 
             resp = cluster_pb2.Controller.GetWorkerStatusResponse(
                 bootstrap_logs=bootstrap_logs,

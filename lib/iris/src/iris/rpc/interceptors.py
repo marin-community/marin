@@ -27,3 +27,18 @@ class RequestTimingInterceptor:
         except Exception as e:
             logger.warning("RPC %s failed after %dms: %s", method, timer.elapsed_ms(), e)
             raise
+
+    async def intercept_unary(self, call_next, request, ctx):
+        method = ctx.method().name
+        timer = Timer()
+        try:
+            response = await call_next(request, ctx)
+            elapsed = timer.elapsed_ms()
+            if elapsed > _SLOW_RPC_THRESHOLD_MS:
+                logger.warning("RPC %s completed in %dms (slow)", method, elapsed)
+            else:
+                logger.debug("RPC %s completed in %dms", method, elapsed)
+            return response
+        except Exception as e:
+            logger.warning("RPC %s failed after %dms: %s", method, timer.elapsed_ms(), e)
+            raise

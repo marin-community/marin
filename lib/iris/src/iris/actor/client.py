@@ -16,7 +16,8 @@ Example:
 Custom backoff behavior:
     client = ActorClient(
         resolver, "my-actor",
-        initial_backoff=0.2, max_backoff=5.0,
+        backoff=ExponentialBackoff(initial=0.2, maximum=5.0),
+        max_call_attempts=3,
     )
 """
 
@@ -35,6 +36,15 @@ from iris.time_utils import ExponentialBackoff
 logger = logging.getLogger(__name__)
 
 
+def unwrap_actor_response(resp: actor_pb2.ActorResponse) -> Any:
+    """Unwrap an ActorResponse, raising the embedded exception on error."""
+    if resp.HasField("error"):
+        if resp.error.serialized_exception:
+            raise cloudpickle.loads(resp.error.serialized_exception)
+        raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
+    return cloudpickle.loads(resp.serialized_value)
+
+
 class ActorClient:
     """Actor client with resolver-based discovery."""
 
@@ -44,11 +54,8 @@ class ActorClient:
         name: str,
         resolve_timeout: float = 3600.0,
         call_timeout: float | None = None,
-        initial_backoff: float = 0.1,
-        max_backoff: float = 10.0,
-        backoff_factor: float = 2.0,
-        backoff_jitter: float = 0.25,
         max_call_attempts: int = 5,
+        backoff: ExponentialBackoff = ExponentialBackoff(initial=0.1, maximum=10.0, factor=2.0, jitter=0.25),
     ):
         """Initialize the actor client.
 
@@ -56,24 +63,18 @@ class ActorClient:
             resolver: Resolver instance for endpoint discovery
             name: Name of the actor to invoke
             resolve_timeout: Total timeout in seconds for initial worker resolution.
-            call_timeout: Timeout in seconds for RPC calls. Defaults to `timeout`
+            call_timeout: Timeout in seconds for RPC calls. Defaults to `resolve_timeout`
                 when not specified.
-            initial_backoff: Initial retry delay in seconds
-            max_backoff: Maximum delay between retries in seconds
-            backoff_factor: Multiplier for exponential backoff
-            backoff_jitter: Random jitter as fraction of delay (e.g., 0.25 = ±25%)
-            max_call_attempts: Maximum number of RPC call attempts on transient errors.
-                On each retry, the cached connection is cleared and re-resolved.
+            max_call_attempts: Maximum number of RPC call attempts before giving up.
+            backoff: Exponential backoff configuration for both resolution and call retries.
         """
         self._resolver = resolver
         self._name = name
         self._resolve_timeout = resolve_timeout
         self._call_timeout = resolve_timeout if call_timeout is None else call_timeout
-        self._initial_backoff = initial_backoff
-        self._max_backoff = max_backoff
-        self._backoff_factor = backoff_factor
-        self._backoff_jitter = backoff_jitter
         self._max_call_attempts = max_call_attempts
+        self._backoff = backoff
+
         self._rpc_client: ActorServiceClientSync | None = None
 
     def rpc_client(self) -> ActorServiceClientSync:
@@ -88,12 +89,7 @@ class ActorClient:
         if self._rpc_client:
             return self._rpc_client
 
-        backoff = ExponentialBackoff(
-            initial=self._initial_backoff,
-            maximum=self._max_backoff,
-            factor=self._backoff_factor,
-            jitter=self._backoff_jitter,
-        )
+        backoff = self._backoff.copy()
         start_time = time.monotonic()
         attempt = 0
 
@@ -153,11 +149,7 @@ class _RpcMethod:
         def do_call():
             client = self._client.rpc_client()
             resp = client.call(call)
-            if resp.HasField("error"):
-                if resp.error.serialized_exception:
-                    raise cloudpickle.loads(resp.error.serialized_exception)
-                raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
-            return cloudpickle.loads(resp.serialized_value)
+            return unwrap_actor_response(resp)
 
         def clear_connection(_exc):
             self._client._rpc_client = None
@@ -167,7 +159,5 @@ class _RpcMethod:
             do_call,
             on_retry=clear_connection,
             max_attempts=self._client._max_call_attempts,
-            initial_backoff=self._client._initial_backoff,
-            max_backoff=self._client._max_backoff,
-            backoff_factor=self._client._backoff_factor,
+            backoff=self._client._backoff,
         )

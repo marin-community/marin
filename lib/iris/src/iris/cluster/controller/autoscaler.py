@@ -172,6 +172,31 @@ def _diagnose_no_matching_group(
     return f"no_matching_group: no groups match device={entry.device_type.value}:{entry.device_variant or '*'}"
 
 
+def _matches_filters(
+    group: ScalingGroup,
+    entry: DemandEntry,
+    group_region: Callable[[ScalingGroup], str | None],
+    group_zone: Callable[[ScalingGroup], str | None],
+) -> bool:
+    """Check device type, preemptible preference, region, and zone constraints.
+
+    Does NOT check resource capacity or accept-demand readiness.
+    """
+    if not group.matches_device_requirement(entry.device_type, entry.device_variant):
+        return False
+    if entry.preemptible is not None and group.config.slice_template.preemptible != entry.preemptible:
+        return False
+    if entry.required_regions:
+        region = group_region(group)
+        if region not in entry.required_regions:
+            return False
+    if entry.required_zones:
+        zone = group_zone(group)
+        if zone not in entry.required_zones:
+            return False
+    return True
+
+
 def route_demand(
     groups: list[ScalingGroup],
     demand_entries: list[DemandEntry],
@@ -212,18 +237,8 @@ def route_demand(
         return None
 
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
-        if not group.matches_device_requirement(entry.device_type, entry.device_variant):
+        if not _matches_filters(group, entry, group_region, group_zone):
             return False
-        if entry.preemptible is not None and group.config.slice_template.preemptible != entry.preemptible:
-            return False
-        if entry.required_regions:
-            region = group_region(group)
-            if region not in entry.required_regions:
-                return False
-        if entry.required_zones:
-            zone = group_zone(group)
-            if zone not in entry.required_zones:
-                return False
         if entry.invalid_reason:
             return False
         if entry.coschedule_group_id and group.num_vms != len(entry.task_ids):
@@ -289,14 +304,7 @@ def route_demand(
             unmet.append(UnmetDemand(entry=entry, reason=entry.invalid_reason))
             continue
 
-        matching_groups = [
-            g
-            for g in sorted_groups
-            if g.matches_device_requirement(entry.device_type, entry.device_variant)
-            and (entry.preemptible is None or g.config.slice_template.preemptible == entry.preemptible)
-            and (not entry.required_regions or group_region(g) in entry.required_regions)
-            and (not entry.required_zones or group_zone(g) in entry.required_zones)
-        ]
+        matching_groups = [g for g in sorted_groups if _matches_filters(g, entry, group_region, group_zone)]
         if not matching_groups:
             reason = _diagnose_no_matching_group(entry, sorted_groups, group_region, group_zone)
             unmet.append(UnmetDemand(entry=entry, reason=reason))
