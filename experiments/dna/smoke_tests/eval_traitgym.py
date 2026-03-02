@@ -129,7 +129,7 @@ def run_eval_traitgym(config: EvalTraitGymConfig):
         model=dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=dna_effective_seq_len(256, config.tokenizer)),
     )
 
-    logger.info(f"Evaluating checkpoint: {config.checkpoint_path}")
+    logger.info("Evaluating checkpoint: %s", config.checkpoint_path)
 
     client = current_client()
 

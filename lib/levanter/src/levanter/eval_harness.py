@@ -1248,6 +1248,20 @@ class EvalHarnessMainConfig:
         return load_tokenizer(self.tokenizer)
 
 
+def _inject_subset_results(outputs: dict, tasks_to_run: dict) -> None:
+    """Merge per-subset metrics from tasks that collect them into the outputs dict.
+
+    Tasks like DnaVepLlrEvalTask store stratified metrics in a ``_subset_results``
+    dict during aggregation.  This helper surfaces those metrics so they flow
+    through ``log_report_to_tracker`` to wandb.
+    """
+    for task_name, task_obj in tasks_to_run.items():
+        # Duck-type check: lm-eval's base Task class doesn't define _subset_results,
+        # but custom tasks (e.g. DnaVepLlrEvalTask) may attach it for per-subset metrics.
+        if hasattr(task_obj, "_subset_results") and task_obj._subset_results:
+            outputs["results"].setdefault(task_name, {}).update(task_obj._subset_results)
+
+
 def run_lm_eval_harness(
     config: LmEvalHarnessConfig,
     model,
@@ -1281,11 +1295,8 @@ def run_lm_eval_harness(
         config, model, tasks_to_run, tokenizer, EvalBatch, axis_resources, mp, profiler_config
     )
 
-    # Inject per-subset results from tasks that collect them (e.g., DnaVepLlrEvalTask).
     if outputs is not None:
-        for task_name, task_obj in tasks_to_run.items():
-            if hasattr(task_obj, "_subset_results") and task_obj._subset_results:
-                outputs["results"].setdefault(task_name, {}).update(task_obj._subset_results)
+        _inject_subset_results(outputs, tasks_to_run)
 
     return outputs
 
@@ -1601,10 +1612,7 @@ def lm_eval_harness(config: LmEvalHarnessConfig, tokenizer, EvalBatch, axis_reso
         if jax.process_index() == 0:
             assert outputs is not None
 
-            # Inject per-subset results from tasks that collect them (e.g., DnaVepLlrEvalTask)
-            for task_name, task_obj in tasks_to_run.items():
-                if hasattr(task_obj, "_subset_results") and task_obj._subset_results:
-                    outputs["results"].setdefault(task_name, {}).update(task_obj._subset_results)
+            _inject_subset_results(outputs, tasks_to_run)
 
             log_report_to_tracker("lm_eval", outputs, levanter.tracker.current_tracker())
             logger.info("Logged report to tracker")

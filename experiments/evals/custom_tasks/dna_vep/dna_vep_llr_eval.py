@@ -20,6 +20,7 @@ Metrics are reported as {subset}/{metric} (e.g. "all/auprc", "missense/auprc").
 """
 
 from collections import defaultdict
+from collections.abc import Callable
 
 import datasets
 from lm_eval.api.instance import Instance
@@ -73,7 +74,7 @@ class SubsetAwareAggregation:
         return self.results_store[f"all/{self.metric_name}"]
 
 
-LLR_TRANSFORMS: dict[str, callable] = {
+LLR_TRANSFORMS: dict[str, Callable[[float], float]] = {
     "identity": lambda x: x,
     "negate": lambda x: -x,
     "abs": abs,

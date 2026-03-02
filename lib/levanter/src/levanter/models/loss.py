@@ -1,7 +1,7 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Literal, Optional, cast, overload
+from typing import Literal, Optional, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -174,7 +174,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-    implementation: Implementation | Any = None,
+    implementation: Implementation | None = None,
     return_argmax: Literal[False] = False,
 ) -> NamedArray: ...
 
@@ -195,7 +195,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-    implementation: Implementation | Any = None,
+    implementation: Implementation | None = None,
     return_argmax: Literal[True] = True,
 ) -> tuple[NamedArray, NamedArray]: ...
 
@@ -215,7 +215,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-    implementation: Implementation | Any = None,
+    implementation: Implementation | None = None,
     return_argmax: bool = False,
 ) -> NamedArray | tuple[NamedArray, NamedArray]:
     """
