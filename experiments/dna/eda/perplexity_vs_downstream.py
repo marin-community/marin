@@ -34,7 +34,7 @@ TOKENIZER = "bolinas-dna/tokenizer-char"
 DNA_SEQ_LEN = 254
 MODEL_SEQ_LEN = dna_effective_seq_len(DNA_SEQ_LEN, TOKENIZER)  # 256 with BOS+EOS
 
-TIMESCALES = ["animals", "mammals", "primates"]
+TIMESCALES = ["humans", "primates", "mammals"]
 DATASETS = {ts: f"bolinas-dna/genomes-v4-genome_set-{ts}-intervals-v16_254_127-id0.3_cov0.3" for ts in TIMESCALES}
 
 # =============================================================================
