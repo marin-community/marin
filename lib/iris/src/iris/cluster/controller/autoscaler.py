@@ -856,9 +856,25 @@ class Autoscaler:
         self.refresh(vm_status_map, timestamp)
         return self.update(demand_entries, timestamp)
 
+    def _lookup_worker(self, identifier: str) -> TrackedWorker | None:
+        """Look up a tracked worker by ID or internal address.
+
+        Primary lookup is by worker_id key. Falls back to matching by
+        internal_address because the controller derives worker_id from
+        the worker's advertised address, which differs from the
+        platform-assigned worker_id used as the registry key.
+        """
+        tracked = self._workers.get(identifier)
+        if tracked:
+            return tracked
+        for tw in self._workers.values():
+            if tw.handle.internal_address == identifier:
+                return tw
+        return None
+
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Get worker info by ID from the centralized worker registry."""
-        tracked = self._workers.get(vm_id)
+        """Get worker info by ID or address from the centralized worker registry."""
+        tracked = self._lookup_worker(vm_id)
         if not tracked:
             return None
 
@@ -882,7 +898,7 @@ class Autoscaler:
 
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
         """Get bootstrap log for a worker from the centralized worker registry."""
-        tracked = self._workers.get(vm_id)
+        tracked = self._lookup_worker(vm_id)
         if not tracked:
             return ""
         log = tracked.bootstrap_log
