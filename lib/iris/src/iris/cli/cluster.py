@@ -3,13 +3,12 @@
 
 """Cluster management CLI commands.
 
-All cluster subcommands live here: lifecycle (start/stop/restart/reload/status),
+All cluster subcommands live here: lifecycle (start/stop/restart/status),
 controller VM management, VM operations via controller RPC, and the dashboard tunnel.
 """
 
 import signal
 import threading
-from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
@@ -22,8 +21,6 @@ from iris.cli.build import (
     push_to_ghcr,
 )
 from iris.cli.main import require_controller_url
-from iris.client import IrisClient
-from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.config import IrisConfig, make_local_config
 from iris.cluster.manager import stop_all
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
@@ -312,44 +309,6 @@ def cluster_restart(ctx):
     ctx.invoke(cluster_start)
 
 
-@cluster.command("reload")
-@click.option("--no-build", is_flag=True, help="Skip image building")
-@click.option("--validate", is_flag=True, help="Submit a health check after reload")
-@click.pass_context
-def cluster_reload(ctx, no_build: bool, validate: bool):
-    """Rebuild images and reload the cluster (controller + workers)."""
-    config = ctx.obj.get("config")
-    if not config:
-        raise click.ClickException("--config is required for cluster reload")
-    is_local = config.controller.WhichOneof("controller") == "local"
-    if not is_local:
-        _pin_latest_images(config)
-    if not no_build:
-        built = _build_cluster_images(config)
-        if built:
-            click.echo("Built image tags:")
-            for name, tag in built.items():
-                click.echo(f"  {name}: {tag}")
-    iris_config = IrisConfig(config)
-    platform = iris_config.platform()
-    click.echo("Reloading cluster (workers + controller)...")
-    try:
-        address = platform.reload(config)
-        click.echo(f"Cluster reloaded. Controller at {address}")
-    except Exception as e:
-        click.echo(f"Failed to reload cluster: {e}", err=True)
-        raise SystemExit(1) from e
-    if validate:
-        click.echo("\nValidating cluster health...")
-        controller_url = require_controller_url(ctx)
-        try:
-            _validate_cluster_health(controller_url)
-            click.echo("Cluster validation passed.")
-        except Exception as e:
-            click.echo(f"Cluster validation failed: {e}", err=True)
-            raise SystemExit(1) from e
-
-
 @cluster.command("status")
 @click.pass_context
 def cluster_status_cmd(ctx):
@@ -484,29 +443,6 @@ def vm_logs(ctx, vm_id):
 
 
 # =============================================================================
-# Internal helpers
-# =============================================================================
-
-
-def _validate_cluster_health(controller_url: str) -> None:
-    click.echo(f"  Connected to controller at {controller_url}")
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
-
-    def _validate_hello():
-        print("Reload validation job OK")
-        return 42
-
-    click.echo("  Submitting validation job...")
-    job = client.submit(
-        entrypoint=Entrypoint.from_callable(_validate_hello), name="reload-validate", resources=ResourceSpec(cpu=1)
-    )
-    click.echo(f"  Job submitted: {job.job_id}")
-    click.echo("  Waiting for job (workers may need to scale up)...")
-    status = job.wait(timeout=600, raise_on_failure=True)
-    click.echo(f"  Job completed: {cluster_pb2.JobState.Name(status.state)}")
-
-
-# =============================================================================
 # Controller subcommands (RPC-based controller operations)
 # =============================================================================
 
@@ -563,8 +499,8 @@ def controller_checkpoint(ctx, stop: bool):
 def controller_restart(ctx):
     """Restart controller with state preservation (remote platforms only).
 
-    Takes a checkpoint, stops the controller, starts a new one.
-    The new controller auto-restores from the checkpoint.
+    Takes a checkpoint, builds fresh images, stops the controller, and starts
+    a new one. The new controller auto-restores from the checkpoint.
     Workers on separate VMs survive the restart.
     """
     config = ctx.obj.get("config")
@@ -590,6 +526,15 @@ def controller_restart(ctx):
     finally:
         client.close()
     click.echo(f"Checkpoint: {resp.snapshot_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
+
+    # Build fresh images so the new controller VM gets the latest code
+    _pin_latest_images(config)
+    verbose = ctx.obj.get("verbose", False)
+    built = _build_cluster_images(config, verbose=verbose)
+    if built:
+        click.echo("Built image tags:")
+        for name, tag in built.items():
+            click.echo(f"  {name}: {tag}")
 
     # Stop controller
     iris_config = IrisConfig(config)

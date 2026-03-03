@@ -467,19 +467,6 @@ class Platform(Protocol):
         """
         ...
 
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        """Reload controller and workers with updated images/config.
-
-        Each platform implements its own reload strategy:
-        - GCP/Manual: full stop + start (terminate all worker slices, then controller)
-        - CoreWeave: update ConfigMap, reload worker Pods in parallel, then
-          rolling update controller Deployment
-        - Local: restart in-process controller
-
-        Returns the controller address after reload.
-        """
-        ...
-
 
 # ============================================================================
 # Default stop_all implementation

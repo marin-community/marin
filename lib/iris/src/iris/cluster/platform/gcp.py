@@ -1285,11 +1285,6 @@ class GcpPlatform:
     ) -> list[str]:
         return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
 
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        logger.info("Reload on GCP uses full teardown + restart")
-        self.stop_all(config)
-        return self.start_controller(config)
-
     # ========================================================================
     # Internal helpers
     # ========================================================================

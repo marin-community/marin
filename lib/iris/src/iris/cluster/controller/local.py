@@ -203,9 +203,6 @@ class LocalController:
         self.stop()
         return self.start()
 
-    def reload(self) -> str:
-        return self.restart()
-
     def discover(self) -> str | None:
         return self._controller.url if self._controller else None
 
