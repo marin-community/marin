@@ -62,9 +62,12 @@ jobs:
             -e CANARY_DATE "$(date -u +%Y-%m-%d)" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
+            -e GCP_SA_KEY "$GCP_SA_KEY" \
+            -e JAX_COMPILATION_CACHE_DIR "gs://marin-tmp-us-west4/ttl=30d/compilation-cache" \
             -- python -m experiments.ferries.canary_ferry_cw
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}

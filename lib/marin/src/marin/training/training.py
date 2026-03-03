@@ -414,6 +414,11 @@ def _add_run_env_variables(env: dict):
     if "TPU_STDERR_LOG_LEVEL" not in env:
         env["TPU_STDERR_LOG_LEVEL"] = "2"
 
+    # Allow the caller (or iris -e) to override the compilation cache dir.
+    if "JAX_COMPILATION_CACHE_DIR" not in env:
+        if val := os.environ.get("JAX_COMPILATION_CACHE_DIR"):
+            env["JAX_COMPILATION_CACHE_DIR"] = val
+
     return env
 
 
