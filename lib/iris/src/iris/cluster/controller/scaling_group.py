@@ -17,7 +17,7 @@ from enum import Enum, StrEnum
 
 from iris.cluster.platform.base import Labels, Platform, SliceHandle
 from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
-from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, time_pb2, vm_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -115,8 +115,8 @@ def prepare_slice_config(
     """Build a SliceConfig for platform.create_slice() from a template.
 
     Copies the template and sets the name_prefix and managed/scale-group labels.
-    The template must already have accelerator_type, accelerator_variant, and
-    num_vms set directly.
+    Propagates accelerator_type, accelerator_variant, num_vms, and resource
+    fields from the parent ScaleGroupConfig when the template doesn't set them.
     """
     labels = Labels(label_prefix)
     config = config_pb2.SliceConfig()
@@ -127,6 +127,11 @@ def prepare_slice_config(
 
     if not config.num_vms and parent_config.HasField("num_vms"):
         config.num_vms = parent_config.num_vms
+
+    if not config.accelerator_type and parent_config.accelerator_type:
+        config.accelerator_type = parent_config.accelerator_type
+    if not config.accelerator_variant and parent_config.accelerator_variant:
+        config.accelerator_variant = parent_config.accelerator_variant
 
     if parent_config.HasField("resources"):
         config.gpu_count = parent_config.resources.gpu_count
@@ -242,6 +247,16 @@ class ScalingGroup:
         self._quota_exceeded_until: Deadline | None = None
         self._quota_reason: str = ""
         self._quota_timeout = quota_timeout
+
+    @property
+    def platform(self) -> Platform:
+        """Platform instance for this scale group."""
+        return self._platform
+
+    @property
+    def label_prefix(self) -> str:
+        """Label prefix used for slice labels."""
+        return self._label_prefix
 
     @property
     def config(self) -> config_pb2.ScaleGroupConfig:
@@ -712,10 +727,10 @@ class ScalingGroup:
         if group_type != device_type:
             return False
 
-        # None variant = any group of this type; specific variant = exact match
+        # None variant = any group of this type; specific variant = case-insensitive match
         if device_variant is None:
             return True
-        return self._config.accelerator_variant == device_variant
+        return self._config.accelerator_variant.lower() == device_variant.lower()
 
     def _get_device_type(self) -> DeviceType:
         """Get device type from config."""
@@ -801,6 +816,67 @@ class ScalingGroup:
             self._pending_scale_ups = 0
         for handle in snapshot:
             handle.terminate()
+
+    def to_snapshot(self) -> snapshot_pb2.ScalingGroupSnapshot:
+        """Serialize this group's state for checkpointing.
+
+        Captures slice inventory and timing state under lock. Deadlines are
+        stored as wall-clock timestamps for portability across restarts.
+        """
+
+        snap = snapshot_pb2.ScalingGroupSnapshot(
+            name=self.name,
+            consecutive_failures=self._consecutive_failures,
+        )
+
+        with self._slices_lock:
+            for slice_id, slice_state in self._slices.items():
+                slice_snap = snapshot_pb2.SliceSnapshot(
+                    slice_id=slice_id,
+                    scale_group=self.name,
+                    lifecycle=slice_state.lifecycle.value,
+                    error_message=slice_state.error_message,
+                )
+                slice_snap.vm_addresses.extend(slice_state.vm_addresses)
+                slice_snap.created_at.CopyFrom(slice_state.handle.created_at.to_proto())
+                slice_snap.last_active.CopyFrom(slice_state.last_active.to_proto())
+                snap.slices.append(slice_snap)
+
+        if self._backoff_until is not None:
+            snap.backoff_until.CopyFrom(self._backoff_until.as_timestamp().to_proto())
+
+        if self._last_scale_up.epoch_ms() > 0:
+            snap.last_scale_up.CopyFrom(self._last_scale_up.to_proto())
+        if self._last_scale_down.epoch_ms() > 0:
+            snap.last_scale_down.CopyFrom(self._last_scale_down.to_proto())
+
+        if self._quota_exceeded_until is not None:
+            snap.quota_exceeded_until.CopyFrom(self._quota_exceeded_until.as_timestamp().to_proto())
+        snap.quota_reason = self._quota_reason
+
+        return snap
+
+    def restore_from_snapshot(
+        self,
+        slices: dict[str, SliceState],
+        consecutive_failures: int,
+        last_scale_up: Timestamp,
+        last_scale_down: Timestamp,
+        backoff_until: Deadline | None,
+        quota_exceeded_until: Deadline | None,
+        quota_reason: str,
+    ) -> None:
+        """Restore state from a snapshot. Called before the autoscaler loop starts."""
+        with self._slices_lock:
+            self._slices = slices
+        self._consecutive_failures = consecutive_failures
+        self._last_scale_up = last_scale_up
+        self._last_scale_down = last_scale_down
+        if backoff_until is not None:
+            self._backoff_until = backoff_until
+        if quota_exceeded_until is not None:
+            self._quota_exceeded_until = quota_exceeded_until
+            self._quota_reason = quota_reason
 
     def to_status(self) -> vm_pb2.ScaleGroupStatus:
         """Build a ScaleGroupStatus proto for the status API."""

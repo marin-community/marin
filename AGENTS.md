@@ -12,6 +12,7 @@
 ## Shared Workflow Playbooks
 
 - Begin with the agent-friendly recipes in `docs/recipes/`.
+- For PR descriptions, testing, specifications, and review workflow, follow [pull-request.md](docs/recipes/pull-request.md).
 - The first step for dataset addition is schema inspection. See the [add_dataset.md](docs/recipes/add_dataset.md) recipe for details.
 - You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
 - For long-running benchmark/research threads, follow [agent_research.md](docs/recipes/agent_research.md).

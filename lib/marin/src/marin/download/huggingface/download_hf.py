@@ -54,7 +54,7 @@ class DownloadConfig:
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
-    zephyr_max_parallelism: int = 32
+    zephyr_max_parallelism: int = 8
     """Maximum parallelism of the Zephyr download job"""
 
 
@@ -201,7 +201,14 @@ def download_hf(cfg: DownloadConfig) -> None:
             fsspec_file_path = os.path.join(output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
             expected_size = file_sizes.get(file)
-            download_tasks.append((output_path, file, fsspec_file_path, expected_size))
+            download_tasks.append(
+                (
+                    output_path,
+                    file,
+                    fsspec_file_path,
+                    expected_size,
+                )
+            )
         except Exception as e:
             logging.exception(f"Error preparing task for {file}: {e}")
 
@@ -216,7 +223,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    ctx = ZephyrContext(name="download-hf")
+    ctx = ZephyrContext(name="download-hf", max_workers=cfg.zephyr_max_parallelism)
     ctx.execute(pipeline)
 
     # Write Provenance JSON

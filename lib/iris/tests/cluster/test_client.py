@@ -41,17 +41,17 @@ def test_submit_rejects_duplicate_name(local_client):
     resources = ResourceSpec(cpu=1, memory="1g")
 
     # First submit should succeed
-    job = local_client.submit(entrypoint, "duplicate-job", resources)
-    assert job.job_id == JobName.root("duplicate-job")
+    job = local_client.submit(entrypoint, "duplicate-job", resources, user="test-user")
+    assert job.job_id == JobName.root("test-user", "duplicate-job")
 
     # Second submit with same name should raise JobAlreadyExists
     with pytest.raises(JobAlreadyExists) as exc_info:
-        local_client.submit(entrypoint, "duplicate-job", resources)
+        local_client.submit(entrypoint, "duplicate-job", resources, user="test-user")
 
     assert "already exists" in str(exc_info.value).lower()
     # The exception carries a Job handle that can be used to adopt the existing job
     assert exc_info.value.job is not None
-    assert exc_info.value.job.job_id == JobName.root("duplicate-job")
+    assert exc_info.value.job.job_id == JobName.root("test-user", "duplicate-job")
 
 
 def test_list_jobs_returns_all_jobs(local_client):
@@ -59,8 +59,8 @@ def test_list_jobs_returns_all_jobs(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    job1 = local_client.submit(entrypoint, "list-job-1", resources)
-    job2 = local_client.submit(entrypoint, "list-job-2", resources)
+    job1 = local_client.submit(entrypoint, "list-job-1", resources, user="test-user")
+    job2 = local_client.submit(entrypoint, "list-job-2", resources, user="test-user")
 
     jobs = local_client.list_jobs()
     job_ids = {j.job_id for j in jobs}
@@ -74,7 +74,7 @@ def test_list_jobs_filter_by_state(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    job = local_client.submit(entrypoint, "state-filter-job", resources)
+    job = local_client.submit(entrypoint, "state-filter-job", resources, user="test-user")
     job.wait()  # Wait for completion
 
     # Filter for SUCCEEDED only
@@ -91,17 +91,17 @@ def test_list_jobs_filter_by_prefix(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    local_client.submit(entrypoint, "exp-a-job", resources)
-    local_client.submit(entrypoint, "exp-b-job", resources)
-    local_client.submit(entrypoint, "other-job", resources)
+    local_client.submit(entrypoint, "exp-a-job", resources, user="test-user")
+    local_client.submit(entrypoint, "exp-b-job", resources, user="test-user")
+    local_client.submit(entrypoint, "other-job", resources, user="test-user")
 
     # Filter by prefix
-    jobs = local_client.list_jobs(prefix=JobName.root("exp-"))
+    jobs = local_client.list_jobs(prefix=JobName.root("test-user", "exp-"))
     job_ids = {j.job_id for j in jobs}
 
-    assert JobName.root("exp-a-job").to_wire() in job_ids
-    assert JobName.root("exp-b-job").to_wire() in job_ids
-    assert JobName.root("other-job").to_wire() not in job_ids
+    assert JobName.root("test-user", "exp-a-job").to_wire() in job_ids
+    assert JobName.root("test-user", "exp-b-job").to_wire() in job_ids
+    assert JobName.root("test-user", "other-job").to_wire() not in job_ids
 
 
 def test_terminate_prefix_basic(local_client):
@@ -110,17 +110,17 @@ def test_terminate_prefix_basic(local_client):
     resources = ResourceSpec(cpu=1, memory="1g")
 
     # Submit jobs with different prefixes
-    local_client.submit(entrypoint, "exp-a-job1", resources)
-    local_client.submit(entrypoint, "exp-a-job2", resources)
-    local_client.submit(entrypoint, "exp-b-job1", resources)
+    local_client.submit(entrypoint, "exp-a-job1", resources, user="test-user")
+    local_client.submit(entrypoint, "exp-a-job2", resources, user="test-user")
+    local_client.submit(entrypoint, "exp-b-job1", resources, user="test-user")
 
     # Terminate exp-a jobs
-    terminated = local_client.terminate_prefix(JobName.root("exp-a"))
+    terminated = local_client.terminate_prefix(JobName.root("test-user", "exp-a"))
 
     assert len(terminated) == 2
-    assert JobName.root("exp-a-job1") in terminated
-    assert JobName.root("exp-a-job2") in terminated
-    assert JobName.root("exp-b-job1") not in terminated
+    assert JobName.root("test-user", "exp-a-job1") in terminated
+    assert JobName.root("test-user", "exp-a-job2") in terminated
+    assert JobName.root("test-user", "exp-b-job1") not in terminated
 
 
 def test_terminate_prefix_excludes_finished(local_client):
@@ -128,7 +128,7 @@ def test_terminate_prefix_excludes_finished(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    job = local_client.submit(entrypoint, "finished-test", resources)
+    job = local_client.submit(entrypoint, "finished-test", resources, user="test-user")
     job.wait()  # Wait for completion
 
     # Job should be SUCCEEDED now
@@ -136,5 +136,5 @@ def test_terminate_prefix_excludes_finished(local_client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # terminate_prefix should not include it
-    terminated = local_client.terminate_prefix(JobName.root("finished-test"))
+    terminated = local_client.terminate_prefix(JobName.root("test-user", "finished-test"))
     assert job.job_id not in terminated

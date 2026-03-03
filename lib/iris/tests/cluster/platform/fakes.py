@@ -351,6 +351,16 @@ class FakePlatform:
             for fake_slice in self._slices.values():
                 fake_slice.tick(ts)
 
+    def inject_slice(self, handle: FakeSliceHandle) -> None:
+        """Add a slice without going through create_slice(). Simulates pre-existing cloud slices."""
+        with self._lock:
+            self._slices[handle.slice_id] = handle
+
+    def remove_slice(self, slice_id: str) -> None:
+        """Remove a slice without calling terminate(). Simulates termination during restart."""
+        with self._lock:
+            self._slices.pop(slice_id, None)
+
     def set_failure_mode(self, mode: FailureMode) -> None:
         """Set the failure mode for subsequent operations."""
         self._config.failure_mode = mode

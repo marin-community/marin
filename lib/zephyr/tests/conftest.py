@@ -85,7 +85,7 @@ def fray_client(request):
         client = FrayIrisClient.from_iris_client(iris_client)
 
         # Set up IrisContext so actor handles can resolve
-        ctx = IrisContext(job_id=JobName.root("test"), client=iris_client)
+        ctx = IrisContext(job_id=JobName.root("test-user", "test"), client=iris_client)
         with iris_ctx_scope(ctx):
             yield client
         client.shutdown(wait=True)

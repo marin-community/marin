@@ -50,6 +50,20 @@ from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True)
+class ReservationClaim:
+    """A claim binding a worker to a specific reservation entry.
+
+    The controller assigns unclaimed workers to unsatisfied reservation entries
+    each scheduling cycle. Once every entry for a job is claimed, the
+    reservation gate opens and the job's tasks can be scheduled.
+    """
+
+    job_id: str
+    entry_idx: int
+
+
 MAX_REPLICAS_PER_JOB = 10000
 """Maximum replicas allowed per job to prevent resource exhaustion."""
 
@@ -589,6 +603,15 @@ class ControllerJob:
         if self.is_coscheduled:
             return self.request.coscheduling.group_by
         return None
+
+
+@dataclass(frozen=True)
+class UserStats:
+    """Aggregate counts for a single user."""
+
+    user: str
+    task_state_counts: dict[int, int] = field(default_factory=dict)
+    job_state_counts: dict[int, int] = field(default_factory=dict)
 
 
 # =============================================================================
@@ -1495,6 +1518,25 @@ class ControllerState:
         with self._lock:
             return list(self._jobs.values())
 
+    def list_user_stats(self) -> list[UserStats]:
+        """Return aggregated live counts grouped by user."""
+        with self._lock:
+            by_user: dict[str, UserStats] = {}
+            for job in self._jobs.values():
+                task_ids = self._tasks_by_job.get(job.job_id, [])
+                user_stats = by_user.setdefault(
+                    job.job_id.user,
+                    UserStats(user=job.job_id.user),
+                )
+                for task_id in task_ids:
+                    task = self._tasks.get(task_id)
+                    if task is None:
+                        continue
+                    user_stats.task_state_counts[task.state] = user_stats.task_state_counts.get(task.state, 0) + 1
+                user_stats.job_state_counts[job.state] = user_stats.job_state_counts.get(job.state, 0) + 1
+
+            return list(by_user.values())
+
     def get_children(self, job_id: JobName) -> list[ControllerJob]:
         with self._lock:
             return [job for job in self._jobs.values() if job.job_id.parent == job_id]
@@ -1889,8 +1931,6 @@ class ControllerState:
 
         Must be called with _lock held.
         """
-        from iris.cluster.controller.events import TaskStateChangedEvent
-
         event = TaskStateChangedEvent(
             task_id=task_id,
             new_state=new_state,
@@ -1987,6 +2027,15 @@ class ControllerState:
         """Return all registered endpoints."""
         with self._lock:
             return list(self._endpoints.values())
+
+    def get_endpoint_task_mapping(self) -> dict[str, JobName]:
+        """Return a mapping from endpoint_id to task_id for all tracked endpoints."""
+        with self._lock:
+            result: dict[str, JobName] = {}
+            for task_id, endpoint_ids in self._endpoints_by_task.items():
+                for eid in endpoint_ids:
+                    result[eid] = task_id
+            return result
 
     def _remove_endpoints_for_task(self, task_id: JobName) -> list[ControllerEndpoint]:
         """Remove all endpoints associated with a task."""

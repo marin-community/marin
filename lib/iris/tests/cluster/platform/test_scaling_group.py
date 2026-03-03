@@ -892,8 +892,10 @@ class TestScalingGroupAvailability:
         # CPU matches any group
         assert group.matches_device_requirement(DeviceType.CPU, None)
 
-        # TPU with matching variant
+        # TPU with matching variant (case-insensitive)
         assert group.matches_device_requirement(DeviceType.TPU, "v5p-8")
+        assert group.matches_device_requirement(DeviceType.TPU, "V5P-8")
+        assert group.matches_device_requirement(DeviceType.TPU, "V5p-8")
         assert group.matches_device_requirement(DeviceType.TPU, None)  # None = any TPU
         assert not group.matches_device_requirement(DeviceType.TPU, "v5litepod-4")
 
@@ -1067,7 +1069,7 @@ class TestMarkSliceLockDiscipline:
     """Tests that mark_slice_ready/mark_slice_failed hold the lock during mutation."""
 
     def test_mark_slice_ready_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """lifecycle and vm_addresses are both set while holding the lock."""
+        """lifecycle and vm_addresses are set while holding the lock."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         handle = _tracked_scale_up(group)
@@ -1080,7 +1082,7 @@ class TestMarkSliceLockDiscipline:
         addresses = ["10.0.0.1", "10.0.0.2"]
         group.mark_slice_ready(handle.slice_id, addresses)
 
-        # Both fields should be set atomically
+        # All fields should be set atomically
         with group._slices_lock:
             state = group._slices[handle.slice_id]
             assert state.lifecycle == SliceLifecycleState.READY
@@ -1109,6 +1111,27 @@ class TestMarkSliceLockDiscipline:
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         group.mark_slice_failed("nonexistent")
+
+
+def test_slice_state_to_proto_generates_synthetic_vm_ids():
+    """slice_state_to_proto generates synthetic VM IDs from slice_id and index."""
+    from iris.cluster.controller.scaling_group import slice_state_to_proto
+
+    handle = MagicMock()
+    handle.slice_id = "my-slice"
+    handle.scale_group = "sg"
+    handle.created_at = Timestamp.from_ms(1000)
+
+    state = SliceState(
+        handle=handle,
+        lifecycle=SliceLifecycleState.READY,
+        vm_addresses=["10.0.0.1", "10.0.0.2"],
+    )
+    proto = slice_state_to_proto(state)
+    assert proto.vms[0].vm_id == "my-slice-vm-0"
+    assert proto.vms[1].vm_id == "my-slice-vm-1"
+    assert proto.vms[0].address == "10.0.0.1"
+    assert proto.vms[1].address == "10.0.0.2"
 
 
 def _make_worker_handle(vm_id: str, cloud_state: CloudWorkerState, address: str = "10.0.0.1") -> MagicMock:

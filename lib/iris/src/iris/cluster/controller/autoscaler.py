@@ -36,7 +36,7 @@ from iris.cluster.platform.base import (
 from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap, ZONE_ATTRIBUTE_KEY
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -172,6 +172,31 @@ def _diagnose_no_matching_group(
     return f"no_matching_group: no groups match device={entry.device_type.value}:{entry.device_variant or '*'}"
 
 
+def _matches_filters(
+    group: ScalingGroup,
+    entry: DemandEntry,
+    group_region: Callable[[ScalingGroup], str | None],
+    group_zone: Callable[[ScalingGroup], str | None],
+) -> bool:
+    """Check device type, preemptible preference, region, and zone constraints.
+
+    Does NOT check resource capacity or accept-demand readiness.
+    """
+    if not group.matches_device_requirement(entry.device_type, entry.device_variant):
+        return False
+    if entry.preemptible is not None and group.config.slice_template.preemptible != entry.preemptible:
+        return False
+    if entry.required_regions:
+        region = group_region(group)
+        if region not in entry.required_regions:
+            return False
+    if entry.required_zones:
+        zone = group_zone(group)
+        if zone not in entry.required_zones:
+            return False
+    return True
+
+
 def route_demand(
     groups: list[ScalingGroup],
     demand_entries: list[DemandEntry],
@@ -212,18 +237,8 @@ def route_demand(
         return None
 
     def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
-        if not group.matches_device_requirement(entry.device_type, entry.device_variant):
+        if not _matches_filters(group, entry, group_region, group_zone):
             return False
-        if entry.preemptible is not None and group.config.slice_template.preemptible != entry.preemptible:
-            return False
-        if entry.required_regions:
-            region = group_region(group)
-            if region not in entry.required_regions:
-                return False
-        if entry.required_zones:
-            zone = group_zone(group)
-            if zone not in entry.required_zones:
-                return False
         if entry.invalid_reason:
             return False
         if entry.coschedule_group_id and group.num_vms != len(entry.task_ids):
@@ -289,14 +304,7 @@ def route_demand(
             unmet.append(UnmetDemand(entry=entry, reason=entry.invalid_reason))
             continue
 
-        matching_groups = [
-            g
-            for g in sorted_groups
-            if g.matches_device_requirement(entry.device_type, entry.device_variant)
-            and (entry.preemptible is None or g.config.slice_template.preemptible == entry.preemptible)
-            and (not entry.required_regions or group_region(g) in entry.required_regions)
-            and (not entry.required_zones or group_zone(g) in entry.required_zones)
-        ]
+        matching_groups = [g for g in sorted_groups if _matches_filters(g, entry, group_region, group_zone)]
         if not matching_groups:
             reason = _diagnose_no_matching_group(entry, sorted_groups, group_region, group_zone)
             unmet.append(UnmetDemand(entry=entry, reason=reason))
@@ -848,8 +856,25 @@ class Autoscaler:
         self.refresh(vm_status_map, timestamp)
         return self.update(demand_entries, timestamp)
 
+    def to_tracked_worker_snapshots(self) -> list[snapshot_pb2.TrackedWorkerSnapshot]:
+        """Serialize tracked worker state for checkpointing."""
+
+        return [
+            snapshot_pb2.TrackedWorkerSnapshot(
+                worker_id=tw.worker_id,
+                slice_id=tw.slice_id,
+                scale_group=tw.scale_group,
+                internal_address=tw.handle.internal_address,
+            )
+            for tw in self._workers.values()
+        ]
+
+    def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
+        """Restore tracked worker state from a snapshot. Called before loops start."""
+        self._workers.update(workers)
+
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Get worker info by ID from the centralized worker registry."""
+        """Get VM info by platform worker ID from the centralized worker registry."""
         tracked = self._workers.get(vm_id)
         if not tracked:
             return None
@@ -873,7 +898,7 @@ class Autoscaler:
         )
 
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
-        """Get bootstrap log for a worker from the centralized worker registry."""
+        """Get bootstrap log for a VM by platform worker ID."""
         tracked = self._workers.get(vm_id)
         if not tracked:
             return ""

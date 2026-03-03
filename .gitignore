@@ -229,5 +229,6 @@ scr/*
 /scratch
 
 .claude
+.agents/tmp/
 .codex
 .entire

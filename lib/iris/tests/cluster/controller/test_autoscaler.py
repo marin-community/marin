@@ -779,6 +779,26 @@ class TestAutoscalerBootstrapLogs:
         assert autoscaler.get_init_log(vm_id) == bootstrap_log
         assert autoscaler.get_init_log(vm_id, tail=2) == "line2\nline3"
 
+    def test_get_vm_by_worker_id(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """get_vm() uses platform worker_id as the only lookup key."""
+        mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        workers = mock_handle.describe().workers
+        autoscaler._register_slice_workers(workers, mock_handle.slice_id, "test-group")
+
+        worker = workers[0]
+        # Lookup by platform worker_id
+        info = autoscaler.get_vm(worker.worker_id)
+        assert info is not None
+        assert info.scale_group == "test-group"
+
+        # Unknown keys return None — no address fallback
+        assert autoscaler.get_vm(worker.internal_address) is None
+        assert autoscaler.get_vm("192.168.0.99") is None
+
 
 class TestWaterfallRouting:
     """Tests for priority-based waterfall demand routing."""

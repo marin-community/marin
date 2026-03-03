@@ -23,17 +23,18 @@ import logging
 import os
 import select
 import signal
-import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import uuid
 import weakref
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from iris.cluster.runtime.bundle import stage_bundle_to_local
 from iris.cluster.runtime.env import build_device_env_vars
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -73,67 +74,6 @@ atexit.register(_cleanup_all_runtimes)
 # =============================================================================
 # Process management utilities
 # =============================================================================
-
-
-def _read_proc_memory_mb(pid: int) -> int | None:
-    """Read RSS memory usage for a process, in megabytes.
-
-    On Linux, reads /proc/{pid}/statm directly (no external dependencies).
-    On macOS, shells out to `ps` since /proc is not available.
-    Returns None if the process doesn't exist or the read fails.
-    """
-    if sys.platform == "linux":
-        try:
-            with open(f"/proc/{pid}/statm") as f:
-                pages = int(f.read().split()[1])  # resident set size in pages
-            return (pages * 4096) // (1024 * 1024)
-        except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
-            return None
-    else:
-        try:
-            result = subprocess.run(
-                ["ps", "-o", "rss=", "-p", str(pid)],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                return None
-            rss_kb = int(result.stdout.strip())
-            return rss_kb // 1024
-        except (subprocess.TimeoutExpired, ValueError, OSError):
-            return None
-
-
-def _read_proc_cpu_percent(pid: int, prev_total: float, prev_utime: float) -> tuple[int, float, float]:
-    """Read CPU usage percentage for a process since the last call.
-
-    On Linux, computes delta CPU usage from /proc/{pid}/stat and /proc/stat.
-    On macOS, returns 0 since /proc is not available.
-    Returns (cpu_percent, new_total, new_utime).
-    """
-    if sys.platform != "linux":
-        return (0, prev_total, prev_utime)
-
-    try:
-        with open(f"/proc/{pid}/stat") as f:
-            fields = f.read().split()
-        # utime (field 14) + stime (field 15), 1-indexed => 0-indexed 13, 14
-        proc_time = int(fields[13]) + int(fields[14])
-
-        with open("/proc/stat") as f:
-            cpu_line = f.readline()
-        total_time = sum(int(x) for x in cpu_line.split()[1:])
-
-        dt = total_time - prev_total
-        dp = proc_time - prev_utime
-        if dt <= 0 or prev_total == 0:
-            return (0, total_time, proc_time)
-
-        cpu_pct = int((dp / dt) * 100)
-        return (cpu_pct, total_time, proc_time)
-    except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
-        return (0, prev_total, prev_utime)
 
 
 def set_pdeathsig_preexec():
@@ -442,8 +382,6 @@ class ProcessContainerHandle:
     _container_id: str | None = field(default=None, repr=False)
     _prev_cpu_total: float = field(default=0.0, repr=False)
     _prev_cpu_utime: float = field(default=0.0, repr=False)
-    _prev_cpu_total: float = field(default=0.0, repr=False)
-    _prev_cpu_utime: float = field(default=0.0, repr=False)
 
     @property
     def container_id(self) -> str | None:
@@ -487,9 +425,6 @@ class ProcessContainerHandle:
                     arg = host_path + arg[len(container_path) :]
                     break
             remapped_cmd.append(arg)
-
-        # Create container with remapped environment and command
-        from dataclasses import replace
 
         updated_config = replace(config, env=env)
 
@@ -564,8 +499,6 @@ class ProcessContainerHandle:
 
         output_path = None
         try:
-            import tempfile
-
             with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
                 output_path = f.name
 
@@ -573,8 +506,12 @@ class ProcessContainerHandle:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
             if result.returncode == 0:
                 return Path(output_path).read_bytes()
-        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
-            logger.warning("py-spy profiling failed for PID %s; falling back to stub", pid, exc_info=True)
+        except FileNotFoundError:
+            logger.warning("py-spy not found; falling back to stub profile for PID %s", pid)
+        except subprocess.TimeoutExpired:
+            logger.warning("py-spy timed out; falling back to stub profile for PID %s", pid)
+        except PermissionError:
+            logger.warning("py-spy lacks permission to attach; falling back to stub profile for PID %s", pid)
         finally:
             if output_path is not None:
                 Path(output_path).unlink(missing_ok=True)
@@ -589,8 +526,6 @@ class ProcessContainerHandle:
         trace_path = None
         output_path = None
         try:
-            import tempfile
-
             with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
                 trace_path = f.name
 
@@ -615,8 +550,14 @@ class ProcessContainerHandle:
             else:
                 return result.stdout.encode("utf-8")
 
-        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError, RuntimeError):
-            logger.warning("memray profiling failed for PID %s; falling back to stub", pid, exc_info=True)
+        except FileNotFoundError:
+            logger.warning("memray not found; falling back to stub profile for PID %s", pid)
+        except subprocess.TimeoutExpired:
+            logger.warning("memray timed out; falling back to stub profile for PID %s", pid)
+        except PermissionError:
+            logger.warning("memray lacks permission to attach; falling back to stub profile for PID %s", pid)
+        except RuntimeError:
+            logger.warning("memray failed for PID %s; falling back to stub", pid, exc_info=True)
         finally:
             if trace_path is not None:
                 Path(trace_path).unlink(missing_ok=True)
@@ -663,10 +604,12 @@ class ProcessRuntime:
         fetch_bundle: Callable[[str], Path],
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        bundle_path = fetch_bundle(bundle_gcs_path)
-        shutil.copytree(bundle_path, workdir, dirs_exist_ok=True)
-        for name, data in workdir_files.items():
-            (workdir / name).write_bytes(data)
+        stage_bundle_to_local(
+            bundle_gcs_path=bundle_gcs_path,
+            workdir=workdir,
+            workdir_files=workdir_files,
+            fetch_bundle=fetch_bundle,
+        )
 
     def list_containers(self) -> list[ProcessContainerHandle]:
         """List all managed container handles."""

@@ -72,7 +72,7 @@ def job_request():
         max_retries_failure: int = 0,
         max_retries_preemption: int = 0,  # Default to 0 for tests (no implicit retries)
     ) -> cluster_pb2.Controller.LaunchJobRequest:
-        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root(name)
+        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
         return cluster_pb2.Controller.LaunchJobRequest(
             name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
@@ -151,13 +151,13 @@ def test_launch_job_returns_job_id(service, job_request):
 
     response = service.launch_job(request, None)
 
-    assert response.job_id == JobName.root("test-job").to_wire()
+    assert response.job_id == JobName.root("test-user", "test-job").to_wire()
 
     # Verify via get_job_status RPC
     status_response = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-job").to_wire()), None
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "test-job").to_wire()), None
     )
-    assert status_response.job.job_id == JobName.root("test-job").to_wire()
+    assert status_response.job.job_id == JobName.root("test-user", "test-job").to_wire()
     assert status_response.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
@@ -166,7 +166,7 @@ def test_launch_job_rejects_duplicate_name(service, job_request):
     request = job_request("duplicate-job")
 
     response = service.launch_job(request, None)
-    assert response.job_id == JobName.root("duplicate-job").to_wire()
+    assert response.job_id == JobName.root("test-user", "duplicate-job").to_wire()
 
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(request, None)
@@ -181,10 +181,10 @@ def test_launch_job_replaces_finished_job_by_default(service, state, job_request
 
     # Submit initial job
     response = service.launch_job(request, None)
-    assert response.job_id == JobName.root("replaceable-job").to_wire()
+    assert response.job_id == JobName.root("test-user", "replaceable-job").to_wire()
 
     # Mark the job as failed
-    job = state.get_job(JobName.root("replaceable-job"))
+    job = state.get_job(JobName.root("test-user", "replaceable-job"))
     assert job is not None
     tasks = state.get_job_tasks(job.job_id)
     assert len(tasks) == 1
@@ -199,15 +199,15 @@ def test_launch_job_replaces_finished_job_by_default(service, state, job_request
     )
 
     # Verify job is now failed
-    job = state.get_job(JobName.root("replaceable-job"))
+    job = state.get_job(JobName.root("test-user", "replaceable-job"))
     assert job.state == cluster_pb2.JOB_STATE_FAILED
 
     # Submit again - should succeed (replaces the finished job)
     response = service.launch_job(request, None)
-    assert response.job_id == JobName.root("replaceable-job").to_wire()
+    assert response.job_id == JobName.root("test-user", "replaceable-job").to_wire()
 
     # Verify the new job is pending
-    job = state.get_job(JobName.root("replaceable-job"))
+    job = state.get_job(JobName.root("test-user", "replaceable-job"))
     assert job.state == cluster_pb2.JOB_STATE_PENDING
 
 
@@ -217,10 +217,10 @@ def test_launch_job_fail_if_exists_prevents_replacement(service, state, job_requ
 
     # Submit initial job
     response = service.launch_job(request, None)
-    assert response.job_id == JobName.root("no-replace-job").to_wire()
+    assert response.job_id == JobName.root("test-user", "no-replace-job").to_wire()
 
     # Mark the job as succeeded
-    job = state.get_job(JobName.root("no-replace-job"))
+    job = state.get_job(JobName.root("test-user", "no-replace-job"))
     tasks = state.get_job_tasks(job.job_id)
     task = tasks[0]
     state.handle_event(
@@ -232,7 +232,7 @@ def test_launch_job_fail_if_exists_prevents_replacement(service, state, job_requ
     )
 
     # Verify job is now succeeded
-    job = state.get_job(JobName.root("no-replace-job"))
+    job = state.get_job(JobName.root("test-user", "no-replace-job"))
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Submit again with fail_if_exists=true - should fail
@@ -270,16 +270,16 @@ def test_get_job_status_returns_status(service, job_request):
     """Verify get_job_status returns correct status for launched job."""
     service.launch_job(job_request("test-job"), None)
 
-    request = cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-job").to_wire())
+    request = cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "test-job").to_wire())
     response = service.get_job_status(request, None)
 
-    assert response.job.job_id == JobName.root("test-job").to_wire()
+    assert response.job.job_id == JobName.root("test-user", "test-job").to_wire()
     assert response.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
 def test_get_job_status_not_found(service):
     """Verify get_job_status raises ConnectError for unknown job."""
-    request = cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("nonexistent").to_wire())
+    request = cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "nonexistent").to_wire())
 
     with pytest.raises(ConnectError) as exc_info:
         service.get_job_status(request, None)
@@ -297,14 +297,14 @@ def test_terminate_job_marks_as_killed(service, job_request):
     """Verify terminate_job sets job state to KILLED via get_job_status."""
     service.launch_job(job_request("test-job"), None)
 
-    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-job").to_wire())
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "test-job").to_wire())
     response = service.terminate_job(request, None)
 
     assert isinstance(response, cluster_pb2.Empty)
 
     # Verify via get_job_status RPC
     status_response = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-job").to_wire()), None
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "test-job").to_wire()), None
     )
     assert status_response.job.state == cluster_pb2.JOB_STATE_KILLED
     assert status_response.job.finished_at.epoch_ms > 0
@@ -312,7 +312,7 @@ def test_terminate_job_marks_as_killed(service, job_request):
 
 def test_terminate_job_not_found(service):
     """Verify terminate_job raises ConnectError for unknown job."""
-    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("nonexistent").to_wire())
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "nonexistent").to_wire())
 
     with pytest.raises(ConnectError) as exc_info:
         service.terminate_job(request, None)
@@ -325,12 +325,12 @@ def test_terminate_pending_job(service, job_request):
     """Verify terminate_job works on pending jobs (not just running)."""
     service.launch_job(job_request("test-job"), None)
 
-    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-job").to_wire())
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "test-job").to_wire())
     service.terminate_job(request, None)
 
     # Verify via get_job_status RPC
     status_response = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-job").to_wire()), None
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "test-job").to_wire()), None
     )
     assert status_response.job.state == cluster_pb2.JOB_STATE_KILLED
     assert status_response.job.finished_at.epoch_ms > 0
@@ -339,17 +339,17 @@ def test_terminate_pending_job(service, job_request):
 def test_terminate_job_cascades_to_children(service, job_request):
     """Verify terminate_job terminates all children when parent is terminated."""
     service.launch_job(job_request("parent"), None)
-    service.launch_job(job_request("/parent/child1"), None)
-    service.launch_job(job_request("/parent/child2"), None)
+    service.launch_job(job_request("/test-user/parent/child1"), None)
+    service.launch_job(job_request("/test-user/parent/child2"), None)
 
-    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("parent").to_wire())
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "parent").to_wire())
     service.terminate_job(request, None)
 
     # Verify all jobs are killed via get_job_status RPC
     for job_name in [
-        JobName.root("parent"),
-        JobName.from_string("/parent/child1"),
-        JobName.from_string("/parent/child2"),
+        JobName.root("test-user", "parent"),
+        JobName.from_string("/test-user/parent/child1"),
+        JobName.from_string("/test-user/parent/child2"),
     ]:
         status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire()), None)
         assert status.job.state == cluster_pb2.JOB_STATE_KILLED, f"Job {job_name} should be KILLED"
@@ -358,26 +358,30 @@ def test_terminate_job_cascades_to_children(service, job_request):
 def test_terminate_job_only_affects_descendants(service, job_request):
     """Verify terminate_job does not affect sibling jobs."""
     service.launch_job(job_request("parent"), None)
-    service.launch_job(job_request("/parent/child1"), None)
-    service.launch_job(job_request("/parent/child2"), None)
+    service.launch_job(job_request("/test-user/parent/child1"), None)
+    service.launch_job(job_request("/test-user/parent/child2"), None)
 
     # Terminate only child1
-    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.from_string("/parent/child1").to_wire())
+    request = cluster_pb2.Controller.TerminateJobRequest(
+        job_id=JobName.from_string("/test-user/parent/child1").to_wire()
+    )
     service.terminate_job(request, None)
 
     # Verify states via get_job_status RPC
     child1_status = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/parent/child1").to_wire()), None
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/test-user/parent/child1").to_wire()),
+        None,
     )
     assert child1_status.job.state == cluster_pb2.JOB_STATE_KILLED
 
     child2_status = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/parent/child2").to_wire()), None
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/test-user/parent/child2").to_wire()),
+        None,
     )
     assert child2_status.job.state == cluster_pb2.JOB_STATE_PENDING
 
     parent_status = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("parent").to_wire()), None
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "parent").to_wire()), None
     )
     assert parent_status.job.state == cluster_pb2.JOB_STATE_PENDING
 
@@ -393,35 +397,39 @@ def test_terminate_job_skips_already_finished_children(service, state, job_reque
     # Create a child that's already succeeded (need to set up via state since
     # we can't naturally get a job to SUCCEEDED without worker interaction)
     child_succeeded = ControllerJob(
-        job_id=JobName.from_string("/parent/child-succeeded"),
-        request=job_request("/parent/child-succeeded"),
+        job_id=JobName.from_string("/test-user/parent/child-succeeded"),
+        request=job_request("/test-user/parent/child-succeeded"),
         state=cluster_pb2.JOB_STATE_SUCCEEDED,
         finished_at=Timestamp.from_ms(12345),
     )
     state.add_job(child_succeeded)
 
     # Launch running child via RPC
-    service.launch_job(job_request("/parent/child-running"), None)
+    service.launch_job(job_request("/test-user/parent/child-running"), None)
 
     # Terminate parent
-    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("parent").to_wire())
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "parent").to_wire())
     service.terminate_job(request, None)
 
     # Verify states via get_job_status RPC
     succeeded_status = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/parent/child-succeeded").to_wire()),
+        cluster_pb2.Controller.GetJobStatusRequest(
+            job_id=JobName.from_string("/test-user/parent/child-succeeded").to_wire()
+        ),
         None,
     )
     assert succeeded_status.job.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     running_status = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/parent/child-running").to_wire()),
+        cluster_pb2.Controller.GetJobStatusRequest(
+            job_id=JobName.from_string("/test-user/parent/child-running").to_wire()
+        ),
         None,
     )
     assert running_status.job.state == cluster_pb2.JOB_STATE_KILLED
 
     parent_status = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("parent").to_wire()),
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "parent").to_wire()),
         None,
     )
     assert parent_status.job.state == cluster_pb2.JOB_STATE_KILLED
@@ -431,11 +439,11 @@ def test_parent_job_failure_cascades_to_children(service, state, job_request):
     """Verify when a parent job fails, all children are automatically cancelled."""
     # Launch parent and children via RPC
     service.launch_job(job_request("parent"), None)
-    service.launch_job(job_request("/parent/child1"), None)
-    service.launch_job(job_request("/parent/child2"), None)
+    service.launch_job(job_request("/test-user/parent/child1"), None)
+    service.launch_job(job_request("/test-user/parent/child2"), None)
 
     # Get parent task and mark it as failed
-    parent_job = state.get_job(JobName.root("parent"))
+    parent_job = state.get_job(JobName.root("test-user", "parent"))
     parent_tasks = state.get_job_tasks(parent_job.job_id)
     parent_task = parent_tasks[0]
 
@@ -450,17 +458,19 @@ def test_parent_job_failure_cascades_to_children(service, state, job_request):
 
     # Verify all jobs are now in terminal states via get_job_status RPC
     parent_status = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("parent").to_wire()), None
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "parent").to_wire()), None
     )
     assert parent_status.job.state == cluster_pb2.JOB_STATE_FAILED
 
     child1_status = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/parent/child1").to_wire()), None
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/test-user/parent/child1").to_wire()),
+        None,
     )
     assert child1_status.job.state == cluster_pb2.JOB_STATE_KILLED, "Child 1 should be killed when parent fails"
 
     child2_status = service.get_job_status(
-        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/parent/child2").to_wire()), None
+        cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string("/test-user/parent/child2").to_wire()),
+        None,
     )
     assert child2_status.job.state == cluster_pb2.JOB_STATE_KILLED, "Child 2 should be killed when parent fails"
 
@@ -469,7 +479,7 @@ def test_launch_job_rejects_child_of_failed_parent(service, state, job_request):
     """Verify launch_job rejects submissions to a failed parent's namespace."""
     # Launch and fail parent
     service.launch_job(job_request("failed-parent"), None)
-    parent_job = state.get_job(JobName.root("failed-parent"))
+    parent_job = state.get_job(JobName.root("test-user", "failed-parent"))
     parent_tasks = state.get_job_tasks(parent_job.job_id)
     parent_task = parent_tasks[0]
 
@@ -484,7 +494,7 @@ def test_launch_job_rejects_child_of_failed_parent(service, state, job_request):
 
     # Try to submit a child job - should fail
     with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(job_request("/failed-parent/new-child"), None)
+        service.launch_job(job_request("/test-user/failed-parent/new-child"), None)
 
     assert exc_info.value.code == Code.FAILED_PRECONDITION
     assert "terminated" in exc_info.value.message.lower() or "failed" in exc_info.value.message.lower()
@@ -502,7 +512,9 @@ def test_list_jobs_returns_all_jobs(service, job_request):
     service.launch_job(job_request("job-3"), None)
 
     # Terminate one to get different state
-    service.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("job-3").to_wire()), None)
+    service.terminate_job(
+        cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "job-3").to_wire()), None
+    )
 
     request = cluster_pb2.Controller.ListJobsRequest()
     response = service.list_jobs(request, None)
@@ -510,15 +522,15 @@ def test_list_jobs_returns_all_jobs(service, job_request):
     assert len(response.jobs) == 3
     job_ids = {j.job_id for j in response.jobs}
     assert job_ids == {
-        JobName.root("job-1").to_wire(),
-        JobName.root("job-2").to_wire(),
-        JobName.root("job-3").to_wire(),
+        JobName.root("test-user", "job-1").to_wire(),
+        JobName.root("test-user", "job-2").to_wire(),
+        JobName.root("test-user", "job-3").to_wire(),
     }
 
     states_by_id = {j.job_id: j.state for j in response.jobs}
-    assert states_by_id[JobName.root("job-1").to_wire()] == cluster_pb2.JOB_STATE_PENDING
-    assert states_by_id[JobName.root("job-2").to_wire()] == cluster_pb2.JOB_STATE_PENDING
-    assert states_by_id[JobName.root("job-3").to_wire()] == cluster_pb2.JOB_STATE_KILLED
+    assert states_by_id[JobName.root("test-user", "job-1").to_wire()] == cluster_pb2.JOB_STATE_PENDING
+    assert states_by_id[JobName.root("test-user", "job-2").to_wire()] == cluster_pb2.JOB_STATE_PENDING
+    assert states_by_id[JobName.root("test-user", "job-3").to_wire()] == cluster_pb2.JOB_STATE_KILLED
 
 
 # =============================================================================

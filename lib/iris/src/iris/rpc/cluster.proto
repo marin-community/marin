@@ -225,6 +225,27 @@ message JobStatus {
 // Job state is derived from task states, and retry semantics are per-task.
 
 // ============================================================================
+// RESERVATION
+// ============================================================================
+
+// A single reservation entry describing one worker's worth of resources.
+// Duplicate entries to reserve multiple workers of the same type.
+message ReservationEntry {
+  // Resource spec for one worker.
+  ResourceSpecProto resources = 1;
+
+  // Constraints for routing (region, zone, preemptible, etc.).
+  repeated Constraint constraints = 2;
+}
+
+// Reservation configuration attached to a job. The autoscaler pre-provisions
+// capacity and the reserving job is held pending until all entries are fulfilled.
+message ReservationConfig {
+  // Resource entries to reserve. Each entry = one worker.
+  repeated ReservationEntry entries = 1;
+}
+
+// ============================================================================
 // RESOURCE SPECIFICATION
 // ============================================================================
 
@@ -450,6 +471,10 @@ message Controller {
     // name is in a terminal state. If false (default), finished jobs are automatically
     // removed and replaced with the new submission.
     bool fail_if_exists = 22;
+
+    // Resource reservation. When set, the autoscaler pre-provisions capacity
+    // and the reserving job is held pending until the reservation is satisfied.
+    ReservationConfig reservation = 30;
   }
 
   message LaunchJobResponse {
@@ -642,6 +667,16 @@ message Controller {
     repeated TransactionAction actions = 1;
   }
 
+  // --- Checkpoint ---
+  message BeginCheckpointRequest {}
+  message BeginCheckpointResponse {
+    string snapshot_path = 1;
+    iris.time.Timestamp created_at = 2;
+    int32 job_count = 3;
+    int32 task_count = 4;
+    int32 worker_count = 5;
+  }
+
   // --- Cluster Summary ---
   message GetClusterSummaryRequest {}
   message GetClusterSummaryResponse {
@@ -649,6 +684,19 @@ message Controller {
     int32 total_jobs = 2;
     int32 total_workers = 3;
     int32 healthy_workers = 4;
+    int32 total_users = 5;
+  }
+
+  message UserSummary {
+    string user = 1;
+    map<string, int32> task_state_counts = 2;
+    map<string, int32> job_state_counts = 3;
+  }
+
+  message ListUsersRequest {}
+
+  message ListUsersResponse {
+    repeated UserSummary users = 1;
   }
 
   // --- Task/Job Logs (batch fetching) ---
@@ -849,6 +897,7 @@ service ControllerService {
 
   // Cluster summary (aggregated counts)
   rpc GetClusterSummary(Controller.GetClusterSummaryRequest) returns (Controller.GetClusterSummaryResponse);
+  rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
   // Task logs (proxied to worker)
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
@@ -861,6 +910,9 @@ service ControllerService {
 
   // Unified worker detail (VM + worker + logs in one call)
   rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
+
+  // Checkpoint
+  rpc BeginCheckpoint(Controller.BeginCheckpointRequest) returns (Controller.BeginCheckpointResponse);
 }
 
 service WorkerService {

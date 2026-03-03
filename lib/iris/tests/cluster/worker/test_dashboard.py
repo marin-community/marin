@@ -87,7 +87,7 @@ def worker(mock_bundle_cache, mock_runtime, tmp_path):
 
 
 def create_run_task_request(
-    task_id: str = JobName.root("test-job-1").task(0).to_wire(),
+    task_id: str = JobName.root("test-user", "test-job-1").task(0).to_wire(),
     num_tasks: int = 1,
     ports: list[str] | None = None,
 ):
@@ -158,7 +158,7 @@ def rpc_post(client, method, body=None):
 def test_list_tasks_with_data(client, worker):
     """Test ListTasks RPC returns all tasks."""
     for i in range(3):
-        request = create_run_task_request(task_id=JobName.root(f"job-{i}").task(0).to_wire())
+        request = create_run_task_request(task_id=JobName.root("test-user", f"job-{i}").task(0).to_wire())
         worker.submit_task(request)
 
     response = rpc_post(client, "ListTasks")
@@ -169,9 +169,9 @@ def test_list_tasks_with_data(client, worker):
 
     task_ids = {t["taskId"] for t in tasks}
     assert task_ids == {
-        JobName.root("job-0").task(0).to_wire(),
-        JobName.root("job-1").task(0).to_wire(),
-        JobName.root("job-2").task(0).to_wire(),
+        JobName.root("test-user", "job-0").task(0).to_wire(),
+        JobName.root("test-user", "job-1").task(0).to_wire(),
+        JobName.root("test-user", "job-2").task(0).to_wire(),
     }
 
 
@@ -180,14 +180,14 @@ def test_get_task_not_found(client):
     response = rpc_post(
         client,
         "GetTaskStatus",
-        {"taskId": JobName.root("nonexistent").task(0).to_wire()},
+        {"taskId": JobName.root("test-user", "nonexistent").task(0).to_wire()},
     )
     assert response.status_code != 200
 
 
 def test_get_task_success(client, worker):
     """Test GetTaskStatus RPC returns task details."""
-    task_id = JobName.root("job-details").task(0).to_wire()
+    task_id = JobName.root("test-user", "job-details").task(0).to_wire()
     request = create_run_task_request(task_id=task_id, ports=["http", "grpc"])
     worker.submit_task(request)
 
@@ -200,7 +200,10 @@ def test_get_task_success(client, worker):
     data = response.json()
 
     assert data["taskId"] == task_id
-    assert JobName.from_wire(data["taskId"]).require_task()[0].to_wire() == JobName.root("job-details").to_wire()
+    assert (
+        JobName.from_wire(data["taskId"]).require_task()[0].to_wire()
+        == JobName.root("test-user", "job-details").to_wire()
+    )
     assert data["state"] == "TASK_STATE_SUCCEEDED"
     assert data["exitCode"] == 0
     assert "http" in data["ports"]
@@ -211,7 +214,7 @@ def test_get_logs_with_tail_parameter(client, worker):
     """Test FetchTaskLogs RPC with negative start_line for tailing."""
     import time
 
-    task_id = JobName.root("job-tail").task(0).to_wire()
+    task_id = JobName.root("test-user", "job-tail").task(0).to_wire()
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
@@ -247,7 +250,7 @@ def test_get_logs_with_source_filter(client, worker):
     """Test FetchTaskLogs RPC returns logs that can be filtered client-side."""
     import time
 
-    task_id = JobName.root("job-source-filter").task(0).to_wire()
+    task_id = JobName.root("test-user", "job-source-filter").task(0).to_wire()
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
@@ -286,7 +289,7 @@ def test_get_logs_with_source_filter(client, worker):
 
 def test_fetch_task_logs_tail_with_negative_start_line(service, worker, request_context):
     """Test fetch_task_logs with negative start_line for tailing."""
-    task_id = JobName.root("job-logs-tail").task(0).to_wire()
+    task_id = JobName.root("test-user", "job-logs-tail").task(0).to_wire()
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
@@ -307,7 +310,7 @@ def test_fetch_task_logs_tail_with_negative_start_line(service, worker, request_
 
 def test_fetch_task_logs_with_regex_filter(service, worker, request_context):
     """Test fetch_task_logs with regex content filter."""
-    task_id = JobName.root("job-logs-regex").task(0).to_wire()
+    task_id = JobName.root("test-user", "job-logs-regex").task(0).to_wire()
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
@@ -332,7 +335,7 @@ def test_fetch_task_logs_with_regex_filter(service, worker, request_context):
 
 def test_fetch_task_logs_combined_filters(service, worker, request_context):
     """Test fetch_task_logs with multiple filters combined."""
-    task_id = JobName.root("job-logs-combined").task(0).to_wire()
+    task_id = JobName.root("test-user", "job-logs-combined").task(0).to_wire()
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
@@ -372,7 +375,7 @@ def test_task_detail_page_loads(client):
 
 def test_run_task_with_ports(worker):
     """Test run_task allocates ports correctly."""
-    task_id = JobName.root("job-with-ports").task(0).to_wire()
+    task_id = JobName.root("test-user", "job-with-ports").task(0).to_wire()
     request = create_run_task_request(task_id=task_id, ports=["http", "grpc"])
     worker.submit_task(request)
 
@@ -385,7 +388,9 @@ def test_run_task_with_ports(worker):
 
 def test_get_task_status_not_found(service, worker, request_context):
     """Test get_task_status raises NOT_FOUND for nonexistent task."""
-    status_request = cluster_pb2.Worker.GetTaskStatusRequest(task_id=JobName.root("nonexistent").task(0).to_wire())
+    status_request = cluster_pb2.Worker.GetTaskStatusRequest(
+        task_id=JobName.root("test-user", "nonexistent").task(0).to_wire()
+    )
 
     with pytest.raises(ConnectError) as exc_info:
         service.get_task_status(status_request, request_context)
@@ -396,7 +401,7 @@ def test_get_task_status_not_found(service, worker, request_context):
 
 def test_get_task_status_completed_task(service, worker, request_context):
     """Test get_task_status for completed task includes timing info."""
-    task_id = JobName.root("job-completed").task(0).to_wire()
+    task_id = JobName.root("test-user", "job-completed").task(0).to_wire()
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
@@ -408,7 +413,10 @@ def test_get_task_status_completed_task(service, worker, request_context):
     status = service.get_task_status(status_request, request_context)
 
     assert status.task_id == task_id
-    assert JobName.from_wire(status.task_id).require_task()[0].to_wire() == JobName.root("job-completed").to_wire()
+    assert (
+        JobName.from_wire(status.task_id).require_task()[0].to_wire()
+        == JobName.root("test-user", "job-completed").to_wire()
+    )
     assert status.state == cluster_pb2.TASK_STATE_SUCCEEDED
     assert status.exit_code == 0
     assert status.started_at.epoch_ms > 0

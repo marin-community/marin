@@ -16,7 +16,6 @@ import logging
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import time
 import uuid
@@ -25,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from iris.cluster.runtime.bundle import stage_bundle_to_local
 from iris.cluster.runtime.env import build_device_env_vars
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -141,52 +141,29 @@ def _parse_memory_size(size_str: str) -> int:
 
 
 def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogLine]:
-    """Get container logs, optionally filtered by timestamp."""
-    logs: list[LogLine] = []
+    """Get container logs, optionally filtered by timestamp.
 
-    base_cmd = ["docker", "logs", "--timestamps"]
+    Uses a single `docker logs` call with capture_output to get both stdout and
+    stderr in one shot, then parses each stream separately.
+    """
+    cmd = ["docker", "logs", "--timestamps"]
     if since:
-        base_cmd.extend(["--since", since.as_formatted_date()])
-    base_cmd.append(container_id)
+        cmd.extend(["--since", since.as_formatted_date()])
+    cmd.append(container_id)
 
-    # Check if container exists
-    result = subprocess.run(
-        base_cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         return []
 
-    # Fetch stdout
-    stdout_result = subprocess.run(
-        base_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=False,
-    )
-
-    for line in stdout_result.stdout.splitlines():
+    logs: list[LogLine] = []
+    for line in result.stdout.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
             logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
-
-    # Fetch stderr
-    stderr_result = subprocess.run(
-        base_cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-
-    for line in stderr_result.stderr.splitlines():
+    for line in result.stderr.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
             logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
-
     return logs
 
 
@@ -344,7 +321,7 @@ exec {quoted_cmd}
             command=command,
             include_resources=True,
         )
-        self.runtime._track_container(self._run_container_id)
+        self.runtime.track_container(self._run_container_id)
         self._docker_start(self._run_container_id)
 
         logger.info(
@@ -475,7 +452,7 @@ exec {quoted_cmd}
         """Remove the run container and clean up resources."""
         if self._run_container_id:
             self._docker_remove(self._run_container_id)
-            self.runtime._untrack_container(self._run_container_id)
+            self.runtime.untrack_container(self._run_container_id)
             self._run_container_id = None
 
     # -------------------------------------------------------------------------
@@ -716,16 +693,18 @@ class DockerRuntime:
         fetch_bundle: Callable[[str], Path],
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        bundle_path = fetch_bundle(bundle_gcs_path)
-        shutil.copytree(bundle_path, workdir, dirs_exist_ok=True)
-        for name, data in workdir_files.items():
-            (workdir / name).write_bytes(data)
+        stage_bundle_to_local(
+            bundle_gcs_path=bundle_gcs_path,
+            workdir=workdir,
+            workdir_files=workdir_files,
+            fetch_bundle=fetch_bundle,
+        )
 
-    def _track_container(self, container_id: str) -> None:
+    def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""
         self._created_containers.add(container_id)
 
-    def _untrack_container(self, container_id: str) -> None:
+    def untrack_container(self, container_id: str) -> None:
         """Untrack a container ID."""
         self._created_containers.discard(container_id)
 

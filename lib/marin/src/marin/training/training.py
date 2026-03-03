@@ -186,15 +186,30 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     return replace(config, train_config=inner_config)
 
 
+_LOCAL_COMPILATION_CACHE_DIR = "/tmp/jax-compilation-cache"
+
+
 def _normalize_jax_compilation_cache_dir(path: str) -> str:
     """Normalize cache dir to a form accepted by JAX compilation cache config.
 
-    JAX accepts local filesystem paths and cloud URIs (for example ``gs://``)
-    for ``jax_compilation_cache_dir``, but ``file://`` URIs raise during
-    initialization in our training jobs.
+    JAX accepts local filesystem paths and ``gs://`` URIs for
+    ``jax_compilation_cache_dir``.  However:
+
+    - ``file://`` URIs raise during initialization in our training jobs.
+    - ``s3://`` URIs crash at runtime because XLA's C++ autotune cache writer
+      (``xla_gpu_per_fusion_autotune_cache_dir``) doesn't implement S3.
+
+    For unsupported schemes we fall back to a local path.
     """
     if path.startswith("file://"):
         return path.removeprefix("file://")
+    if path.startswith("s3://"):
+        logger.warning(
+            "JAX compilation cache does not support S3; falling back to %s (was %s)",
+            _LOCAL_COMPILATION_CACHE_DIR,
+            path,
+        )
+        return _LOCAL_COMPILATION_CACHE_DIR
     return path
 
 
@@ -398,6 +413,11 @@ def _add_run_env_variables(env: dict):
         env["TPU_MIN_LOG_LEVEL"] = "2"
     if "TPU_STDERR_LOG_LEVEL" not in env:
         env["TPU_STDERR_LOG_LEVEL"] = "2"
+
+    # Allow the caller (or iris -e) to override the compilation cache dir.
+    if "JAX_COMPILATION_CACHE_DIR" not in env:
+        if val := os.environ.get("JAX_COMPILATION_CACHE_DIR"):
+            env["JAX_COMPILATION_CACHE_DIR"] = val
 
     return env
 

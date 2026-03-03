@@ -38,7 +38,7 @@ def make_job_request():
 
 def test_job_compute_job_state_all_succeeded(make_job_request):
     """Job state becomes SUCCEEDED when all tasks succeed."""
-    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=make_job_request())
     job.num_tasks = 2
 
     # Start with pending tasks
@@ -57,7 +57,7 @@ def test_job_compute_job_state_failed(make_job_request):
     """Job state becomes FAILED when task failures exceed threshold."""
     request = make_job_request()
     request.max_task_failures = 0
-    job = ControllerJob(job_id=JobName.root("test"), request=request)
+    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=request)
     job.num_tasks = 2
 
     # Start with running tasks
@@ -73,7 +73,7 @@ def test_job_compute_job_state_tolerates_failures(make_job_request):
     """Job state stays RUNNING when failures are within threshold."""
     request = make_job_request()
     request.max_task_failures = 1
-    job = ControllerJob(job_id=JobName.root("test"), request=request)
+    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=request)
     job.num_tasks = 3
 
     # Start with running tasks
@@ -91,7 +91,7 @@ def test_job_compute_job_state_tolerates_failures(make_job_request):
 
 def test_job_finished_task_count(make_job_request):
     """finished_task_count returns count of tasks in terminal states."""
-    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=make_job_request())
     job.num_tasks = 5
 
     # Start with 5 pending tasks
@@ -116,7 +116,7 @@ def test_job_finished_task_count(make_job_request):
 
 def test_job_on_task_transition_sets_running_on_first_dispatch(make_job_request):
     """Job state becomes RUNNING when first task starts running."""
-    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=make_job_request())
     job.num_tasks = 2
     job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 2
 
@@ -134,7 +134,7 @@ def test_job_expands_to_correct_number_of_tasks(make_job_request):
     """expand_job_to_tasks creates correct number of tasks based on replicas."""
     request = make_job_request()
     request.replicas = 3
-    job = ControllerJob(job_id=JobName.root("test-job"), request=request)
+    job = ControllerJob(job_id=JobName.root("test-user", "test-job"), request=request)
 
     tasks = expand_job_to_tasks(job)
 
@@ -150,7 +150,7 @@ def test_job_expands_tasks_with_retry_limits_from_request(make_job_request):
     request.replicas = 2
     request.max_retries_failure = 3
     request.max_retries_preemption = 7
-    job = ControllerJob(job_id=JobName.root("test-job"), request=request)
+    job = ControllerJob(job_id=JobName.root("test-user", "test-job"), request=request)
 
     tasks = expand_job_to_tasks(job)
 
@@ -162,7 +162,7 @@ def test_job_expands_tasks_with_retry_limits_from_request(make_job_request):
 
 def test_job_becomes_unschedulable_when_task_unschedulable(make_job_request):
     """Job transitions to UNSCHEDULABLE when any task becomes unschedulable."""
-    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=make_job_request())
     job.num_tasks = 3
     job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 3
 
@@ -174,7 +174,7 @@ def test_job_becomes_unschedulable_when_task_unschedulable(make_job_request):
 
 def test_job_becomes_killed_when_task_killed(make_job_request):
     """Job transitions to KILLED when any task is killed."""
-    job = ControllerJob(job_id=JobName.root("test"), request=make_job_request())
+    job = ControllerJob(job_id=JobName.root("test-user", "test"), request=make_job_request())
     job.num_tasks = 3
     job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] = 3
     job.state = cluster_pb2.JOB_STATE_RUNNING
