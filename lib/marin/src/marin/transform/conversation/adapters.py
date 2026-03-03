@@ -137,7 +137,14 @@ class TransformAdapter:
                 if raw_role in self.drop_roles:
                     continue
                 role = role_to_openai_role[raw_role]
-                messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
+                kwargs: dict = {"role": role, "content": conv[self.content_key]}
+                if conv.get("tool_calls"):
+                    kwargs["tool_calls"] = conv["tool_calls"]
+                if conv.get("tool_call_id"):
+                    kwargs["tool_call_id"] = conv["tool_call_id"]
+                if conv.get("name"):
+                    kwargs["name"] = conv["name"]
+                messages.append(OpenAIChatMessage(**kwargs))
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
             messages = []
