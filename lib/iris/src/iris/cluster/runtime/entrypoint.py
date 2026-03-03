@@ -63,6 +63,12 @@ def build_runtime_entrypoint(
 
     setup_commands = [
         "cd /app",
+        # Materialize GCP service account credentials from env var if present.
+        # This enables GCS access (e.g. JAX compilation cache) on non-GCP clusters
+        # where the metadata server is unavailable.
+        '[ -n "$GCP_SA_KEY" ] && echo "$GCP_SA_KEY" > /tmp/gcp-sa-key.json'
+        " && export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa-key.json"
+        ' && echo "GCP credentials materialized"',
     ]
     # Use --link-mode symlink to reference cached wheels directly from .venv,
     # avoiding redundant installation. Symlinks work across bind mounts.
