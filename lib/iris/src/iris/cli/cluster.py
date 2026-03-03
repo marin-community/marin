@@ -495,8 +495,9 @@ def controller_checkpoint(ctx, stop: bool):
 
 
 @controller.command("restart")
+@click.option("--bundle-prefix", default=None, help="Override bundle/snapshot storage prefix (e.g. gs://bucket/path)")
 @click.pass_context
-def controller_restart(ctx):
+def controller_restart(ctx, bundle_prefix: str | None):
     """Restart controller with state preservation (remote platforms only).
 
     Takes a checkpoint, builds fresh images, stops the controller, and starts
@@ -513,6 +514,9 @@ def controller_restart(ctx):
             "controller restart is not supported for local clusters. "
             "Stop and restart the 'iris cluster start --local' process instead."
         )
+
+    if bundle_prefix:
+        config.storage.bundle_prefix = bundle_prefix
 
     controller_url = require_controller_url(ctx)
 

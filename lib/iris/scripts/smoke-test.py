@@ -681,9 +681,16 @@ class SmokeTestRunner:
         self._background_procs: list[BackgroundProc] = []
         # Set once we have a controller connection (for RPC diagnostics at teardown)
         self._controller_url: str | None = None
-        # Stable bundle directory for snapshot storage across controller restarts
+        # Unique bundle prefix for snapshot storage across controller restarts.
+        # Must be isolated per run so we don't restore stale snapshots from
+        # previous smoke test runs.
         self._bundle_dir = Path(tempfile.mkdtemp(prefix="iris-smoke-bundles-"))
-        self._bundle_prefix = f"file://{self._bundle_dir}"
+        if config.local:
+            self._bundle_prefix = f"file://{self._bundle_dir}"
+        else:
+            from iris.marin_fs import marin_temp_bucket
+
+            self._bundle_prefix = marin_temp_bucket(ttl_days=1, prefix=f"iris/smoke-bundles/{self._run_id}")
 
     def run(self) -> bool:
         """Run the smoke test. Returns True if all tests pass."""
@@ -792,10 +799,7 @@ class SmokeTestRunner:
         args = ["cluster", "start"]
         if self.config.local:
             args.append("--local")
-            # Local mode: make_local_config() clears bundle_prefix, causing
-            # LocalController to use a temp dir that dies on restart. Override
-            # with a stable path so snapshots survive controller restarts.
-            args.extend(["--bundle-prefix", self._bundle_prefix])
+        args.extend(["--bundle-prefix", self._bundle_prefix])
 
         logger.info("Starting cluster (background)...")
         bg = _run_iris_background(*args, config_path=self.config.config_path)
@@ -910,6 +914,8 @@ class SmokeTestRunner:
             "cluster",
             "controller",
             "restart",
+            "--bundle-prefix",
+            self._bundle_prefix,
             config_path=self.config.config_path,
             timeout=self.config.boot_timeout_seconds,
         )
