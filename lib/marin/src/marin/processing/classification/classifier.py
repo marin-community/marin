@@ -8,9 +8,9 @@ import time
 import urllib.parse
 from typing import Any, ClassVar
 
-import fsspec
 import lz4.frame
 import ray
+from iris.marin_fs import url_to_fs
 
 
 class BaseClassifier:
@@ -56,7 +56,7 @@ class FasttextClassifier(BaseClassifier):
             )
             is_huggingface_path = False
 
-        fs, fs_path = fsspec.core.url_to_fs(self.model_name)
+        fs, fs_path = url_to_fs(self.model_name)
 
         if not fs_path.endswith(".bin"):
             fs_path = os.path.join(fs_path, "model.bin")

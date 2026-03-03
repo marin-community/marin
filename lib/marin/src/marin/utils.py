@@ -18,6 +18,7 @@ import datasets
 import fsspec
 import requests
 import transformers
+from iris.marin_fs import url_to_fs
 from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def fsspec_exists(file_path):
     """
 
     # Use fsspec to check if the file exists
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
     return fs.exists(file_path)
 
 
@@ -52,7 +53,7 @@ def fsspec_rm(path: str):
     """
 
     # Use fsspec to check if the file exists
-    fs = fsspec.core.url_to_fs(path)[0]
+    fs = url_to_fs(path)[0]
     if fs.exists(path):
         try:
             fs.rm(path, recursive=True)
@@ -80,7 +81,7 @@ def fsspec_glob(file_path):
     """
 
     # Use fsspec to get a list of files
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
     protocol = fsspec.core.split_protocol(file_path)[0]
 
     def join_protocol(file):
@@ -106,7 +107,7 @@ def fsspec_mkdirs(dir_path, exist_ok=True):
     """
 
     # Use fsspec to create the directory
-    fs = fsspec.core.url_to_fs(dir_path)[0]
+    fs = url_to_fs(dir_path)[0]
     fs.makedirs(dir_path, exist_ok=exist_ok)
 
 
@@ -120,7 +121,7 @@ def fsspec_get_curr_subdirectories(dir_path):
     Returns:
         list: A list of subdirectories.
     """
-    fs, _ = fsspec.core.url_to_fs(dir_path)
+    fs, _ = url_to_fs(dir_path)
     protocol = fsspec.core.split_protocol(dir_path)[0]
 
     # List only immediate subdirectories
@@ -137,7 +138,7 @@ def fsspec_dir_only_contains_files(dir_path):
     """
     Check if a directory only contains files in a fsspec filesystem.
     """
-    fs, _ = fsspec.core.url_to_fs(dir_path)
+    fs, _ = url_to_fs(dir_path)
     ls_res = fs.ls(dir_path, detail=True)
     if len(ls_res) == 0:
         return False
@@ -164,7 +165,7 @@ def fsspec_isdir(dir_path):
     """
     Check if a path is a directory in fsspec filesystem.
     """
-    fs, _ = fsspec.core.url_to_fs(dir_path)
+    fs, _ = url_to_fs(dir_path)
     return fs.isdir(dir_path)
 
 
@@ -295,14 +296,14 @@ def load_tokenizer_with_backoff(
 
 def fsspec_size(file_path: str) -> int:
     """Get file size (in bytes) of a file on an `fsspec` filesystem."""
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
 
     return fs.size(file_path)
 
 
 def fsspec_mtime(file_path: str) -> datetime:
     """Get file modification time (in seconds since epoch) of a file on an `fsspec` filesystem."""
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
 
     return fs.modified(file_path)
 

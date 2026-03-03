@@ -36,6 +36,7 @@ from typing import ClassVar
 from urllib.parse import urlparse
 
 from fray.v1.cluster import ResourceConfig
+from iris.marin_fs import filesystem as marin_filesystem
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
@@ -619,16 +620,11 @@ _enable_vllm_stat_logging()
         vLLM streams model weights directly from GCS, but transformers AutoConfig
         doesn't support GCS paths. We download only the config files locally.
         """
-        try:
-            import fsspec
-        except ImportError as e:
-            raise ImportError("fsspec is required for GCS model paths. " "Install with: pip install fsspec gcsfs") from e
-
         path_hash = hashlib.md5(gcs_path.encode()).hexdigest()[:8]
         local_dir = os.path.join(self.CONFIG_CACHE_PATH, f"config_{path_hash}")
         os.makedirs(local_dir, exist_ok=True)
 
-        fs = fsspec.filesystem("gcs")
+        fs = marin_filesystem("gcs")
         gcs_path_clean = gcs_path.rstrip("/")
 
         for filename in self.CONFIG_FILES:

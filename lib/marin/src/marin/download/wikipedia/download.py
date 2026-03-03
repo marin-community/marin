@@ -33,8 +33,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 import draccus
-import fsspec
 import requests
+from iris.marin_fs import open_url
 from marin.utils import fsspec_size
 from tqdm_loggable.auto import tqdm
 from zephyr import Dataset, ZephyrContext, atomic_rename, load_jsonl
@@ -58,7 +58,7 @@ def download_tar(url: str, output_prefix) -> str:
         total_size = fsspec_size(url)
         pbar = tqdm(total=total_size, desc="Downloading File", unit="B", unit_scale=True)
 
-        with atomic_rename(output_filename) as tmp_filename, fsspec.open(tmp_filename, "wb") as f:
+        with atomic_rename(output_filename) as tmp_filename, open_url(tmp_filename, "wb") as f:
             r = requests.get(url, stream=True)
 
             for chunk in r.raw.stream(20 * 1024 * 1024, decode_content=False):
@@ -79,7 +79,7 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
     logger.info(f"Output path: {output_path}")
 
     try:
-        with fsspec.open(input_file) as f:
+        with open_url(input_file) as f:
             with tarfile.open(fileobj=f, mode="r:gz") as tr:
                 for info in tr:
                     with tr.extractfile(info) as file:
@@ -90,7 +90,7 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
                     # per file with size ranging from 200MB to 300MB
                     with (
                         atomic_rename(file_path) as tmpfile_path,
-                        fsspec.open(tmpfile_path, "wb", compression="gzip") as output_f,
+                        open_url(tmpfile_path, "wb", compression="gzip") as output_f,
                     ):
                         output_f.write(file_content)
                         yield file_path

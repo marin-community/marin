@@ -29,8 +29,8 @@ from typing import (
 )
 
 import equinox as eqx
-import fsspec
 import haliax as hax
+from iris.marin_fs import open_url
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -736,10 +736,10 @@ class Trainer:
         artifact_path = dir / name
 
         if isinstance(artifact, str):
-            with fsspec.open(str(artifact_path), "w", compression="infer") as f:
+            with open_url(str(artifact_path), "w", compression="infer") as f:
                 f.write(artifact)
         else:
-            with fsspec.open(str(artifact_path), "wb", compression="infer") as f:
+            with open_url(str(artifact_path), "wb", compression="infer") as f:
                 f.write(artifact)
 
         self.tracker.log_artifact(artifact_path, name=name, type=type)
