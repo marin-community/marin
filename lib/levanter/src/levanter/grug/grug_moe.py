@@ -54,6 +54,7 @@ def _batch_spec(mesh: jax.sharding.AbstractMesh | None) -> P:
     return P(("data",))
 
 
+@named_call
 def _prepare_moe_dispatch(
     x: Float[Array, "T D"],
     selected_experts: Int[Array, "T K"],
@@ -100,12 +101,14 @@ def _moe_mlp_local(
         num_experts=num_experts,
     )
 
-    w13_out = gmm_sharded(x_dispatch, moe_w13, group_sizes)
-    moe_dim = moe_w2.shape[1]
-    gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2, group_sizes)
+    with jax.named_scope("moe_up_down"):
+        w13_out = gmm_sharded(x_dispatch, moe_w13, group_sizes)
+        moe_dim = moe_w2.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2, group_sizes)
 
-    out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
+    with jax.named_scope("scatter"):
+        out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
     return out, jnp.array(0, dtype=jnp.int32)
 
 
@@ -131,67 +134,70 @@ def _moe_mlp_ep_ring_local(
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
-    x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
-    selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
-    combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
+    with jax.named_scope("gather"):
+        x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
+        selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
+        combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
 
-    tokens = x_global.shape[0]
-    topk = selected_experts_global.shape[1]
-    assignments = tokens * topk
-    expert_flat = selected_experts_global.reshape(assignments)
-    weight_flat = combine_weights_global.reshape(assignments)
-    token_flat = jnp.arange(assignments, dtype=jnp.int32) // topk
+        tokens = x_global.shape[0]
+        topk = selected_experts_global.shape[1]
+        assignments = tokens * topk
+        expert_flat = selected_experts_global.reshape(assignments)
+        weight_flat = combine_weights_global.reshape(assignments)
+        token_flat = jnp.arange(assignments, dtype=jnp.int32) // topk
 
-    sort_idx = jnp.argsort(expert_flat, axis=0)
-    expert_sorted = jnp.take(expert_flat, sort_idx, axis=0)
-    token_sorted = jnp.take(token_flat, sort_idx, axis=0)
-    weight_sorted = jnp.take(weight_flat, sort_idx, axis=0).astype(x_local.dtype)
+        sort_idx = jnp.argsort(expert_flat, axis=0)
+        expert_sorted = jnp.take(expert_flat, sort_idx, axis=0)
+        token_sorted = jnp.take(token_flat, sort_idx, axis=0)
+        weight_sorted = jnp.take(weight_flat, sort_idx, axis=0).astype(x_local.dtype)
 
-    local_experts = moe_w13_local.shape[0]
-    if num_experts % local_experts != 0:
-        raise ValueError(
-            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
-        )
+        local_experts = moe_w13_local.shape[0]
+        if num_experts % local_experts != 0:
+            raise ValueError(
+                f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+            )
 
-    ep_size = num_experts // local_experts
-    local_capacity = int(math.ceil(capacity_factor * assignments / ep_size))
-    local_capacity = max(local_experts, local_capacity)
+        ep_size = num_experts // local_experts
+        local_capacity = int(math.ceil(capacity_factor * assignments / ep_size))
+        local_capacity = max(local_experts, local_capacity)
 
-    expert_axis = jax.lax.axis_index("expert")
-    expert_start = expert_axis * local_experts
-    expert_end = expert_start + local_experts
-    local_mask = jnp.logical_and(expert_sorted >= expert_start, expert_sorted < expert_end)
+        expert_axis = jax.lax.axis_index("expert")
+        expert_start = expert_axis * local_experts
+        expert_end = expert_start + local_experts
+        local_mask = jnp.logical_and(expert_sorted >= expert_start, expert_sorted < expert_end)
 
-    local_idx = jnp.nonzero(local_mask, size=local_capacity, fill_value=0)[0]
-    local_count = jnp.sum(local_mask, dtype=jnp.int32)
-    dropped_local = jnp.maximum(local_count - local_capacity, 0)
-    valid = jnp.arange(local_capacity, dtype=jnp.int32) < local_count
-    valid_weight = valid.astype(jnp.float32)
+        local_idx = jnp.nonzero(local_mask, size=local_capacity, fill_value=0)[0]
+        local_count = jnp.sum(local_mask, dtype=jnp.int32)
+        dropped_local = jnp.maximum(local_count - local_capacity, 0)
+        valid = jnp.arange(local_capacity, dtype=jnp.int32) < local_count
+        valid_weight = valid.astype(jnp.float32)
 
-    token_local = jnp.take(token_sorted, local_idx, axis=0)
-    expert_local = jnp.take(expert_sorted, local_idx, axis=0) - expert_start
-    weight_local = jnp.take(weight_sorted, local_idx, axis=0)
+        token_local = jnp.take(token_sorted, local_idx, axis=0)
+        expert_local = jnp.take(expert_sorted, local_idx, axis=0) - expert_start
+        weight_local = jnp.take(weight_sorted, local_idx, axis=0)
 
-    x_take = jnp.take(x_global, token_local, axis=0)
-    x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
-    weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
-    expert_local = jnp.where(valid, expert_local, 0)
+        x_take = jnp.take(x_global, token_local, axis=0)
+        x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+        weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
+        expert_local = jnp.where(valid, expert_local, 0)
 
     group_sizes = jnp.bincount(expert_local, weights=valid_weight, length=local_experts).astype(jnp.int32)
     # `local_idx` pads by appending invalid rows at the end; keep GMM segment
     # boundaries aligned by attributing padding to the final expert segment.
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
-    w13_out = gmm_sharded(x_dispatch, moe_w13_local, group_sizes)
-    moe_dim = moe_w2_local.shape[1]
-    gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2_local, group_sizes)
+    with jax.named_scope("moe_up_down"):
+        w13_out = gmm_sharded(x_dispatch, moe_w13_local, group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
-    out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
-    # #2710 ring EP strategy: collect only this shard's token slice after
-    # reducing contributions from experts across the EP mesh.
-    out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
-    dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+    with jax.named_scope("scatter"):
+        out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+        # #2710 ring EP strategy: collect only this shard's token slice after
+        # reducing contributions from experts across the EP mesh.
+        out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
     return out_local, dropped_total
 
 

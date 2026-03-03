@@ -32,22 +32,14 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 
 
-def _mesh_has_axis(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> bool:
-    if mesh is None or mesh.empty:
-        return False
-    return axis_name in mesh.shape
-
-
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
-    if mesh is None or mesh.empty:
-        return 1
-    return int(mesh.shape.get(axis_name, 1))
+    if mesh is None or mesh.empty or axis_name not in mesh.shape:
+        raise ValueError(f"grug/moe requires an abstract mesh with axis '{axis_name}'")
+    return int(mesh.shape[axis_name])
 
 
-def _batch_spec(mesh: jax.sharding.AbstractMesh | None) -> P:
-    if _mesh_has_axis(mesh, "expert"):
-        return P(("data", "expert"))
-    return P(("data",))
+def _batch_spec() -> P:
+    return P(("data", "expert"))
 
 
 @dataclass(frozen=True)
@@ -120,7 +112,7 @@ class CausalSelfAttention(eqx.Module):
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
-        batch_spec = _batch_spec(get_abstract_mesh())
+        batch_spec = _batch_spec()
 
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
@@ -149,7 +141,8 @@ class RMSNorm(eqx.Module):
         return (normed * weight).astype(dtype)
 
 
-def _shared_dense_mlp(
+@named_call
+def shared_dense_mlp(
     x: Float[Array, "B S D"],
     shared_w_up_gate: Float[Array, "D J2"],
     shared_w_down: Float[Array, "J D"],
@@ -166,7 +159,7 @@ def _shared_dense_mlp(
     shared_dim = shared_w_down.shape[0]
     shared_up_gate = jnp.einsum("td,dm->tm", x_flat, shared_w_up_gate)
     shared_gate, shared_up = jnp.split(shared_up_gate, [shared_dim], axis=-1)
-    out_flat = jnp.einsum("tm,md->td", activation_fn(shared_gate) * shared_up, shared_w_down)
+    out_flat = jnp.einsum("tm,md->td", activation_fn(shared_gate) * shared_up, shared_w_down, out_sharding=_batch_spec())
     return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
 
 
@@ -240,8 +233,6 @@ class MoEMLP(eqx.Module):
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
-        expert_param_spec = P("expert", None, None) if _mesh_has_axis(mesh, "expert") else P(None, None, None)
-
         d, e, i, j = (
             cfg.hidden_dim,
             cfg.num_experts,
@@ -252,16 +243,17 @@ class MoEMLP(eqx.Module):
         shared_w_up_gate = None
         shared_w_down = None
         if j > 0:
-            # Keep shared expert weights replicated in this compact variant.
-            # This avoids introducing additional sharding/layout complexity
-            # while we iterate on routed-expert behavior.
-            shared_w_up_gate = reshard(_init_weight(k_shared_up_gate, (d, 2 * j), cfg.initializer_std), P(None, None))
-            shared_w_down = reshard(_init_weight(k_shared_down, (j, d), cfg.initializer_std), P(None, None))
+            shared_w_up_gate = reshard(
+                _init_weight(k_shared_up_gate, (d, 2 * j), cfg.initializer_std), P("data", "model")
+            )
+            shared_w_down = reshard(_init_weight(k_shared_down, (j, d), cfg.initializer_std), P("model", "data"))
 
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
-            w_up_gate=reshard(_init_weight(k_w_up_gate, (e, d, 2 * i), cfg.initializer_std), expert_param_spec),
-            w_down=reshard(_init_weight(k_w_down, (e, i, d), cfg.initializer_std), expert_param_spec),
+            w_up_gate=reshard(
+                _init_weight(k_w_up_gate, (e, d, 2 * i), cfg.initializer_std), P("expert", "data", "model")
+            ),
+            w_down=reshard(_init_weight(k_w_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             shared_w_up_gate=shared_w_up_gate,
             shared_w_down=shared_w_down,
             cfg=cfg,
@@ -279,11 +271,7 @@ class MoEMLP(eqx.Module):
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None)))
         topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
         combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
-        router_stats = (
-            _routing_stats_from_selected_experts(selected_experts.astype(jnp.int32), num_experts=self.cfg.num_experts)
-            if return_router_stats
-            else None
-        )
+        router_stats = _routing_stats_from_selected_experts(selected_experts, num_experts=self.cfg.num_experts)
 
         routed_flat = moe_mlp(
             x_flat,
@@ -296,25 +284,26 @@ class MoEMLP(eqx.Module):
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
         )
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _batch_spec(get_abstract_mesh()))
+        routed = reshard(routed, _batch_spec())
 
         out = routed
-        if self.shared_w_up_gate is None:
-            assert self.shared_w_down is None
-        else:
-            assert self.shared_w_down is not None
-            shared_out = _shared_dense_mlp(
-                x,
-                self.shared_w_up_gate,
-                self.shared_w_down,
-                activation=ActivationFunctionEnum.silu,
+        if self._has_shared():
+            shared_out = shared_dense_mlp(
+                x, self.shared_w_up_gate, self.shared_w_down, activation=ActivationFunctionEnum.silu
             )
             out = routed + shared_out
 
         if return_router_stats:
             assert router_stats is not None
             return out, router_stats
+
         return out
+
+    def _has_shared(self):
+        if self.shared_w_up_gate is not None or self.shared_w_down is not None:
+            assert self.shared_w_up_gate is not None and self.shared_w_down is not None
+            return True
+        return False
 
 
 class Block(eqx.Module):
@@ -385,7 +374,7 @@ class Transformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
 
-        batch_spec = _batch_spec(get_abstract_mesh())
+        batch_spec = _batch_spec()
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         if return_router_stats:
             all_router_stats: list[dict[str, jax.Array]] = []
@@ -409,7 +398,7 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
-        batch_spec = _batch_spec(get_abstract_mesh())
+        batch_spec = _batch_spec()
         hidden = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
