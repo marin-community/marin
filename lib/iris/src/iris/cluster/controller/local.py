@@ -119,6 +119,7 @@ class _InProcessController(Protocol):
 
     def start(self) -> None: ...
     def stop(self) -> None: ...
+    def restore_from_snapshot(self) -> bool: ...
 
     @property
     def url(self) -> str: ...
@@ -176,6 +177,7 @@ class LocalController:
             autoscaler=self._autoscaler,
             threads=controller_threads,
         )
+        self._controller.restore_from_snapshot()
         self._controller.start()
         return self._controller.url
 
@@ -200,9 +202,6 @@ class LocalController:
     def restart(self) -> str:
         self.stop()
         return self.start()
-
-    def reload(self) -> str:
-        return self.restart()
 
     def discover(self) -> str | None:
         return self._controller.url if self._controller else None

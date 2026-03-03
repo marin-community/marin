@@ -518,23 +518,6 @@ def test_gcp_list_slices_preserves_vm_creation_timestamp():
         assert listed_by_id[handle.slice_id].created_at.epoch_ms() == expected_epoch_ms
 
 
-def test_gcp_reload_uses_full_stop_then_start():
-    """reload delegates to stop_all() before starting controller again."""
-    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
-    platform = GcpPlatform(gcp_config, label_prefix="iris")
-    cfg = config_pb2.IrisClusterConfig()
-
-    with (
-        unittest.mock.patch.object(platform, "stop_all") as stop_all,
-        unittest.mock.patch.object(platform, "start_controller", return_value="10.0.0.1:10000") as start_controller,
-    ):
-        address = platform.reload(cfg)
-
-    stop_all.assert_called_once_with(cfg)
-    start_controller.assert_called_once_with(cfg)
-    assert address == "10.0.0.1:10000"
-
-
 # =============================================================================
 # Section 3: Manual-Specific Tests
 #

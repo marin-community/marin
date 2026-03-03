@@ -639,10 +639,6 @@ class LocalPlatform:
             assert isinstance(self._local_controller, LocalController)
             self._local_controller.wait()
 
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        self.stop_controller(config)
-        return self.start_controller(config)
-
     @property
     def threads(self) -> ThreadContainer:
         """Expose the ThreadContainer for callers that need to spawn worker threads."""

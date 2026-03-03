@@ -801,6 +801,22 @@ class Controller(_message.Message):
         ACTIONS_FIELD_NUMBER: _ClassVar[int]
         actions: _containers.RepeatedCompositeFieldContainer[Controller.TransactionAction]
         def __init__(self, actions: _Optional[_Iterable[_Union[Controller.TransactionAction, _Mapping]]] = ...) -> None: ...
+    class BeginCheckpointRequest(_message.Message):
+        __slots__ = ()
+        def __init__(self) -> None: ...
+    class BeginCheckpointResponse(_message.Message):
+        __slots__ = ("snapshot_path", "created_at", "job_count", "task_count", "worker_count")
+        SNAPSHOT_PATH_FIELD_NUMBER: _ClassVar[int]
+        CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+        JOB_COUNT_FIELD_NUMBER: _ClassVar[int]
+        TASK_COUNT_FIELD_NUMBER: _ClassVar[int]
+        WORKER_COUNT_FIELD_NUMBER: _ClassVar[int]
+        snapshot_path: str
+        created_at: _time_pb2.Timestamp
+        job_count: int
+        task_count: int
+        worker_count: int
+        def __init__(self, snapshot_path: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., job_count: _Optional[int] = ..., task_count: _Optional[int] = ..., worker_count: _Optional[int] = ...) -> None: ...
     class GetClusterSummaryRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...

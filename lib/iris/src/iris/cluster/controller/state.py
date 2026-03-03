@@ -50,6 +50,20 @@ from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True)
+class ReservationClaim:
+    """A claim binding a worker to a specific reservation entry.
+
+    The controller assigns unclaimed workers to unsatisfied reservation entries
+    each scheduling cycle. Once every entry for a job is claimed, the
+    reservation gate opens and the job's tasks can be scheduled.
+    """
+
+    job_id: str
+    entry_idx: int
+
+
 MAX_REPLICAS_PER_JOB = 10000
 """Maximum replicas allowed per job to prevent resource exhaustion."""
 
@@ -2013,6 +2027,15 @@ class ControllerState:
         """Return all registered endpoints."""
         with self._lock:
             return list(self._endpoints.values())
+
+    def get_endpoint_task_mapping(self) -> dict[str, JobName]:
+        """Return a mapping from endpoint_id to task_id for all tracked endpoints."""
+        with self._lock:
+            result: dict[str, JobName] = {}
+            for task_id, endpoint_ids in self._endpoints_by_task.items():
+                for eid in endpoint_ids:
+                    result[eid] = task_id
+            return result
 
     def _remove_endpoints_for_task(self, task_id: JobName) -> list[ControllerEndpoint]:
         """Remove all endpoints associated with a task."""

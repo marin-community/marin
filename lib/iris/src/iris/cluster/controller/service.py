@@ -28,6 +28,7 @@ from iris.cluster.controller.pending_diagnostics import (
     is_active_scale_up_hint,
 )
 from iris.cluster.controller.scheduler import SchedulingContext
+from iris.cluster.controller.snapshot import SnapshotResult
 from iris.cluster.controller.state import (
     ControllerEndpoint,
     ControllerJob,
@@ -203,6 +204,8 @@ class ControllerProtocol(Protocol):
     def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext: ...
 
     def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str: ...
+
+    def begin_checkpoint(self) -> tuple[str, SnapshotResult]: ...
 
     @property
     def autoscaler(self) -> AutoscalerProtocol | None: ...
@@ -1190,4 +1193,20 @@ class ControllerServiceImpl:
                 resp.current_resources.CopyFrom(worker.resource_snapshot)
             for snapshot in worker.resource_history:
                 resp.resource_history.append(snapshot)
+            return resp
+
+    def begin_checkpoint(
+        self,
+        request: cluster_pb2.Controller.BeginCheckpointRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.BeginCheckpointResponse:
+        with rpc_error_handler("begin checkpoint"):
+            path, result = self._controller.begin_checkpoint()
+            resp = cluster_pb2.Controller.BeginCheckpointResponse(
+                snapshot_path=path,
+                job_count=result.job_count,
+                task_count=result.task_count,
+                worker_count=result.worker_count,
+            )
+            resp.created_at.CopyFrom(result.proto.created_at)
             return resp
