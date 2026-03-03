@@ -17,6 +17,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 __all__ = [
     "AIME24",
     "AIME25",
+    "AIME26",
     "ALICE_IN_WONDERLAND",
     "AMC23",
     "BIGCODEBENCH",
@@ -36,6 +37,7 @@ __all__ = [
     "LIVECODEBENCH_V5_OFFICIAL",
     "MATH500",
     "MBPP_PLUS",
+    "OLYMPIADBENCH",
 ]
 
 # =============================================================================
@@ -49,10 +51,12 @@ __all__ = [
 # seeds from Marin instead, to avoid a hidden seeds x n_repeat multiplier on iteration count.
 AIME24 = EvalTaskConfig(name="AIME24", num_fewshot=0, task_alias="AIME24", task_kwargs={"n_repeat": 1})
 AIME25 = EvalTaskConfig(name="AIME25", num_fewshot=0, task_alias="AIME25", task_kwargs={"n_repeat": 1})
+AIME26 = EvalTaskConfig(name="AIME26", num_fewshot=0, task_alias="AIME26", task_kwargs={"n_repeat": 1})
 AMC23 = EvalTaskConfig(name="AMC23", num_fewshot=0, task_alias="AMC23", task_kwargs={"n_repeat": 1})
 
 MATH500 = EvalTaskConfig(name="MATH500", num_fewshot=0, task_alias="MATH500")
 HMMT = EvalTaskConfig(name="HMMT", num_fewshot=0, task_alias="HMMT", task_kwargs={"n_repeat": 1})
+OLYMPIADBENCH = EvalTaskConfig(name="OlympiadBench", num_fewshot=0, task_alias="OlympiadBench", task_kwargs={"n_repeat": 1})
 
 # =============================================================================
 # Code tasks
@@ -86,7 +90,7 @@ HUMANITYS_LAST_EXAM = EvalTaskConfig(
 # =============================================================================
 # Task groups
 # =============================================================================
-EVALCHEMY_MATH_TASKS = (AIME24, AIME25, AMC23, MATH500, HMMT)
+EVALCHEMY_MATH_TASKS = (AIME24, AIME25, AIME26, AMC23, MATH500, HMMT, OLYMPIADBENCH)
 EVALCHEMY_CODE_TASKS = (
     HUMANEVAL_PLUS,
     MBPP_PLUS,

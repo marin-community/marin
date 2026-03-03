@@ -14,6 +14,7 @@ from experiments.evals.evals import run_evalchemy_experiment
 from experiments.evals.evalchemy_task_configs import (
     AIME24,
     AIME25,
+    AIME26,
     AMC23,
     CODEELO,
     CODEFORCES,
@@ -24,6 +25,7 @@ from experiments.evals.evalchemy_task_configs import (
     LIVECODEBENCH,
     LIVECODEBENCH_V5_OFFICIAL,
     MATH500,
+    OLYMPIADBENCH,
 )
 from fray.cluster import ResourceConfig
 
@@ -60,8 +62,9 @@ SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
 
 # Seed counts per benchmark follow OpenThoughts (https://arxiv.org/pdf/2506.04178).
 MATH_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([AIME24, AIME25, AMC23, HMMT], SEEDS[:10]),
+    ([AIME24, AIME25, AIME26, AMC23, HMMT], SEEDS[:10]),
     ([MATH500], SEEDS[:1]),
+    ([OLYMPIADBENCH], SEEDS[:1]),
 ]
 
 SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [

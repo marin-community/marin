@@ -44,8 +44,8 @@ from marin.evaluation.utils import is_remote_path, upload_to_gcs
 logger = logging.getLogger(__name__)
 
 # Evalchemy git repo and commit to use
-EVALCHEMY_REPO = "https://github.com/mlfoundations/evalchemy.git"
-EVALCHEMY_COMMIT = "6ed674159b37f740f2353a86f596f49f6ac13c19"  # 2025-01-08
+EVALCHEMY_REPO = "https://github.com/teetone/evalchemy.git"
+EVALCHEMY_COMMIT = "92ba18364d92fab9547a38a5abcb125a96186828"  # moreevals branch: AIME26, OlympiadBench
 
 
 # Evalchemy benchmarks that have hardcoded n_repeat values and their paths.
@@ -65,6 +65,8 @@ N_REPEAT_BENCHMARK_PATHS = {
     "GPQADiamond": "eval/chat_benchmarks/GPQADiamond/eval_instruct.py",
     "JEEBench": "eval/chat_benchmarks/JEEBench/eval_instruct.py",
     "HLE": "eval/chat_benchmarks/HLE/eval_instruct.py",
+    "AIME26": "eval/chat_benchmarks/AIME26/eval_instruct.py",
+    "OlympiadBench": "eval/chat_benchmarks/OlympiadBench/eval_instruct.py",
 }
 
 
