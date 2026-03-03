@@ -13,12 +13,6 @@ import os
 from dataclasses import asdict, dataclass
 
 import numpy as np
-from scipy.stats import kendalltau, spearmanr
-from sklearn.cluster import KMeans
-from sklearn.linear_model import RidgeCV
-from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +57,12 @@ def evaluate_quality_probe(
     Returns:
         QualityProbeResult with correlation metrics.
     """
+    # Optional deps — guarded because sklearn is in the `embedding` extra
+    from scipy.stats import kendalltau, spearmanr
+    from sklearn.linear_model import RidgeCV
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import LabelEncoder
+
     os.makedirs(output_path, exist_ok=True)
 
     data = np.load(embeddings_path, allow_pickle=True)
@@ -116,6 +116,10 @@ def evaluate_topic_clusters(
     Returns:
         TopicClusterResult with ARI and NMI metrics.
     """
+    # Optional deps — guarded because sklearn is in the `embedding` extra
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+
     os.makedirs(output_path, exist_ok=True)
 
     data = np.load(embeddings_path, allow_pickle=True)

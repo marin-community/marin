@@ -5,8 +5,11 @@ import json
 import os
 
 import numpy as np
+import pytest
 
-from experiments.embed_everything.evaluate import evaluate_quality_probe, evaluate_topic_clusters
+sklearn = pytest.importorskip("sklearn")
+
+from experiments.embed_everything.evaluate import evaluate_quality_probe, evaluate_topic_clusters  # noqa: E402
 
 
 def _write_embeddings(path: str, embeddings: np.ndarray, ids: list[str], labels: list[str]):
