@@ -3351,3 +3351,73 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt / regression**. The fused full-sequence train kernel cut train closed-call `shard_map/pallas_call` times by ~50%, but added substantial `while` overhead and regressed end-to-end throughput.
 - Next bold hypothesis:
   - Move to **Macro Move J** next (coverage slot 2/5 for this run): execute the required `Ct={64,96,128}` x `Seg={8,16,32}` sweep with a compact benchmark table, then use the best point to launch a stronger structural move (likely Macro E if `while` overhead persists).
+
+### Iteration 56 - Macro Move I / full-chunk segmented train-call fusion (infra-blocked, reverted)
+
+- Coverage slot: I (1/5)
+- Covered set so far: {I}
+- Date: 2026-03-03T10:37:52Z
+- Commit: none (failed attempt)
+- Starting commit: `1b0b002d56f175efbfbdacc5a36c70aac548e145`
+- Dominant bottleneck carried in (latest validated trace context from prior log entries):
+  - train-path `shard_map/custom-call` remained dominant:
+    - forward closed-call source: `gated_deltanet.py:2486` ~= `41.324 ms`
+    - backward closed-call source: `gated_deltanet.py:3972` ~= `26.266 ms`
+    - recurring `while` overhead appeared in prior Macro-I/J variants.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move I**: collapse train-path segmented forward/backward outer scans into one large segmented custom call over full padded chunk axis (`+10-18%`, high compile/VMEM and infra risk).
+  2. **Macro Move E**: V-tiling with shared-K precompute in recurrent/backward kernels (`+15-30%`, high kernel-decomposition risk).
+  3. **Macro Move J**: explicit `Ct in {64,96,128}` x `Seg in {8,16,32}` sweep (`+5-12%`, medium risk; tuning-heavy unless paired with structural change).
+
+- Selected macro-move category: **I) Fuse segmented forward prepare + recurrent with reusable heavy intermediates**.
+- Selected hypothesis: training path should reduce launch/control overhead by replacing outer JAX segment scans with single segmented Pallas calls that run across `Seg=n_chunks_pad` (forward and backward), while keeping segmented kernel math unchanged.
+
+- Change attempt summary:
+  - Implemented a Macro-I structural variant in `lib/levanter/src/levanter/layers/gated_deltanet.py`:
+    - train forward (`return_prepare_tape=True`) attempted single-call segmented fused execution over the full padded chunk axis.
+    - train backward attempted one segmented backward call over full padded chunk axis (instead of reverse segment scan).
+    - added a singleton-axis cleanup for `d_g` accumulation (`matvec` instead of `[..., Ct, 1]` path).
+  - Local smoke before TPU validation:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+
+- TPU validation attempts (`tests=both`) and deterministic infra signatures:
+  - Attempt A (Ray, preferred):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job `ray-run-calvinxu-levanter-20260303-100901` stayed `PENDING` beyond 180s, then failed with supervisor/node heartbeat death signature.
+  - Attempt B (next validation ray cluster per directive):
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+    - Job `ray-run-calvinxu-levanter-20260303-101331` stayed `PENDING` beyond 180s.
+  - Dev TPU fallback:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both`
+    - deterministic signature: `ssh: Could not resolve hostname dev-tpu-calvinxu-gdn`.
+    - single allowed retry path used (`dev-tpu-allocate` then rerun) but allocation did not become reachable.
+  - Retry (central) after explicit FAILED state:
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - Job `ray-run-calvinxu-levanter-20260303-102831` again stayed `PENDING` > 180s.
+  - Retry (east5) per cluster-switch directive:
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+    - Job `ray-run-calvinxu-levanter-20260303-103305` again stayed `PENDING` > 180s.
+
+- Retry-budget decision:
+  - Same command + dominant signature (`ray-test ... --tests both` stuck `PENDING >180s`) repeated after one retry on each cluster.
+  - Treated as deterministic infra block for this iteration; stopped further retries.
+
+- Profile run:
+  - Not executed. Validation remained infra-blocked across both ray clusters and dev-TPU fallback.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - Required TPU command attempted: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both` and fallback cluster/dev paths.
+    - Result: **infra-blocked** (no completed TPU test run).
+  - Perf:
+    - Forward/backward `shard_map/pallas_call` deltas: N/A (no completed profile run).
+    - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`: N/A (no completed profile run).
+  - Governance:
+    - Iteration marked **infra-blocked**.
+    - Speculative kernel edits were reverted; working tree restored to starting commit code state.
+
+- Assessment: **failed attempt / infra-blocked**.
+- Next bold hypothesis:
+  - Run the next iteration with a held dev TPU allocation at session start (`--hold-dev-tpu`) to avoid repeated ray queue starvation, then retry Macro-I validation/profile on stable hardware before moving to Macro-J coverage.
