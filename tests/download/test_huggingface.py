@@ -208,8 +208,6 @@ def test_stream_file_to_fsspec_retries_on_timeout(tmp_path):
             file_path,
             str(destination),
             expected_size=len(content),
-            read_timeout_seconds=1.0,
-            progress_log_interval_seconds=0.0,
         )
 
     assert result["status"] == "success"

@@ -10,7 +10,6 @@ using HfFileSystem for direct streaming of data transfer.
 import logging
 import os
 import random
-import socket
 import time
 from dataclasses import dataclass, field
 
@@ -58,15 +57,6 @@ class DownloadConfig:
     zephyr_max_parallelism: int = 8
     """Maximum parallelism of the Zephyr download job"""
 
-    read_timeout_seconds: float = 120.0
-    """Socket read timeout while streaming each HF file. Timeout failures trigger retries."""
-
-    progress_log_interval_seconds: float = 60.0
-    """Log a heartbeat for each in-flight shard every N seconds while bytes are flowing."""
-
-    read_chunk_size_mib: int = 8
-    """Chunk size for each streaming read from HF."""
-
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
@@ -81,15 +71,7 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
-def stream_file_to_fsspec(
-    gcs_output_path: str,
-    file_path: str,
-    fsspec_file_path: str,
-    expected_size: int | None = None,
-    read_timeout_seconds: float = 120.0,
-    progress_log_interval_seconds: float = 60.0,
-    read_chunk_size_mib: int = 8,
-):
+def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path: str, expected_size: int | None = None):
     """Stream a file from HfFileSystem to another fsspec path using atomic write.
 
     Uses atomic_rename to write to a temp file first, then rename on success.
@@ -104,7 +86,8 @@ def stream_file_to_fsspec(
     """
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
-    chunk_size = max(1, int(read_chunk_size_mib)) * 1024 * 1024
+    # Use 256 MB chunk size for large files
+    chunk_size = 256 * 1024 * 1024
     max_retries = 20
     # 15 minutes max sleep
     max_sleep = 15 * 60
@@ -118,41 +101,10 @@ def stream_file_to_fsspec(
             target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
             bytes_written = 0
             with atomic_rename(fsspec_file_path) as temp_path:
-                previous_socket_timeout = socket.getdefaulttimeout()
-                socket.setdefaulttimeout(read_timeout_seconds)
-                try:
-                    # Some HfFileSystem-like mocks/adapters do not accept `block_size`.
-                    try:
-                        src_ctx = hf_fs.open(file_path, "rb", block_size=chunk_size)
-                    except TypeError:
-                        src_ctx = hf_fs.open(file_path, "rb")
-
-                    with src_ctx as src_file, fsspec.open(temp_path, "wb") as dest_file:
-                        start_time = time.monotonic()
-                        next_progress_log = start_time + progress_log_interval_seconds
-                        while True:
-                            try:
-                                chunk = src_file.read(chunk_size)
-                            except TimeoutError as timeout_error:
-                                raise TimeoutError(
-                                    f"Timed out reading from {file_path} after "
-                                    f"{read_timeout_seconds:.1f}s with {bytes_written} bytes written"
-                                ) from timeout_error
-                            if not chunk:
-                                break
-                            dest_file.write(chunk)
-                            bytes_written += len(chunk)
-                            now = time.monotonic()
-                            if progress_log_interval_seconds > 0 and now >= next_progress_log:
-                                elapsed = max(now - start_time, 1e-9)
-                                speed_mib_s = (bytes_written / (1024**2)) / elapsed
-                                logger.info(
-                                    f"Streaming {file_path}: {bytes_written / (1024**2):.1f} MiB written "
-                                    f"in {elapsed:.1f}s ({speed_mib_s:.2f} MiB/s)"
-                                )
-                                next_progress_log = now + progress_log_interval_seconds
-                finally:
-                    socket.setdefaulttimeout(previous_socket_timeout)
+                with hf_fs.open(file_path, "rb") as src_file, fsspec.open(temp_path, "wb") as dest_file:
+                    while chunk := src_file.read(chunk_size):
+                        dest_file.write(chunk)
+                        bytes_written += len(chunk)
 
                 # Validate file size BEFORE atomic_rename commits the file
                 if expected_size is not None and bytes_written != expected_size:
@@ -255,9 +207,6 @@ def download_hf(cfg: DownloadConfig) -> None:
                     file,
                     fsspec_file_path,
                     expected_size,
-                    cfg.read_timeout_seconds,
-                    cfg.progress_log_interval_seconds,
-                    cfg.read_chunk_size_mib,
                 )
             )
         except Exception as e:
