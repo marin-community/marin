@@ -4,9 +4,9 @@
 """Actor client for making RPC calls to actor servers.
 
 The ActorClient provides transparent actor discovery and invocation with
-automatic retry logic. When an actor name cannot be resolved immediately
-(e.g., actor server still starting), the client retries with exponential
-backoff until the timeout is reached.
+automatic retry logic. Both resolution failures (e.g., actor not yet
+registered) and transient RPC errors are retried up to ``max_call_attempts``
+with exponential backoff.
 
 Example:
     resolver = ClusterResolver("http://controller:8080")
@@ -53,8 +53,7 @@ class ActorClient:
         self,
         resolver: Resolver,
         name: str,
-        resolve_timeout: float = 3600.0,
-        call_timeout: float | None = None,
+        call_timeout: float = 3600.0,
         max_call_attempts: int = 5,
         backoff: ExponentialBackoff = ExponentialBackoff(initial=0.1, maximum=10.0, factor=2.0, jitter=0.25),
     ):
@@ -63,16 +62,14 @@ class ActorClient:
         Args:
             resolver: Resolver instance for endpoint discovery
             name: Name of the actor to invoke
-            resolve_timeout: Total timeout in seconds for initial worker resolution.
-            call_timeout: Timeout in seconds for RPC calls. Defaults to `resolve_timeout`
-                when not specified.
-            max_call_attempts: Maximum number of RPC call attempts before giving up.
-            backoff: Exponential backoff configuration for both resolution and call retries.
+            call_timeout: Timeout in seconds for individual RPC calls.
+            max_call_attempts: Maximum number of RPC call attempts (including
+                resolution failures) before giving up.
+            backoff: Exponential backoff configuration for retries between attempts.
         """
         self._resolver = resolver
         self._name = name
-        self._resolve_timeout = resolve_timeout
-        self._call_timeout = resolve_timeout if call_timeout is None else call_timeout
+        self._call_timeout = call_timeout
         self._max_call_attempts = max_call_attempts
         self._backoff = backoff
 
