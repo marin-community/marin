@@ -434,15 +434,11 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
     return mesh, P(("data", "expert"), None)
 
 
-GrugMoeModelConfig = GrugModelConfig
-
-
 __all__ = [
     "Block",
     "CausalSelfAttention",
     "DenseMLP",
     "GrugModelConfig",
-    "GrugMoeModelConfig",
     "MoEMLP",
     "MoeActivation",
     "RMSNorm",
