@@ -5,7 +5,9 @@
   "branch": "kevin/agentic-sft",
   "checkpoints_count": 2,
   "files_touched": [
-    "experiments/exp2956_sft_swe_smith_qwen3_8b.py"
+    "experiments/exp2956_sft_swe_smith.py",
+    "experiments/exp2956_sft_swe_smith_qwen3_8b.py",
+    "experiments/qwen3.py"
   ],
   "sessions": [
     {
@@ -14,13 +16,20 @@
       "context": "/be/19b3f714cb/0/context.md",
       "content_hash": "/be/19b3f714cb/0/content_hash.txt",
       "prompt": "/be/19b3f714cb/0/prompt.txt"
+    },
+    {
+      "metadata": "/be/19b3f714cb/1/metadata.json",
+      "transcript": "/be/19b3f714cb/1/full.jsonl",
+      "context": "/be/19b3f714cb/1/context.md",
+      "content_hash": "/be/19b3f714cb/1/content_hash.txt",
+      "prompt": "/be/19b3f714cb/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 66,
-    "cache_creation_tokens": 216133,
-    "cache_read_tokens": 3013577,
-    "output_tokens": 21548,
-    "api_call_count": 49
+    "input_tokens": 131,
+    "cache_creation_tokens": 284157,
+    "cache_read_tokens": 5914741,
+    "output_tokens": 43324,
+    "api_call_count": 98
   }
 }
