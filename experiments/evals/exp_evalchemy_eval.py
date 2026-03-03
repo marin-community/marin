@@ -63,8 +63,7 @@ SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
 # Seed counts per benchmark follow OpenThoughts (https://arxiv.org/pdf/2506.04178).
 MATH_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
     ([AIME24, AIME25, AIME26, AMC23, HMMT], SEEDS[:10]),
-    ([MATH500], SEEDS[:1]),
-    ([OLYMPIADBENCH], SEEDS[:1]),
+    ([MATH500, OLYMPIADBENCH], SEEDS[:1]),
 ]
 
 SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
