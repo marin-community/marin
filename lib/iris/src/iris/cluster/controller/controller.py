@@ -1222,6 +1222,8 @@ class Controller:
         """
         if self._periodic_checkpoint_limiter is None:
             return
+        if self._checkpoint_in_progress:
+            return
         prefix = self._snapshot_storage_prefix
         if not prefix:
             return

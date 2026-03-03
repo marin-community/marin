@@ -24,7 +24,7 @@ import fsspec
 from google.protobuf import json_format
 
 from iris.cluster.controller.autoscaler import Autoscaler, TrackedWorker
-from iris.cluster.controller.scaling_group import SliceLifecycleState, SliceState
+from iris.cluster.controller.scaling_group import SliceLifecycleState, SliceState, _zones_from_config
 from iris.cluster.controller.state import (
     ControllerEndpoint,
     ControllerJob,
@@ -500,7 +500,6 @@ def restore_snapshot(
 
 def _wall_clock_to_deadline(
     wall_clock_ts: Timestamp,
-    snapshot_created_at: Timestamp,
 ) -> Deadline | None:
     """Convert a wall-clock timestamp from a snapshot into a monotonic Deadline.
 
@@ -535,8 +534,10 @@ def restore_scaling_group(
     labels = Labels(label_prefix)
     filter_labels = {labels.iris_scale_group: group_snapshot.name}
 
-    # Discover live cloud slices for this group
-    cloud_handles = platform.list_slices(zones=[], labels=filter_labels)
+    # Discover live cloud slices for this group.
+    # Use zones from config so GCP list_slices (which iterates per-zone) works correctly.
+    zones = _zones_from_config(config)
+    cloud_handles = platform.list_slices(zones=zones, labels=filter_labels)
     cloud_by_id: dict[str, SliceHandle] = {h.slice_id: h for h in cloud_handles}
 
     # Build checkpoint slice index
@@ -557,7 +558,16 @@ def restore_scaling_group(
             result.discarded_count += 1
             continue
 
-        lifecycle = SliceLifecycleState(slice_snap.lifecycle)
+        try:
+            lifecycle = SliceLifecycleState(slice_snap.lifecycle)
+        except ValueError:
+            logger.warning(
+                "Scaling group %s: unknown lifecycle %r for slice %s, defaulting to BOOTING",
+                group_snapshot.name,
+                slice_snap.lifecycle,
+                slice_id,
+            )
+            lifecycle = SliceLifecycleState.BOOTING
         state = SliceState(
             handle=cloud_handle,
             lifecycle=lifecycle,
@@ -584,19 +594,16 @@ def restore_scaling_group(
         result.adopted_count += 1
 
     # Restore timing state
-    now = Timestamp.now()
-    snapshot_created_at = now  # We use current time as reference for deadline conversion
-
     if group_snapshot.HasField("backoff_until") and group_snapshot.backoff_until.epoch_ms > 0:
         backoff_ts = Timestamp.from_proto(group_snapshot.backoff_until)
-        result.backoff_until = _wall_clock_to_deadline(backoff_ts, snapshot_created_at)
+        result.backoff_until = _wall_clock_to_deadline(backoff_ts)
         result.backoff_active = result.backoff_until is not None and not result.backoff_until.expired()
     else:
         result.backoff_active = False
 
     if group_snapshot.HasField("quota_exceeded_until") and group_snapshot.quota_exceeded_until.epoch_ms > 0:
         quota_ts = Timestamp.from_proto(group_snapshot.quota_exceeded_until)
-        result.quota_exceeded_until = _wall_clock_to_deadline(quota_ts, snapshot_created_at)
+        result.quota_exceeded_until = _wall_clock_to_deadline(quota_ts)
         result.quota_exceeded_active = (
             result.quota_exceeded_until is not None and not result.quota_exceeded_until.expired()
         )
@@ -679,7 +686,7 @@ def read_snapshot_from_path(
 
     json_bytes = fs.cat_file(fs_path)
     proto = snapshot_pb2.ControllerSnapshot()
-    json_format.Parse(json_bytes, proto)
+    json_format.Parse(json_bytes, proto, ignore_unknown_fields=True)
     return proto
 
 
@@ -697,5 +704,5 @@ def read_latest_snapshot(
 
     json_bytes = fs.cat_file(fs_path)
     proto = snapshot_pb2.ControllerSnapshot()
-    json_format.Parse(json_bytes, proto)
+    json_format.Parse(json_bytes, proto, ignore_unknown_fields=True)
     return proto
