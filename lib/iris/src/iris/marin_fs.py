@@ -427,13 +427,13 @@ class CrossRegionGuardedFS:
         threshold_bytes: int = CROSS_REGION_READ_THRESHOLD_BYTES,
         cross_region_checker: Callable[[str], bool] | None = None,
     ):
-        object.__setattr__(self, "_fs", fs)
-        object.__setattr__(self, "_threshold_bytes", threshold_bytes)
-        object.__setattr__(self, "_is_gcs", _fs_is_gcs(fs))
-        object.__setattr__(self, "_cross_region_checker", cross_region_checker)
+        self._fs = fs
+        self._threshold_bytes = threshold_bytes
+        self._is_gcs = _fs_is_gcs(fs)
+        self._cross_region_checker = cross_region_checker
         # Cache the VM region once at construction so _guard_read never
         # hits the metadata server.
-        object.__setattr__(self, "_current_region", None if cross_region_checker else _cached_marin_region())
+        self._current_region = None if cross_region_checker else _cached_marin_region()
 
     # -- cross-region detection ----------------------------------------------
 
@@ -496,6 +496,7 @@ class CrossRegionGuardedFS:
         try:
             size = self._fs.size(path)
         except Exception:
+            logger.warning("Failed to stat %s for cross-region guard check", path, exc_info=True)
             return
 
         if size is not None and size > self._threshold_bytes:
