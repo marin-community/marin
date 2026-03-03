@@ -12,6 +12,7 @@ from pathlib import Path
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.controller.snapshot import read_snapshot_from_path
 from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
@@ -44,6 +45,17 @@ def cli():
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
+@click.option(
+    "--snapshot-path",
+    default=None,
+    help="Restore from this specific snapshot file instead of the default latest.json",
+)
+@click.option(
+    "--checkpoint-interval",
+    default=None,
+    type=float,
+    help="Periodic checkpoint interval in seconds (default: no periodic checkpointing)",
+)
 def serve(
     host: str,
     port: int,
@@ -51,6 +63,8 @@ def serve(
     scheduler_interval: float,
     config_file: str | None,
     log_level: str,
+    snapshot_path: str | None,
+    checkpoint_interval: float | None,
 ):
     """Start the Iris controller service.
 
@@ -131,6 +145,7 @@ def serve(
         bundle_prefix=bundle_prefix,
         scheduler_interval=Duration.from_seconds(scheduler_interval),
         heartbeat_failure_threshold=heartbeat_failure_threshold,
+        checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
     )
 
     try:
@@ -143,6 +158,21 @@ def serve(
     except Exception as e:
         logger.exception("Failed to create controller")
         raise click.ClickException(f"Failed to create controller: {e}") from e
+
+    # Restore from a specific snapshot file if requested; otherwise fall back to latest.json.
+    if snapshot_path:
+        logger.info("Restoring from explicit snapshot: %s", snapshot_path)
+        try:
+            proto = read_snapshot_from_path(snapshot_path)
+            if proto is None:
+                raise click.ClickException(f"Snapshot not found: {snapshot_path}")
+            controller.restore_from_snapshot(proto)
+            logger.info("Snapshot restored from %s", snapshot_path)
+        except Exception as e:
+            logger.exception("Failed to restore snapshot from %s", snapshot_path)
+            raise click.ClickException(f"Failed to restore snapshot: {e}") from e
+    else:
+        controller.restore_from_snapshot()
 
     try:
         controller.start()

@@ -667,6 +667,16 @@ message Controller {
     repeated TransactionAction actions = 1;
   }
 
+  // --- Checkpoint ---
+  message BeginCheckpointRequest {}
+  message BeginCheckpointResponse {
+    string snapshot_path = 1;
+    iris.time.Timestamp created_at = 2;
+    int32 job_count = 3;
+    int32 task_count = 4;
+    int32 worker_count = 5;
+  }
+
   // --- Cluster Summary ---
   message GetClusterSummaryRequest {}
   message GetClusterSummaryResponse {
@@ -900,6 +910,9 @@ service ControllerService {
 
   // Unified worker detail (VM + worker + logs in one call)
   rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
+
+  // Checkpoint
+  rpc BeginCheckpoint(Controller.BeginCheckpointRequest) returns (Controller.BeginCheckpointResponse);
 }
 
 service WorkerService {
