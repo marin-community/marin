@@ -436,7 +436,6 @@ def create_environment(
         "HF_TOKEN": os.getenv("HF_TOKEN"),
         "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
         "MARIN_CI_DISABLE_RUNTIME_ENVS": os.getenv("MARIN_CI_DISABLE_RUNTIME_ENVS"),
-        "GCP_SA_KEY": os.getenv("GCP_SA_KEY"),
     }
 
     merged_env_vars = {k: v for k, v in {**default_env_vars, **(env_vars or {})}.items() if v is not None}
