@@ -11,7 +11,6 @@ aggregated from task states.
 import json
 import logging
 import uuid
-from dataclasses import dataclass
 from typing import Any, Protocol
 
 from connectrpc.code import Code
@@ -209,82 +208,6 @@ class ControllerProtocol(Protocol):
     def autoscaler(self) -> AutoscalerProtocol | None: ...
 
     stub_factory: StubFactoryProtocol
-
-
-@dataclass
-class ResolvedWorker:
-    """Result of resolving a worker/VM identifier against controller and autoscaler state."""
-
-    vm_info: vm_pb2.VmInfo | None
-    worker: ControllerWorker | None
-    scale_group: str
-    bootstrap_logs: str
-
-
-def resolve_worker_identity(
-    identifier: str,
-    state: ControllerState,
-    autoscaler: AutoscalerProtocol | None,
-) -> ResolvedWorker:
-    """Resolve an identifier against both VM IDs and worker IDs.
-
-    Tries VM ID first (via autoscaler), then falls back to worker ID.
-    Cross-references between the two when one is found to enrich the result.
-    """
-    vm_info: vm_pb2.VmInfo | None = None
-    scale_group = ""
-    bootstrap_logs = ""
-    worker: ControllerWorker | None = None
-
-    # Try to resolve as VM ID first
-    if autoscaler:
-        vm_info = autoscaler.get_vm(identifier)
-        if vm_info:
-            scale_group = vm_info.scale_group
-            bootstrap_logs = autoscaler.get_init_log(identifier, tail=500)
-            # Enrich with worker info
-            if vm_info.address:
-                for w in state.list_all_workers():
-                    vm_addr = w.metadata.vm_address if w.metadata else None
-                    w_host = w.address.split(":")[0] if w.address and ":" in w.address else w.address
-                    if vm_addr == vm_info.address or w_host == vm_info.address:
-                        worker = w
-                        vm_info.worker_id = w.worker_id
-                        vm_info.worker_healthy = w.healthy
-                        break
-
-    # If not found as VM, try as worker ID
-    if not vm_info:
-        worker = state.get_worker(identifier)
-        # If we found a worker, scan autoscaler status for its VM
-        if worker and autoscaler:
-            status = autoscaler.get_status()
-            found = False
-            for group in status.groups:
-                for slice_info in group.slices:
-                    for vm in slice_info.vms:
-                        if vm.address and worker.address:
-                            w_host = worker.address.split(":")[0] if ":" in worker.address else worker.address
-                            vm_addr = worker.metadata.vm_address if worker.metadata else None
-                            if vm.address == vm_addr or vm.address == w_host:
-                                vm_info = vm
-                                scale_group = group.name
-                                bootstrap_logs = autoscaler.get_init_log(vm.vm_id, tail=500)
-                                vm_info.worker_id = worker.worker_id
-                                vm_info.worker_healthy = worker.healthy
-                                found = True
-                                break
-                    if found:
-                        break
-                if found:
-                    break
-
-    return ResolvedWorker(
-        vm_info=vm_info,
-        worker=worker,
-        scale_group=scale_group,
-        bootstrap_logs=bootstrap_logs,
-    )
 
 
 class ControllerServiceImpl:
@@ -1209,49 +1132,41 @@ class ControllerServiceImpl:
             ]
         )
 
-    # --- Worker Detail (unified VM + worker view) ---
+    # --- Worker Detail ---
 
     def get_worker_status(
         self,
         request: cluster_pb2.Controller.GetWorkerStatusRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.GetWorkerStatusResponse:
-        """Return unified VM + worker detail for a single worker.
+        """Return detail for a single worker, keyed by worker ID.
 
-        Resolves the identifier against both VM IDs and worker IDs, then
-        returns VM info, worker health, bootstrap logs, and worker daemon
-        logs in a single response.
+        Workers and VMs are independent: the worker detail page shows only
+        worker state (health, tasks, logs). VM status lives on the Autoscaler
+        tab.
         """
         with rpc_error_handler("get_worker_status"):
             if not request.id:
                 raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
 
-            resolved = resolve_worker_identity(request.id, self._state, self._controller.autoscaler)
-            vm_info = resolved.vm_info
-            worker = resolved.worker
-            scale_group = resolved.scale_group
-            bootstrap_logs = resolved.bootstrap_logs
+            worker = self._state.get_worker(request.id)
+            if not worker:
+                raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
 
-            if not vm_info and not worker:
-                raise ConnectError(Code.NOT_FOUND, f"No VM or worker found for '{request.id}'")
-
-            # Build worker health status proto
-            worker_health: cluster_pb2.Controller.WorkerHealthStatus | None = None
-            if worker:
-                worker_health = cluster_pb2.Controller.WorkerHealthStatus(
-                    worker_id=worker.worker_id,
-                    healthy=worker.healthy,
-                    consecutive_failures=worker.consecutive_failures,
-                    last_heartbeat=worker.last_heartbeat.to_proto(),
-                    running_job_ids=[tid.to_wire() for tid in worker.running_tasks],
-                    address=worker.address,
-                    metadata=worker.metadata,
-                    status_message=worker_status_message(worker),
-                )
+            worker_health = cluster_pb2.Controller.WorkerHealthStatus(
+                worker_id=worker.worker_id,
+                healthy=worker.healthy,
+                consecutive_failures=worker.consecutive_failures,
+                last_heartbeat=worker.last_heartbeat.to_proto(),
+                running_job_ids=[tid.to_wire() for tid in worker.running_tasks],
+                address=worker.address,
+                metadata=worker.metadata,
+                status_message=worker_status_message(worker),
+            )
 
             # Fetch worker daemon logs if worker is healthy
             worker_logs: list[cluster_pb2.ProcessLogRecord] = []
-            if worker and worker.healthy:
+            if worker.healthy:
                 try:
                     stub = self._controller.stub_factory.get_stub(worker.address)
                     resp = stub.get_process_logs(
@@ -1263,25 +1178,16 @@ class ControllerServiceImpl:
                     logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
 
             # Collect recent task history for this worker
-            recent_tasks: list[cluster_pb2.TaskStatus] = []
-            if worker:
-                tasks = self._state.get_tasks_for_worker(worker.worker_id, limit=50)
-                for task in tasks:
-                    recent_tasks.append(task_to_proto(task))
+            tasks = self._state.get_tasks_for_worker(worker.worker_id, limit=50)
+            recent_tasks = [task_to_proto(task) for task in tasks]
 
             resp = cluster_pb2.Controller.GetWorkerStatusResponse(
-                bootstrap_logs=bootstrap_logs,
-                scale_group=scale_group,
                 worker_logs=worker_logs,
                 recent_tasks=recent_tasks,
             )
-            if vm_info:
-                resp.vm.CopyFrom(vm_info)
-            if worker_health:
-                resp.worker.CopyFrom(worker_health)
-            if worker:
-                if worker.resource_snapshot:
-                    resp.current_resources.CopyFrom(worker.resource_snapshot)
-                for snapshot in worker.resource_history:
-                    resp.resource_history.append(snapshot)
+            resp.worker.CopyFrom(worker_health)
+            if worker.resource_snapshot:
+                resp.current_resources.CopyFrom(worker.resource_snapshot)
+            for snapshot in worker.resource_history:
+                resp.resource_history.append(snapshot)
             return resp

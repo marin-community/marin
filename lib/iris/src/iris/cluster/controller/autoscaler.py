@@ -857,7 +857,7 @@ class Autoscaler:
         return self.update(demand_entries, timestamp)
 
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Get worker info by ID from the centralized worker registry."""
+        """Get VM info by platform worker ID from the centralized worker registry."""
         tracked = self._workers.get(vm_id)
         if not tracked:
             return None
@@ -881,7 +881,7 @@ class Autoscaler:
         )
 
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
-        """Get bootstrap log for a worker from the centralized worker registry."""
+        """Get bootstrap log for a VM by platform worker ID."""
         tracked = self._workers.get(vm_id)
         if not tracked:
             return ""
