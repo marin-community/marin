@@ -93,6 +93,10 @@ def main():
     print("Building interpolated surface...")
     GX, GY, GZ = build_surface(x, y, z)
 
+    # Match holdout_analysis.py color range
+    vmin = float(np.min(z)) - 0.05
+    vmax = float(np.percentile(z, 90))
+
     # Find global minimum (observed)
     min_idx = int(np.argmin(z))
     min_x, min_y, min_z = float(x[min_idx]), float(y[min_idx]), float(z[min_idx])
@@ -131,9 +135,9 @@ def main():
             marker=dict(
                 size=3.5,
                 color=z,
-                colorscale="Viridis",
-                cmin=float(np.nanmin(GZ)),
-                cmax=float(np.nanmax(GZ)),
+                colorscale="RdYlGn_r",
+                cmin=vmin,
+                cmax=vmax,
                 showscale=False,
                 line=dict(width=0.5, color="rgba(0,0,0,0.3)"),
             ),

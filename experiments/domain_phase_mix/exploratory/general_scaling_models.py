@@ -2468,6 +2468,9 @@ def _fit_dsre_ceq(
     spec: DatasetSpec,
     *,
     gate: bool = True,
+    satiety: bool = True,
+    per_domain_pi: bool = True,
+    interference: bool = True,
     n_restarts: int = 8,
     seed: int = 0,
     maxiter: int = 500,
@@ -2486,16 +2489,12 @@ def _fit_dsre_ceq(
       P = softplus(sum_{d in small} X_d - tau)^2                integrated penalty
       y_hat = c0 - A*U + B*P
 
-    Parameters (gate=True):
-      c0, logA, logB                          3
-      (M-1) domain logits                     M-1
-      rho                                     1
-      M*(N-1) pi logits (per-domain)          M*(N-1)
-      (N-1)*M lambda logits                   (N-1)*M
-      M phi logits (sigmoid -> satiety mem)   M
-      N gate logits (sigmoid, g_0 forced 0)   N
-      log tau                                 1
-    Total: 2*M*N + N + 4     (gate=False: 2*M*N + 4)
+    Ablation flags:
+      gate=False:          fix g_k = 1 for k>0 (remove learnable conflict gate)
+      satiety=False:       fix phi_d = 1 (full memory, remove learnable satiety)
+      per_domain_pi=False: share a single pi across all domains (1*(N-1) logits)
+      interference=False:  fix r_{k,d} = 1 (no interference/forgetting; also
+                           disables gate and lambda)
     """
     rng = np.random.default_rng(seed)
     W = spec.weights
@@ -2509,14 +2508,19 @@ def _fit_dsre_ceq(
 
     huber_d = _huber_delta(y)
 
+    # When interference=False, lambda and gate are both removed
+    use_gate = gate and interference
+    use_lambda = interference
+    n_pi_sets = M if per_domain_pi else 1
+
     n_params = (
         3
         + (M - 1)
         + 1
-        + M * max(N - 1, 0)
-        + max(N - 1, 0) * M
-        + M
-        + (N if gate else 0)
+        + n_pi_sets * max(N - 1, 0)
+        + (max(N - 1, 0) * M if use_lambda else 0)
+        + (M if satiety else 0)
+        + (N if use_gate else 0)
         + 1
     )
 
@@ -2551,38 +2555,55 @@ def _fit_dsre_ceq(
         rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
         idx += 1
 
-        # Per-domain phase importance: M sets of (N-1) logits -> M simplex vectors
+        # Per-domain (or shared) phase importance logits -> simplex vectors
         pi_dom = np.zeros((M, N))
-        for d in range(M):
-            if N > 1:
-                logits_free = p[idx : idx + (N - 1)]
-                idx += N - 1
-            else:
-                logits_free = np.array([])
+        if per_domain_pi:
+            for d in range(M):
+                if N > 1:
+                    logits_free = p[idx : idx + (N - 1)]
+                    idx += N - 1
+                else:
+                    logits_free = np.array([])
+                full = np.zeros(N)
+                if N > 1:
+                    full[: N - 1] = logits_free
+                pi_dom[d] = _softmax_logits(full)
+        else:
+            # Single shared pi across all domains
             full = np.zeros(N)
             if N > 1:
-                full[: N - 1] = logits_free
-            pi_dom[d] = _softmax_logits(full)
+                full[: N - 1] = p[idx : idx + (N - 1)]
+                idx += N - 1
+            shared = _softmax_logits(full)
+            for d in range(M):
+                pi_dom[d] = shared
 
         # Per-domain per-phase interference lambda: phases 1..N-1, per domain
         lam = np.zeros((N, M))
-        if N > 1:
+        if use_lambda and N > 1:
             raw = p[idx : idx + (N - 1) * M].reshape(N - 1, M)
             idx += (N - 1) * M
             lam[1:] = np.exp(np.clip(raw, -8.0, 8.0))
 
         # Per-domain satiety memory phi_d in (0, 1) via sigmoid
-        phi = np.array([_sigmoid(float(p[idx + d])) for d in range(M)])
-        idx += M
+        if satiety:
+            phi = np.array([_sigmoid(float(p[idx + d])) for d in range(M)])
+            idx += M
+        else:
+            phi = np.ones(M)  # full memory: prior exposure fully remembered
 
         # Conflict gate g_k in (0, 1); g_0 forced to 0
-        if gate:
+        if use_gate:
             g = np.array([_sigmoid(float(p[idx + k])) for k in range(N)])
             idx += N
             g[0] = 0.0
-        else:
+        elif interference:
+            # interference=True but gate=False: g_k = 1 for k>0
             g = np.ones(N)
             g[0] = 0.0
+        else:
+            # interference=False: r_{k,d} = 1 everywhere
+            g = np.zeros(N)
 
         tau = float(np.exp(np.clip(p[idx], -8.0, 8.0)))
         idx += 1
@@ -2655,19 +2676,21 @@ def _fit_dsre_ceq(
             idx += M - 1
         p0[idx] = float(rng.normal(0.0, 0.7))  # rho raw
         idx += 1
-        # Per-domain pi logits
-        if N > 1:
-            p0[idx : idx + M * (N - 1)] = rng.normal(0.0, 0.5, M * (N - 1))
-            idx += M * (N - 1)
+        # Pi logits (per-domain or shared)
+        n_pi_total = n_pi_sets * max(N - 1, 0)
+        if n_pi_total > 0:
+            p0[idx : idx + n_pi_total] = rng.normal(0.0, 0.5, n_pi_total)
+            idx += n_pi_total
         # Per-domain per-phase lambda logits
-        if N > 1:
+        if use_lambda and N > 1:
             p0[idx : idx + (N - 1) * M] = rng.normal(-1.0, 0.5, (N - 1) * M)
             idx += (N - 1) * M
         # Phi init: near 1 (remember satiety) — sigmoid(2.0) ~ 0.88
-        p0[idx : idx + M] = rng.normal(2.0, 0.6, M)
-        idx += M
+        if satiety:
+            p0[idx : idx + M] = rng.normal(2.0, 0.6, M)
+            idx += M
         # Gate init: increasing with phase index
-        if gate:
+        if use_gate:
             t = np.linspace(-2.0, 2.0, N)
             p0[idx : idx + N] = t + rng.normal(0.0, 0.6, N)
             idx += N
@@ -2693,12 +2716,27 @@ def _fit_dsre_ceq(
     def predict(W_new: np.ndarray) -> np.ndarray:
         return forward(final_p, _as_3d(W_new))
 
-    return predict, {"n_params": n_params}
+    return predict, {"n_params": n_params, "final_p": final_p.copy()}
 
 
 def _fit_dsre_ceq_nogate(spec: DatasetSpec, **kw):
     """DS-RE-CEQ without the conflict gate (g_k = 1 for k>0)."""
     return _fit_dsre_ceq(spec, gate=False, **kw)
+
+
+def _fit_dsre_ceq_nosat(spec: DatasetSpec, **kw):
+    """DS-RE-CEQ without satiety memory (phi_d fixed to 1)."""
+    return _fit_dsre_ceq(spec, satiety=False, **kw)
+
+
+def _fit_dsre_ceq_shared_pi(spec: DatasetSpec, **kw):
+    """DS-RE-CEQ with shared phase weights (single pi for all domains)."""
+    return _fit_dsre_ceq(spec, per_domain_pi=False, **kw)
+
+
+def _fit_dsre_ceq_no_interference(spec: DatasetSpec, **kw):
+    """DS-RE-CEQ without interference (r_{k,d} = 1, no forgetting)."""
+    return _fit_dsre_ceq(spec, interference=False, **kw)
 
 
 # ---------------------------------------------------------------------------
@@ -2918,6 +2956,16 @@ GENERAL_MODELS: list[GeneralModelSpec] = [
     GeneralModelSpec("DS-RE-CEQ", _fit_dsre_ceq, lambda _: True, "Satiety-memory + conflict-gated interference"),
     GeneralModelSpec(
         "DS-RE-CEQ(ng)", _fit_dsre_ceq_nogate, lambda _: True, "DS-RE-CEQ without conflict gate"
+    ),
+    GeneralModelSpec(
+        "DS-RE-CEQ(ns)", _fit_dsre_ceq_nosat, lambda _: True, "DS-RE-CEQ without satiety memory"
+    ),
+    GeneralModelSpec(
+        "DS-RE-CEQ(sp)", _fit_dsre_ceq_shared_pi, lambda _: True, "DS-RE-CEQ with shared phase weights"
+    ),
+    GeneralModelSpec(
+        "DS-RE-CEQ(ni)", _fit_dsre_ceq_no_interference, lambda _: True,
+        "DS-RE-CEQ without interference"
     ),
     # Hybrid models: mixture design + economics utility + information theory
     GeneralModelSpec("SHEQ", _fit_sheq, lambda _: True, "Scheffé+log + epoch-entropy + epoch-overfit quadratic"),

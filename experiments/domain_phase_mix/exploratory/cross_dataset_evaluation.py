@@ -214,6 +214,7 @@ def cross_validate(
         "MAE": float("nan"),
         "Spearman": float("nan"),
         "Huber": float("nan"),
+        "TestRegret": float("nan"),
     }
     for K in topk_values:
         nan_result[f"recall@{K}"] = float("nan")
@@ -221,6 +222,7 @@ def cross_validate(
         nan_result[f"mean_pred_rank_of_true_top{K}"] = float("nan")
 
     all_preds = np.full(spec.R, np.nan)
+    fold_regrets: list[float] = []
     for fold_i, test_idx in enumerate(folds):
         train_idx = np.concatenate([f for j, f in enumerate(folds) if j != fold_i])
         train_spec = spec.subset(train_idx)
@@ -228,6 +230,12 @@ def cross_validate(
             predict_fn, _info = model.fit_fn(train_spec)
             preds = predict_fn(spec.weights[test_idx])
             all_preds[test_idx] = preds
+
+            # Test regret: y(argmin yhat on test) - min(y on test)
+            y_test = spec.y[test_idx]
+            chosen_idx = int(np.argmin(preds))
+            regret = float(y_test[chosen_idx]) - float(np.min(y_test))
+            fold_regrets.append(regret)
         except Exception as e:
             log.warning(f"  {model.name} fold {fold_i} failed: {e}")
             return nan_result
@@ -250,7 +258,13 @@ def cross_validate(
     huber = np.where(abs_r <= delta, 0.5 * residuals**2, delta * abs_r - 0.5 * delta**2)
     huber_mean = float(np.mean(huber))
 
-    result = {"R²": r2, "RMSE": rmse, "MAE": mae, "Spearman": float(sp_corr), "Huber": huber_mean}
+    # Test regret: averaged across folds
+    test_regret = float(np.mean(fold_regrets)) if fold_regrets else float("nan")
+
+    result = {
+        "R²": r2, "RMSE": rmse, "MAE": mae, "Spearman": float(sp_corr),
+        "Huber": huber_mean, "TestRegret": test_regret,
+    }
 
     # Top-K metrics on full CV predictions
     for K in topk_values:
