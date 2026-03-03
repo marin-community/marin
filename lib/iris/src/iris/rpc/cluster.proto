@@ -169,6 +169,9 @@ message WorkerResourceSnapshot {
   // Aggregate task stats
   int32 running_task_count = 7;
   int32 total_process_count = 8;
+  // Network bandwidth (bytes/sec, computed as delta between heartbeats)
+  int64 net_recv_bps = 9;
+  int64 net_sent_bps = 10;
 }
 
 message BuildMetrics {
