@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "be19b3f714cb",
+  "strategy": "manual-commit",
+  "branch": "kevin/agentic-sft",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "experiments/exp2956_sft_swe_smith_qwen3_8b.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/be/19b3f714cb/0/metadata.json",
+      "transcript": "/be/19b3f714cb/0/full.jsonl",
+      "context": "/be/19b3f714cb/0/context.md",
+      "content_hash": "/be/19b3f714cb/0/content_hash.txt",
+      "prompt": "/be/19b3f714cb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 216133,
+    "cache_read_tokens": 3013577,
+    "output_tokens": 21548,
+    "api_call_count": 49
+  }
+}
