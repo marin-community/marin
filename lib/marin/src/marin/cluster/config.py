@@ -207,9 +207,7 @@ CONFIGS = {
         "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v6e",
         "min_workers": 0,
-        "worker_targets": {
-            "v6e-128": 8,
-        },
+        "worker_targets": {},
     },
     "marin-us-east5": {
         "NAME": "marin-us-east5",
@@ -220,9 +218,7 @@ CONFIGS = {
         "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v6e",
         "min_workers": 0,
-        "worker_targets": {
-            "v6e-128": 8,
-        },
+        "worker_targets": {},
     },
     "marin-us-east5-a": {
         "NAME": "marin-us-east5-a",
