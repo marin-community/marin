@@ -1,0 +1,37 @@
+Render one sample trajectory into tokens from https://huggingface.co/datasets/AlienKevin/SWE-smith-rs-minimax-m2.5-trajectories using the same pipeline as @experiments/exp2956_sft_swe_smith_qwen3_8b.py, decode into text and save to exp2956_minimax_traj.txt
+
+---
+
+does this faithfully replicate @experiments/exp2956_sft_swe_smith_qwen3_8b.py ?
+
+---
+
+[Request interrupted by user]
+
+---
+
+Wait, why can't you just run the marin pipeline directly?
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+if you encounter cuda issues, reference how the CI handles them by specifying cpu only
+
+---
+
+Great, can you double check if the loss mask is applied correctly to the minimax training trajectories?
+
+---
+
+do rendered gemini/minimax training trajectories contain a "<|end_think|>" token?
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+Ok, find a sample of gemini training trajectory https://huggingface.co/datasets/AlienKevin/SWE-smith-rs-gemini-3-flash-trajectories and render it in a similar fashion into exp2956_gemini_traj.txt. Then, check if it contains <|end_think|>
