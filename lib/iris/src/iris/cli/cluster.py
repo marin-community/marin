@@ -221,8 +221,11 @@ def cluster(ctx):
 
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
+@click.option(
+    "--bundle-prefix", default=None, help="Override bundle/snapshot storage prefix (e.g. file:///tmp/iris-bundles)"
+)
 @click.pass_context
-def cluster_start(ctx, local: bool):
+def cluster_start(ctx, local: bool, bundle_prefix: str | None):
     """Start controller and wait for health.
 
     Each platform handles its own controller lifecycle:
@@ -237,6 +240,8 @@ def cluster_start(ctx, local: bool):
         raise click.ClickException("--config is required for cluster start")
     if local:
         config = make_local_config(config)
+    if bundle_prefix:
+        config.storage.bundle_prefix = bundle_prefix
     is_local = config.controller.WhichOneof("controller") == "local"
     if not is_local:
         _pin_latest_images(config)
@@ -551,3 +556,55 @@ def controller_checkpoint(ctx, stop: bool):
         except Exception as e:
             click.echo(f"Failed to stop controller: {e}", err=True)
             raise SystemExit(1) from e
+
+
+@controller.command("restart")
+@click.pass_context
+def controller_restart(ctx):
+    """Restart controller with state preservation (remote platforms only).
+
+    Takes a checkpoint, stops the controller, starts a new one.
+    The new controller auto-restores from the checkpoint.
+    Workers on separate VMs survive the restart.
+    """
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required")
+
+    is_local = config.controller.WhichOneof("controller") == "local"
+    if is_local:
+        raise click.ClickException(
+            "controller restart is not supported for local clusters. "
+            "Stop and restart the 'iris cluster start --local' process instead."
+        )
+
+    controller_url = require_controller_url(ctx)
+
+    # Checkpoint
+    client = cluster_connect.ControllerServiceClientSync(controller_url)
+    try:
+        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+    except Exception as e:
+        click.echo(f"Checkpoint failed: {e}", err=True)
+        raise SystemExit(1) from e
+    finally:
+        client.close()
+    click.echo(f"Checkpoint: {resp.snapshot_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
+
+    # Stop controller
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
+    try:
+        platform.stop_controller(config)
+    except Exception as e:
+        click.echo(f"Failed to stop controller: {e}", err=True)
+        raise SystemExit(1) from e
+    click.echo("Controller stopped.")
+
+    # Start new controller (auto-restores from latest.json in storage)
+    try:
+        address = platform.start_controller(config)
+    except Exception as e:
+        click.echo(f"Failed to start controller: {e}", err=True)
+        raise SystemExit(1) from e
+    click.echo(f"Controller restarted at {address}")
