@@ -817,11 +817,11 @@ class ScalingGroup:
         for handle in snapshot:
             handle.terminate()
 
-    def to_snapshot(self, created_at: Timestamp) -> snapshot_pb2.ScalingGroupSnapshot:
+    def to_snapshot(self) -> snapshot_pb2.ScalingGroupSnapshot:
         """Serialize this group's state for checkpointing.
 
         Captures slice inventory and timing state under lock. Deadlines are
-        converted to wall-clock timestamps for portability across restarts.
+        stored as wall-clock timestamps for portability across restarts.
         """
 
         snap = snapshot_pb2.ScalingGroupSnapshot(
@@ -843,9 +843,7 @@ class ScalingGroup:
                 snap.slices.append(slice_snap)
 
         if self._backoff_until is not None:
-            remaining_ms = self._backoff_until.remaining_ms()
-            backoff_ts = Timestamp.from_ms(created_at.epoch_ms() + remaining_ms)
-            snap.backoff_until.CopyFrom(backoff_ts.to_proto())
+            snap.backoff_until.CopyFrom(self._backoff_until.as_timestamp().to_proto())
 
         if self._last_scale_up.epoch_ms() > 0:
             snap.last_scale_up.CopyFrom(self._last_scale_up.to_proto())
@@ -853,9 +851,7 @@ class ScalingGroup:
             snap.last_scale_down.CopyFrom(self._last_scale_down.to_proto())
 
         if self._quota_exceeded_until is not None:
-            remaining_ms = self._quota_exceeded_until.remaining_ms()
-            quota_ts = Timestamp.from_ms(created_at.epoch_ms() + remaining_ms)
-            snap.quota_exceeded_until.CopyFrom(quota_ts.to_proto())
+            snap.quota_exceeded_until.CopyFrom(self._quota_exceeded_until.as_timestamp().to_proto())
         snap.quota_reason = self._quota_reason
 
         return snap

@@ -298,7 +298,7 @@ def create_snapshot(
     # Snapshot autoscaler state
     if autoscaler is not None:
         for group in autoscaler.groups.values():
-            proto.scaling_groups.append(group.to_snapshot(created_at))
+            proto.scaling_groups.append(group.to_snapshot())
         for tw_snap in autoscaler.to_tracked_worker_snapshots():
             proto.tracked_workers.append(tw_snap)
 
@@ -501,19 +501,15 @@ def restore_snapshot(
 def _wall_clock_to_deadline(
     wall_clock_ts: Timestamp,
 ) -> Deadline | None:
-    """Convert a wall-clock timestamp from a snapshot into a monotonic Deadline.
+    """Convert a wall-clock timestamp from a snapshot into a timestamp-mode Deadline.
 
     Returns None if the timestamp is zero (field was not set in the snapshot).
-    If the deadline has already expired (wall_clock_ts is in the past relative
-    to now), returns an already-expired Deadline.
+    Uses Deadline.after() so the result supports as_timestamp(), which is
+    required by ScalingGroup.availability() and to_status().
     """
     if wall_clock_ts.epoch_ms() == 0:
         return None
-    remaining_ms = wall_clock_ts.epoch_ms() - Timestamp.now().epoch_ms()
-    if remaining_ms > 0:
-        return Deadline.from_now(Duration.from_ms(remaining_ms))
-    # Already expired — return a deadline that is immediately expired
-    return Deadline.from_now(Duration.from_ms(0))
+    return Deadline.after(wall_clock_ts, Duration.from_ms(0))
 
 
 def restore_scaling_group(

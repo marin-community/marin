@@ -792,7 +792,10 @@ class SmokeTestRunner:
         args = ["cluster", "start"]
         if self.config.local:
             args.append("--local")
-        args.extend(["--bundle-prefix", self._bundle_prefix])
+            # Local mode: make_local_config() clears bundle_prefix, causing
+            # LocalController to use a temp dir that dies on restart. Override
+            # with a stable path so snapshots survive controller restarts.
+            args.extend(["--bundle-prefix", self._bundle_prefix])
 
         logger.info("Starting cluster (background)...")
         bg = _run_iris_background(*args, config_path=self.config.config_path)
