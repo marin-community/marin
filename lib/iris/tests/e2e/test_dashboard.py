@@ -71,15 +71,15 @@ def test_job_detail_shows_task_logs(cluster, page, screenshot):
     screenshot("job-detail-task-logs")
 
 
-def test_fleet_tab(cluster, page, screenshot):
-    """Fleet tab shows machines with health status."""
+def test_workers_tab(cluster, page, screenshot):
+    """Workers tab shows workers with health status."""
     cluster.wait_for_workers(1)
     dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
-    dashboard_click(page, 'button.tab-btn:has-text("Fleet")')
+    dashboard_click(page, 'button.tab-btn:has-text("Workers")')
 
-    assert_visible(page, "text=ready")
-    screenshot("fleet-tab")
+    assert_visible(page, "text=healthy")
+    screenshot("workers-tab")
 
 
 def test_worker_detail_page(cluster, page, screenshot):

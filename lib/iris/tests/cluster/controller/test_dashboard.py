@@ -714,6 +714,26 @@ def test_get_worker_status_recent_tasks_have_timestamps(client, state, make_work
     assert tasks[0].get("finishedAt"), "finished_at must be populated from attempt timestamps"
 
 
+def test_get_worker_status_by_worker_id(client, state, make_worker_metadata):
+    """GetWorkerStatus looks up purely by worker ID — no autoscaler cross-referencing."""
+    register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
+    assert resp.get("worker", {}).get("workerId") == "w1"
+    assert resp.get("worker", {}).get("healthy") is True
+    assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
+
+
+def test_get_worker_status_unknown_id_returns_error(client):
+    """GetWorkerStatus returns 404 for unknown IDs (no VM fallback)."""
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetWorkerStatus",
+        json={"id": "nonexistent-vm-0"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code != 200
+
+
 def test_health_endpoint_returns_ok(client, state, make_worker_metadata, job_request):
     """Health endpoint returns status ok with worker and job counts."""
     register_worker(state, "w1", "h1:8080", make_worker_metadata())
