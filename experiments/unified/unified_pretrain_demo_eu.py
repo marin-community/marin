@@ -39,6 +39,10 @@ from levanter.data.text import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
 
 from experiments.defaults import default_train, default_validation_sets
+from experiments.unified.vlm_tokenize_captions import (
+    ENDOFTEXT_ID,
+    VISUAL_TOKEN_OFFSET,
+)
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import tokenize_nemotron
 from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
@@ -200,6 +204,38 @@ def _only_fractional_transform(weights: np.ndarray) -> np.ndarray:
     return result
 
 
+def _replace_visual_with_eos(input_ids: np.ndarray) -> np.ndarray:
+    """Replace visual tokens with EOS so block_cross_document_attention prevents
+    real tokens from attending to them.
+
+    Each replaced position becomes its own segment boundary, so the remaining
+    text tokens (in a later segment) cannot attend to any visual position.
+    """
+    result = input_ids.copy()
+    visual_mask = (result >= VISUAL_TOKEN_OFFSET) | (result == VISION_START_ID) | (result == VISION_END_ID)
+    result[visual_mask] = ENDOFTEXT_ID
+    return result
+
+
+def _replace_text_with_eos(input_ids: np.ndarray) -> np.ndarray:
+    """Replace text tokens with EOS so block_cross_document_attention prevents
+    real tokens from attending to them.
+
+    Each replaced position becomes its own segment boundary, so the remaining
+    visual tokens (in a later segment) cannot attend to any text position.
+    """
+    result = input_ids.copy()
+    text_mask = (
+        (result > 0)
+        & (result < VISUAL_TOKEN_OFFSET)
+        & (result != VISION_START_ID)
+        & (result != VISION_END_ID)
+        & (result != ENDOFTEXT_ID)
+    )
+    result[text_mask] = ENDOFTEXT_ID
+    return result
+
+
 def unified_data_config(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
@@ -336,6 +372,37 @@ def unified_data_config(
     )
     weights["val_generation_text_only"] = 0.0
     weights["val_generation_visual_only"] = 0.0
+
+    # Ablation val: replace one modality with EOS → segment-based attention blocking
+    # prevents real tokens from attending to the replaced positions.
+    fmt_und_wo_visual = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_zero_fractional_transform,
+        input_ids_transform=_replace_visual_with_eos,
+    )
+    fmt_gen_wo_language = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=_zero_fractional_transform,
+        input_ids_transform=_replace_text_with_eos,
+    )
+
+    components["val_understanding_wo_visual"] = DatasetComponent(
+        cache_dir=und_val_cache,
+        format=fmt_und_wo_visual,
+        pack=True,
+        tags=["multimodal", "understanding"],
+    )
+    weights["val_understanding_wo_visual"] = 0.0
+
+    components["val_generation_wo_language"] = DatasetComponent(
+        cache_dir=gen_val_cache,
+        format=fmt_gen_wo_language,
+        pack=True,
+        tags=["multimodal", "generation"],
+    )
+    weights["val_generation_wo_language"] = 0.0
 
     # Eval benchmarks: weight 0.0 → eval-only (not used in training data).
     # Levanter's validation_sets() loads these for periodic eval during training.
