@@ -261,6 +261,16 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
 
+    model_config = config.train_config.model
+    logger.info(
+        "Model config: type=%s seq_len=%d hidden=%d batch=%s device=%s",
+        type(model_config).__name__,
+        model_config.max_seq_len,
+        model_config.Embed.size,
+        config.train_config.trainer.train_batch_size,
+        config.resources.device,
+    )
+
     train_config = config.train_config
     train_config = _suppress_ray_config(train_config)
     train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
@@ -420,6 +430,9 @@ def _add_run_env_variables(env: dict):
         env["TPU_MIN_LOG_LEVEL"] = "2"
     if "TPU_STDERR_LOG_LEVEL" not in env:
         env["TPU_STDERR_LOG_LEVEL"] = "2"
+
+    if "JAX_EXPLAIN_CACHE_MISSES" not in env:
+        env["JAX_EXPLAIN_CACHE_MISSES"] = "1"
 
     # Allow the caller (or iris -e) to override the compilation cache dir.
     if "JAX_COMPILATION_CACHE_DIR" not in env:
