@@ -17,7 +17,6 @@ adopted as BOOTING.
 """
 
 import logging
-from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -78,6 +77,9 @@ class _RestoredWorkerHandle:
         return ""
 
     def status(self) -> WorkerStatus:
+        # Always returns RUNNING since we have no live infrastructure connection.
+        # The autoscaler will replace this stub with a real handle during its
+        # next reconciliation pass.
         return WorkerStatus(state=CloudWorkerState.RUNNING)
 
     def run_command(
@@ -221,12 +223,16 @@ def _snapshot_worker(worker: ControllerWorker) -> snapshot_pb2.WorkerSnapshot:
     return snap
 
 
-def _snapshot_endpoint(endpoint: ControllerEndpoint) -> snapshot_pb2.EndpointSnapshot:
+def _snapshot_endpoint(
+    endpoint: ControllerEndpoint,
+    task_id: JobName | None = None,
+) -> snapshot_pb2.EndpointSnapshot:
     snap = snapshot_pb2.EndpointSnapshot(
         endpoint_id=endpoint.endpoint_id,
         name=endpoint.name,
         address=endpoint.address,
         job_id=str(endpoint.job_id),
+        task_id=str(task_id) if task_id else "",
     )
     for k, v in endpoint.metadata.items():
         snap.metadata[k] = v
@@ -284,8 +290,10 @@ def create_snapshot(
     for worker in state.list_all_workers():
         proto.workers.append(_snapshot_worker(worker))
 
+    endpoint_task_map = state.get_endpoint_task_mapping()
     for endpoint in state.list_all_endpoints():
-        proto.endpoints.append(_snapshot_endpoint(endpoint))
+        task_id = endpoint_task_map.get(endpoint.endpoint_id)
+        proto.endpoints.append(_snapshot_endpoint(endpoint, task_id=task_id))
 
     # Snapshot autoscaler state
     if autoscaler is not None:
@@ -367,11 +375,9 @@ def _restore_job(
     job_id = JobName.from_string(snap.job_id)
     tasks = [_restore_task(t) for t in snap.tasks]
 
-    # Rebuild task state counts from restored tasks
-    task_state_counts: Counter[int] = Counter()
-    for t in tasks:
-        task_state_counts[t.state] += 1
-
+    # Do NOT pre-populate task_state_counts here. state.add_job() will
+    # iterate the tasks and increment counts itself. Building them here
+    # would cause every task state to be double-counted.
     job = ControllerJob(
         job_id=job_id,
         request=snap.request,
@@ -383,7 +389,6 @@ def _restore_job(
         error=snap.error if snap.error else None,
         exit_code=snap.exit_code if snap.exit_code != 0 else None,
         num_tasks=snap.num_tasks,
-        task_state_counts=task_state_counts,
     )
 
     # Restore scheduling deadline from wall-clock epoch_ms
@@ -411,8 +416,10 @@ def _restore_worker(snap: snapshot_pb2.WorkerSnapshot) -> ControllerWorker:
     )
 
 
-def _restore_endpoint(snap: snapshot_pb2.EndpointSnapshot) -> ControllerEndpoint:
-    return ControllerEndpoint(
+def _restore_endpoint(snap: snapshot_pb2.EndpointSnapshot) -> tuple[ControllerEndpoint, JobName | None]:
+    """Restore an endpoint and its task association from a snapshot."""
+    task_id = JobName.from_string(snap.task_id) if snap.task_id else None
+    endpoint = ControllerEndpoint(
         endpoint_id=snap.endpoint_id,
         name=snap.name,
         address=snap.address,
@@ -420,6 +427,7 @@ def _restore_endpoint(snap: snapshot_pb2.EndpointSnapshot) -> ControllerEndpoint
         metadata=dict(snap.metadata),
         registered_at=Timestamp.from_proto(snap.registered_at),
     )
+    return endpoint, task_id
 
 
 def restore_snapshot(
@@ -461,14 +469,11 @@ def restore_snapshot(
                 if worker:
                     worker.assign_task(task.task_id, job.request.resources)
 
-    # Restore endpoints
+    # Restore endpoints with their task associations
     endpoint_count = 0
     for ep_snap in snapshot.endpoints:
-        endpoint = _restore_endpoint(ep_snap)
-        # Find the task_id for this endpoint's job to rebuild _endpoints_by_task.
-        # Endpoints are associated with tasks, but the snapshot stores job_id.
-        # We pass task_id=None since we can't reliably determine the task.
-        state.add_endpoint(endpoint, task_id=None)
+        endpoint, task_id = _restore_endpoint(ep_snap)
+        state.add_endpoint(endpoint, task_id=task_id)
         endpoint_count += 1
 
     logger.info(
@@ -627,13 +632,10 @@ def restore_scaling_group(
 def _snapshot_dir(storage_prefix: str) -> str:
     """Compute the snapshot directory from a storage prefix.
 
-    Path: {storage_prefix}/../controller-snapshots/
+    Path: {storage_prefix}/controller-snapshots/
     """
-    # Strip trailing slash
     prefix = storage_prefix.rstrip("/")
-    # Go up one level
-    parent = prefix.rsplit("/", 1)[0]
-    return f"{parent}/controller-snapshots"
+    return f"{prefix}/controller-snapshots"
 
 
 def write_snapshot(
@@ -642,25 +644,21 @@ def write_snapshot(
 ) -> str:
     """Write snapshot to storage as JSON. Returns the path of the timestamped file.
 
-    Writes to a .tmp file first, then renames for atomic write.
-    Also writes a latest.json pointer.
+    Writes directly to the final path (no tmp+rename). GCS object writes are
+    already atomic, and GCS rename is implemented as copy+delete which is
+    strictly worse than a direct write.
     """
 
     snapshot_dir = _snapshot_dir(storage_prefix)
     timestamp_ms = snapshot.created_at.epoch_ms
     path = f"{snapshot_dir}/snapshot-{timestamp_ms}.json"
     latest_path = f"{snapshot_dir}/latest.json"
-    tmp_path = f"{path}.tmp"
 
     json_bytes = json_format.MessageToJson(snapshot).encode("utf-8")
 
-    fs, fs_path = fsspec.core.url_to_fs(tmp_path)
+    fs, fs_path = fsspec.core.url_to_fs(path)
     fs.makedirs(fs.sep.join(fs_path.rsplit(fs.sep, 1)[:-1]), exist_ok=True)
     fs.pipe_file(fs_path, json_bytes)
-
-    # Rename tmp to final
-    _, final_path = fsspec.core.url_to_fs(path)
-    fs.rename(fs_path, final_path)
 
     # Write latest.json
     _, latest_fs_path = fsspec.core.url_to_fs(latest_path)

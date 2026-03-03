@@ -677,16 +677,6 @@ message Controller {
     int32 worker_count = 5;
   }
 
-  message LoadCheckpointRequest {
-    // If empty, loads the latest snapshot from the well-known path.
-    string snapshot_path = 1;
-  }
-  message LoadCheckpointResponse {
-    int32 jobs_restored = 1;
-    int32 tasks_restored = 2;
-    int32 workers_restored = 3;
-  }
-
   // --- Cluster Summary ---
   message GetClusterSummaryRequest {}
   message GetClusterSummaryResponse {
@@ -921,9 +911,8 @@ service ControllerService {
   // Unified worker detail (VM + worker + logs in one call)
   rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
 
-  // Checkpoint/restore
+  // Checkpoint
   rpc BeginCheckpoint(Controller.BeginCheckpointRequest) returns (Controller.BeginCheckpointResponse);
-  rpc LoadCheckpoint(Controller.LoadCheckpointRequest) returns (Controller.LoadCheckpointResponse);
 }
 
 service WorkerService {

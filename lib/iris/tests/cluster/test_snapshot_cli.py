@@ -10,7 +10,7 @@ from iris.cli.main import iris
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.snapshot import read_latest_snapshot, read_snapshot_from_path
 from iris.cluster.controller.state import ControllerState
-from iris.time_utils import Duration, Timestamp
+from iris.time_utils import Duration
 
 
 class _FakeStubFactory:
@@ -65,15 +65,13 @@ def test_checkpoint_cli_invokes_rpc(tmp_path):
 
 def test_periodic_checkpoint_writes_snapshot(tmp_path):
     """Periodic checkpointing writes a snapshot when the interval elapses."""
-    # Use a very short interval so the test completes quickly.
     checkpoint_interval = Duration.from_ms(50)
     controller = _make_controller(str(tmp_path), checkpoint_interval=checkpoint_interval)
     controller.start()
     try:
         # Drive periodic checkpoint directly via the private method instead of
         # waiting on the autoscaler loop (which requires a configured autoscaler).
-        # Force the last checkpoint timestamp to zero so the interval check triggers.
-        controller._last_periodic_checkpoint = Timestamp.from_ms(0)
+        # The RateLimiter fires on first call, so no setup needed.
         controller._maybe_periodic_checkpoint()
 
         storage_prefix = f"file://{tmp_path}/bundles"
@@ -90,8 +88,8 @@ def test_periodic_checkpoint_respects_interval(tmp_path):
     controller = _make_controller(str(tmp_path), checkpoint_interval=checkpoint_interval)
     controller.start()
     try:
-        # Set last checkpoint to now so the interval hasn't elapsed yet.
-        controller._last_periodic_checkpoint = Timestamp.now()
+        # Consume the first-call allowance so the limiter thinks it just ran.
+        controller._periodic_checkpoint_limiter.should_run()
         controller._maybe_periodic_checkpoint()
 
         storage_prefix = f"file://{tmp_path}/bundles"
@@ -106,7 +104,6 @@ def test_periodic_checkpoint_disabled_when_no_interval(tmp_path):
     controller = _make_controller(str(tmp_path), checkpoint_interval=None)
     controller.start()
     try:
-        controller._last_periodic_checkpoint = Timestamp.from_ms(0)
         controller._maybe_periodic_checkpoint()
 
         storage_prefix = f"file://{tmp_path}/bundles"

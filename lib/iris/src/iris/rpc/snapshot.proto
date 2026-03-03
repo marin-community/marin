@@ -101,6 +101,7 @@ message EndpointSnapshot {
   string job_id = 4;
   map<string, string> metadata = 5;
   iris.time.Timestamp registered_at = 6;
+  string task_id = 7;
 }
 
 message WorkerSnapshot {

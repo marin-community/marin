@@ -446,3 +446,105 @@ def test_snapshot_roundtrip_preserves_reservation_claims():
 
     assert restored_claims[WorkerId("w-1")] == claims[WorkerId("w-1")]
     assert restored_claims[WorkerId("w-2")] == claims[WorkerId("w-2")]
+
+
+def test_task_state_counts_not_doubled_after_restore():
+    """task_state_counts must reflect actual task states, not double-count.
+
+    This verifies the fix for a bug where _restore_job() pre-populated
+    task_state_counts and then state.add_job() incremented them again.
+    """
+    state = ControllerState()
+    job_id = JobName.from_string("/alice/mixed-job")
+    job = ControllerJob(
+        job_id=job_id,
+        request=_make_request("mixed-job", replicas=3),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        submitted_at=Timestamp.from_ms(1000),
+        started_at=Timestamp.from_ms(1100),
+    )
+    tasks = [
+        ControllerTask(
+            task_id=job_id.task(0),
+            job_id=job_id,
+            state=cluster_pb2.TASK_STATE_PENDING,
+            submitted_at=Timestamp.from_ms(1000),
+        ),
+        ControllerTask(
+            task_id=job_id.task(1),
+            job_id=job_id,
+            state=cluster_pb2.TASK_STATE_PENDING,
+            submitted_at=Timestamp.from_ms(1000),
+        ),
+        ControllerTask(
+            task_id=job_id.task(2),
+            job_id=job_id,
+            state=cluster_pb2.TASK_STATE_RUNNING,
+            started_at=Timestamp.from_ms(1100),
+            submitted_at=Timestamp.from_ms(1000),
+        ),
+    ]
+    state.add_job(job, tasks)
+
+    result = create_snapshot(state)
+    fresh_state = ControllerState()
+    restore_snapshot(result.proto, fresh_state)
+
+    restored_job = fresh_state.get_job(job_id)
+    assert restored_job is not None
+    assert restored_job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] == 2
+    assert restored_job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] == 1
+    assert restored_job.num_tasks == 3
+
+
+def test_endpoint_task_association_survives_roundtrip():
+    """Endpoint-task mapping persisted in the snapshot is restored correctly.
+
+    After restore, _endpoints_by_task should be populated so that
+    _remove_endpoints_for_task can find endpoints for a given task.
+    """
+    state = ControllerState()
+    worker = _make_worker("w-1")
+    state.add_worker(worker)
+
+    job_id = JobName.from_string("/alice/serve-job")
+    job = ControllerJob(
+        job_id=job_id,
+        request=_make_request("serve-job"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        submitted_at=Timestamp.from_ms(1000),
+        started_at=Timestamp.from_ms(1100),
+    )
+    task = ControllerTask(
+        task_id=job_id.task(0),
+        job_id=job_id,
+        state=cluster_pb2.TASK_STATE_RUNNING,
+        started_at=Timestamp.from_ms(1100),
+        submitted_at=Timestamp.from_ms(1000),
+    )
+    state.add_job(job, [task])
+
+    endpoint = ControllerEndpoint(
+        endpoint_id="ep-1",
+        name="/alice/serve-job/my-actor",
+        address="10.0.0.1:8080",
+        job_id=job_id,
+        metadata={"role": "primary"},
+        registered_at=Timestamp.from_ms(2000),
+    )
+    state.add_endpoint(endpoint, task_id=task.task_id)
+
+    result = create_snapshot(state)
+
+    # Verify the proto includes the task_id
+    assert len(result.proto.endpoints) == 1
+    assert result.proto.endpoints[0].task_id == str(task.task_id)
+
+    # Restore into a fresh state
+    fresh_state = ControllerState()
+    restore_snapshot(result.proto, fresh_state)
+
+    # The endpoint-task mapping should be restored
+    ep_task_map = fresh_state.get_endpoint_task_mapping()
+    assert "ep-1" in ep_task_map
+    assert ep_task_map["ep-1"] == task.task_id

@@ -110,7 +110,7 @@ class TaskAttemptSnapshot(_message.Message):
     def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[int] = ..., log_directory: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ...) -> None: ...
 
 class EndpointSnapshot(_message.Message):
-    __slots__ = ("endpoint_id", "name", "address", "job_id", "metadata", "registered_at")
+    __slots__ = ("endpoint_id", "name", "address", "job_id", "metadata", "registered_at", "task_id")
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -124,13 +124,15 @@ class EndpointSnapshot(_message.Message):
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
     REGISTERED_AT_FIELD_NUMBER: _ClassVar[int]
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
     endpoint_id: str
     name: str
     address: str
     job_id: str
     metadata: _containers.ScalarMap[str, str]
     registered_at: _time_pb2.Timestamp
-    def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., job_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., registered_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    task_id: str
+    def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., job_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., registered_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., task_id: _Optional[str] = ...) -> None: ...
 
 class WorkerSnapshot(_message.Message):
     __slots__ = ("worker_id", "address", "metadata", "attributes")

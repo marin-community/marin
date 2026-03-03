@@ -499,14 +499,14 @@ def read_latest_snapshot(
 
 ## RPC Endpoints
 
-Two new RPCs on the Controller service:
+One RPC on the Controller service for creating checkpoints. Restore is
+startup-only via `Controller.restore_from_snapshot()` (called from `main.py`
+before the server starts accepting traffic).
 
 ```protobuf
 // In cluster.proto, added to the Controller service
 rpc BeginCheckpoint(Controller.BeginCheckpointRequest)
     returns (Controller.BeginCheckpointResponse);
-rpc LoadCheckpoint(Controller.LoadCheckpointRequest)
-    returns (Controller.LoadCheckpointResponse);
 
 message Controller {
   // ... existing messages ...
@@ -518,19 +518,6 @@ message Controller {
     int32 job_count = 3;
     int32 task_count = 4;
     int32 worker_count = 5;
-    int32 slice_count = 6;
-  }
-
-  message LoadCheckpointRequest {
-    // If empty, loads the latest snapshot from the well-known path.
-    string snapshot_path = 1;
-  }
-  message LoadCheckpointResponse {
-    int32 jobs_restored = 1;
-    int32 tasks_restored = 2;
-    int32 workers_restored = 3;
-    int32 slices_restored = 4;
-    int32 slices_reconciled = 5;  // Slices found in cloud but not in checkpoint
   }
 }
 ```

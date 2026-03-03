@@ -817,20 +817,6 @@ class Controller(_message.Message):
         task_count: int
         worker_count: int
         def __init__(self, snapshot_path: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., job_count: _Optional[int] = ..., task_count: _Optional[int] = ..., worker_count: _Optional[int] = ...) -> None: ...
-    class LoadCheckpointRequest(_message.Message):
-        __slots__ = ("snapshot_path",)
-        SNAPSHOT_PATH_FIELD_NUMBER: _ClassVar[int]
-        snapshot_path: str
-        def __init__(self, snapshot_path: _Optional[str] = ...) -> None: ...
-    class LoadCheckpointResponse(_message.Message):
-        __slots__ = ("jobs_restored", "tasks_restored", "workers_restored")
-        JOBS_RESTORED_FIELD_NUMBER: _ClassVar[int]
-        TASKS_RESTORED_FIELD_NUMBER: _ClassVar[int]
-        WORKERS_RESTORED_FIELD_NUMBER: _ClassVar[int]
-        jobs_restored: int
-        tasks_restored: int
-        workers_restored: int
-        def __init__(self, jobs_restored: _Optional[int] = ..., tasks_restored: _Optional[int] = ..., workers_restored: _Optional[int] = ...) -> None: ...
     class GetClusterSummaryRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...

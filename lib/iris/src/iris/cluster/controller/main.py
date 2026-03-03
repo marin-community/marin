@@ -12,6 +12,7 @@ from pathlib import Path
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.controller.snapshot import read_snapshot_from_path
 from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
@@ -162,8 +163,6 @@ def serve(
     if snapshot_path:
         logger.info("Restoring from explicit snapshot: %s", snapshot_path)
         try:
-            from iris.cluster.controller.snapshot import read_snapshot_from_path
-
             proto = read_snapshot_from_path(snapshot_path)
             if proto is None:
                 raise click.ClickException(f"Snapshot not found: {snapshot_path}")

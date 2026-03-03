@@ -29,7 +29,7 @@ from iris.cluster.controller.pending_diagnostics import (
     is_active_scale_up_hint,
 )
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.snapshot import SnapshotResult, read_latest_snapshot, read_snapshot_from_path
+from iris.cluster.controller.snapshot import SnapshotResult
 from iris.cluster.controller.state import (
     ControllerEndpoint,
     ControllerJob,
@@ -40,7 +40,7 @@ from iris.cluster.controller.state import (
 from iris.cluster import task_logging
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
-from iris.rpc import cluster_pb2, snapshot_pb2, vm_pb2
+from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.proto_utils import job_state_name, task_state_name
@@ -207,11 +207,6 @@ class ControllerProtocol(Protocol):
     def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str: ...
 
     def begin_checkpoint(self) -> tuple[str, SnapshotResult]: ...
-
-    def restore_from_snapshot(self, proto: snapshot_pb2.ControllerSnapshot | None = None) -> bool: ...
-
-    @property
-    def started(self) -> bool: ...
 
     @property
     def autoscaler(self) -> AutoscalerProtocol | None: ...
@@ -1309,42 +1304,3 @@ class ControllerServiceImpl:
             )
             resp.created_at.CopyFrom(result.proto.created_at)
             return resp
-
-    def _read_snapshot_for_load(
-        self,
-        snapshot_path: str,
-        bundle_prefix: str,
-    ) -> snapshot_pb2.ControllerSnapshot | None:
-        """Read a snapshot from an explicit path, or fall back to latest."""
-        if snapshot_path:
-            return read_snapshot_from_path(snapshot_path)
-        return read_latest_snapshot(bundle_prefix)
-
-    def load_checkpoint(
-        self,
-        request: cluster_pb2.Controller.LoadCheckpointRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Controller.LoadCheckpointResponse:
-        with rpc_error_handler("load checkpoint"):
-            if self._controller.started:
-                raise ConnectError(
-                    Code.FAILED_PRECONDITION,
-                    "LoadCheckpoint requires the controller to be stopped first; "
-                    "use BeginCheckpoint for graceful checkpointing of a running controller.",
-                )
-
-            # Read the snapshot
-            bundle_prefix = self._bundle_store.prefix
-            proto = self._read_snapshot_for_load(request.snapshot_path, bundle_prefix)
-            if proto is None:
-                raise ConnectError(Code.NOT_FOUND, "No snapshot found")
-
-            restored = self._controller.restore_from_snapshot(proto)
-            if not restored:
-                raise ConnectError(Code.INTERNAL, "Failed to restore snapshot")
-
-            return cluster_pb2.Controller.LoadCheckpointResponse(
-                jobs_restored=len(proto.jobs),
-                tasks_restored=sum(len(j.tasks) for j in proto.jobs),
-                workers_restored=len(proto.workers),
-            )

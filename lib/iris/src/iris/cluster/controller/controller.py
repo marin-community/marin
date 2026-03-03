@@ -61,7 +61,7 @@ from iris.logging import get_global_buffer
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, snapshot_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, Timer, Timestamp
+from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -625,8 +625,18 @@ class Controller:
         # loops skip their work so the snapshot captures a quiescent state.
         self._checkpoint_in_progress = False
 
-        # Wall-clock time of the last periodic (best-effort) checkpoint write.
-        self._last_periodic_checkpoint: Timestamp = Timestamp.from_ms(0)
+        # Serializes heartbeat rounds against checkpoint snapshots so that
+        # begin_checkpoint cannot fire while dispatches from begin_heartbeat()
+        # are in flight (but not yet applied by complete_heartbeat).
+        self._heartbeat_lock = threading.Lock()
+
+        # Rate-limits periodic (best-effort) checkpoint writes.
+        # None when checkpoint_interval is not configured.
+        self._periodic_checkpoint_limiter: RateLimiter | None = (
+            RateLimiter(interval_seconds=config.checkpoint_interval.to_seconds())
+            if config.checkpoint_interval is not None
+            else None
+        )
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -1027,7 +1037,14 @@ class Controller:
         When fail_heartbeat causes a worker to exceed the failure threshold,
         _on_worker_failed prunes it from state. We detect this (worker no longer
         in state) and evict the cached stub + notify the autoscaler.
+
+        Holds _heartbeat_lock for the entire round so begin_checkpoint() can
+        wait for a complete quiescent state before snapshotting.
         """
+        with self._heartbeat_lock:
+            self._heartbeat_all_workers_inner()
+
+    def _heartbeat_all_workers_inner(self) -> None:
         round_timer = Timer()
 
         # Phase 1: create snapshots for all healthy workers (lock-acquiring).
@@ -1203,14 +1220,12 @@ class Controller:
         captures a point-in-time snapshot without pausing scheduling or heartbeats.
         Suitable for crash recovery; not guaranteed to be fully quiescent.
         """
-        interval = self._config.checkpoint_interval
-        if interval is None:
+        if self._periodic_checkpoint_limiter is None:
             return
         prefix = self._snapshot_storage_prefix
         if not prefix:
             return
-        elapsed_ms = Timestamp.now().epoch_ms() - self._last_periodic_checkpoint.epoch_ms()
-        if elapsed_ms < interval.to_ms():
+        if not self._periodic_checkpoint_limiter.should_run():
             return
         try:
             result = create_snapshot(
@@ -1219,7 +1234,6 @@ class Controller:
                 reservation_claims=self._reservation_claims,
             )
             path = write_snapshot(result.proto, prefix)
-            self._last_periodic_checkpoint = Timestamp.now()
             logger.info(
                 "Periodic checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
                 path,
@@ -1243,17 +1257,14 @@ class Controller:
 
         self._checkpoint_in_progress = True
         try:
-            # Wait for dispatch executor to drain in-flight heartbeats.
-            # Submit a no-op and wait for it to complete — this ensures all
-            # previously submitted work has finished.
-            self._dispatch_executor.submit(lambda: None).result(timeout=10.0)
-
-            result = create_snapshot(
-                self._state,
-                autoscaler=self._autoscaler,
-                reservation_claims=self._reservation_claims,
-            )
-            path = write_snapshot(result.proto, prefix)
+            # Wait for any in-flight heartbeat round to complete.
+            with self._heartbeat_lock:
+                result = create_snapshot(
+                    self._state,
+                    autoscaler=self._autoscaler,
+                    reservation_claims=self._reservation_claims,
+                )
+                path = write_snapshot(result.proto, prefix)
             logger.info(
                 "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
                 path,
@@ -1315,6 +1326,12 @@ class Controller:
                     quota_exceeded_until=restore_result.quota_exceeded_until,
                     quota_reason=restore_result.quota_reason,
                 )
+
+            # Workers from discarded slices remain in ControllerState as healthy.
+            # They will naturally fail heartbeat checks and be pruned once
+            # consecutive failures exceed the threshold. This is intentional:
+            # the heartbeat failure path handles cleanup of stale workers
+            # including task reassignment and resource release.
 
             # Restore tracked workers into the autoscaler
             restored_workers = restore_tracked_workers(proto)

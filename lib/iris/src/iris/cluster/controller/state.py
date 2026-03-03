@@ -2028,6 +2028,15 @@ class ControllerState:
         with self._lock:
             return list(self._endpoints.values())
 
+    def get_endpoint_task_mapping(self) -> dict[str, JobName]:
+        """Return a mapping from endpoint_id to task_id for all tracked endpoints."""
+        with self._lock:
+            result: dict[str, JobName] = {}
+            for task_id, endpoint_ids in self._endpoints_by_task.items():
+                for eid in endpoint_ids:
+                    result[eid] = task_id
+            return result
+
     def _remove_endpoints_for_task(self, task_id: JobName) -> list[ControllerEndpoint]:
         """Remove all endpoints associated with a task."""
         endpoint_ids = list(self._endpoints_by_task.get(task_id, []))
