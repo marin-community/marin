@@ -39,6 +39,13 @@ Usage:
         --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a \
         --model_size 1.7b \
         --no_text_eval_benchmarks
+
+    # Resume a previous run (skips already-evaluated steps)
+    uv run experiments/unified/eval_all_checkpoints.py \
+        --checkpoint_folder gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-demo6-cb843a/hf \
+        --model_size 1.7b \
+        --checkpoint_is_hf --region eu \
+        --resume_wandb_run <wandb_run_id>
 """
 
 import argparse
@@ -101,6 +108,18 @@ REGION_CACHE_PATHS = {
         "text_eval_cache_path": EU_TEXT_EVAL_CACHE_PATH,
     },
 }
+
+
+def _get_evaluated_steps(wandb_project: str, run_id: str) -> set[int]:
+    """Fetch steps that already have eval/loss logged in a wandb run."""
+    import wandb
+
+    api = wandb.Api()
+    run = api.run(f"{wandb_project}/{run_id}")
+    evaluated = set()
+    for row in run.scan_history(keys=["eval/loss"], min_step=0):
+        evaluated.add(row["_step"])
+    return evaluated
 
 
 def _load_levanter_checkpoint_step(ckpt_path: str) -> int:
@@ -187,6 +206,12 @@ def main():
         help="Region for eval data caches: 'us' (gs://marin-vlm) or 'eu' (gs://marin-vlm-eu) (default: us)",
     )
     parser.add_argument(
+        "--resume_wandb_run",
+        type=str,
+        default=None,
+        help="Resume a previous wandb run by ID, skipping already-evaluated steps",
+    )
+    parser.add_argument(
         "--no_wandb",
         action="store_true",
         help="Disable wandb logging (dry run)",
@@ -201,6 +226,13 @@ def main():
 
     if args.no_wandb:
         tracker_config: WandbConfig | tuple = ()
+    elif args.resume_wandb_run:
+        tracker_config = WandbConfig(
+            project=args.wandb_project,
+            name=wandb_name,
+            id=args.resume_wandb_run,
+            resume="must",
+        )
     else:
         tracker_config = WandbConfig(
             project=args.wandb_project,
@@ -242,6 +274,23 @@ def main():
         ckpt_format,
         [s for _, s in ckpt_steps],
     )
+
+    # --- Resume: skip already-evaluated steps ---
+    if args.resume_wandb_run and not args.no_wandb:
+        logger.info("Fetching already-evaluated steps from wandb run %s ...", args.resume_wandb_run)
+        evaluated_steps = _get_evaluated_steps(args.wandb_project, args.resume_wandb_run)
+        before = len(ckpt_steps)
+        ckpt_steps = [(p, s) for p, s in ckpt_steps if s not in evaluated_steps]
+        skipped = before - len(ckpt_steps)
+        logger.info(
+            "Skipping %d already-evaluated steps, %d remaining: %s",
+            skipped,
+            len(ckpt_steps),
+            [s for _, s in ckpt_steps],
+        )
+        if not ckpt_steps:
+            logger.info("All checkpoints already evaluated. Nothing to do.")
+            return
 
     # --- Build data config ---
     eval_benchmarks = None if args.no_eval_benchmarks else DEFAULT_EVAL_BENCHMARKS
