@@ -15,6 +15,8 @@ from dataclasses import dataclass
 import json
 import logging
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -133,7 +135,8 @@ def _submit_job(
     resources: dict[str, Any] | None = None,
 ) -> str:
     """Submit a job to Ray cluster and return job ID."""
-    cmd = ["ray", "job", "submit"]
+    # Detach by default; we have `wait-job` / `job-logs` for interactive follow.
+    cmd = ["ray", "job", "submit", "--no-wait"]
 
     if working_dir:
         cmd.extend(["--working-dir", working_dir])
@@ -145,14 +148,21 @@ def _submit_job(
         for resource, amount in resources.items():
             cmd.extend([f"--{resource}", str(amount)])
 
-    cmd.extend(["--", entrypoint])
+    # Ray expects the entrypoint as argv tokens after `--`, not as a single shell string.
+    cmd.extend(["--", *shlex.split(entrypoint)])
 
     result = subprocess.check_output(cmd, text=True, timeout=500)
     # Extract job ID from output (usually in format "Job submitted with ID: <id>")
     output_lines = result.strip().split("\n")
+    # Older Ray output
     for line in output_lines:
         if "submitted with ID:" in line:
             return line.split(":")[-1].strip()
+    # Newer Ray output (especially with --no-wait)
+    for line in output_lines:
+        m = re.search(r"Job ['\"](?P<job_id>[^'\"]+)['\"] submitted successfully", line)
+        if m:
+            return m.group("job_id")
 
     # Fallback: return full output if we can't parse job ID
     return result.strip()
@@ -176,6 +186,7 @@ def _add_manual_worker(
     capacity_type: str = "preemptible",
     tpu_name: str | None = None,
     version: str | None = None,
+    ray_resources: dict[str, float] | None = None,
 ) -> None:
     """Add a manual TPU worker to the cluster.
 
@@ -220,10 +231,15 @@ def _add_manual_worker(
 
     # Setup worker entrypoint
     logger.info(f"Setting up worker on TPU: {tpu_name}")
-    _initialize_manual_worker(config.config_file, tpu_name)
+    _initialize_manual_worker(config.config_file, tpu_name, ray_resources=ray_resources)
 
 
-def _initialize_manual_worker(config_file: str, tpu_name: str) -> None:
+def _initialize_manual_worker(
+    config_file: str,
+    tpu_name: str,
+    *,
+    ray_resources: dict[str, float] | None = None,
+) -> None:
     """Setup the worker entrypoint script and start the container.
 
     This script configures the worker to automatically poll for a new head_ip
@@ -243,6 +259,7 @@ def _initialize_manual_worker(config_file: str, tpu_name: str) -> None:
     docker_image = cluster_config["docker"]["image"]
     region = cluster_config["provider"]["region"]
     bucket = f"marin-{region}"
+    ray_resources_json = json.dumps(ray_resources) if ray_resources else ""
 
     print(f"Initializing Ray on worker {tpu_name}...")
     print(f"Zone: {zone}")
@@ -274,7 +291,13 @@ if [ -z "$HEAD_IP" ]; then
 fi
 
 echo "Found head node IP: $HEAD_IP"
-ray start --address=${{HEAD_IP}}:6379 --block
+RAY_RESOURCES_JSON='{ray_resources_json}'
+if [ -n "$RAY_RESOURCES_JSON" ]; then
+  echo "Starting Ray worker with custom resources: $RAY_RESOURCES_JSON"
+  ray start --address=${{HEAD_IP}}:6379 --resources="$RAY_RESOURCES_JSON" --block
+else
+  ray start --address=${{HEAD_IP}}:6379 --block
+fi
 echo "Ray worker crashed. Sleeping 10 seconds to avoid rapid restart..."
 sleep 10
     """
@@ -863,23 +886,65 @@ def wait_job(ctx, job_id, match, poll, timeout, show_logs, tail, grep):
     help="Capacity type",
 )
 @click.option("--name", help="Custom TPU name")
+@click.option(
+    "--ray-resource",
+    "ray_resources",
+    multiple=True,
+    help=(
+        "Custom Ray resource to attach to this TPU worker (repeatable). "
+        "Use KEY or KEY=VALUE. Example: --ray-resource olmoe_base"
+    ),
+)
 @click.pass_context
-def add_worker(ctx, tpu_type, capacity, name):
+def add_worker(ctx, tpu_type, capacity, name, ray_resources):
     """Add manual TPU worker to cluster."""
     config_obj = ctx.obj.config_obj
     print(f"Adding {tpu_type} worker with {capacity} capacity...")
-    _add_manual_worker(config_obj, tpu_type, capacity, name)
+    ray_resources_dict: dict[str, float] | None = None
+    if ray_resources:
+        ray_resources_dict = {}
+        for item in ray_resources:
+            item = item.strip()
+            if not item:
+                continue
+            if "=" in item:
+                key, value = item.split("=", 1)
+                ray_resources_dict[key.strip()] = float(value)
+            else:
+                ray_resources_dict[item] = 1.0
+    _add_manual_worker(config_obj, tpu_type, capacity, name, ray_resources=ray_resources_dict)
     print("Worker added successfully!")
 
 
 @cli.command("init-worker")
 @click.argument("name")
+@click.option(
+    "--ray-resource",
+    "ray_resources",
+    multiple=True,
+    help=(
+        "Custom Ray resource to attach to this TPU worker (repeatable). "
+        "Use KEY or KEY=VALUE. Example: --ray-resource olmoe_base"
+    ),
+)
 @click.pass_context
-def init_worker(ctx, name):
+def init_worker(ctx, name, ray_resources):
     """Initialize Ray on a manual TPU worker."""
     config_obj = ctx.obj.config_obj
     print(f"Initializing Ray on worker {name}...")
-    _initialize_manual_worker(config_obj.config_file, name)
+    ray_resources_dict: dict[str, float] | None = None
+    if ray_resources:
+        ray_resources_dict = {}
+        for item in ray_resources:
+            item = item.strip()
+            if not item:
+                continue
+            if "=" in item:
+                key, value = item.split("=", 1)
+                ray_resources_dict[key.strip()] = float(value)
+            else:
+                ray_resources_dict[item] = 1.0
+    _initialize_manual_worker(config_obj.config_file, name, ray_resources=ray_resources_dict)
     print("Worker initialized successfully!")
 
 

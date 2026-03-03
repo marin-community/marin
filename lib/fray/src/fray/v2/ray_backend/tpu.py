@@ -434,9 +434,10 @@ class ResourcePoolManager(ABC):
 
 
 class SlicePoolManager(ResourcePoolManager):
-    def __init__(self, tpu_type: str):
+    def __init__(self, tpu_type: str, *, head_resources: dict[str, float] | None = None):
         super().__init__()
         self._tpu_type = tpu_type
+        self._head_resources = dict(head_resources or {})
         self._last_scale_multislice_time: float | None = None
         self._last_check_should_scale_up_multislice_time: float | None = None
 
@@ -447,7 +448,10 @@ class SlicePoolManager(ResourcePoolManager):
         return str(actor_info.slice_name)
 
     def create_actor(self) -> ActorHandle:
-        return SliceActor.options(resources={f"TPU-{self._tpu_type}-head": 1}).remote()  # type: ignore
+        resources = {f"TPU-{self._tpu_type}-head": 1}
+        if self._head_resources:
+            resources |= self._head_resources
+        return SliceActor.options(resources=resources).remote()  # type: ignore
 
     def scale_multislice(self, num_slices: int | Sequence[int]) -> None:
         self._last_scale_multislice_time = time.time()
@@ -656,6 +660,7 @@ def run_on_pod(
     tpu_type: str,
     *,
     num_slices: int | Sequence[int] = 1,
+    head_resources: dict[str, float] | None = None,
     max_retries_preemption=10000,
     max_retries_failure=10,
 ):
@@ -665,7 +670,16 @@ def run_on_pod(
     """
     _validate_num_slices(num_slices)
 
-    return ray.get(run_on_pod_ray.remote(remote_fn, tpu_type, num_slices, max_retries_preemption, max_retries_failure))
+    return ray.get(
+        run_on_pod_ray.remote(
+            remote_fn,
+            tpu_type,
+            num_slices,
+            head_resources,
+            max_retries_preemption,
+            max_retries_failure,
+        )
+    )
 
 
 @ray.remote(num_cpus=0.1, max_retries=-1, retry_exceptions=False)
@@ -673,6 +687,7 @@ def run_on_pod_ray(
     remote_fn: RemoteFunction,
     tpu_type: str,
     num_slices: int | Sequence[int] = 1,
+    head_resources: dict[str, float] | None = None,
     max_retries_preemption: int = 10000,
     max_retries_failure: int = 10,
 ):
@@ -698,7 +713,7 @@ def run_on_pod_ray(
     elif remote_fn._default_options.get("max_calls") is None:
         raise ValueError("Remote function must have max_calls set to 1 for TPU workloads.")
 
-    slice_pool_manager = SlicePoolManager(tpu_type)
+    slice_pool_manager = SlicePoolManager(tpu_type, head_resources=head_resources)
 
     try:
         while num_failures <= max_retries_failure and num_preemptions <= max_retries_preemption:

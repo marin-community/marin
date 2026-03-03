@@ -8,67 +8,66 @@ import jax.numpy as jnp
 from jax import Array
 
 
-def equilibrium_bias_delta_from_topk(
-    adjusted_router_logits: Array,
-    topk_idx: Array,
-    topk_weights: Array,
+def quantile_balancing_bias_target(
+    router_logits: Array,
+    selection_bias: Array,
     *,
-    unit_capacity: float = 1.0,
+    top_k: int,
+    num_iterations: int = 5,
 ) -> tuple[Array, Array, Array, Array]:
-    """Compute one quantile-balancing bias update from top-k routing.
+    """Compute a Quantile Balancing (QB) target for the routing selection bias.
 
-    This implements the single-step column update from Quantile Balancing:
-      - build per-token threshold from the K-th largest adjusted logit,
-      - compute per-expert overload residuals,
-      - compute target-aware quantiles from current expert loads,
-      - return per-expert bias deltas.
+    This follows the alternating quantile scheme from MoE Odyssey:
+      1) alpha_i <- Quantile(s_i + b, 1 - k / n) over experts
+      2) beta_j  <- Quantile(s - alpha, 1 - k / n) over tokens
+      3) b <- -beta
+
+    where:
+      - s has shape [tokens, experts]
+      - b has shape [experts]
+      - k is top-k experts per token
+      - n is number of experts
 
     Args:
-      adjusted_router_logits: `[tokens, experts]` logits after adding selection bias.
-      topk_idx: `[tokens, k]` selected expert indices.
-      topk_weights: `[tokens, k]` routing weights for selected experts.
-      unit_capacity: Upper-bound offset in the clipped allocation residual term.
+      router_logits: `[tokens, experts]` pre-bias router scores.
+      selection_bias: `[experts]` additive bias used for current-step selection.
+      top_k: Number of experts selected per token.
+      num_iterations: Number of alternating quantile updates to run.
 
     Returns:
-      A tuple `(delta, expert_weighted_load, target_load, quantile_prob)` where:
-      - `delta`: `[experts]` bias update to subtract (`b <- b - delta`),
-      - `expert_weighted_load`: `[experts]` current weighted load,
-      - `target_load`: scalar target load per expert (`tokens / experts`),
-      - `quantile_prob`: `[experts]` quantile level used per expert.
+      `(target_bias, expert_counts, target_count, quantile_level)`:
+      - `target_bias`: `[experts]` additive bias target for selection logits.
+      - `expert_counts`: `[experts]` binary top-k assignment counts under current bias.
+      - `target_count`: scalar desired assignment count per expert (`tokens * k / experts`).
+      - `quantile_level`: scalar `1 - k / experts` used by both quantile steps.
     """
-    if adjusted_router_logits.ndim != 2:
-        raise ValueError(
-            f"adjusted_router_logits must be rank-2 [tokens, experts], got {adjusted_router_logits.shape}"
-        )
-    if topk_idx.ndim != 2 or topk_weights.ndim != 2:
-        raise ValueError("topk_idx and topk_weights must be rank-2 [tokens, k]")
-    if topk_idx.shape != topk_weights.shape:
-        raise ValueError(f"topk_idx shape {topk_idx.shape} must match topk_weights shape {topk_weights.shape}")
+    if router_logits.ndim != 2:
+        raise ValueError(f"router_logits must be rank-2 [tokens, experts], got {router_logits.shape}")
+    if selection_bias.ndim != 1:
+        raise ValueError(f"selection_bias must be rank-1 [experts], got {selection_bias.shape}")
 
-    tokens, experts = adjusted_router_logits.shape
-    if topk_idx.shape[0] != tokens:
-        raise ValueError("topk tensors must have same token dimension as adjusted_router_logits")
+    tokens, experts = router_logits.shape
+    if selection_bias.shape[0] != experts:
+        raise ValueError(f"selection_bias has size {selection_bias.shape[0]} but router_logits has experts={experts}")
+    if not (1 <= top_k <= experts):
+        raise ValueError(f"top_k must satisfy 1 <= top_k <= experts, got top_k={top_k}, experts={experts}")
+    if num_iterations < 1:
+        raise ValueError(f"num_iterations must be >= 1, got {num_iterations}")
 
-    k = topk_idx.shape[1]
-    logits = adjusted_router_logits.astype(jnp.float32)
-    idx = topk_idx.astype(jnp.int32)
-    weights = topk_weights.astype(jnp.float32)
+    scores = router_logits.astype(jnp.float32)
+    bias = selection_bias.astype(jnp.float32)
+    quantile_level_float = 1.0 - top_k / float(experts)
 
-    kth = jax.lax.top_k(logits, k)[0][:, -1]
-    residual = jnp.maximum(logits - kth[:, None] - unit_capacity, 0.0)
+    for _ in range(num_iterations):
+        adjusted = scores + bias[None, :]
+        alpha = jnp.quantile(adjusted, quantile_level_float, axis=1, keepdims=True)
+        beta = jnp.quantile(scores - alpha, quantile_level_float, axis=0, keepdims=False)
+        bias = -beta
 
-    flat_idx = idx.reshape(-1)
-    flat_weights = weights.reshape(-1)
-    expert_weighted_load = jnp.bincount(flat_idx, weights=flat_weights, length=experts)
+    current_adjusted = scores + selection_bias.astype(jnp.float32)[None, :]
+    topk_idx = jax.lax.top_k(current_adjusted, top_k)[1].astype(jnp.int32)
+    expert_counts = jnp.bincount(topk_idx.reshape(-1), length=experts).astype(jnp.float32)
+    target_count = jnp.asarray(tokens * top_k / float(experts), dtype=jnp.float32)
+    quantile_level = jnp.asarray(quantile_level_float, dtype=jnp.float32)
 
-    tokens_f = jnp.asarray(tokens, dtype=jnp.float32)
-    target_load = tokens_f / float(experts)
-    quantile_prob = jnp.clip(1.0 - (expert_weighted_load - target_load) / tokens_f, 0.0, 1.0)
-
-    sorted_residual = jnp.sort(residual, axis=0)
-    quantile_pos = jnp.floor(quantile_prob * float(tokens - 1)).astype(jnp.int32)
-    quantile_pos = jnp.clip(quantile_pos, 0, tokens - 1)
-    expert_ids = jnp.arange(experts, dtype=jnp.int32)
-    delta = sorted_residual[quantile_pos, expert_ids]
-
-    return delta.astype(adjusted_router_logits.dtype), expert_weighted_load, target_load, quantile_prob
+    return bias.astype(selection_bias.dtype), expert_counts, target_count, quantile_level

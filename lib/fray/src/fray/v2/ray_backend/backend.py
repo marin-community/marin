@@ -331,6 +331,7 @@ class RayClient:
             remote_fn,
             tpu_type=device.variant,
             num_slices=num_slices,
+            head_resources=request.resources.tpu_head_resources or None,
             max_retries_preemption=request.max_retries_preemption,
             max_retries_failure=request.max_retries_failure,
         )

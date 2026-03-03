@@ -369,11 +369,23 @@ def make_speedrun_config(
     seq_len: int,
     tpu_type: str,
     cross_entropy_block_size: int | None = None,
+    equilibrium_lb_loss_scale: float = 0.0,
+    equilibrium_lb_iterations: int = 5,
+    equilibrium_lb_center_bias: bool = True,
 ) -> SpeedrunConfig:
     tokenized_dataset = DATASET_OPTIONS[dataset_name]
     model_config = build_model_config(model=model, seq_len=seq_len)
     if cross_entropy_block_size is not None:
         model_config = dataclasses.replace(model_config, cross_entropy_block_size=cross_entropy_block_size)
+    if equilibrium_lb_loss_scale > 0:
+        # Quantile-balancing (aux-free style) uses router bias updates; disable classic lbl aux when enabled.
+        model_config = dataclasses.replace(
+            model_config,
+            lbl_coef=None,
+            equilibrium_lb_loss_scale=equilibrium_lb_loss_scale,
+            equilibrium_lb_iterations=equilibrium_lb_iterations,
+            equilibrium_lb_center_bias=equilibrium_lb_center_bias,
+        )
     return SpeedrunConfig(
         author=Author(
             name="Marin Team",
@@ -426,6 +438,34 @@ def _parse_args():
             "Useful for working around TPU vmem limits in the fused (Pallas) CE kernel."
         ),
     )
+    parser.add_argument(
+        "--equilibrium-lb-loss-scale",
+        type=float,
+        default=0.0,
+        help=(
+            "Enable quantile-balancing load balancing (MoE Odyssey / Optimal Allocation) when > 0. "
+            "This applies a router-bias-only loss proxy and disables classic lbl_coef."
+        ),
+    )
+    parser.add_argument(
+        "--equilibrium-lb-iterations",
+        type=int,
+        default=5,
+        help="Number of alternating quantile updates used to compute the QB bias target.",
+    )
+    parser.add_argument(
+        "--equilibrium-lb-center-bias",
+        dest="equilibrium_lb_center_bias",
+        action="store_true",
+        help="Center router bias before applying it to selection logits (default).",
+    )
+    parser.add_argument(
+        "--no-equilibrium-lb-center-bias",
+        dest="equilibrium_lb_center_bias",
+        action="store_false",
+        help="Do not center router bias before selection logits.",
+    )
+    parser.set_defaults(equilibrium_lb_center_bias=True)
     parser.add_argument(
         "--profile",
         action="store_true",
@@ -520,6 +560,9 @@ if __name__ == "__main__":
         seq_len=args.seq_len,
         tpu_type=args.tpu_type,
         cross_entropy_block_size=args.cross_entropy_block_size,
+        equilibrium_lb_loss_scale=args.equilibrium_lb_loss_scale,
+        equilibrium_lb_iterations=args.equilibrium_lb_iterations,
+        equilibrium_lb_center_bias=args.equilibrium_lb_center_bias,
     )
     logger.info("Launching MoE Nemotron speedrun.")
     logger.info(
@@ -531,7 +574,12 @@ if __name__ == "__main__":
         TOKEN_TARGET / 1e9,
     )
     logger.info("Model preset: %s", args.model)
-    logger.info("Model config flags: use_gmm=%s", run_config.model_config.use_gmm)
+    logger.info(
+        "Model config flags: use_gmm=%s equilibrium_lb_loss_scale=%s equilibrium_lb_iterations=%s",
+        run_config.model_config.use_gmm,
+        getattr(run_config.model_config, "equilibrium_lb_loss_scale", 0.0),
+        getattr(run_config.model_config, "equilibrium_lb_iterations", 5),
+    )
     if args.profile:
         logger.info(
             "Profiler enabled: start_step=%s num_steps=%s",

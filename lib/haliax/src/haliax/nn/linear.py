@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import functools
 import math
+import os
 from typing import Optional
 
 import equinox as eqx
@@ -31,6 +33,44 @@ from ..jax_utils import named_call
 from ..partitioning import ResourceAxis, shard_map
 from ..quantization import DotGeneralOp
 from ..util import ensure_tuple
+
+_GMM_TILE_SIZE_ENV_VAR = "HALIAX_GMM_TILE_SIZE"
+# Default Megablox GMM tiling (m, k, n). Users can override this with HALIAX_GMM_TILE_SIZE.
+#
+# Note: On TPU, the Megablox kernel allocates scratch buffers in *scoped* VMEM which has a small
+# (16MiB) budget. Recent XLA versions can fail compilation for some shapes when tiling is too
+# aggressive. We default to slightly smaller K/N tiles to avoid deterministic vmem OOMs while
+# keeping good performance.
+_DEFAULT_GMM_TILE_SIZE = (512, 1024, 1024)
+_TPU_GMM_TILE_SIZE = (512, 896, 896)
+
+
+@functools.lru_cache(maxsize=1)
+def _get_gmm_tile_size() -> tuple[int, int, int]:
+    """Return the Megablox GMM tiling (m, k, n).
+
+    Override the default by setting `HALIAX_GMM_TILE_SIZE` to a comma-separated triple of
+    positive integers, e.g. `512,896,896`.
+    """
+    override = os.getenv(_GMM_TILE_SIZE_ENV_VAR)
+    if override:
+        parts = [p.strip() for p in override.split(",")]
+        if len(parts) != 3:
+            raise ValueError(f"{_GMM_TILE_SIZE_ENV_VAR} must be 3 comma-separated integers (m,k,n), got: {override!r}")
+        try:
+            m, k, n = (int(p) for p in parts)
+        except ValueError as e:
+            raise ValueError(
+                f"{_GMM_TILE_SIZE_ENV_VAR} must be 3 comma-separated integers (m,k,n), got: {override!r}"
+            ) from e
+        if m <= 0 or k <= 0 or n <= 0:
+            raise ValueError(f"{_GMM_TILE_SIZE_ENV_VAR} must be positive integers (m,k,n), got: {override!r}")
+        return (m, k, n)
+
+    if jax.default_backend() == "tpu":
+        return _TPU_GMM_TILE_SIZE
+
+    return _DEFAULT_GMM_TILE_SIZE
 
 
 class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
@@ -318,7 +358,7 @@ def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray,
         pad_length = 512 - hs_shape[0] % 512
         lhs_ = jax.lax.pad(lhs_, 0.0, [(0, pad_length, 0), (0, 0, 0)])
 
-    tile_size = (512, 1024, 1024)  # (m, k, n)
+    tile_size = _get_gmm_tile_size()
     m, k, n = lhs_.shape[0], lhs_.shape[1], rhs_.shape[2]
     out = gmm(
         lhs_,
