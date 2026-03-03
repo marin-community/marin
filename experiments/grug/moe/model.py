@@ -263,9 +263,7 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
-        *,
-        return_router_stats: bool = False,
-    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None)))
@@ -293,11 +291,7 @@ class MoEMLP(eqx.Module):
             )
             out = routed + shared_out
 
-        if return_router_stats:
-            assert router_stats is not None
-            return out, router_stats
-
-        return out
+        return out, router_stats
 
     def _has_shared(self):
         if self.shared_w_up_gate is not None or self.shared_w_down is not None:
@@ -327,17 +321,11 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        *,
-        return_router_stats: bool = False,
-    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x = x + self.attn(self.rms_attn(x), mask)
-        if return_router_stats:
-            mlp_out, router_stats = self.mlp(self.rms_mlp(x), return_router_stats=True)
-            x = x + mlp_out
-            return x, router_stats
-
-        x = x + self.mlp(self.rms_mlp(x))
-        return x
+        mlp_out, router_stats = self.mlp(self.rms_mlp(x))
+        x = x + mlp_out
+        return x, router_stats
 
 
 class Transformer(eqx.Module):
@@ -368,29 +356,22 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-        *,
-        return_router_stats: bool = False,
-    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
 
         batch_spec = _batch_spec()
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        if return_router_stats:
-            all_router_stats: list[dict[str, jax.Array]] = []
-            for block in self.blocks:
-                hidden, router_stats = eqx.filter_checkpoint(block)(hidden, mask, return_router_stats=True)
-                all_router_stats.append(router_stats)
-
-            router_metrics = {
-                "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in all_router_stats], axis=0),
-                "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in all_router_stats], axis=0),
-            }
-            return self.final_norm(hidden), router_metrics
-
+        all_router_stats: list[dict[str, jax.Array]] = []
         for block in self.blocks:
-            hidden = eqx.filter_checkpoint(block)(hidden, mask)
-        return self.final_norm(hidden)
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, mask)
+            all_router_stats.append(router_stats)
+
+        router_metrics = {
+            "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in all_router_stats], axis=0),
+            "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in all_router_stats], axis=0),
+        }
+        return self.final_norm(hidden), router_metrics
 
     @named_call
     def logits(
@@ -399,10 +380,10 @@ class Transformer(eqx.Module):
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
-        hidden = self(token_ids, mask=mask)
+        hidden, _ = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
-    def compute_loss(
+    def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
         loss_weight: Float[Array, "B S"],
@@ -413,12 +394,7 @@ class Transformer(eqx.Module):
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
-        """Compute next-token cross-entropy loss for a batch."""
-        router_metrics: dict[str, jax.Array] | None = None
-        if return_router_metrics:
-            hidden, router_metrics = self(token_ids, mask=mask, return_router_stats=True)
-        else:
-            hidden = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -432,30 +408,8 @@ class Transformer(eqx.Module):
             dtype=loss_dtype,
         )
         if return_router_metrics:
-            assert router_metrics is not None
             return loss, _summarize_router_metrics(router_metrics)
         return loss
-
-    def next_token_loss(
-        self,
-        token_ids: Int[Array, "B S"],
-        loss_weight: Float[Array, "B S"],
-        *,
-        mask: AttentionMask | jax.Array | None = None,
-        reduction: str = "mean",
-        logsumexp_weight: float | None = None,
-        loss_dtype: jnp.dtype = jnp.float32,
-        return_router_metrics: bool = False,
-    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
-        return self.compute_loss(
-            token_ids,
-            loss_weight,
-            mask=mask,
-            reduction=reduction,
-            logsumexp_weight=logsumexp_weight,
-            loss_dtype=loss_dtype,
-            return_router_metrics=return_router_metrics,
-        )
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
