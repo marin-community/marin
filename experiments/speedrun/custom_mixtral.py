@@ -33,7 +33,7 @@ from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddin
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
-from levanter.models.moe_load_balance import equilibrium_bias_delta_from_topk
+from levanter.models.moe_load_balance import quantile_balancing_bias_target
 from levanter.models.mistral import MistralConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -123,6 +123,7 @@ class CustomMixtralConfig(MistralConfig):
     cross_entropy_h_block_size: int | None = None
     cross_entropy_implementation: str | None = "legacy"
     log_moe_metrics: bool = True
+    moe_metrics_mode: str = "full"
 
     # QK normalization (applies LayerNorm/RMSNorm in attention on q and k vectors).
     use_qk_norm: bool = False
@@ -149,12 +150,18 @@ class CustomMixtralConfig(MistralConfig):
 
     # Quantile-balancing (Optimal Allocation for Equilibrium) bias-only update proxy.
     #
-    # We reuse `router_bias` and build a stop-gradient bias loss from the quantile update direction:
-    #   b <- b - Quantile(r_ij, q_j)
-    # where residuals/quantiles are computed from adjusted logits and current top-k routing.
+    # We reuse `router_bias` and build a stop-gradient target from the alternating quantile update:
+    #   alpha_i <- Quantile(s_i + b, 1 - k / n)
+    #   beta_j  <- Quantile(s - alpha, 1 - k / n)
+    #   b*      <- -beta
+    # The training objective for the bias is then a squared distance to b*.
     equilibrium_lb_loss_scale: float = 0.0
     equilibrium_lb_center_bias: bool = True
-    equilibrium_lb_unit_capacity: float = 1.0
+    equilibrium_lb_iterations: int = 5
+    # Objective mode for equilibrium load balancing:
+    # - "target_l2": 0.5 * ||b - stop_grad(b*)||^2
+    # - "article_original": article objective with stop-grad scores/alpha so gradients are bias-only.
+    equilibrium_lb_objective: str = "target_l2"
 
     # Use dense (single-expert) routing for the first N transformer layers.
     dense_first_n_layers: int = 0
@@ -193,6 +200,17 @@ class CustomMixtralConfig(MistralConfig):
         ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
         if self.alf_lb_loss_scale > 0 and self.equilibrium_lb_loss_scale > 0:
             raise ValueError("alf_lb_loss_scale and equilibrium_lb_loss_scale are mutually exclusive.")
+        if self.equilibrium_lb_iterations < 1:
+            raise ValueError("equilibrium_lb_iterations must be >= 1.")
+        if self.equilibrium_lb_objective not in {"target_l2", "article_original"}:
+            raise ValueError(
+                "equilibrium_lb_objective must be one of {'target_l2', 'article_original'}; "
+                f"got {self.equilibrium_lb_objective!r}."
+            )
+        if self.moe_metrics_mode not in {"full", "equilibrium_only"}:
+            raise ValueError(
+                "moe_metrics_mode must be one of {'full', 'equilibrium_only'}; " f"got {self.moe_metrics_mode!r}."
+            )
 
     def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
         return HFCheckpointConverter(
@@ -585,16 +603,20 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         alf_scale = float(getattr(self.config, "alf_lb_loss_scale", 0.0))
         equilibrium_scale = float(getattr(self.config, "equilibrium_lb_loss_scale", 0.0))
+        equilibrium_objective = str(getattr(self.config, "equilibrium_lb_objective", "target_l2"))
         selection_logits = router_logits
+        selection_bias = None
+        equilibrium_center_bias = bool(getattr(self.config, "equilibrium_lb_center_bias", True))
         if alf_scale > 0 or equilibrium_scale > 0:
             bias = self.router_bias
             center_bias = getattr(self.config, "alf_lb_center_bias", True)
             if equilibrium_scale > 0:
-                center_bias = getattr(self.config, "equilibrium_lb_center_bias", center_bias)
+                center_bias = equilibrium_center_bias
             if center_bias:
                 bias = bias - hax.mean(bias, axis=Experts)
             if router_fp32 and bias.array.dtype != jnp.float32:
                 bias = bias.astype(jnp.float32)
+            selection_bias = bias
             selection_logits = selection_logits + bias
 
         topk_weights, topk_idx = self._route(
@@ -611,19 +633,64 @@ class MixtralSparseMoeBlock(eqx.Module):
             topk_weights = hax.named(w_arr, (Token, TopExperts))
             topk_idx = hax.named(idx_arr, (Token, TopExperts))
 
-        equilibrium_delta = None
         if equilibrium_scale > 0 and not force_dense:
-            delta_arr, weighted_load_arr, target_load_arr, quantile_prob_arr = equilibrium_bias_delta_from_topk(
-                selection_logits.array,
-                topk_idx.array,
-                topk_weights.array,
-                unit_capacity=float(getattr(self.config, "equilibrium_lb_unit_capacity", 1.0)),
+            if selection_bias is None:
+                raise ValueError("selection_bias must be set when equilibrium load balancing is enabled")
+            target_bias_arr, expert_counts_arr, target_count_arr, quantile_level_arr = quantile_balancing_bias_target(
+                router_logits.array,
+                selection_bias.array,
+                top_k=TopExperts.size,
+                num_iterations=int(getattr(self.config, "equilibrium_lb_iterations", 5)),
             )
-            equilibrium_delta = hax.named(jax.lax.stop_gradient(delta_arr), Experts)
-            weighted_load = hax.named(weighted_load_arr, Experts)
-            quantile_prob = hax.named(quantile_prob_arr, Experts)
-            target_load = hax.named(jnp.full((Experts.size,), target_load_arr, dtype=weighted_load_arr.dtype), Experts)
+            target_bias = hax.named(jax.lax.stop_gradient(target_bias_arr), Experts)
+            bias_for_loss = self.router_bias
+            if equilibrium_center_bias:
+                bias_for_loss = bias_for_loss - hax.mean(bias_for_loss, axis=Experts)
+            if router_fp32 and bias_for_loss.array.dtype != jnp.float32:
+                bias_for_loss = bias_for_loss.astype(jnp.float32)
+            if equilibrium_objective == "target_l2":
+                diff = bias_for_loss - target_bias
+                equilibrium_bias_loss = 0.5 * equilibrium_scale * hax.sum(diff * diff, axis=Experts)
+            elif equilibrium_objective == "article_original":
+                # MoE Odyssey objective:
+                #   min_beta sum_{i,j} max(0, s_ij - alpha_i - beta_j) + (mk/n) * sum_j beta_j
+                # Our routing uses b = -beta in selection logits (s + b), so:
+                #   sum_{i,j} max(0, s_ij - alpha_i + b_j) - (k/n) * sum_j b_j
+                # We stop gradients through router scores and alpha so only bias receives aux gradients.
+                scores_for_obj = hax.named(
+                    jax.lax.stop_gradient(router_logits.array.astype(jnp.float32)),
+                    (Token, Experts),
+                )
+                selection_for_alpha = jax.lax.stop_gradient(selection_bias.array.astype(jnp.float32))
+                alpha_arr = jnp.quantile(
+                    scores_for_obj.array + selection_for_alpha[None, :],
+                    1.0 - float(TopExperts.size) / float(Experts.size),
+                    axis=1,
+                    keepdims=False,
+                )
+                alpha = hax.named(jax.lax.stop_gradient(alpha_arr), Token)
+                bias_for_obj = hax.named(bias_for_loss.array.astype(jnp.float32), Experts)
+                margin = scores_for_obj - alpha + bias_for_obj
+                relu_term = hax.mean(
+                    hax.sum(hax.named(jax.nn.relu(margin.array), (Token, Experts)), axis=Experts),
+                    axis=Token,
+                )
+                capacity_fraction = float(TopExperts.size) / float(Experts.size)
+                linear_term = capacity_fraction * hax.sum(bias_for_obj, axis=Experts)
+                equilibrium_bias_loss = equilibrium_scale * (relu_term - linear_term)
+            else:
+                raise ValueError(
+                    "Unsupported equilibrium_lb_objective="
+                    f"{equilibrium_objective!r}. Expected 'target_l2' or 'article_original'."
+                )
+            weighted_load = hax.named(expert_counts_arr, Experts)
+            quantile_prob = hax.named(
+                jnp.full((Experts.size,), quantile_level_arr, dtype=expert_counts_arr.dtype),
+                Experts,
+            )
+            target_load = hax.named(jnp.full((Experts.size,), target_count_arr, dtype=expert_counts_arr.dtype), Experts)
         else:
+            equilibrium_bias_loss = None
             weighted_load = None
             quantile_prob = None
             target_load = None
@@ -687,6 +754,8 @@ class MixtralSparseMoeBlock(eqx.Module):
         extras = {
             "expert_loads": expert_loads,
         }
+        if selection_bias is not None:
+            extras["router_bias"] = selection_bias
         if self.config.lbl_coef is not None and alf_scale <= 0 and equilibrium_scale <= 0:
             # Shapes:
             # - expert_loads: [Experts] where Experts.size == n_routed_experts
@@ -710,11 +779,8 @@ class MixtralSparseMoeBlock(eqx.Module):
             delta_arr = jax.lax.stop_gradient(delta_arr)
             delta = hax.named(delta_arr, Experts)
             extras["alf_lb_bias_loss"] = alf_scale * hax.sum(self.router_bias * delta, axis=Experts)
-        if equilibrium_scale > 0 and equilibrium_delta is not None:
-            extras["equilibrium_lb_bias_loss"] = equilibrium_scale * hax.sum(
-                self.router_bias * equilibrium_delta,
-                axis=Experts,
-            )
+        if equilibrium_scale > 0 and equilibrium_bias_loss is not None:
+            extras["equilibrium_lb_bias_loss"] = equilibrium_bias_loss
             # Helpful diagnostics for smoke tests.
             extras["equilibrium_lb_weighted_load"] = weighted_load
             extras["equilibrium_lb_target_load"] = target_load
@@ -830,17 +896,25 @@ class MixtralTransformer(eqx.Module):
             stats["train/equilibrium_lb_bias_loss"] = jax.lax.stop_gradient(extras["equilibrium_lb_bias_loss"].array)
 
         if self.config.log_moe_metrics:
+            moe_metrics_mode = str(getattr(self.config, "moe_metrics_mode", "full"))
             expert_loads = extras["expert_loads"]
-            entropy = -hax.sum(expert_loads * hax.log(expert_loads + 1e-6), axis=self.config.Experts)
             load_violation = expert_loads * self.config.n_routed_experts - 1.0
             load_violation_max = hax.max(load_violation, axis=self.config.Experts)
             global_load_violation_max = hax.max(load_violation_max, axis=self.config.Layers)
-
-            for i in range(self.config.num_layers):
-                stats[f"moe/layer{i}/routing_entropy"] = jax.lax.stop_gradient(entropy.array[i])
-                stats[f"moe/layer{i}/load_violation_max"] = jax.lax.stop_gradient(load_violation_max.array[i])
+            if "router_bias" in extras:
+                bias_by_expert = hax.mean(extras["router_bias"], axis=self.config.Layers)
                 for j in range(self.config.n_routed_experts):
-                    stats[f"moe/layer{i}/expert{j}_load"] = jax.lax.stop_gradient(expert_loads.array[i, j])
+                    stats[f"moe/router_bias/expert{j}"] = jax.lax.stop_gradient(bias_by_expert.array[j])
+                stats["moe/router_bias/experts_mean"] = jax.lax.stop_gradient(jnp.mean(bias_by_expert.array))
+                stats["moe/router_bias/l2_norm"] = jax.lax.stop_gradient(jnp.linalg.norm(bias_by_expert.array))
+
+            if moe_metrics_mode == "full":
+                entropy = -hax.sum(expert_loads * hax.log(expert_loads + 1e-6), axis=self.config.Experts)
+                for i in range(self.config.num_layers):
+                    stats[f"moe/layer{i}/routing_entropy"] = jax.lax.stop_gradient(entropy.array[i])
+                    stats[f"moe/layer{i}/load_violation_max"] = jax.lax.stop_gradient(load_violation_max.array[i])
+                    for j in range(self.config.n_routed_experts):
+                        stats[f"moe/layer{i}/expert{j}_load"] = jax.lax.stop_gradient(expert_loads.array[i, j])
             stats["moe/load_violation_max"] = jax.lax.stop_gradient(global_load_violation_max.array)
             if "equilibrium_lb_weighted_load" in extras and "equilibrium_lb_target_load" in extras:
                 weighted = extras["equilibrium_lb_weighted_load"].array

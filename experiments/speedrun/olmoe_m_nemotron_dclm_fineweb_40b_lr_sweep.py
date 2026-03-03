@@ -9,7 +9,7 @@ This mirrors `experiments/speedrun/olmoe_s_dclm10b_moe_vs_dense_lr_sweep.py`, bu
   - `nemotron_cc` (full Nemotron-CC)
   - `nemotron_dclm_fineweb_10b` (composite Nemotron+DCLM+FineWeb mixture)
 - runs OLMoE-M geometry (16 experts, top-2 routing)
-- compares 5 MoE variants across 4 learning rates:
+- compares 6 MoE variants across 4 learning rates:
   1) `olmoe_m` (vanilla)
   2) `olmoe_m_bilinear` (bilinear expert MLPs; SwiGLU -> (W1 x) * (W3 x))
   3) `olmoe_m_stab2` (two stability measures):
@@ -19,7 +19,17 @@ This mirrors `experiments/speedrun/olmoe_s_dclm10b_moe_vs_dense_lr_sweep.py`, bu
      - QK-norm
      - topk-then-softmax routing
      - fp32 router compute
-  5) `olmoe_m_stab5` (five stability measures, including fp32 router compute):
+  5) `olmoe_m_stab4` (four stability measures, target-L2 equilibrium objective):
+     - QK-norm
+     - topk-then-softmax routing
+     - fp32 router compute
+     - equilibrium/quantile load balancing (MoE Odyssey / Optimal Allocation)
+  6) `olmoe_m_stab4_original` (same as stab4, but original article objective):
+     - QK-norm
+     - topk-then-softmax routing
+     - fp32 router compute
+     - equilibrium/quantile load balancing with article objective
+  7) `olmoe_m_stab5` (five stability measures, including fp32 router compute):
      - QK-norm
      - topk-then-softmax routing
      - auxiliary-free load balancing (ALF-LB)
@@ -124,6 +134,8 @@ def _make_tags(
     use_qk_norm: bool,
     router_topk_then_softmax: bool,
     alf_lb_loss_scale: float,
+    equilibrium_lb_loss_scale: float,
+    equilibrium_lb_objective: str,
     dense_first_n_layers: int,
     router_fp32: bool,
     dataset_name: str,
@@ -142,6 +154,8 @@ def _make_tags(
         f"stab_qk_norm={int(use_qk_norm)}",
         f"stab_topk_then_softmax={int(router_topk_then_softmax)}",
         f"stab_alf_lb={int(alf_lb_loss_scale > 0)}",
+        f"stab_equilibrium_lb={int(equilibrium_lb_loss_scale > 0)}",
+        f"stab_equilibrium_obj={equilibrium_lb_objective}",
         f"stab_dense_first2={int(dense_first_n_layers >= 2)}",
         f"stab_router_fp32={int(router_fp32)}",
         *extra_tags,
@@ -149,7 +163,15 @@ def _make_tags(
 
 
 def main() -> None:
-    variant_choices = ("olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab2", "olmoe_m_stab3", "olmoe_m_stab5")
+    variant_choices = (
+        "olmoe_m",
+        "olmoe_m_bilinear",
+        "olmoe_m_stab2",
+        "olmoe_m_stab3",
+        "olmoe_m_stab4",
+        "olmoe_m_stab4_original",
+        "olmoe_m_stab5",
+    )
     parser = argparse.ArgumentParser(
         description=(
             "OLMoE-M LR sweep on configurable Nemotron-family datasets "
@@ -267,6 +289,18 @@ def main() -> None:
     parser.add_argument("--extra-tag", action="append", default=[], help="Additional W&B tag (repeatable).")
 
     parser.add_argument("--stab-alf-lb-loss-scale", type=float, default=0.01)
+    parser.add_argument(
+        "--stab-equilibrium-lb-loss-scale",
+        type=float,
+        default=0.01,
+        help="Equilibrium/quantile load-balancing bias-loss scale used by stab4.",
+    )
+    parser.add_argument(
+        "--stab-equilibrium-lb-iterations",
+        type=int,
+        default=5,
+        help="Number of alternating quantile updates used by stab4 equilibrium balancing.",
+    )
     parser.add_argument(
         "--variants",
         nargs="+",
@@ -400,6 +434,28 @@ def main() -> None:
         router_topk_then_softmax=True,
         router_fp32=True,
     )
+    olmoe_m_stab4 = dataclasses.replace(
+        olmoe_m,
+        use_qk_norm=True,
+        router_topk_then_softmax=True,
+        router_fp32=True,
+        lbl_coef=None,
+        equilibrium_lb_loss_scale=args.stab_equilibrium_lb_loss_scale,
+        equilibrium_lb_iterations=args.stab_equilibrium_lb_iterations,
+        equilibrium_lb_objective="target_l2",
+        moe_metrics_mode="equilibrium_only",
+    )
+    olmoe_m_stab4_original = dataclasses.replace(
+        olmoe_m,
+        use_qk_norm=True,
+        router_topk_then_softmax=True,
+        router_fp32=True,
+        lbl_coef=None,
+        equilibrium_lb_loss_scale=args.stab_equilibrium_lb_loss_scale,
+        equilibrium_lb_iterations=args.stab_equilibrium_lb_iterations,
+        equilibrium_lb_objective="article_original",
+        moe_metrics_mode="equilibrium_only",
+    )
     olmoe_m_stab5 = dataclasses.replace(
         olmoe_m,
         use_qk_norm=True,
@@ -414,6 +470,8 @@ def main() -> None:
         ("olmoe_m_bilinear", olmoe_m_bilinear),
         ("olmoe_m_stab2", olmoe_m_stab2),
         ("olmoe_m_stab3", olmoe_m_stab3),
+        ("olmoe_m_stab4", olmoe_m_stab4),
+        ("olmoe_m_stab4_original", olmoe_m_stab4_original),
         ("olmoe_m_stab5", olmoe_m_stab5),
     ]
     selected_variants = {v.strip() for v in args.variants}
@@ -440,6 +498,8 @@ def main() -> None:
             use_qk_norm = bool(getattr(model_cfg, "use_qk_norm", False))
             router_topk_then_softmax = bool(getattr(model_cfg, "router_topk_then_softmax", False))
             alf_lb_loss_scale = float(getattr(model_cfg, "alf_lb_loss_scale", 0.0) or 0.0)
+            equilibrium_lb_loss_scale = float(getattr(model_cfg, "equilibrium_lb_loss_scale", 0.0) or 0.0)
+            equilibrium_lb_objective = str(getattr(model_cfg, "equilibrium_lb_objective", "target_l2"))
             dense_first_n_layers = int(getattr(model_cfg, "dense_first_n_layers", 0) or 0)
             router_fp32 = bool(getattr(model_cfg, "router_fp32", False))
 
@@ -457,6 +517,8 @@ def main() -> None:
                 use_qk_norm=use_qk_norm,
                 router_topk_then_softmax=router_topk_then_softmax,
                 alf_lb_loss_scale=alf_lb_loss_scale,
+                equilibrium_lb_loss_scale=equilibrium_lb_loss_scale,
+                equilibrium_lb_objective=equilibrium_lb_objective,
                 dense_first_n_layers=dense_first_n_layers,
                 router_fp32=router_fp32,
                 dataset_name=args.dataset,

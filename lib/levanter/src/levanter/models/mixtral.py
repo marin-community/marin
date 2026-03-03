@@ -29,7 +29,7 @@ from levanter.layers.attention import Attention, AttentionBackend, AttentionConf
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
 from levanter.models.lm_model import LmConfig, LmHeadModel
-from levanter.models.moe_load_balance import equilibrium_bias_delta_from_topk
+from levanter.models.moe_load_balance import quantile_balancing_bias_target
 from levanter.models.mistral import MistralConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -88,7 +88,7 @@ class MixtralConfig(MistralConfig):
     router_fp32: bool = False
     equilibrium_lb_loss_scale: float = 0.0
     equilibrium_lb_center_bias: bool = True
-    equilibrium_lb_unit_capacity: float = 1.0
+    equilibrium_lb_iterations: int = 5
 
     # Attention-related config
     upcast_attn: bool = False
@@ -126,6 +126,8 @@ class MixtralConfig(MistralConfig):
         assert (
             self.num_experts_per_tok <= self.n_routed_experts
         ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
+        if self.equilibrium_lb_iterations < 1:
+            raise ValueError("equilibrium_lb_iterations must be >= 1.")
 
     def hf_checkpoint_converter(
         self, ref_checkpoint: Optional[str] = None
@@ -475,12 +477,14 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         equilibrium_scale = float(getattr(self.config, "equilibrium_lb_loss_scale", 0.0))
         selection_logits = router_logits
+        selection_bias = None
         if equilibrium_scale > 0:
             bias = self.router_bias
             if bool(getattr(self.config, "equilibrium_lb_center_bias", True)):
                 bias = bias - hax.mean(bias, axis=Experts)
             if router_fp32 and bias.array.dtype != jnp.float32:
                 bias = bias.astype(jnp.float32)
+            selection_bias = bias
             selection_logits = selection_logits + bias
 
         router_probs = hnn.softmax(router_logits, axis=Experts)
@@ -514,20 +518,31 @@ class MixtralSparseMoeBlock(eqx.Module):
                 hnn.logsumexp(router_logits, axis=Experts) ** 2, axis=Token
             )
         if equilibrium_scale > 0:
-            delta_arr, weighted_load_arr, target_load_arr, quantile_prob_arr = equilibrium_bias_delta_from_topk(
-                selection_logits.array,
-                topk_idx.array,
-                topk_weights.array,
-                unit_capacity=float(getattr(self.config, "equilibrium_lb_unit_capacity", 1.0)),
+            if selection_bias is None:
+                raise ValueError("selection_bias must be set when equilibrium load balancing is enabled")
+            target_bias_arr, expert_counts_arr, target_count_arr, quantile_level_arr = quantile_balancing_bias_target(
+                router_logits.array,
+                selection_bias.array,
+                top_k=TopExperts.size,
+                num_iterations=int(getattr(self.config, "equilibrium_lb_iterations", 5)),
             )
-            delta = hax.named(jax.lax.stop_gradient(delta_arr), Experts)
-            extras["equilibrium_lb_bias_loss"] = equilibrium_scale * hax.sum(self.router_bias * delta, axis=Experts)
-            extras["equilibrium_lb_weighted_load"] = hax.named(weighted_load_arr, Experts)
+            target_bias = hax.named(jax.lax.stop_gradient(target_bias_arr), Experts)
+            bias_for_loss = self.router_bias
+            if bool(getattr(self.config, "equilibrium_lb_center_bias", True)):
+                bias_for_loss = bias_for_loss - hax.mean(bias_for_loss, axis=Experts)
+            if router_fp32 and bias_for_loss.array.dtype != jnp.float32:
+                bias_for_loss = bias_for_loss.astype(jnp.float32)
+            diff = bias_for_loss - target_bias
+            extras["equilibrium_lb_bias_loss"] = 0.5 * equilibrium_scale * hax.sum(diff * diff, axis=Experts)
+            extras["equilibrium_lb_weighted_load"] = hax.named(expert_counts_arr, Experts)
             extras["equilibrium_lb_target_load"] = hax.named(
-                jnp.full((Experts.size,), target_load_arr, dtype=weighted_load_arr.dtype),
+                jnp.full((Experts.size,), target_count_arr, dtype=expert_counts_arr.dtype),
                 Experts,
             )
-            extras["equilibrium_lb_quantile_prob"] = hax.named(quantile_prob_arr, Experts)
+            extras["equilibrium_lb_quantile_prob"] = hax.named(
+                jnp.full((Experts.size,), quantile_level_arr, dtype=expert_counts_arr.dtype),
+                Experts,
+            )
 
         return hax.unflatten_axis(out, axis=Token, new_axes=squash_axes), extras  # [Batch, Pos, Embed]
 
