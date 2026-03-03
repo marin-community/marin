@@ -779,13 +779,8 @@ class TestAutoscalerBootstrapLogs:
         assert autoscaler.get_init_log(vm_id) == bootstrap_log
         assert autoscaler.get_init_log(vm_id, tail=2) == "line2\nline3"
 
-    def test_get_vm_by_address_fallback(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """get_vm() finds workers by internal address when the key doesn't match.
-
-        The controller derives worker_id from the worker's advertised address
-        (e.g. '10.0.0.5'), while the autoscaler indexes by the platform
-        worker_id (e.g. 'slice-001-vm-0'). The address fallback bridges this.
-        """
+    def test_get_vm_by_worker_id(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """get_vm() uses platform worker_id as the only lookup key."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
@@ -795,16 +790,13 @@ class TestAutoscalerBootstrapLogs:
         autoscaler._register_slice_workers(workers, mock_handle.slice_id, "test-group")
 
         worker = workers[0]
-        # Primary lookup by platform worker_id works
-        assert autoscaler.get_vm(worker.worker_id) is not None
-        # Lookup by internal address (controller-style worker_id) also works
-        assert autoscaler.get_vm(worker.internal_address) is not None
-        assert autoscaler.get_vm(worker.internal_address).scale_group == "test-group"
+        # Lookup by platform worker_id
+        info = autoscaler.get_vm(worker.worker_id)
+        assert info is not None
+        assert info.scale_group == "test-group"
 
-        # Same for init logs
-        assert autoscaler.get_init_log(worker.internal_address) is not None
-
-        # Non-existent address returns None
+        # Unknown keys return None — no address fallback
+        assert autoscaler.get_vm(worker.internal_address) is None
         assert autoscaler.get_vm("192.168.0.99") is None
 
 

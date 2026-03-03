@@ -714,55 +714,24 @@ def test_get_worker_status_recent_tasks_have_timestamps(client, state, make_work
     assert tasks[0].get("finishedAt"), "finished_at must be populated from attempt timestamps"
 
 
-def test_get_worker_status_by_worker_id(state, scheduler, make_worker_metadata):
-    """GetWorkerStatus uses worker ID as the canonical lookup key."""
+def test_get_worker_status_by_worker_id(client, state, make_worker_metadata):
+    """GetWorkerStatus looks up purely by worker ID — no autoscaler cross-referencing."""
     register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
-
-    # Mock autoscaler enriches with VM info when looked up by worker ID
-    autoscaler = Mock()
-    autoscaler.get_vm.return_value = vm_pb2.VmInfo(
-        vm_id="w1",
-        state=vm_pb2.VM_STATE_READY,
-        address="10.0.0.5",
-        scale_group="gpu-group",
-    )
-    autoscaler.get_init_log.return_value = "bootstrap done"
-
-    controller_mock = _make_controller_mock(state, scheduler, autoscaler=autoscaler)
-    service = ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
-    dashboard = ControllerDashboard(service)
-    client = TestClient(dashboard.app)
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
     assert resp.get("worker", {}).get("workerId") == "w1"
     assert resp.get("worker", {}).get("healthy") is True
-    assert resp.get("scaleGroup") == "gpu-group"
-    assert resp.get("bootstrapLogs") == "bootstrap done"
+    assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
 
 
-def test_get_worker_status_vm_id_fallback(state, scheduler, make_worker_metadata):
-    """GetWorkerStatus falls back to VM ID for pre-registration VMs."""
-    # No worker registered — only a VM known to the autoscaler
-    autoscaler = Mock()
-    autoscaler.get_vm.return_value = vm_pb2.VmInfo(
-        vm_id="my-vm-0",
-        state=vm_pb2.VM_STATE_BOOTING,
-        address="10.0.0.5",
-        scale_group="gpu-group",
+def test_get_worker_status_unknown_id_returns_error(client):
+    """GetWorkerStatus returns 404 for unknown IDs (no VM fallback)."""
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetWorkerStatus",
+        json={"id": "nonexistent-vm-0"},
+        headers={"Content-Type": "application/json"},
     )
-    autoscaler.get_init_log.return_value = "booting..."
-
-    controller_mock = _make_controller_mock(state, scheduler, autoscaler=autoscaler)
-    service = ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
-    dashboard = ControllerDashboard(service)
-    client = TestClient(dashboard.app)
-
-    resp = rpc_post(client, "GetWorkerStatus", {"id": "my-vm-0"})
-    # No worker registered yet, but VM info is returned
-    assert resp.get("vm", {}).get("vmId") == "my-vm-0"
-    assert resp.get("scaleGroup") == "gpu-group"
-    assert resp.get("bootstrapLogs") == "booting..."
-    assert "worker" not in resp or resp.get("worker") == {}
+    assert resp.status_code != 200
 
 
 def test_health_endpoint_returns_ok(client, state, make_worker_metadata, job_request):
