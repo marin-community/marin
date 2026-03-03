@@ -9,7 +9,7 @@ and displays token breakdown, decoded text, and loss weights.
 Usage:
     uv run experiments/unified/inspect_parquet_row.py --row_index 5
     uv run experiments/unified/inspect_parquet_row.py --row_index 0 \
-        --cache_path gs://marin-vlm/text_eval_cache/winogrande/validation
+        --cache_path gs://marin-vlm/unified_eval_cache/ai2d/validation
 """
 
 import argparse
@@ -25,7 +25,7 @@ from experiments.unified.vlm_tokenize_captions import (
 )
 
 
-def print_record(index, record, tok):
+def print_record(index, record, tok, show_visual_tokens=False):
     ids = record["input_ids"]
     weights = record["loss_weights"]
 
@@ -56,12 +56,17 @@ def print_record(index, record, tok):
     print(f"  Last 10 tokens:  {[int(t) for t in ids[-10:]]}")
     print(f"  Last 10 weights: {[float(w) for w in weights[-10:]]}")
 
+    if show_visual_tokens:
+        visual_ids = [int(t) - VISUAL_TOKEN_OFFSET for t in ids if t >= VISUAL_TOKEN_OFFSET]
+        print(f"  Visual tokens (w/o offset): {visual_ids}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Inspect records from tokenized Levanter cache.")
     parser.add_argument("--row_index", type=int, required=True, help="Record index in the cache")
     parser.add_argument("--cache_path", default="gs://marin-vlm/stage2_sharded_full_tokenized_llama3/train")
     parser.add_argument("--tokenizer", default=UNIFIED_TOKENIZER_PATH)
+    parser.add_argument("--show_visual_tokens", action="store_true", help="Print all visual token IDs with offset subtracted")
     args = parser.parse_args()
 
     from levanter.compat.hf_checkpoints import load_tokenizer
@@ -74,7 +79,7 @@ def main():
 
     tok = load_tokenizer(args.tokenizer)
     record = cache[args.row_index]
-    print_record(args.row_index, record, tok)
+    print_record(args.row_index, record, tok, show_visual_tokens=args.show_visual_tokens)
 
 
 if __name__ == "__main__":
