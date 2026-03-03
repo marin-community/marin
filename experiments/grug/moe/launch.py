@@ -1,10 +1,10 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Template: grug-base trial run.
+"""Template: grug-moe trial run.
 
-This keeps model, train loop, and launch wiring in `experiments/grug/base` so
-variants can be copied and modified in-place (for example MoE forks).
+This keeps model, train loop, and launch wiring in `experiments/grug/moe` so
+the MoE variant can be iterated independently from the dense base template.
 """
 
 import dataclasses
@@ -25,14 +25,14 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.base.model import GrugModelConfig
-from experiments.grug.base.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe.model import GrugModelConfig
+from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.tootsie.exp1295_32b import nemotron_mix
 
 
 @dataclass(frozen=True)
-class GrugBaseLaunchConfig:
-    """Last-mile run config for the base grug template.
+class GrugMoeLaunchConfig:
+    """Last-mile run config for the MoE grug template.
 
     Keep this as the main entry point for day-to-day edits (model/data/optimizer/trainer/eval knobs).
     """
@@ -51,10 +51,13 @@ class GrugBaseLaunchConfig:
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
 
 
-GRUG_130M_MODEL = GrugModelConfig(
+GRUG_MOE_TRIAL_MODEL = GrugModelConfig(
     vocab_size=128_256,
     hidden_dim=512,
     intermediate_dim=1792,
+    shared_expert_intermediate_dim=1792,
+    num_experts=8,
+    num_experts_per_token=2,
     num_layers=6,
     num_heads=8,
     num_kv_heads=8,
@@ -83,7 +86,7 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     return tracker
 
 
-def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
+def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     # Map template launch knobs onto full Levanter TrainerConfig.
     trainer = TrainerConfig(
         id=config.run_id,
@@ -116,16 +119,16 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
     run_grug(run_config)
 
 
-RESOLVED_RUN_ID = _resolve_run_id("grug-base-trial")
+RESOLVED_RUN_ID = _resolve_run_id("grug-moe-trial")
 
 
-grug_base_trial = ExecutorStep(
-    name="grug/base-trial",
-    fn=run_grug_base_trial,
-    config=GrugBaseLaunchConfig(
-        model=versioned(GRUG_130M_MODEL),
+grug_moe_trial = ExecutorStep(
+    name="grug/moe-trial",
+    fn=run_grug_moe_trial,
+    config=GrugMoeLaunchConfig(
+        model=versioned(GRUG_MOE_TRIAL_MODEL),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-        # this_output_path() resolves to this step's output root (e.g. gs://.../grug/base-trial-<version>).
+        # this_output_path() resolves to this step's output root (e.g. gs://.../grug/moe-trial-<version>).
         output_path=this_output_path(),
         # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
@@ -135,8 +138,8 @@ grug_base_trial = ExecutorStep(
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="marin",
-            tags=["grug", "template"],
-            group="grug-base-trial",
+            tags=["grug", "template", "moe"],
+            group="grug-moe-trial",
             name=None,  # filled from run_id in _resolve_tracker
         ),
         optimizer=versioned(
@@ -172,6 +175,6 @@ grug_base_trial = ExecutorStep(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[grug_base_trial],
-        description="Template grug base 130M trial run (~2000 steps) on Nemotron mix.",
+        steps=[grug_moe_trial],
+        description="Template grug MoE trial run (~2000 steps) on Nemotron mix.",
     )
