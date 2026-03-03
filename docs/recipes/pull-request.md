@@ -45,7 +45,8 @@ Fixes #1234
 
 Every PR should reference a GitHub issue. Use `Fixes #NNNN` in the description
 body so GitHub auto-closes the issue on merge. For partial work, use
-`Part of #NNNN` instead.
+`Part of #NNNN` instead. If no issue exists yet, create one with `gh issue create`
+before opening the PR.
 
 ## Testing
 
@@ -63,6 +64,11 @@ Before marking a PR ready for review:
 - Write tests _before_ or alongside your fix, not after.
 - Prefer behavioral/integration tests over mocks.
 - Do not test obvious behavior (a type exists, a constant has a value).
+- Do not reimplement the system under test inside your assertions. Tests should
+  verify externally-observable outputs and side effects, not mirror the
+  production logic with `assert` statements.
+- Focus on tests that would catch real regressions: boundary conditions, error
+  paths, and integration points between modules.
 - Use existing test files when appropriate.
 
 ## Self-Review
@@ -116,7 +122,8 @@ Automated review validates the implementation matches the specification:
 
 1. Every change in the diff should be traceable to the spec.
 2. The implementation follows the described approach.
-3. Described test scenarios exist and test what they claim.
+3. Described test scenarios exist and test what they claim. Tests should
+   exercise meaningful behavior, not merely restate production logic.
 4. No bugs, logic errors, resource leaks, or race conditions.
 
 The standard [PR review prompt](github-pr-review.md) includes specification
