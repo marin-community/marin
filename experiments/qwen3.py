@@ -5,6 +5,8 @@
 Specifies a sequence of Llama 3 models from small to large.
 """
 
+import dataclasses
+
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config, QwenConfig
 from levanter.utils.activation import ActivationFunctionEnum
@@ -232,6 +234,12 @@ qwen2_5_32b_instruct = QwenConfig(
     tie_word_embeddings=False,
     reference_checkpoint="Qwen/Qwen2.5-32B-Instruct",
     rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
+)
+
+qwen2_5_coder_32b_instruct_tokenizer = "Qwen/Qwen2.5-Coder-32B-Instruct"
+qwen2_5_coder_32b_instruct = dataclasses.replace(
+    qwen2_5_32b_instruct,
+    reference_checkpoint="Qwen/Qwen2.5-Coder-32B-Instruct",
 )
 
 
