@@ -141,26 +141,38 @@ class RMSNorm(eqx.Module):
         return (normed * weight).astype(dtype)
 
 
-@named_call
-def shared_dense_mlp(
-    x: Float[Array, "B S D"],
-    shared_w_up_gate: Float[Array, "D J2"],
-    shared_w_down: Float[Array, "J D"],
-    *,
-    activation: MoeActivation = ActivationFunctionEnum.silu,
-) -> Float[Array, "B S D"]:
-    if isinstance(activation, ActivationFunctionEnum):
-        activation_fn = activation.to_jax_fn()
-    else:
-        activation_fn = activation
+class DenseMLP(eqx.Module):
+    w_gate: jax.Array
+    w_up: jax.Array
+    w_down: jax.Array
 
-    b, s, _ = x.shape
-    x_flat = rearrange(x, "b s d -> (b s) d")
-    shared_dim = shared_w_down.shape[0]
-    shared_up_gate = jnp.einsum("td,dm->tm", x_flat, shared_w_up_gate)
-    shared_gate, shared_up = jnp.split(shared_up_gate, [shared_dim], axis=-1)
-    out_flat = jnp.einsum("tm,md->td", activation_fn(shared_gate) * shared_up, shared_w_down, out_sharding=_batch_spec())
-    return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+    @staticmethod
+    def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
+        k_gate, k_up, k_down = random.split(key, 3)
+        return DenseMLP(
+            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
+            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
+            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        *,
+        activation: MoeActivation = ActivationFunctionEnum.silu,
+    ) -> Float[Array, "B S D"]:
+        if isinstance(activation, ActivationFunctionEnum):
+            activation_fn = activation.to_jax_fn()
+        else:
+            activation_fn = activation
+
+        b, s, _ = x.shape
+        x_flat = rearrange(x, "b s d -> (b s) d")
+        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
+        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
+        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
+        return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
 
 
 def _routing_stats_from_selected_experts(
@@ -220,33 +232,22 @@ class MoEMLP(eqx.Module):
     router: jax.Array
     w_up_gate: jax.Array
     w_down: jax.Array
-    shared_w_up_gate: jax.Array | None
-    shared_w_down: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_w_up_gate, k_w_down, k_shared_up_gate, k_shared_down = random.split(key, 5)
+        k_router, k_w_up_gate, k_w_down = random.split(key, 3)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
-        d, e, i, j = (
+        d, e, i = (
             cfg.hidden_dim,
             cfg.num_experts,
             cfg.intermediate_dim,
-            cfg.shared_expert_intermediate_dim,
         )
-
-        shared_w_up_gate = None
-        shared_w_down = None
-        if j > 0:
-            shared_w_up_gate = reshard(
-                _init_weight(k_shared_up_gate, (d, 2 * j), cfg.initializer_std), P("data", "model")
-            )
-            shared_w_down = reshard(_init_weight(k_shared_down, (j, d), cfg.initializer_std), P("model", "data"))
 
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
@@ -254,8 +255,6 @@ class MoEMLP(eqx.Module):
                 _init_weight(k_w_up_gate, (e, d, 2 * i), cfg.initializer_std), P("expert", "data", "model")
             ),
             w_down=reshard(_init_weight(k_w_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
-            shared_w_up_gate=shared_w_up_gate,
-            shared_w_down=shared_w_down,
             cfg=cfg,
         )
 
@@ -283,21 +282,7 @@ class MoEMLP(eqx.Module):
         )
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
-
-        out = routed
-        if self._has_shared():
-            shared_out = shared_dense_mlp(
-                x, self.shared_w_up_gate, self.shared_w_down, activation=ActivationFunctionEnum.silu
-            )
-            out = routed + shared_out
-
-        return out, router_stats
-
-    def _has_shared(self):
-        if self.shared_w_up_gate is not None or self.shared_w_down is not None:
-            assert self.shared_w_up_gate is not None and self.shared_w_down is not None
-            return True
-        return False
+        return routed, router_stats
 
 
 class Block(eqx.Module):
@@ -305,15 +290,25 @@ class Block(eqx.Module):
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
     mlp: MoEMLP
+    shared: DenseMLP | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key = random.split(key, 2)
+        attn_key, mlp_key, shared_key = random.split(key, 3)
+        shared = None
+        if cfg.shared_expert_intermediate_dim > 0:
+            shared = DenseMLP.init(
+                cfg.hidden_dim,
+                cfg.shared_expert_intermediate_dim,
+                cfg.initializer_std,
+                key=shared_key,
+            )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             mlp=MoEMLP.init(cfg, key=mlp_key),
+            shared=shared,
         )
 
     @named_call
@@ -323,7 +318,10 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x = x + self.attn(self.rms_attn(x), mask)
-        mlp_out, router_stats = self.mlp(self.rms_mlp(x))
+        mlp_in = self.rms_mlp(x)
+        mlp_out, router_stats = self.mlp(mlp_in)
+        if self.shared is not None:
+            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
         return x, router_stats
 
@@ -442,6 +440,7 @@ GrugMoeModelConfig = GrugModelConfig
 __all__ = [
     "Block",
     "CausalSelfAttention",
+    "DenseMLP",
     "GrugModelConfig",
     "GrugMoeModelConfig",
     "MoEMLP",
