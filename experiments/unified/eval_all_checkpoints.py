@@ -117,8 +117,9 @@ def _get_evaluated_steps(wandb_project: str, run_id: str) -> set[int]:
     api = wandb.Api()
     run = api.run(f"{wandb_project}/{run_id}")
     evaluated = set()
-    for row in run.scan_history(keys=["eval/loss"], min_step=0):
-        evaluated.add(row["_step"])
+    for row in run.scan_history(keys=["eval/loss", "_step"], min_step=0):
+        if "_step" in row:
+            evaluated.add(row["_step"])
     return evaluated
 
 
