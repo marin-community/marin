@@ -118,6 +118,42 @@ DO NOT:
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
 
+## Marin On Hyperturing1 (SNAP)
+
+- Canonical clone for TPU orchestration from SNAP is `/lfs/hyperturing1/0/pranshu/workspace/marin` (not AFS home).
+- Keep this clone on branch `pc0618/pr-ray-infra-portability` and sync with:
+```bash
+cd /lfs/hyperturing1/0/pranshu/workspace/marin
+export HOME=/lfs/hyperturing1/0/pranshu/home
+export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/github_id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+git fetch origin
+git checkout pc0618/pr-ray-infra-portability
+git pull --ff-only origin pc0618/pr-ray-infra-portability
+```
+- Run launch/cluster commands from this clone on `hyperturing1`; use `uv run ...` entrypoints.
+
+## Converting GPU Speedrun Script To TPU Ray Launcher
+
+- Start from a GPU script pattern such as `experiments/speedrun/hello_world_gpu_speedrun/hello_world_gpu_speedrun.py`.
+- Replace GPU resources with TPU resources in `SimpleTrainConfig`:
+```python
+resources=ResourceConfig.with_tpu("v5p-16")
+```
+- Keep `executor_main(...)` as the entrypoint; for argparse-based launchers that already parse custom flags, use `executor_main.__wrapped__(ExecutorMainConfig(...), steps=...)` to avoid draccus argument conflicts (see `experiments/speedrun/olmoe_m_nemotron_dclm_fineweb_40b_lr_sweep.py`).
+- Expose TPU/launcher flags in your script when needed: `--tpu-type`, `--prefix`, `--executor-info-base-path`, `--dry-run`, `--run-only`, `--max-concurrent`.
+- Ensure output paths are bucket-backed for distributed runs (for example `--prefix gs://<bucket>/marin`).
+- Submit from `hyperturing1` using Ray cluster CLI:
+```bash
+cd /lfs/hyperturing1/0/pranshu/workspace/marin
+uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml submit-job \
+  "uv run python experiments/speedrun/<your_script>.py --tpu-type v5p-16 --prefix gs://<bucket>/marin --executor-info-base-path gs://<bucket>/marin/experiments"
+```
+- Monitor and debug with:
+```bash
+uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs
+uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml job-logs <submission_id>
+```
+
 ## Ray Run Notes
 
 - In shared clusters, `OwnerDiedError`, raylet "missed too many heartbeats" messages, and autoscaler resize logs can be noise from other workloads. Prefer judging health by your *job's* step logs/status and whether `run_on_pod_ray` is retrying preemptions.
