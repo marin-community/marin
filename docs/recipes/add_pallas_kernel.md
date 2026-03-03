@@ -238,6 +238,24 @@ Replace:
 The cluster you use will vary depending on TPU generation/availability; most kernel work should start with a single
 node (e.g. `*-8`) unless you’re explicitly targeting multi-slice behavior.
 
+##### Scoped VMEM flag policy (kernel benchmarking/tuning)
+
+When running TPU Pallas microbenches/tuning, set `LIBTPU_INIT_ARGS` explicitly by TPU generation:
+
+- `v5p`/`v5e`: `LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000"`
+- `v6e`: `LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=98304"`
+- `v4`: do **not** set a special scoped VMEM limit flag (use default platform behavior).
+
+Examples:
+
+```sh
+# v5p / v5e
+-e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000"
+
+# v6e
+-e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=98304"
+```
+
 ##### Listing available TPU clusters
 
 If you’re not sure which cluster has which TPU types, use the cluster CLI:
@@ -307,6 +325,45 @@ You will need to set up wandb logging by initializing a Levanter [levanter.track
 Always report at least:
 - time-to-first-step (includes compilation) vs steady-state step time (after warmup)
 - the exact TPU type and shape/dtype grid tested
+
+##### Capturing compiler diagnostics early (recommended)
+
+For Pallas TPU work, capture compiler diagnostics on every serious benchmark/tuning run:
+
+1. Enable HLO text dumps with `--xla-dump-dir`.
+2. Tee stdout/stderr to a file with `--compiler-log-path`.
+3. Record the exact `XLA_FLAGS` and `LIBTPU_INIT_ARGS` used (the benchmark/tuning scripts print these now).
+
+These hooks are available in:
+- `lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py`
+- `lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py`
+
+Example (bench):
+
+```sh
+uv run --package levanter --extra tpu \
+  python lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py \
+  --implementation pallas_tpu \
+  --batch 64 --pos 1024 --embed 1024 --vocab 128256 \
+  --xla-dump-dir /tmp/ce_hlo_dumps \
+  --compiler-log-path /tmp/ce_compile.log
+```
+
+Example (tune):
+
+```sh
+uv run --package levanter --extra tpu \
+  python lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py \
+  --implementation pallas_tpu \
+  --batch 64 --seq-len 1024 --embed 1024 --vocab 128256 \
+  --xla-dump-dir /tmp/ce_tune_hlo_dumps \
+  --compiler-log-path /tmp/ce_tune_compile.log
+```
+
+When a kernel unexpectedly underperforms, this is the first triage loop:
+- compare Pallas vs XLA HLO dumps on the same shape,
+- scan compiler logs for VMEM pressure / verifier errors / lowering warnings,
+- then run the microbench ladder (`matmul-only`, `streaming-lse-only`, `fused matmul+lse`) before retuning blocks.
 
 ##### Tokamax comparison (optional)
 
