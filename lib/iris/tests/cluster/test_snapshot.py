@@ -27,7 +27,7 @@ from iris.cluster.controller.state import (
     ControllerWorker,
 )
 from iris.cluster.types import AttributeValue, JobName, WorkerId
-from iris.rpc import cluster_pb2, snapshot_pb2
+from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 
@@ -548,3 +548,53 @@ def test_endpoint_task_association_survives_roundtrip():
     ep_task_map = fresh_state.get_endpoint_task_mapping()
     assert "ep-1" in ep_task_map
     assert ep_task_map["ep-1"] == task.task_id
+
+
+def test_restored_scaling_group_deadlines_support_as_timestamp():
+    """Restored backoff/quota deadlines must be timestamp-mode so as_timestamp() works.
+
+    This is a regression test for a bug where _wall_clock_to_deadline() created
+    monotonic-mode Deadlines, but ScalingGroup.availability() and to_status()
+    call as_timestamp() which only works for timestamp-mode Deadlines.
+    """
+    from unittest.mock import MagicMock
+
+    from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup
+
+    platform = MagicMock()
+    sg_config = config_pb2.ScaleGroupConfig(
+        name="test-group",
+        min_slices=0,
+        max_slices=4,
+    )
+    group = ScalingGroup(sg_config, platform)
+
+    # Simulate restore with active backoff and quota deadlines 60s in the future
+    future_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() + 60_000)
+    backoff_deadline = Deadline.after(future_ts, Duration.from_ms(0))
+    quota_deadline = Deadline.after(future_ts, Duration.from_ms(0))
+
+    group.restore_from_snapshot(
+        slices={},
+        consecutive_failures=3,
+        last_scale_up=Timestamp.from_ms(0),
+        last_scale_down=Timestamp.from_ms(0),
+        backoff_until=backoff_deadline,
+        quota_exceeded_until=quota_deadline,
+        quota_reason="quota exhausted",
+    )
+
+    # availability() calls as_timestamp() on the deadlines — this crashed before the fix
+    avail = group.availability()
+    assert avail.status == GroupAvailability.QUOTA_EXCEEDED
+    assert avail.until is not None
+    assert avail.until.epoch_ms() == future_ts.epoch_ms()
+
+    # to_status() also calls as_timestamp() on _backoff_until
+    status = group.to_status()
+    assert status.backoff_until.epoch_ms == future_ts.epoch_ms()
+
+    # to_snapshot() should also work (uses as_timestamp() directly now)
+    snap = group.to_snapshot()
+    assert snap.backoff_until.epoch_ms == future_ts.epoch_ms()
+    assert snap.quota_exceeded_until.epoch_ms == future_ts.epoch_ms()
