@@ -15,8 +15,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from google.protobuf import json_format
 
-import fsspec
 from iris.logging import BufferedLogRecord, LogBuffer
+from iris.marin_fs import filesystem
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
 from iris.time_utils import Duration, Timestamp
@@ -105,7 +105,7 @@ class FsspecLogSink:
         assert "://" in config.prefix, f"log prefix must be a URL, got: {config.prefix}"
         scheme, path = config.prefix.split("://", 1)
         self._scheme = scheme
-        self._fs = fsspec.filesystem(scheme)
+        self._fs = filesystem(scheme)
         self._path_prefix = path
         self._sync_thread.start()
 
@@ -326,7 +326,7 @@ class LogReader:
         self._tail = ""
         assert "://" in logs_path, f"log path must be a URL, got: {logs_path}"
         scheme, _ = logs_path.split("://", 1)
-        self._fs = fsspec.filesystem(scheme)
+        self._fs = filesystem(scheme)
 
     @classmethod
     def from_attempt(
@@ -526,7 +526,7 @@ class ProcessLogSink:
         self._max_entries = max_entries
         self._last_seq = 0
         self._scheme, path = self._prefix.split("://", 1)
-        self._fs = fsspec.filesystem(self._scheme)
+        self._fs = filesystem(self._scheme)
         self._path_prefix = path
         self._stop_event = Event()
         self._sync_thread = Thread(

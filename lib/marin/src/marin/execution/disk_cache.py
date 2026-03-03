@@ -12,8 +12,7 @@ from collections.abc import Callable
 from typing import Generic, TypeVar, ParamSpec
 
 import cloudpickle
-import fsspec
-from iris.marin_fs import marin_temp_bucket
+from iris.marin_fs import marin_temp_bucket, open_url
 
 from marin.execution.distributed_lock import StepAlreadyDone
 from marin.execution.executor_step_status import (
@@ -105,7 +104,7 @@ class disk_cache(Generic[P, T]):
             assert output_path is not None
             if self._load_fn is not None:
                 return self._load_fn(output_path)
-            with fsspec.open(output_path + "/data.pkl", "rb") as f:
+            with open_url(output_path + "/data.pkl", "rb") as f:
                 return cloudpickle.loads(f.read())
 
         status_file = StatusFile(output_path, worker_id())
@@ -127,7 +126,7 @@ class disk_cache(Generic[P, T]):
         if self._save_fn is not None:
             self._save_fn(result, output_path)
         else:
-            with fsspec.open(output_path + "/data.pkl", "wb") as f:
+            with open_url(output_path + "/data.pkl", "wb") as f:
                 f.write(cloudpickle.dumps(result))
 
         StatusFile(output_path, worker_id()).write_status(STATUS_SUCCESS)

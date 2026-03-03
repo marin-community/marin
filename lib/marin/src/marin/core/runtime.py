@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-import fsspec
+from iris.marin_fs import open_url
 from marin.utils import fsspec_exists
 
 logger = logging.getLogger("ray")
@@ -50,7 +50,7 @@ def cached_or_construct_output(success_suffix="success", verbose=True):
             datetime_end = datetime.utcnow()
 
             # Write the success file, so that we don't have to process it next time
-            with fsspec.open(success_file, "w") as f:
+            with open_url(success_file, "w") as f:
                 metadata = {
                     "input_file_path": input_file_path,
                     "output_file_path": output_file_path,

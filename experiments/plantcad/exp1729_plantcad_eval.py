@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import fsspec
 import haliax as hax
+from iris.marin_fs import open_url
 import haliax.haxtyping as ht
 import jax.numpy as jnp
 import numpy as np
@@ -494,7 +495,7 @@ def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
         "metrics": metrics,
     }
 
-    with fsspec.open(results_file, "w") as f:
+    with open_url(results_file, "w") as f:
         json.dump(output_data, f, indent=2, cls=CustomJsonEncoder)
 
     logger.info(f"Results saved to: {results_file}")

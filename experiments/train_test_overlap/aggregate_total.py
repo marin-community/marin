@@ -21,7 +21,7 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-import fsspec
+from iris.marin_fs import open_url
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
 from zephyr import Dataset, ZephyrContext, load_file, load_jsonl
@@ -323,7 +323,7 @@ def aggregate_total(cfg: AggregateConfig):
 
     # Write consolidated summary CSV (all datasets + union)
     summary_path = os.path.join(cfg.output_path, "summary.csv")
-    with fsspec.open(summary_path, "wt") as f:
+    with open_url(summary_path, "wt") as f:
         writer = csv.writer(f)
         writer.writerow(["training_dataset", "ngram", "total_examples", "contaminated", "fraction"])
 
@@ -345,7 +345,7 @@ def aggregate_total(cfg: AggregateConfig):
 
     # Write overlap matrix CSV (evaluation x training datasets)
     matrix_path = os.path.join(cfg.output_path, "overlap_matrix.csv")
-    with fsspec.open(matrix_path, "wt") as f:
+    with open_url(matrix_path, "wt") as f:
         writer = csv.writer(f)
 
         # Header: training datasets as columns + union

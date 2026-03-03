@@ -6,8 +6,8 @@ import json
 import logging
 import os
 
-import fsspec
 import jmp
+from iris.marin_fs import filesystem as marin_filesystem
 import levanter
 import levanter.eval_harness as eval_harness
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -118,7 +118,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 logger.info(f"Uploading results to GCS: {output_path}")
 
                 # write output JSON directly to output_path on GCS
-                fs = fsspec.filesystem("gcs")
+                fs = marin_filesystem("gcs")
                 with fs.open(output_path, "w") as f:
                     json.dump(results, f, indent=2, default=_json_default)
 

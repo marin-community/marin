@@ -24,8 +24,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-import fsspec
 from fray.v1.cluster import ResourceConfig
+from iris.marin_fs import open_url
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
@@ -657,7 +657,7 @@ class HarborEvaluator(Evaluator):
                     ext = ".json" if trajectory_content.strip().startswith("{") else ".jsonl"
                     trajectory_path = os.path.join(output_path, "trajectories", f"{trial_id}{ext}")
 
-                    with fsspec.open(trajectory_path, "w") as dst:
+                    with open_url(trajectory_path, "w") as dst:
                         dst.write(trajectory_content)
 
                     results["trials"][trial_id]["trajectory_path"] = trajectory_path
@@ -677,7 +677,7 @@ class HarborEvaluator(Evaluator):
             trial_output.pop("trajectory_content", None)  # Already saved to file
             trials_for_output[trial_id] = trial_output
 
-        with fsspec.open(samples_path, "w") as f:
+        with open_url(samples_path, "w") as f:
             for trial_id, trial_data in sorted(trials_for_output.items()):
                 sample = {
                     "task_id": trial_id,
@@ -694,7 +694,7 @@ class HarborEvaluator(Evaluator):
             "aggregate": results["aggregate"],
             "samples_path": samples_path,
         }
-        with fsspec.open(results_path, "w") as f:
+        with open_url(results_path, "w") as f:
             json.dump(aggregated_results, f, indent=2, ensure_ascii=False)
 
         logger.info(f"Wrote samples to {samples_path}")
