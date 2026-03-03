@@ -45,8 +45,11 @@ Fixes #1234
 
 Every PR should reference a GitHub issue. Use `Fixes #NNNN` in the description
 body so GitHub auto-closes the issue on merge. For partial work, use
-`Part of #NNNN` instead. If no issue exists yet, create one with `gh issue create`
-before opening the PR.
+`Part of #NNNN` instead.
+
+Prefer more specific issues when possible, falling back to general issues like tracking epics if needed.
+
+If no issue exists yet, create one with `gh issue create` before opening the PR.
 
 ## Testing
 
@@ -86,11 +89,11 @@ Any PR that adds or modifies more than ~500 lines of code must include a
 specification. Smaller PRs may include one if the change is architecturally
 significant or touches many modules.
 
-The specification can live in:
+Prefer to put the specification in one of (in preferred order):
 
-- A GitHub PR comment (first comment after the description) -- default.
-- `docs/design/<topic>.md` or `.agents/projects/<topic>.md` -- when the spec
-  will be referenced by future work. Link from the PR description.
+- The associated issue for this work
+- A GitHub PR comment (first comment after the description).
+- `docs/design/<topic>.md` or `.agents/projects/<topic>.md` -- when it is important for the spec to be referenced and used in future work.
 
 A specification must contain:
 
