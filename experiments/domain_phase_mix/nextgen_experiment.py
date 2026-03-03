@@ -15,16 +15,19 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 
 from marin.execution.executor import executor_main
 
 from experiments.domain_phase_mix.nextgen.contracts import LoopConfig
 from experiments.domain_phase_mix.nextgen.import_sources import (
+    CsvDomainPhaseImportSource,
     LegacyDomainPhaseImportSource,
     default_legacy_sources,
 )
 from experiments.domain_phase_mix.nextgen.model_registry import available_model_names
 from experiments.domain_phase_mix.nextgen.pipeline import create_nextgen_steps, summarize_step_names
+from experiments.domain_phase_mix.three_phase_starcoder_experiment import create_three_phase_experiment
 from experiments.domain_phase_mix.two_phase_starcoder_experiment import create_two_phase_experiment
 
 logger = logging.getLogger("ray")
@@ -36,6 +39,13 @@ DEFAULT_LOOP_NAME = "pinlin_calvin_xu/data_mixture/nextgen_loop"
 
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description="Next-gen mixture loop")
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default="two_phase_starcoder",
+        choices=("two_phase_starcoder", "three_phase_starcoder"),
+        help="Which domain_phase_mix experiment topology to use for new runs.",
+    )
     parser.add_argument("--name", type=str, default=DEFAULT_LOOP_NAME, help="Loop name used for run tags and artifacts.")
     parser.add_argument(
         "--objective-metric",
@@ -56,44 +66,82 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Import configured legacy experiments into the merged trajectory store.",
     )
     parser.add_argument(
+        "--import-csv",
+        action="append",
+        default=[],
+        help="Additional CSV import source path (repeatable).",
+    )
+    parser.add_argument(
         "--state-root",
         type=str,
         default="domain_phase_mix/nextgen",
         help="Persistent root directory for loop state and artifacts.",
+    )
+    parser.add_argument(
+        "--candidate-opt-method",
+        type=str,
+        default="sample",
+        choices=("sample", "scipy_minimize"),
+        help="Candidate extraction method after model fitting.",
+    )
+    parser.add_argument(
+        "--candidate-opt-restarts",
+        type=int,
+        default=128,
+        help="Number of random restarts for scipy-based candidate optimization.",
+    )
+    parser.add_argument(
+        "--candidate-opt-maxiter",
+        type=int,
+        default=400,
+        help="Maximum optimizer iterations per scipy restart.",
     )
     parser.add_argument("--wandb-entity", type=str, default="marin-community")
     parser.add_argument("--wandb-project", type=str, default="marin")
     return parser.parse_known_args()
 
 
-
 def _build_loop_config(args: argparse.Namespace) -> LoopConfig:
     model_names = tuple(name.strip() for name in args.models.split(",") if name.strip())
-    import_sources: tuple[LegacyDomainPhaseImportSource, ...]
+    import_sources: list[LegacyDomainPhaseImportSource | CsvDomainPhaseImportSource] = []
+    for csv_path in args.import_csv:
+        import_sources.append(
+            CsvDomainPhaseImportSource(
+                source_experiment=args.name,
+                csv_path=csv_path,
+            )
+        )
     if args.import_legacy:
-        import_sources = default_legacy_sources()
-    else:
-        import_sources = ()
+        import_sources.extend(default_legacy_sources())
 
     return LoopConfig(
         name=args.name,
         objective_metric=args.objective_metric,
         model_names=model_names,
         n_new_runs=args.n_new_runs,
-        import_sources=import_sources,
+        import_sources=tuple(import_sources),
         state_root=args.state_root,
+        candidate_opt_method=args.candidate_opt_method,
+        candidate_opt_restarts=args.candidate_opt_restarts,
+        candidate_opt_maxiter=args.candidate_opt_maxiter,
     )
 
 
+def _build_experiment(args: argparse.Namespace):
+    if args.experiment == "three_phase_starcoder":
+        return create_three_phase_experiment(name=args.name)
+    return create_two_phase_experiment(name=args.name)
+
 
 def main() -> None:
-    args, _ = _parse_args()
+    args, remaining = _parse_args()
+    sys.argv = [sys.argv[0], *remaining]
 
     if os.getenv("CI") is not None:
         logger.info("Skipping execution in CI environment")
         return
 
-    experiment = create_two_phase_experiment(name=args.name)
+    experiment = _build_experiment(args)
     loop = _build_loop_config(args)
 
     steps = create_nextgen_steps(

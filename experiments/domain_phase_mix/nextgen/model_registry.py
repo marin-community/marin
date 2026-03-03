@@ -17,6 +17,7 @@ from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
 
 from experiments.domain_phase_mix.exploratory.general_scaling_models import (
     DatasetSpec,
@@ -270,14 +271,13 @@ def _sample_simplex_points(rng: np.random.Generator, n_points: int, n_dims: int)
     return raw / raw.sum(axis=1, keepdims=True)
 
 
-def _propose_top1_candidate(
+def _sample_top1_point(
     *,
     loop: LoopConfig,
-    model_name: str,
     predict_fn,
     spec: DatasetSpec,
-    training_setup: dict[str, Any],
-) -> Candidate:
+    model_name: str,
+) -> tuple[np.ndarray, float]:
     rng_seed = int(stable_hash({"loop": loop.name, "model": model_name, "seed": loop.candidate_search_seed})[:8], 16)
     rng = np.random.default_rng(rng_seed)
     n_points = max(loop.candidate_search_points, 512)
@@ -298,13 +298,109 @@ def _propose_top1_candidate(
     best_idx = int(finite_idx[np.argmin(pred[finite_mask])])
     best = points[best_idx]
     best_pred = float(pred[best_idx])
+    return best, best_pred
 
-    phase_weights = {
+
+def _optimize_top1_point_two_domain(
+    *,
+    loop: LoopConfig,
+    predict_fn,
+    spec: DatasetSpec,
+    initial_point: np.ndarray,
+    initial_pred: float,
+    model_name: str,
+) -> tuple[np.ndarray, float]:
+    if spec.M != 2:
+        logger.info(
+            "Optimization method scipy_minimize currently supports M=2 only for model '%s'; falling back to sampling",
+            model_name,
+        )
+        return initial_point, initial_pred
+
+    small_domain_idx = spec.small_domains[0] if spec.small_domains else 1
+    if small_domain_idx not in (0, 1):
+        small_domain_idx = 1
+    other_domain_idx = 1 - small_domain_idx
+
+    def _point_from_small_weights(small_weights: np.ndarray) -> np.ndarray:
+        point = np.zeros((spec.N, spec.M), dtype=float)
+        point[:, small_domain_idx] = small_weights
+        point[:, other_domain_idx] = 1.0 - small_weights
+        return point
+
+    def _objective(small_weights: np.ndarray) -> float:
+        clipped = np.clip(small_weights, 0.0, 1.0)
+        point = _point_from_small_weights(clipped)
+        value = np.asarray(predict_fn(point[None, :, :]), dtype=float)
+        if value.shape != (1,) or not np.isfinite(value[0]):
+            return float("inf")
+        return float(value[0])
+
+    rng_seed = int(stable_hash({"loop": loop.name, "model": model_name, "opt_seed": loop.candidate_search_seed})[:8], 16)
+    rng = np.random.default_rng(rng_seed)
+    n_restarts = max(loop.candidate_opt_restarts, 1)
+    starts = [initial_point[:, small_domain_idx]]
+    starts.extend(rng.uniform(0.0, 1.0, size=(n_restarts, spec.N)))
+
+    best_point = initial_point.copy()
+    best_pred = initial_pred
+    for x0 in starts:
+        try:
+            result = minimize(
+                _objective,
+                x0=np.asarray(x0, dtype=float),
+                method="L-BFGS-B",
+                bounds=[(0.0, 1.0)] * spec.N,
+                options={"maxiter": max(loop.candidate_opt_maxiter, 1)},
+            )
+        except Exception:
+            logger.exception("scipy_minimize failed for model '%s' on one restart", model_name)
+            continue
+
+        candidate_small = np.clip(np.asarray(result.x, dtype=float), 0.0, 1.0)
+        candidate_pred = _objective(candidate_small)
+        if np.isfinite(candidate_pred) and candidate_pred < best_pred:
+            best_pred = candidate_pred
+            best_point = _point_from_small_weights(candidate_small)
+
+    return best_point, best_pred
+
+
+def _build_phase_weights(point: np.ndarray, spec: DatasetSpec) -> dict[str, dict[str, float]]:
+    return {
         spec.phase_names[p_idx]: {
-            spec.domain_names[d_idx]: float(best[p_idx, d_idx]) for d_idx in range(spec.M)
+            spec.domain_names[d_idx]: float(point[p_idx, d_idx]) for d_idx in range(spec.M)
         }
         for p_idx in range(spec.N)
     }
+
+
+def _propose_top1_candidate(
+    *,
+    loop: LoopConfig,
+    model_name: str,
+    predict_fn,
+    spec: DatasetSpec,
+    training_setup: dict[str, Any],
+) -> Candidate:
+    best_point, best_pred = _sample_top1_point(
+        loop=loop,
+        predict_fn=predict_fn,
+        spec=spec,
+        model_name=model_name,
+    )
+
+    if loop.candidate_opt_method == "scipy_minimize":
+        best_point, best_pred = _optimize_top1_point_two_domain(
+            loop=loop,
+            predict_fn=predict_fn,
+            spec=spec,
+            initial_point=best_point,
+            initial_pred=best_pred,
+            model_name=model_name,
+        )
+
+    phase_weights = _build_phase_weights(best_point, spec)
 
     candidate_payload = {
         "kind": "schedule",

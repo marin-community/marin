@@ -10,18 +10,20 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 import fsspec
 import pandas as pd
 
 from experiments.domain_phase_mix.analysis import match_runs_to_configs, query_wandb_runs
-from experiments.domain_phase_mix.nextgen.contracts import RunRecord
+from experiments.domain_phase_mix.nextgen.contracts import ImportSource, RunRecord
 from experiments.domain_phase_mix.nextgen.utils import normalize_phase_weights
 
 logger = logging.getLogger(__name__)
 
 _SWARM_RUN_RE = re.compile(r"/run_(\d+)$")
 _BASE_RUN_RE = re.compile(r"/base_(\d+)$")
+_PHASE_COL_RE = re.compile(r"^phase_(\d+)_(.+)$")
 
 TWO_PHASE_STARCODER_EXPERIMENT = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_4"
 THREE_PHASE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases_6"
@@ -175,6 +177,105 @@ class LegacyDomainPhaseImportSource:
         return pd.DataFrame(rows)
 
 
+@dataclass(frozen=True)
+class CsvDomainPhaseImportSource:
+    """Import source that loads run rows from a local or remote CSV."""
+
+    source_experiment: str
+    csv_path: str
+    status_filter: str | None = "completed"
+    metric_prefixes: tuple[str, ...] = ("eval/", "lm_eval/")
+
+    def _load_csv(self) -> pd.DataFrame:
+        with fsspec.open(self.csv_path, "r") as f:
+            return pd.read_csv(f)
+
+    def collect_runs(self) -> list[RunRecord]:
+        df = self._load_csv()
+        if self.status_filter is not None and "status" in df.columns:
+            df = df[df["status"] == self.status_filter].copy()
+
+        records: list[RunRecord] = []
+        for _, row in df.iterrows():
+            phase_weights: dict[str, dict[str, float]] = {}
+            metrics: dict[str, float] = {}
+
+            for column in df.columns:
+                match = _PHASE_COL_RE.match(column)
+                if match:
+                    value = row.get(column)
+                    if pd.isna(value):
+                        continue
+                    phase_idx = int(match.group(1))
+                    domain = match.group(2)
+                    phase_weights.setdefault(f"phase_{phase_idx}", {})
+                    phase_weights[f"phase_{phase_idx}"][domain] = float(value)
+                    continue
+
+                if any(column.startswith(prefix) for prefix in self.metric_prefixes):
+                    value = row.get(column)
+                    if pd.isna(value):
+                        continue
+                    metrics[column] = float(value)
+
+            local_run_id = _coerce_int(row.get("run_id"))
+            wandb_run_id = _coerce_str(row.get("wandb_run_id"))
+            run_name = _coerce_str(row.get("run_name")) or wandb_run_id
+            status = _coerce_str(row.get("status")) or "unknown"
+
+            records.append(
+                RunRecord(
+                    wandb_run_id=wandb_run_id,
+                    source_experiment=self.source_experiment,
+                    local_run_id=local_run_id,
+                    run_name=run_name,
+                    phase_weights=normalize_phase_weights(phase_weights),
+                    status=status,
+                    metrics=metrics,
+                )
+            )
+
+        return records
+
+    def collect_trajectories(self, objective_metric: str) -> pd.DataFrame:
+        del objective_metric
+        return pd.DataFrame(
+            columns=[
+                "wandb_run_id",
+                "source_experiment",
+                "local_run_id",
+                "run_name",
+                "step",
+                "total_tokens",
+                "metric_key",
+                "metric_value",
+            ]
+        )
+
+
+def _coerce_str(value) -> str | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
+def _coerce_int(value) -> int | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
 def _infer_local_run_id_from_name(run_name: str | None) -> int | None:
     if not run_name:
         return None
@@ -220,17 +321,27 @@ def default_legacy_sources() -> tuple[LegacyDomainPhaseImportSource, ...]:
     )
 
 
-def source_from_dict(payload: dict) -> LegacyDomainPhaseImportSource:
+def source_from_dict(payload: dict) -> ImportSource:
     """Deserialize an import source dictionary."""
     source_type = payload.get("type", "legacy_domain_phase")
-    if source_type != "legacy_domain_phase":
-        raise ValueError(f"Unsupported import source type: {source_type}")
+    if source_type == "legacy_domain_phase":
+        return LegacyDomainPhaseImportSource(
+            source_experiment=payload["source_experiment"],
+            wandb_entity=payload.get("wandb_entity", "marin-community"),
+            wandb_project=payload.get("wandb_project", "marin"),
+            wandb_tags=tuple(payload.get("wandb_tags", ())),
+            weight_configs_path=payload.get("weight_configs_path"),
+            metric_prefixes=tuple(payload.get("metric_prefixes", ("eval/", "lm_eval/"))),
+        )
+    if source_type == "csv_domain_phase":
+        csv_path = payload["csv_path"]
+        if not Path(csv_path).exists() and not str(csv_path).startswith(("gs://", "s3://")):
+            logger.warning("CSV import source path does not currently exist: %s", csv_path)
+        return CsvDomainPhaseImportSource(
+            source_experiment=payload["source_experiment"],
+            csv_path=csv_path,
+            status_filter=payload.get("status_filter", "completed"),
+            metric_prefixes=tuple(payload.get("metric_prefixes", ("eval/", "lm_eval/"))),
+        )
 
-    return LegacyDomainPhaseImportSource(
-        source_experiment=payload["source_experiment"],
-        wandb_entity=payload.get("wandb_entity", "marin-community"),
-        wandb_project=payload.get("wandb_project", "marin"),
-        wandb_tags=tuple(payload.get("wandb_tags", ())),
-        weight_configs_path=payload.get("weight_configs_path"),
-        metric_prefixes=tuple(payload.get("metric_prefixes", ("eval/", "lm_eval/"))),
-    )
+    raise ValueError(f"Unsupported import source type: {source_type}")

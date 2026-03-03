@@ -19,6 +19,7 @@ from marin.execution.executor import ExecutorStep, InputName, output_path_of, th
 from experiments.domain_phase_mix.analysis import query_wandb_runs
 from experiments.domain_phase_mix.nextgen.contracts import PlannedRun, RunRecord
 from experiments.domain_phase_mix.nextgen.import_sources import (
+    CsvDomainPhaseImportSource,
     LegacyDomainPhaseImportSource,
     source_from_dict,
 )
@@ -249,17 +250,25 @@ def serialize_import_sources(sources: tuple) -> str:
 
 
 def source_to_dict(source) -> dict:
-    if not isinstance(source, LegacyDomainPhaseImportSource):
-        raise TypeError(f"Unsupported import source object: {type(source)}")
-    return {
-        "type": "legacy_domain_phase",
-        "source_experiment": source.source_experiment,
-        "wandb_entity": source.wandb_entity,
-        "wandb_project": source.wandb_project,
-        "wandb_tags": list(source.wandb_tags),
-        "weight_configs_path": source.weight_configs_path,
-        "metric_prefixes": list(source.metric_prefixes),
-    }
+    if isinstance(source, LegacyDomainPhaseImportSource):
+        return {
+            "type": "legacy_domain_phase",
+            "source_experiment": source.source_experiment,
+            "wandb_entity": source.wandb_entity,
+            "wandb_project": source.wandb_project,
+            "wandb_tags": list(source.wandb_tags),
+            "weight_configs_path": source.weight_configs_path,
+            "metric_prefixes": list(source.metric_prefixes),
+        }
+    if isinstance(source, CsvDomainPhaseImportSource):
+        return {
+            "type": "csv_domain_phase",
+            "source_experiment": source.source_experiment,
+            "csv_path": source.csv_path,
+            "status_filter": source.status_filter,
+            "metric_prefixes": list(source.metric_prefixes),
+        }
+    raise TypeError(f"Unsupported import source object: {type(source)}")
 
 
 def create_collect_imported_step(

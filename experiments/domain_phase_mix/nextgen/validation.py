@@ -73,7 +73,7 @@ class ValidationSlotConfig:
 @dataclass(frozen=True)
 class CollectValidationConfig:
     output_path: str
-    slot_output_paths: tuple[InputName, ...]
+    slot_output_paths: list[InputName | str]
     slot_model_names_json: str
 
 
@@ -414,7 +414,7 @@ def create_collect_validation_step(
         fn=collect_validation_results,
         config=CollectValidationConfig(
             output_path=this_output_path(),
-            slot_output_paths=tuple(output_path_of(step) for step in slot_steps),
+            slot_output_paths=[output_path_of(step) for step in slot_steps],
             slot_model_names_json=json.dumps(slot_model_names, sort_keys=True),
         ),
         override_output_path=output_override_path,

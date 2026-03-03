@@ -203,6 +203,7 @@ def create_three_phase_experiment(
     target_budget: int = TARGET_BUDGET,
     batch_size: int = BATCH_SIZE,
     seq_len: int = SEQ_LEN,
+    eval_datasets_cache_path: str = EVAL_DATASETS_CACHE_PATH,
 ) -> MixtureExperiment:
     """Create the three-phase starcoder experiment.
 
@@ -230,7 +231,7 @@ def create_three_phase_experiment(
         target_budget=target_budget,
         eval_harness_tasks=EVAL_TASKS,
         sampling_params=SAMPLING_PARAMS,
-        eval_datasets_cache_path=EVAL_DATASETS_CACHE_PATH,
+        eval_datasets_cache_path=eval_datasets_cache_path,
     )
 
 

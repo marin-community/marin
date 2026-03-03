@@ -53,6 +53,9 @@ def _decode_loop_config(payload: str) -> LoopConfig:
         state_root=data.get("state_root", "domain_phase_mix/nextgen"),
         candidate_search_points=int(data.get("candidate_search_points", 8192)),
         candidate_search_seed=int(data.get("candidate_search_seed", 42)),
+        candidate_opt_method=data.get("candidate_opt_method", "sample"),
+        candidate_opt_restarts=int(data.get("candidate_opt_restarts", 128)),
+        candidate_opt_maxiter=int(data.get("candidate_opt_maxiter", 400)),
         execute_validation_slots=bool(data.get("execute_validation_slots", False)),
     )
 
@@ -69,6 +72,9 @@ def _encode_loop_config(loop: LoopConfig) -> str:
             "state_root": loop.state_root,
             "candidate_search_points": loop.candidate_search_points,
             "candidate_search_seed": loop.candidate_search_seed,
+            "candidate_opt_method": loop.candidate_opt_method,
+            "candidate_opt_restarts": loop.candidate_opt_restarts,
+            "candidate_opt_maxiter": loop.candidate_opt_maxiter,
             "execute_validation_slots": loop.execute_validation_slots,
         },
         sort_keys=True,

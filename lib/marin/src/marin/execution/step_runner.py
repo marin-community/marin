@@ -132,11 +132,23 @@ class StepRunner:
                 time.sleep(1)
             for path in done:
                 handle = running.pop(path)
-                status = handle.wait(raise_on_failure=False)
-                if status == JobStatus.FAILED:
-                    logger.error(f"Step failed: {_display_name(path)}")
+                display_name = _display_name(path)
+                try:
+                    status = handle.wait(raise_on_failure=True)
+                except Exception as exc:
+                    logger.exception(f"Step failed with exception: {display_name}")
                     failed.add(path)
-                    failures.append(RuntimeError(f"Step failed: {_display_name(path)}"))
+                    failures.append(RuntimeError(f"Step failed: {display_name}: {exc!r}"))
+                    continue
+
+                if status == JobStatus.FAILED:
+                    logger.error(f"Step failed: {display_name}")
+                    failed.add(path)
+                    failures.append(RuntimeError(f"Step failed: {display_name}"))
+                elif status == JobStatus.STOPPED:
+                    logger.error(f"Step stopped before completion: {display_name}")
+                    failed.add(path)
+                    failures.append(RuntimeError(f"Step stopped before completion: {display_name}"))
                 else:
                     completed.add(path)
 

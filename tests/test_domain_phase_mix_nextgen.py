@@ -5,9 +5,12 @@ import json
 import os
 from dataclasses import asdict
 
+import numpy as np
 import pandas as pd
 
+import experiments.domain_phase_mix.nextgen_experiment as nextgen_experiment
 from experiments.domain_phase_mix.config import WeightConfig
+from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
 from experiments.domain_phase_mix.nextgen.contracts import (
     Candidate,
     LoopConfig,
@@ -21,10 +24,12 @@ from experiments.domain_phase_mix.nextgen.fit_propose import (
     CANDIDATES_JSON,
 )
 from experiments.domain_phase_mix.nextgen.import_sources import (
+    CsvDomainPhaseImportSource,
     THREE_PHASE_EXPERIMENT,
     THREE_PHASE_STARCODER_EXPERIMENT,
     TWO_PHASE_STARCODER_EXPERIMENT,
     default_legacy_sources,
+    source_from_dict,
 )
 from experiments.domain_phase_mix.nextgen.merge_export import (
     MERGED_RUNS_JSON,
@@ -42,7 +47,9 @@ from experiments.domain_phase_mix.nextgen.collect import (
     IMPORTED_TRAJ_FILE,
     NEW_RUNS_FILE,
     NEW_TRAJ_FILE,
+    source_to_dict,
 )
+from experiments.domain_phase_mix.nextgen.model_registry import _propose_top1_candidate
 from experiments.domain_phase_mix.nextgen.state_store import write_loop_state
 from experiments.domain_phase_mix.nextgen.validation import (
     CollectValidationConfig,
@@ -441,3 +448,161 @@ def test_policy_and_schedule_candidates_share_validation_flow(tmp_path):
     assert by_model["OfflineRL"]["candidate_id"] == "cand-policy"
     assert by_model["Linear"]["status"] == "planned"
     assert by_model["OfflineRL"]["status"] == "planned"
+
+
+def test_csv_import_source_parses_phase_weights_and_metrics(tmp_path):
+    csv_path = tmp_path / "runs.csv"
+    df = pd.DataFrame(
+        [
+            {
+                "run_id": 1,
+                "wandb_run_id": "run-a",
+                "run_name": "run_00001",
+                "status": "completed",
+                "phase_0_nemotron_full": 0.8,
+                "phase_0_starcoder": 0.2,
+                "phase_1_nemotron_full": 0.6,
+                "phase_1_starcoder": 0.4,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.81,
+                "lm_eval/foo/acc": 0.5,
+            },
+            {
+                "run_id": 2,
+                "wandb_run_id": "run-b",
+                "run_name": "run_00002",
+                "status": "failed",
+                "phase_0_nemotron_full": 0.7,
+                "phase_0_starcoder": 0.3,
+                "phase_1_nemotron_full": 0.5,
+                "phase_1_starcoder": 0.5,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.9,
+            },
+        ]
+    )
+    df.to_csv(csv_path, index=False)
+
+    source = CsvDomainPhaseImportSource(source_experiment="loop", csv_path=str(csv_path))
+    runs = source.collect_runs()
+
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.local_run_id == 1
+    assert run.wandb_run_id == "run-a"
+    assert run.phase_weights["phase_0"]["starcoder"] == 0.2
+    assert run.phase_weights["phase_1"]["nemotron_full"] == 0.6
+    assert run.metrics["eval/paloma/dolma_100_programing_languages/bpb"] == 0.81
+    assert run.metrics["lm_eval/foo/acc"] == 0.5
+
+    trajectories = source.collect_trajectories("eval/paloma/dolma_100_programing_languages/bpb")
+    assert trajectories.empty
+    assert "metric_value" in trajectories.columns
+
+
+def test_csv_import_source_serialization_roundtrip(tmp_path):
+    csv_path = tmp_path / "runs.csv"
+    pd.DataFrame([{"run_id": 1, "status": "completed"}]).to_csv(csv_path, index=False)
+
+    source = CsvDomainPhaseImportSource(
+        source_experiment="loop",
+        csv_path=str(csv_path),
+        status_filter="completed",
+    )
+    payload = source_to_dict(source)
+    restored = source_from_dict(payload)
+
+    assert isinstance(restored, CsvDomainPhaseImportSource)
+    assert restored.source_experiment == "loop"
+    assert restored.csv_path == str(csv_path)
+    assert restored.status_filter == "completed"
+
+
+def test_csv_import_fixture_has_expected_three_phase_row_count():
+    csv_path = "experiments/domain_phase_mix/exploratory/three_phase_starcoder.csv"
+    source = CsvDomainPhaseImportSource(
+        source_experiment="three_phase_starcoder",
+        csv_path=csv_path,
+        status_filter="completed",
+    )
+    runs = source.collect_runs()
+    assert len(runs) == 160
+
+
+def test_scipy_minimize_candidate_beats_sampling_on_convex_objective():
+    rng = np.random.default_rng(0)
+    samples = rng.uniform(0.0, 1.0, size=(32, 3))
+    weights = np.zeros((32, 3, 2), dtype=float)
+    weights[:, :, 1] = samples
+    weights[:, :, 0] = 1.0 - samples
+    spec = DatasetSpec(
+        weights=weights,
+        y=np.zeros(32, dtype=float),
+        epoch_multipliers=np.ones((3, 2), dtype=float),
+        domain_names=["nemotron_full", "starcoder"],
+        phase_names=["phase_0", "phase_1", "phase_2"],
+        small_domains=[1],
+        name="synthetic",
+    )
+
+    target = np.array([0.23, 0.41, 0.17], dtype=float)
+
+    def predict_fn(points: np.ndarray) -> np.ndarray:
+        return np.sum((points[:, :, 1] - target[None, :]) ** 4, axis=1)
+
+    sample_loop = LoopConfig(
+        name="loop",
+        objective_metric="eval/loss",
+        model_names=("DS-RE-CEQ",),
+        candidate_search_points=512,
+        candidate_search_seed=7,
+        candidate_opt_method="sample",
+    )
+    scipy_loop = LoopConfig(
+        name="loop",
+        objective_metric="eval/loss",
+        model_names=("DS-RE-CEQ",),
+        candidate_search_points=512,
+        candidate_search_seed=7,
+        candidate_opt_method="scipy_minimize",
+        candidate_opt_restarts=16,
+        candidate_opt_maxiter=200,
+    )
+
+    sample_candidate = _propose_top1_candidate(
+        loop=sample_loop,
+        model_name="DS-RE-CEQ",
+        predict_fn=predict_fn,
+        spec=spec,
+        training_setup={},
+    )
+    scipy_candidate = _propose_top1_candidate(
+        loop=scipy_loop,
+        model_name="DS-RE-CEQ",
+        predict_fn=predict_fn,
+        spec=spec,
+        training_setup={},
+    )
+
+    assert scipy_candidate.predicted_objective <= sample_candidate.predicted_objective
+    assert sample_candidate.predicted_objective - scipy_candidate.predicted_objective > 1e-6
+
+
+def test_nextgen_experiment_selects_three_phase(monkeypatch):
+    calls = {"three_phase": 0, "two_phase": 0}
+
+    def _fake_two_phase(*, name):
+        calls["two_phase"] += 1
+        return ("two", name)
+
+    def _fake_three_phase(*, name):
+        calls["three_phase"] += 1
+        return ("three", name)
+
+    monkeypatch.setattr(nextgen_experiment, "create_two_phase_experiment", _fake_two_phase)
+    monkeypatch.setattr(nextgen_experiment, "create_three_phase_experiment", _fake_three_phase)
+
+    args = nextgen_experiment.argparse.Namespace(experiment="three_phase_starcoder", name="loop")
+    result = nextgen_experiment._build_experiment(args)
+
+    assert calls["three_phase"] == 1
+    assert calls["two_phase"] == 0
+    assert result == ("three", "loop")
