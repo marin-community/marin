@@ -1725,16 +1725,16 @@ def test_demand_reservation_excess_tasks():
     assert len(real_demand) == 5
 
 
-def test_demand_reservation_holder_uses_parent_resources():
-    """Holder tasks use the parent job's resource spec, not reservation entries.
+def test_demand_reservation_holder_uses_entry_resources():
+    """Holder tasks use the reservation entry's resource spec, not the parent's.
 
-    The holder job inherits the parent's resources and constraints so it
-    schedules onto the same type of workers. Reservation entry resources
-    are not used for demand.
+    Each reservation entry carries its own resources and constraints. The
+    holder job uses the entry's resources so the autoscaler provisions the
+    correct device type even when the parent job differs.
     """
     state = ControllerState()
     # Job tasks request A100, but reservation entries specify H100.
-    # Holder job inherits the parent's A100 resource spec.
+    # Holder job should use the entry's H100 resource spec.
     req = _make_reservation_job_request(
         task_device=_a100_device(),
         reservation_devices=[_h100_device(), _h100_device()],
@@ -1748,9 +1748,9 @@ def test_demand_reservation_holder_uses_parent_resources():
 
     assert len(synthetic_demand) == 2
     assert len(real_demand) == 2
-    # Holder demand uses parent's A100 device, not reservation entry's H100
+    # Holder demand uses entry's H100 device, not parent's A100
     for d in synthetic_demand:
-        assert d.device_variant == "A100"
+        assert d.device_variant == "H100"
 
 
 def test_demand_reservation_mixed_jobs():
@@ -2492,7 +2492,7 @@ def test_holder_tasks_consume_zero_resources():
     submit_job(state, "j1", req)
 
     wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
-    holder_job_id = JobName.root("test-user", "j1").child("reservation")
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
     holder_tasks = state.get_job_tasks(holder_job_id)
     assert len(holder_tasks) == 1
 
@@ -2522,7 +2522,7 @@ def test_holder_task_cleanup_releases_no_resources():
     submit_job(state, "j1", req)
 
     wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
-    holder_job_id = JobName.root("test-user", "j1").child("reservation")
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
     holder_tasks = state.get_job_tasks(holder_job_id)
 
     # Assign holder task
@@ -2539,3 +2539,67 @@ def test_holder_task_cleanup_releases_no_resources():
     worker_after = state.get_worker(wid)
     assert worker_after.available_gpus == gpus_before
     assert holder_tasks[0].task_id not in worker_after.running_tasks
+
+
+def test_holder_tasks_excluded_from_building_counts():
+    """Holder tasks in ASSIGNED state should not consume building slots.
+
+    Without this exclusion, a worker holding only a reservation task would be
+    permanently "at building limit" and the real reserved task could never be
+    assigned to that otherwise idle worker.
+    """
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 1
+
+    # Assign holder task — it goes to ASSIGNED state
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+    assert holder_tasks[0].state == cluster_pb2.TASK_STATE_ASSIGNED
+
+    # Building counts should NOT include the holder task
+    building_counts = state.snapshot_building_counts()
+    assert building_counts.get(wid, 0) == 0
+
+
+def test_snapshot_round_trip_preserves_reservation_holder():
+    """Snapshot save/restore round-trip preserves is_reservation_holder flag."""
+    from iris.cluster.controller.snapshot import create_snapshot, restore_snapshot
+
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_job = state.get_job(holder_job_id)
+    assert holder_job is not None
+    assert holder_job.is_reservation_holder is True
+
+    # Save and restore
+    snap_result = create_snapshot(state, reservation_claims={})
+    restored_state = ControllerState()
+    restore_snapshot(snap_result.proto, restored_state)
+
+    restored_holder = restored_state.get_job(holder_job_id)
+    assert restored_holder is not None
+    assert restored_holder.is_reservation_holder is True
+
+    # Parent should not be a holder
+    parent_job_id = JobName.root("test-user", "j1")
+    restored_parent = restored_state.get_job(parent_job_id)
+    assert restored_parent is not None
+    assert restored_parent.is_reservation_holder is False

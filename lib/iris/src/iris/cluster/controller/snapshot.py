@@ -191,6 +191,7 @@ def _snapshot_job(
         error=job.error or "",
         exit_code=job.exit_code or 0,
         num_tasks=job.num_tasks,
+        is_reservation_holder=job.is_reservation_holder,
     )
     snap.request.CopyFrom(job.request)
     snap.submitted_at.CopyFrom(job.submitted_at.to_proto())
@@ -373,16 +374,13 @@ def _restore_job(
 ) -> tuple[ControllerJob, list[ControllerTask]]:
     """Restore a job and its tasks from a snapshot.
 
-    Reservation holder jobs are identified by name convention: a child job
-    whose last path component is ``reservation`` and whose parent has a
-    reservation config.  The ``is_reservation_holder`` flag is reconstructed
-    here rather than persisted in the proto.
+    The ``is_reservation_holder`` flag is persisted explicitly in the proto
+    so restore is unambiguous and cannot misclassify normal jobs.
     """
     job_id = JobName.from_string(snap.job_id)
     tasks = [_restore_task(t) for t in snap.tasks]
 
-    # Detect reservation holder jobs by name convention.
-    is_holder = job_id.name == "reservation"
+    is_holder = snap.is_reservation_holder
 
     # Do NOT pre-populate task_state_counts here. state.add_job() will
     # iterate the tasks and increment counts itself. Building them here

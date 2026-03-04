@@ -108,6 +108,15 @@ def compute_demand_entries(
     autoscaler. The taint/constraint mechanism ensures only peer jobs can
     actually use the reserved workers.
 
+    .. note::
+
+        Demand from holder tasks and parent real tasks is additive. On a cold
+        start with N reservation entries and M real tasks this reports N + M
+        demand entries, which may overprovision. In practice reservations are
+        used when the parent job does not request its own resources, so the
+        additive behavior is correct. If that changes, a dedup path (e.g.
+        ``max(real_pending, holders)``) should be added here.
+
     Args:
         state: Controller state to read pending tasks and jobs from.
         scheduler: Scheduler for dry-run pass. If None, skips dry-run.

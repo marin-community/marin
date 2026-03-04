@@ -59,6 +59,9 @@ message JobSnapshot {
   int64 scheduling_deadline_epoch_ms = 11;
 
   repeated TaskSnapshot tasks = 20;
+
+  // Whether this job is a synthetic reservation holder.
+  bool is_reservation_holder = 21;
 }
 
 message TaskSnapshot {

@@ -70,6 +70,12 @@ MAX_REPLICAS_PER_JOB = 10000
 DEFAULT_MAX_RETRIES_PREEMPTION = 100
 """Default preemption retries. High because worker failures are typically transient."""
 
+RESERVATION_HOLDER_JOB_NAME = ":reservation:"
+"""Well-known name component for synthetic reservation holder child jobs.
+
+Uses colons to clearly distinguish from user-created jobs and avoid
+accidental collision with normal job names."""
+
 HEARTBEAT_FAILURE_THRESHOLD = 10
 """Consecutive heartbeat failures before marking worker as failed."""
 
@@ -1149,26 +1155,31 @@ class ControllerState:
             txn.log("task_created", task.task_id, job_id=str(event.job_id))
 
         # Create a synthetic child job for reservation entries. The child
-        # job ``{parent}/reservation`` has one task per reservation entry.
-        # Holder tasks participate in scheduling but consume zero resources,
-        # generating demand to keep reserved capacity alive. They are never
-        # dispatched (no entrypoint). The constraints/taints on claimed
-        # workers ensure only peer jobs can use the reserved resources.
+        # job ``{parent}/:reservation:`` has one task per reservation entry,
+        # using each entry's own resources and constraints. Holder tasks
+        # participate in scheduling but consume zero resources, generating
+        # demand to keep reserved capacity alive. They are never dispatched
+        # (no entrypoint). The constraints/taints on claimed workers ensure
+        # only peer jobs can use the reserved resources.
         # When the parent finishes, ``_cancel_child_jobs`` cleans them up.
         if job.request.HasField("reservation"):
-            num_entries = len(job.request.reservation.entries)
-            holder_job_id = job.job_id.child("reservation")
-            # Use the parent's resources and constraints so holders schedule
-            # onto the same type of workers as the parent's real tasks.
+            entries = job.request.reservation.entries
+            holder_job_id = job.job_id.child(RESERVATION_HOLDER_JOB_NAME)
+            # Each entry carries its own resources and constraints, so the
+            # holder job uses the first entry's spec. When entries differ
+            # the demand still scales correctly because replicas == len(entries).
+            # For heterogeneous entries a per-entry job split would be needed,
+            # but in practice all entries share the same device type.
+            first_entry = entries[0]
             holder_request = cluster_pb2.Controller.LaunchJobRequest(
                 name=holder_job_id.to_wire(),
                 entrypoint=job.request.entrypoint,
-                resources=job.request.resources,
+                resources=first_entry.resources,
                 environment=job.request.environment,
-                replicas=num_entries,
+                replicas=len(entries),
                 max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
             )
-            holder_request.constraints.extend(job.request.constraints)
+            holder_request.constraints.extend(first_entry.constraints or job.request.constraints)
             holder_event = JobSubmittedEvent(
                 job_id=holder_job_id,
                 request=holder_request,
@@ -1178,7 +1189,7 @@ class ControllerState:
             # Tag the child as a reservation holder after submission.
             holder_job = self._jobs[holder_job_id]
             holder_job.is_reservation_holder = True
-            txn.log("reservation_holder_job_created", holder_job_id, num_entries=num_entries)
+            txn.log("reservation_holder_job_created", holder_job_id, num_entries=len(entries))
 
         txn.log("job_submitted", event.job_id, num_tasks=job.num_tasks)
 
@@ -1842,6 +1853,9 @@ class ControllerState:
         Must be done under the lock because the scheduling thread would otherwise
         iterate worker.running_tasks while the heartbeat thread mutates it
         (RuntimeError: Set changed size during iteration).
+
+        Reservation holder tasks are excluded: they are never dispatched, so
+        they should not consume building slots that would throttle real tasks.
         """
         with self._lock:
             counts: dict[WorkerId, int] = {}
@@ -1853,6 +1867,11 @@ class ControllerState:
                         cluster_pb2.TASK_STATE_BUILDING,
                         cluster_pb2.TASK_STATE_ASSIGNED,
                     ):
+                        # Skip holder tasks — they sit in ASSIGNED forever
+                        # and should not block real task dispatch.
+                        job = self._jobs.get(task.job_id)
+                        if job and job.is_reservation_holder:
+                            continue
                         count += 1
                 if count > 0:
                     counts[worker.worker_id] = count
