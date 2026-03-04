@@ -614,6 +614,9 @@ class LocalPlatform:
         self._local_controller = controller
         return address
 
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        raise NotImplementedError("restart_controller not supported for local clusters")
+
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the in-process LocalController."""
         from iris.cluster.controller.local import LocalController

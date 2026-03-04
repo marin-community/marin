@@ -438,6 +438,15 @@ class Platform(Protocol):
         """
         ...
 
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller in-place without destroying underlying compute.
+
+        Re-runs the bootstrap script on the existing VM/pod to pull the latest
+        image and restart the container. Falls back to stop+start semantics on
+        platforms where in-place restart isn't meaningful (e.g. CoreWeave).
+        """
+        ...
+
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the controller.
 

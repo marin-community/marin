@@ -1106,6 +1106,10 @@ class CoreweavePlatform:
 
         return self.discover_controller(config.controller)
 
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller by re-applying manifests and rolling restart."""
+        return self.start_controller(config)
+
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the controller by deleting its K8s resources."""
         cw = config.controller.coreweave
