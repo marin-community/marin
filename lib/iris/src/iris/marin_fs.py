@@ -43,6 +43,14 @@ REGION_TO_TMP_BUCKET: dict[str, str] = {
     "us-east5": "marin-tmp-us-east5",
 }
 
+# Canonical mapping from GCP region to primary Marin bucket name.
+# Most regions follow the `marin-{region}` convention, but some historical
+# buckets use short aliases (e.g. `marin-eu-west4` for `europe-west4`).
+REGION_TO_MARIN_BUCKET: dict[str, str] = {
+    "europe-west4": "marin-eu-west4",
+    "eu-west4": "marin-eu-west4",
+}
+
 
 # ---------------------------------------------------------------------------
 # Low-level region helpers
@@ -89,7 +97,8 @@ def marin_prefix() -> str:
         return prefix
     region = region_from_metadata()
     if region:
-        return f"gs://marin-{region}"
+        bucket = REGION_TO_MARIN_BUCKET.get(region, f"marin-{region}")
+        return f"gs://{bucket}"
     return _DEFAULT_LOCAL_PREFIX
 
 
