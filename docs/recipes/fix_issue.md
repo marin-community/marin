@@ -30,6 +30,15 @@ already have. Follow these rules in all comments you post:
 Use `gh` to fetch the issue. Read the codebase to find all relevant source
 files. Post a single comment combining your research and proposed fix.
 
+Before you write code, run a duplicate-work preflight:
+
+- Check open pull requests for the same issue or subsystem (`gh pr list --state open --search "<issue-id or keyword>"`).
+- Check open issues for the same root cause (`gh issue list --state open --search "<keyword>"`).
+- If overlapping work already exists, do not open a parallel implementation PR.
+  Add a short issue comment summarizing what you found and either:
+  - hand off to the existing PR, or
+  - scope your change explicitly to non-overlapping follow-up work.
+
 The comment has two sections: **Research** and **Proposed Fix**.
 
 ### Research section
@@ -115,6 +124,7 @@ The tasks for this recipe:
 
 - [ ] Fetch issue information
 - [ ] Research codebase for all relevant source files
+- [ ] Run duplicate-work preflight against open PRs/issues
 - [ ] Formulate fix and post Research + Proposed Fix comment
 - [ ] Create branch for the changes
 - [ ] Write a test case as needed for changes
