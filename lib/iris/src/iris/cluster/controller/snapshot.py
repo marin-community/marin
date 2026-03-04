@@ -399,6 +399,15 @@ def _restore_job(
         else:
             job.scheduling_deadline = Deadline.from_now(Duration.from_ms(0))
 
+    # Detect synthetic tasks by index. Synthetic tasks are created for
+    # reservation entries at indices >= replicas. No proto field change is
+    # needed because the relationship is deterministic.
+    replicas = job.request.replicas
+    if job.request.HasField("reservation"):
+        for task in tasks:
+            if task.task_index >= replicas:
+                task.is_synthetic = True
+
     return job, tasks
 
 
