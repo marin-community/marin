@@ -1329,12 +1329,14 @@ def test_stale_attempt_error_log_for_non_terminal(caplog, job_request, worker_me
 
 
 # =============================================================================
-# log_directory Tests
+# Heartbeat Log Forwarding Tests
 # =============================================================================
 
 
-def test_log_directory_persisted_on_first_running_heartbeat(job_request, worker_metadata):
-    """log_directory is stored from running_tasks even when task state has not changed."""
+def test_log_entries_accumulated_in_log_store(job_request, worker_metadata):
+    """Log entries from heartbeat are stored in the controller's log store."""
+    from iris.rpc import logging_pb2
+
     state = ControllerState()
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
@@ -1345,26 +1347,30 @@ def test_log_directory_persisted_on_first_running_heartbeat(job_request, worker_
     snapshot = state.begin_heartbeat(worker_id)
     assert snapshot is not None
 
-    # Worker reports task as RUNNING (same state the controller already has) with a log_directory.
-    # This simulates the common steady-state heartbeat where the state hasn't changed but
-    # log_directory has not yet been recorded by the controller.
+    log_entry = logging_pb2.LogEntry(source="stdout", data="hello world")
+    log_entry.timestamp.epoch_ms = 1000
+
     response = cluster_pb2.HeartbeatResponse(
         tasks=[
             cluster_pb2.Controller.WorkerTaskStatus(
                 task_id=task.task_id.to_wire(),
                 attempt_id=task.current_attempt_id,
                 state=cluster_pb2.TASK_STATE_RUNNING,
-                log_directory="s3://bucket/logs/task/0",
+                log_entries=[log_entry],
             )
         ]
     )
     state.complete_heartbeat(snapshot, response)
 
-    assert task.attempts[task.current_attempt_id].log_directory == "s3://bucket/logs/task/0"
+    logs = state.log_store.get_logs(task.task_id, task.current_attempt_id)
+    assert len(logs) == 1
+    assert logs[0].data == "hello world"
 
 
-def test_log_directory_persisted_on_completed_task(job_request, worker_metadata):
-    """log_directory is stored from completed_tasks report."""
+def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata):
+    """Multiple heartbeats accumulate logs in the store."""
+    from iris.rpc import logging_pb2
+
     state = ControllerState()
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
@@ -1372,22 +1378,26 @@ def test_log_directory_persisted_on_completed_task(job_request, worker_metadata)
     task = tasks[0]
     dispatch_task(state, task, worker_id)
 
-    snapshot = state.begin_heartbeat(worker_id)
-    assert snapshot is not None
+    for i in range(3):
+        snapshot = state.begin_heartbeat(worker_id)
+        assert snapshot is not None
+        entry = logging_pb2.LogEntry(source="stdout", data=f"line {i}")
+        entry.timestamp.epoch_ms = 1000 + i
+        response = cluster_pb2.HeartbeatResponse(
+            tasks=[
+                cluster_pb2.Controller.WorkerTaskStatus(
+                    task_id=task.task_id.to_wire(),
+                    attempt_id=task.current_attempt_id,
+                    state=cluster_pb2.TASK_STATE_RUNNING,
+                    log_entries=[entry],
+                )
+            ]
+        )
+        state.complete_heartbeat(snapshot, response)
 
-    response = cluster_pb2.HeartbeatResponse(
-        tasks=[
-            cluster_pb2.Controller.WorkerTaskStatus(
-                task_id=task.task_id.to_wire(),
-                attempt_id=task.current_attempt_id,
-                state=cluster_pb2.TASK_STATE_SUCCEEDED,
-                log_directory="s3://bucket/logs/task/0",
-            )
-        ]
-    )
-    state.complete_heartbeat(snapshot, response)
-
-    assert task.attempts[task.current_attempt_id].log_directory == "s3://bucket/logs/task/0"
+    logs = state.log_store.get_logs(task.task_id, task.current_attempt_id)
+    assert len(logs) == 3
+    assert [e.data for e in logs] == ["line 0", "line 1", "line 2"]
 
 
 # =============================================================================

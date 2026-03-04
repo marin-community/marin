@@ -129,9 +129,7 @@ message TaskStatus {
   // Scheduling diagnostics for pending tasks (dashboard display)
   string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
-
-  // Log storage location (e.g., "gs://bucket/path/worker-123/job/task/0")
-  string log_directory = 18;
+  // field 18 was log_directory, removed
 }
 
 // Record of a single task execution attempt
@@ -570,8 +568,10 @@ message Controller {
     int32 exit_code = 4;
     string error = 5;
     iris.time.Timestamp finished_at = 6;
-    string log_directory = 7;
+    // field 7 was log_directory, removed
     ResourceUsage resource_usage = 8;
+    // Delta log entries since last heartbeat (capped per heartbeat)
+    repeated iris.logging.LogEntry log_entries = 9;
   }
 
 
