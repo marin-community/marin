@@ -85,8 +85,8 @@ class AvailabilityState:
 
 
 DEFAULT_SCALE_UP_RATE_LIMIT = 5  # per minute
+DEFAULT_SCALE_DOWN_RATE_LIMIT = 5  # per minute
 DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
-DEFAULT_SCALE_DOWN_COOLDOWN = Duration.from_minutes(5)
 DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
 DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
 DEFAULT_BACKOFF_FACTOR = 2.0
@@ -212,13 +212,13 @@ class ScalingGroup:
         platform: Platform,
         label_prefix: str = "iris",
         scale_up_cooldown: Duration = DEFAULT_SCALE_UP_COOLDOWN,
-        scale_down_cooldown: Duration = DEFAULT_SCALE_DOWN_COOLDOWN,
         backoff_initial: Duration = DEFAULT_BACKOFF_INITIAL,
         backoff_max: Duration = DEFAULT_BACKOFF_MAX,
         backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
         idle_threshold: Duration = DEFAULT_IDLE_THRESHOLD,
         quota_timeout: Duration = DEFAULT_QUOTA_TIMEOUT,
         scale_up_rate_limit: int = DEFAULT_SCALE_UP_RATE_LIMIT,
+        scale_down_rate_limit: int = DEFAULT_SCALE_DOWN_RATE_LIMIT,
     ):
         self._config = config
         self._platform = platform
@@ -245,8 +245,6 @@ class ScalingGroup:
         self._last_scale_up: Timestamp = Timestamp.from_ms(0)
         self._last_scale_down: Timestamp = Timestamp.from_ms(0)
         self._scale_up_cooldown = scale_up_cooldown
-        self._scale_down_cooldown = scale_down_cooldown
-
         # Quota state (set by scale_up when QuotaExhaustedError is raised)
         self._quota_exceeded_until: Deadline | None = None
         self._quota_reason: str = ""
@@ -254,6 +252,11 @@ class ScalingGroup:
 
         # Per-group token bucket rate limiter for scale-up API calls
         self._scale_up_bucket = TokenBucket(capacity=scale_up_rate_limit, refill_period=Duration.from_minutes(1))
+
+        # Per-group token bucket rate limiter for scale-down API calls.
+        # This replaces the old cooldown-only gate so that multiple idle slices
+        # can be terminated in a single cycle, up to the token budget.
+        self._scale_down_bucket = TokenBucket(capacity=scale_down_rate_limit, refill_period=Duration.from_minutes(1))
 
     @property
     def platform(self) -> Platform:
@@ -594,13 +597,17 @@ class ScalingGroup:
         vm_status_map: VmWorkerStatusMap,
         target_capacity: int,
         timestamp: Timestamp,
-    ) -> SliceHandle | None:
-        """Scale down one idle slice if we're over target capacity.
+    ) -> list[SliceHandle]:
+        """Scale down idle slices that exceed target capacity.
 
-        This method handles the complete scale-down decision and execution:
+        Terminates multiple idle slices in a single call, rate-limited by a
+        token bucket (matching the scale-up rate limiter).  This replaces the
+        old behaviour of terminating at most one slice per 5-minute cooldown.
+
+        Steps:
         1. Update slice activity based on worker idle status
         2. Check if we're over target capacity (using ready + pending)
-        3. Find an eligible idle slice and terminate it
+        3. Find eligible idle slices and terminate them (up to the token budget)
 
         Args:
             vm_status_map: Map of VM address to worker status
@@ -608,7 +615,7 @@ class ScalingGroup:
             timestamp: Current timestamp for idle calculation
 
         Returns:
-            The terminated slice handle, or None if no scale-down occurred
+            List of terminated slice handles (may be empty).
         """
         # Update activity tracking
         self.update_slice_activity(vm_status_map, timestamp)
@@ -620,19 +627,35 @@ class ScalingGroup:
 
         # Don't scale down if total capacity (ready + pending) is at or below target
         if ready + pending <= target_capacity:
-            return None
+            return []
 
         # Don't scale down ready slices if we're still waiting for pending
         if ready <= target_capacity:
-            return None
+            return []
 
         if not self.can_scale_down(timestamp):
-            logger.debug("Scale group %s: scale down blocked by cooldown", self.name)
-            return None
+            logger.debug("Scale group %s: scale down blocked (at min_slices)", self.name)
+            return []
+
+        terminated: list[SliceHandle] = []
 
         # Find idle slices and verify they're still idle before termination
         idle_slices = self.get_idle_slices(timestamp)
         for slice_state in idle_slices:
+            # Stop once we've scaled down to the target
+            if ready - len(terminated) <= target_capacity:
+                break
+
+            # Stop once we've scaled down to min_slices
+            with self._slices_lock:
+                current_count = len(self._slices)
+            if current_count <= self._config.min_slices:
+                break
+
+            if not self.acquire_scale_down_token(timestamp):
+                logger.info("Scale group %s: scale down rate-limited after %d terminations", self.name, len(terminated))
+                break
+
             if self._verify_slice_idle(slice_state, vm_status_map):
                 with self._slices_lock:
                     state = self._slices.get(slice_state.handle.slice_id)
@@ -651,9 +674,9 @@ class ScalingGroup:
                     target_capacity,
                 )
                 self.scale_down(slice_state.handle.slice_id, timestamp)
-                return slice_state.handle
+                terminated.append(slice_state.handle)
 
-        return None
+        return terminated
 
     def _verify_slice_idle(self, state: SliceState, vm_status_map: VmWorkerStatusMap) -> bool:
         """Verify all workers in a slice are idle before termination (lookup by VM address).
@@ -697,14 +720,10 @@ class ScalingGroup:
     def can_scale_down(self, timestamp: Timestamp | None = None) -> bool:
         """Check if scale-down is allowed.
 
-        Scale-down is blocked if:
-        - Scale-down cooldown period has not elapsed
-        - Already at min_slices
+        Scale-down is blocked if already at min_slices.
+        Per-operation rate limiting is handled by acquire_scale_down_token().
         """
         timestamp = timestamp or Timestamp.now()
-        cooldown_end = self._last_scale_down.add(self._scale_down_cooldown)
-        if self._last_scale_down.epoch_ms() > 0 and timestamp.before(cooldown_end):
-            return False
         with self._slices_lock:
             count = len(self._slices)
         if count <= self._config.min_slices:
@@ -714,6 +733,10 @@ class ScalingGroup:
     def acquire_scale_up_token(self, timestamp: Timestamp | None = None) -> bool:
         """Try to acquire a scale-up rate limit token. Returns False if rate-limited."""
         return self._scale_up_bucket.try_acquire(now=timestamp)
+
+    def acquire_scale_down_token(self, timestamp: Timestamp | None = None) -> bool:
+        """Try to acquire a scale-down rate limit token. Returns False if rate-limited."""
+        return self._scale_down_bucket.try_acquire(now=timestamp)
 
     def record_quota_exceeded(self, reason: str, timestamp: Timestamp | None = None) -> None:
         """Record a quota exhaustion event, blocking scale-up until the quota timeout elapses."""
