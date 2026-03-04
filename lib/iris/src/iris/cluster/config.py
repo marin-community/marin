@@ -936,7 +936,7 @@ def create_autoscaler(
     """
     # Local import: controller modules import config.py, creating a circular dependency.
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.scaling_group import ScalingGroup
+    from iris.cluster.controller.scaling_group import DEFAULT_SCALE_UP_RATE_LIMIT, ScalingGroup
 
     threads = threads or get_thread_container()
 
@@ -954,6 +954,7 @@ def create_autoscaler(
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
+            scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
         )
         resources = group_config.resources
         worker_attrs = dict(group_config.worker.attributes) if group_config.HasField("worker") else {}

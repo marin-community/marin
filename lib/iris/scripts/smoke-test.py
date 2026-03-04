@@ -208,15 +208,9 @@ def _run_iris(*args: str, config_path: Path, timeout: float = DEFAULT_CLI_TIMEOU
     subprocess.TimeoutExpired if the command exceeds timeout.
     """
     cmd = ["uv", "run", "iris", "--config", str(config_path), *args]
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(IRIS_ROOT), timeout=timeout)
+    result = subprocess.run(cmd, capture_output=False, text=True, cwd=str(IRIS_ROOT), timeout=timeout)
     if result.returncode != 0:
-        logger.error(
-            "Command failed (exit %d): %s\nstdout: %s\nstderr: %s",
-            result.returncode,
-            " ".join(cmd),
-            result.stdout,
-            result.stderr,
-        )
+        logger.error("Command failed (exit %d): %s\nstdout: %s\nstderr: %s", result.returncode, " ".join(cmd))
         result.check_returncode()
     return result
 
@@ -801,7 +795,7 @@ class SmokeTestRunner:
             args.append("--local")
         args.extend(["--bundle-prefix", self._bundle_prefix])
 
-        logger.info("Starting cluster (background)...")
+        logger.info("Starting cluster...")
         bg = _run_iris_background(*args, config_path=self.config.config_path)
         bg.name = "cluster-start"
         self._background_procs.append(bg)

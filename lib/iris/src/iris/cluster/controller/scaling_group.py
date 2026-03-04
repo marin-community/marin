@@ -16,9 +16,16 @@ from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 
 from iris.cluster.platform.base import Labels, Platform, SliceHandle
-from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
+from iris.cluster.types import (
+    DeviceType,
+    REGION_ATTRIBUTE_KEY,
+    VmWorkerStatusMap,
+    ZONE_ATTRIBUTE_KEY,
+    get_gpu_count,
+    get_tpu_count,
+)
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, time_pb2, vm_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.time_utils import Deadline, Duration, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -47,30 +54,25 @@ class SliceLifecycleState(StrEnum):
 
 
 class GroupAvailability(Enum):
-    """Availability state for a scale group in waterfall routing.
+    """Availability state for waterfall routing.
 
-    Determines whether demand is routed to this group or falls through
-    to lower-priority groups. States are checked in priority order by
-    availability() — the first matching state wins.
+    ACCEPTING states (demand stays here, scale-up may be deferred):
+    - AVAILABLE: can create new slices immediately
+    - COOLDOWN: recently scaled up, next scale-up deferred until cooldown expires
+    - REQUESTING: scale-up in progress, capacity incoming
+
+    REJECTING states (demand falls through to lower-priority groups):
+    - BACKOFF: slice creation failed, exponential backoff active
+    - QUOTA_EXCEEDED: cloud quota exhausted
+    - AT_MAX_SLICES: configured slice limit reached
     """
 
     AVAILABLE = "available"
-    """Group can accept demand and create new slices."""
-
-    BACKOFF = "backoff"
-    """Recent slice creation failed; group is waiting before retrying.
-    Demand falls through to lower-priority groups during backoff."""
-
-    AT_CAPACITY = "at_capacity"
-    """Group is at max_slices. Existing ready/inflight slices can still
-    serve demand, but no new slices will be created. Excess demand
-    falls through to lower-priority groups."""
-
-    QUOTA_EXCEEDED = "quota_exceeded"
-    """Cloud quota exhausted. Demand falls through to lower-priority groups."""
-
+    COOLDOWN = "cooldown"
     REQUESTING = "requesting"
-    """Scale-up in progress. Group accepts demand since new capacity is incoming."""
+    AT_MAX_SLICES = "at_max_slices"
+    BACKOFF = "backoff"
+    QUOTA_EXCEEDED = "quota_exceeded"
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,7 @@ class AvailabilityState:
     until: Timestamp | None = None
 
 
+DEFAULT_SCALE_UP_RATE_LIMIT = 5  # per minute
 DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
 DEFAULT_SCALE_DOWN_COOLDOWN = Duration.from_minutes(5)
 DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
@@ -215,6 +218,7 @@ class ScalingGroup:
         backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
         idle_threshold: Duration = DEFAULT_IDLE_THRESHOLD,
         quota_timeout: Duration = DEFAULT_QUOTA_TIMEOUT,
+        scale_up_rate_limit: int = DEFAULT_SCALE_UP_RATE_LIMIT,
     ):
         self._config = config
         self._platform = platform
@@ -247,6 +251,9 @@ class ScalingGroup:
         self._quota_exceeded_until: Deadline | None = None
         self._quota_reason: str = ""
         self._quota_timeout = quota_timeout
+
+        # Per-group token bucket rate limiter for scale-up API calls
+        self._scale_up_bucket = TokenBucket(capacity=scale_up_rate_limit, refill_period=Duration.from_minutes(1))
 
     @property
     def platform(self) -> Platform:
@@ -289,6 +296,34 @@ class ScalingGroup:
     def max_slices(self) -> int:
         """Maximum number of VM groups allowed."""
         return self._config.max_slices
+
+    @property
+    def region(self) -> str | None:
+        """Region derived from worker attributes or slice template."""
+        if self._config.HasField("worker"):
+            region = self._config.worker.attributes.get(REGION_ATTRIBUTE_KEY, "").strip()
+            if region:
+                return region
+        template = self._config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone.rsplit("-", 1)[0]
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
+
+    @property
+    def zone(self) -> str | None:
+        """Zone derived from worker attributes or slice template."""
+        if self._config.HasField("worker"):
+            zone = self._config.worker.attributes.get(ZONE_ATTRIBUTE_KEY, "").strip()
+            if zone:
+                return zone
+        template = self._config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
 
     @property
     def current_demand(self) -> int:
@@ -676,6 +711,10 @@ class ScalingGroup:
             return False
         return True
 
+    def acquire_scale_up_token(self, timestamp: Timestamp | None = None) -> bool:
+        """Try to acquire a scale-up rate limit token. Returns False if rate-limited."""
+        return self._scale_up_bucket.try_acquire(now=timestamp)
+
     def record_quota_exceeded(self, reason: str, timestamp: Timestamp | None = None) -> None:
         """Record a quota exhaustion event, blocking scale-up until the quota timeout elapses."""
         timestamp = timestamp or Timestamp.now()
@@ -744,12 +783,11 @@ class ScalingGroup:
     def availability(self, timestamp: Timestamp | None = None) -> AvailabilityState:
         """Compute current availability state for waterfall routing.
 
-        All states are computed from timestamps—no external state setting.
-        Priority: QUOTA_EXCEEDED > BACKOFF > REQUESTING > AT_CAPACITY > AVAILABLE
+        All states are computed from timestamps — no external state setting.
+        Priority: QUOTA_EXCEEDED > BACKOFF > REQUESTING > AT_MAX_SLICES > COOLDOWN > AVAILABLE
         """
         timestamp = timestamp or Timestamp.now()
 
-        # Quota exceeded
         if self._quota_exceeded_until is not None and not self._quota_exceeded_until.expired(now=timestamp):
             return AvailabilityState(
                 GroupAvailability.QUOTA_EXCEEDED,
@@ -757,7 +795,6 @@ class ScalingGroup:
                 self._quota_exceeded_until.as_timestamp(),
             )
 
-        # Backoff from failures
         if self._backoff_until is not None and not self._backoff_until.expired(now=timestamp):
             return AvailabilityState(
                 GroupAvailability.BACKOFF,
@@ -765,7 +802,6 @@ class ScalingGroup:
                 self._backoff_until.as_timestamp(),
             )
 
-        # Requesting (scale-up in progress)
         with self._slices_lock:
             pending = self._pending_scale_ups
             count = len(self._slices) + pending
@@ -775,24 +811,25 @@ class ScalingGroup:
                 "scale-up in progress",
             )
 
-        # At capacity
         if count >= self._config.max_slices:
-            return AvailabilityState(GroupAvailability.AT_CAPACITY)
+            return AvailabilityState(GroupAvailability.AT_MAX_SLICES)
+
+        cooldown_end = self._last_scale_up.add(self._scale_up_cooldown)
+        if self._last_scale_up.epoch_ms() > 0 and timestamp.before(cooldown_end):
+            return AvailabilityState(GroupAvailability.COOLDOWN, "scale-up cooldown", cooldown_end)
 
         return AvailabilityState(GroupAvailability.AVAILABLE)
 
     def can_accept_demand(self, timestamp: Timestamp | None = None) -> bool:
         """Whether this group can accept demand for waterfall routing.
 
-        BACKOFF and QUOTA_EXCEEDED groups reject demand so it falls through
-        to lower-priority groups. AT_CAPACITY groups accept demand because
-        their existing ready/inflight slices can still serve it — this keeps
-        current_demand accurate and prevents premature scale-down.
+        ACCEPTING states keep demand here: AVAILABLE, COOLDOWN, REQUESTING.
+        REJECTING states cause demand to fall through: BACKOFF, QUOTA_EXCEEDED, AT_MAX_SLICES.
         """
         return self.availability(timestamp).status in {
             GroupAvailability.AVAILABLE,
+            GroupAvailability.COOLDOWN,
             GroupAvailability.REQUESTING,
-            GroupAvailability.AT_CAPACITY,
         }
 
     def _get_slice_vm_addresses(self, state: SliceState) -> list[str]:

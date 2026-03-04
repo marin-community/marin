@@ -38,6 +38,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.request
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -815,9 +816,21 @@ class GcpPlatform:
         config: config_pb2.SliceConfig,
         worker_config: config_pb2.WorkerConfig | None = None,
     ) -> GcpSliceHandle:
-        """Create a TPU slice via gcloud."""
+        """Create a TPU slice via gcloud.
+
+        When worker_config is provided the bootstrap script is passed as TPU
+        metadata (startup-script) so each worker VM self-bootstraps on first
+        boot, matching the pattern used for GCE VM slices. Bootstrap progress
+        is monitored via health endpoint polling rather than SSH.
+        """
         gcp = config.gcp
         slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+
+        # Pre-render bootstrap script for metadata embedding.
+        startup_script: str | None = None
+        if worker_config:
+            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
+            startup_script = build_worker_bootstrap_script(worker_config)
 
         cmd = [
             "gcloud",
@@ -838,9 +851,23 @@ class GcpPlatform:
         if config.preemptible:
             cmd.append("--preemptible")
 
+        # Write startup-script to a temp file and pass via --metadata-from-file
+        # to avoid shell-escaping issues with large inline scripts.
+        script_file_path: str | None = None
+        if startup_script:
+            f = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
+            f.write(startup_script)
+            f.close()
+            script_file_path = f.name
+            cmd.append(f"--metadata-from-file=startup-script={script_file_path}")
+
         logger.info("Creating TPU slice: %s (type=%s, zone=%s)", slice_id, config.accelerator_variant, gcp.zone)
         logger.info("gcloud command: %s", cmd)
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        finally:
+            if script_file_path:
+                os.unlink(script_file_path)
         if result.returncode != 0:
             # GCP may have partially created the resource before reporting failure.
             # Best-effort delete to avoid orphaned TPU VMs.
@@ -860,11 +887,10 @@ class GcpPlatform:
         )
 
         if worker_config:
-            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
 
             def _bootstrap_worker():
                 try:
-                    self._run_bootstrap(handle, worker_config)
+                    self._run_tpu_bootstrap(handle, worker_config)
                 except Exception as e:
                     logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
                     with handle._bootstrap_lock:
@@ -977,26 +1003,24 @@ class GcpPlatform:
 
         return handle
 
-    def _run_bootstrap(
+    def _run_tpu_bootstrap(
         self,
         handle: GcpSliceHandle,
         worker_config: config_pb2.WorkerConfig,
         poll_interval: float = 10.0,
         cloud_ready_timeout: float = 600.0,
+        bootstrap_timeout: float = 600.0,
     ) -> None:
-        """Wait for slice to reach cloud READY with all workers, then bootstrap in parallel.
+        """Monitor TPU startup-script bootstrap via health endpoint polling.
 
-        Phase 1: Polls _describe_cloud() until the TPU is READY and all workers
-        have IP addresses. GCP may report READY before all network endpoints are
-        populated, so we keep polling until every worker has an internal IP.
-
-        Phase 2: Bootstraps all workers in parallel threads. Each thread waits
-        for SSH connectivity then runs the bootstrap script. This mirrors the old
-        bootstrap_slice_vms() discovery-and-parallel-bootstrap pattern.
+        The bootstrap script was baked into TPU metadata at creation time.
+        Phase 1: Wait for cloud READY with all worker IPs.
+        Phase 2: Poll worker health endpoints until all respond healthy.
+        On timeout: query Cloud Logging for [iris-init] entries for diagnostics.
         """
-        # Phase 1: Wait for cloud READY with all worker IPs populated
-        deadline = time.monotonic() + cloud_ready_timeout
-        while True:
+        # Phase 1: Wait for cloud READY with all worker IPs populated.
+        deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
+        while not deadline.expired():
             cloud_status = handle._describe_cloud()
             if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
                 raise PlatformError(
@@ -1012,48 +1036,87 @@ class GcpPlatform:
                     sum(1 for w in cloud_status.workers if w.internal_address),
                     cloud_status.worker_count,
                 )
-            if time.monotonic() > deadline:
-                raise PlatformError(f"Slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
             time.sleep(poll_interval)
+        else:
+            raise PlatformError(f"Slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
 
-        # Phase 2: Bootstrap all workers in parallel.
+        # Phase 2: Poll health endpoints for all workers.
         workers = cloud_status.workers
-        logger.info("Bootstrapping %d workers for slice %s", len(workers), handle.slice_id)
-        errors: list[tuple[str, Exception]] = []
+        worker_addrs = [(w.worker_id, w.internal_address) for w in workers]
+        healthy_workers: set[str] = set()
+        health_deadline = Deadline.from_now(Duration.from_seconds(bootstrap_timeout))
 
-        def _bootstrap_one(worker: GcpWorkerHandle) -> None:
-            try:
-                if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
-                    raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-                script = build_worker_bootstrap_script(worker_config)
-                worker.bootstrap(script)
-            except Exception as e:
-                errors.append((worker.worker_id, e))
+        logger.info(
+            "Polling health endpoints for %d workers in slice %s",
+            len(worker_addrs),
+            handle.slice_id,
+        )
 
-        threads: list[threading.Thread] = []
-        for worker in workers:
-            t = threading.Thread(
-                target=_bootstrap_one,
-                args=(worker,),
-                name=f"bootstrap-{worker.worker_id}",
-                daemon=True,
-            )
-            threads.append(t)
-            t.start()
+        while not health_deadline.expired():
+            for worker_id, addr in worker_addrs:
+                if worker_id in healthy_workers:
+                    continue
+                try:
+                    resp = urllib.request.urlopen(
+                        f"http://{addr}:{worker_config.port}/health",
+                        timeout=5,
+                    )
+                    if resp.status == 200:
+                        healthy_workers.add(worker_id)
+                        logger.info("Worker %s is healthy", worker_id)
+                except Exception:
+                    pass  # not ready yet
 
-        for t in threads:
-            t.join()
-
-        if errors:
-            failed_ids = [wid for wid, _ in errors]
+            if len(healthy_workers) == len(worker_addrs):
+                break
+            time.sleep(poll_interval)
+        else:
+            self._fetch_bootstrap_logs(handle)
             raise PlatformError(
-                f"Bootstrap failed for {len(errors)}/{len(workers)} workers in slice {handle.slice_id}: "
-                f"{', '.join(failed_ids)}: {errors[0][1]}"
+                f"TPU slice {handle.slice_id} bootstrap timed out: "
+                f"{len(healthy_workers)}/{len(worker_addrs)} workers healthy"
             )
 
-        logger.info("Bootstrap completed for slice %s (%d workers)", handle.slice_id, len(workers))
+        logger.info("Bootstrap completed for TPU slice %s (%d workers)", handle.slice_id, len(workers))
         with handle._bootstrap_lock:
             handle._bootstrap_state = CloudSliceState.READY
+
+    def _fetch_bootstrap_logs(self, handle: GcpSliceHandle) -> None:
+        """Fetch [iris-init] log entries from Cloud Logging for diagnostics.
+
+        Called only on bootstrap failure/timeout. Queries the last 30 minutes
+        of logs for the TPU's VMs.
+        """
+        log_filter = (
+            f'resource.type="gce_instance" '
+            f'textPayload:"[iris-init]" '
+            f'labels."compute.googleapis.com/resource_name":"{handle._slice_id}"'
+        )
+        cmd = [
+            "gcloud",
+            "logging",
+            "read",
+            log_filter,
+            f"--project={self._project_id}",
+            "--freshness=30m",
+            "--limit=200",
+            "--format=value(textPayload)",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            logger.warning("Cloud Logging query timed out for %s", handle.slice_id)
+            return
+
+        if result.returncode == 0 and result.stdout.strip():
+            logger.error("Bootstrap logs for %s:\n%s", handle.slice_id, result.stdout)
+        else:
+            logger.warning(
+                "Could not fetch Cloud Logging for %s (rc=%d): %s",
+                handle.slice_id,
+                result.returncode,
+                result.stderr.strip(),
+            )
 
     def _run_vm_slice_bootstrap(
         self,

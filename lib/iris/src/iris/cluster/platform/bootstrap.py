@@ -113,7 +113,7 @@ def render_template(template: str, **variables: str | int) -> str:
 
 
 # Bootstrap script template for worker VMs.
-WORKER_BOOTSTRAP_SCRIPT = """
+WORKER_BOOTSTRAP_SCRIPT = """#!/bin/bash
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
