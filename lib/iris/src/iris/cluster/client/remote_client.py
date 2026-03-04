@@ -8,7 +8,7 @@ import time
 
 from iris.cluster.client.protocol import TaskStateLogger
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished, validate_tpu_replicas
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry
@@ -65,6 +65,7 @@ class RemoteClusterClient:
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
+        validate_tpu_replicas(resources.device if resources.HasField("device") else None, replicas)
 
         if environment is None:
             environment = EnvironmentSpec().to_proto()
