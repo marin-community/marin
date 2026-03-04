@@ -237,7 +237,7 @@ class WorkerSettings(_message.Message):
     def __init__(self, attributes: _Optional[_Mapping[str, str]] = ..., env: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class ScaleGroupConfig(_message.Message):
-    __slots__ = ("name", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "resources", "num_vms", "priority", "slice_template", "worker")
+    __slots__ = ("name", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "resources", "num_vms", "priority", "scale_up_rate_limit", "slice_template", "worker")
     NAME_FIELD_NUMBER: _ClassVar[int]
     MIN_SLICES_FIELD_NUMBER: _ClassVar[int]
     MAX_SLICES_FIELD_NUMBER: _ClassVar[int]
@@ -246,6 +246,7 @@ class ScaleGroupConfig(_message.Message):
     RESOURCES_FIELD_NUMBER: _ClassVar[int]
     NUM_VMS_FIELD_NUMBER: _ClassVar[int]
     PRIORITY_FIELD_NUMBER: _ClassVar[int]
+    SCALE_UP_RATE_LIMIT_FIELD_NUMBER: _ClassVar[int]
     SLICE_TEMPLATE_FIELD_NUMBER: _ClassVar[int]
     WORKER_FIELD_NUMBER: _ClassVar[int]
     name: str
@@ -256,9 +257,10 @@ class ScaleGroupConfig(_message.Message):
     resources: ScaleGroupResources
     num_vms: int
     priority: int
+    scale_up_rate_limit: int
     slice_template: SliceConfig
     worker: WorkerSettings
-    def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., num_vms: _Optional[int] = ..., priority: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerSettings, _Mapping]] = ...) -> None: ...
+    def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., num_vms: _Optional[int] = ..., priority: _Optional[int] = ..., scale_up_rate_limit: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerSettings, _Mapping]] = ...) -> None: ...
 
 class WorkerConfig(_message.Message):
     __slots__ = ("docker_image", "host", "port", "port_range", "worker_id", "controller_address", "cache_dir", "log_prefix", "default_task_image", "default_task_env", "runtime", "accelerator_type", "accelerator_variant", "gpu_count", "worker_attributes", "poll_interval", "heartbeat_timeout", "platform")

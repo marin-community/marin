@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import subprocess
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -36,6 +37,7 @@ from iris.cluster.runtime.profile import (
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
+    ContainerInfraError,
     ContainerPhase,
     ContainerStats,
     ContainerStatus,
@@ -46,6 +48,28 @@ from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
+
+# Substrings that indicate a docker/registry infrastructure problem rather than
+# a user-code error.  Checked case-insensitively against stderr from docker
+# create/start/pull.
+_INFRA_ERROR_PATTERNS: list[str] = [
+    "error getting credentials",
+    "denied: denied",
+    "unauthorized: authentication required",
+    "connection refused",
+    "dial tcp",
+    "no such host",
+    "i/o timeout",
+    "TLS handshake timeout",
+    "daemon is not running",
+    "Cannot connect to the Docker daemon",
+]
+
+
+def _is_docker_infra_error(stderr: str) -> bool:
+    """Return True if *stderr* matches a known infrastructure failure pattern."""
+    stderr_lower = stderr.lower()
+    return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
 
 
 def _build_device_flags(config: ContainerConfig) -> list[str]:
@@ -467,6 +491,7 @@ exec {quoted_cmd}
     ) -> str:
         """Create a Docker container. Returns container_id."""
         config = self.config
+        self.runtime.ensure_image(config.image)
 
         cmd = [
             "docker",
@@ -535,7 +560,10 @@ exec {quoted_cmd}
             check=False,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to create container: {result.stderr}")
+            stderr = result.stderr
+            if _is_docker_infra_error(stderr):
+                raise ContainerInfraError(f"Failed to create container (infra): {stderr}")
+            raise RuntimeError(f"Failed to create container: {stderr}")
 
         return result.stdout.strip()
 
@@ -548,7 +576,10 @@ exec {quoted_cmd}
             check=False,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to start container: {result.stderr}")
+            stderr = result.stderr
+            if _is_docker_infra_error(stderr):
+                raise ContainerInfraError(f"Failed to start container (infra): {stderr}")
+            raise RuntimeError(f"Failed to start container: {stderr}")
 
     def _docker_inspect(self, container_id: str) -> ContainerStatus:
         """Inspect container status."""
@@ -673,6 +704,54 @@ class DockerRuntime:
     def __init__(self) -> None:
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
+        # Serializes `docker pull` per image tag so that concurrent task threads
+        # don't each trigger docker-credential-gcloud against the metadata server,
+        # which causes sporadic "no active account" errors under load.
+        self._pull_lock = threading.Lock()
+        self._pulled_images: set[str] = set()
+
+    def ensure_image(self, image: str) -> None:
+        """Pull *image* if it isn't already present locally.
+
+        Only one `docker pull` runs at a time (via ``_pull_lock``).  This
+        prevents a thundering-herd of ``docker-credential-gcloud`` processes
+        when many task threads call ``docker create`` concurrently — each
+        invocation would otherwise shell out to the GCE metadata server for an
+        OAuth token, overwhelming it and causing sporadic auth failures.
+        """
+        if image in self._pulled_images:
+            return
+
+        with self._pull_lock:
+            # Double-check after acquiring lock
+            if image in self._pulled_images:
+                return
+
+            # Fast path: image already on disk
+            inspect = subprocess.run(
+                ["docker", "image", "inspect", image],
+                capture_output=True,
+                check=False,
+            )
+            if inspect.returncode == 0:
+                self._pulled_images.add(image)
+                return
+
+            logger.info("Pulling image %s", image)
+            result = subprocess.run(
+                ["docker", "pull", image],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                stderr = result.stderr
+                if _is_docker_infra_error(stderr):
+                    raise ContainerInfraError(f"Failed to pull image {image} (infra): {stderr}")
+                raise RuntimeError(f"Failed to pull image {image}: {stderr}")
+
+            logger.info("Image %s pulled successfully", image)
+            self._pulled_images.add(image)
 
     def create_container(self, config: ContainerConfig) -> DockerContainerHandle:
         """Create a container handle from config.
