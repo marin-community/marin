@@ -5,10 +5,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import warnings
+
 import jax
 import jax.numpy as jnp
 import pytest
 
+from levanter.kernels.pallas import autotune_cache_utils
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_gpu
@@ -561,6 +563,196 @@ def test_fused_cross_entropy_pallas_gpu_grad_tracing_non_gb10_path(
         return loss.sum()
 
     jax.make_jaxpr(jax.grad(loss_fn, argnums=(0, 1)))(x, w)
+
+
+def test_pallas_autotune_used_when_tuned_match_missing(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    autotuned = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
+    seen_block_sizes: list[fused_api.BlockSizes | None] = []
+
+    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes=None, **_kwargs):
+        del labels_raw
+        seen_block_sizes.append(block_sizes)
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
+    monkeypatch.setattr(
+        fused_api,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (inferred, False),
+    )
+    monkeypatch.setattr(
+        fused_api,
+        "_autotune_block_sizes_on_miss",
+        lambda **kwargs: autotuned,
+    )
+
+    fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        implementation="pallas_tpu",
+    )
+
+    assert seen_block_sizes == [autotuned]
+
+
+def test_pallas_autotune_skipped_when_tuned_match_exists(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    seen_block_sizes: list[fused_api.BlockSizes | None] = []
+
+    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes=None, **_kwargs):
+        del labels_raw
+        seen_block_sizes.append(block_sizes)
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
+    monkeypatch.setattr(
+        fused_api,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (inferred, True),
+    )
+    monkeypatch.setattr(
+        fused_api,
+        "_autotune_block_sizes_on_miss",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("autotune should not be called")),
+    )
+
+    fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        implementation="pallas_tpu",
+    )
+
+    assert seen_block_sizes == [inferred]
+
+
+def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    faster = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
+    slower = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=512)
+
+    calls = {"bench": 0}
+    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_ensure_autotune_cache_loaded", lambda: None)
+    monkeypatch.setattr(fused_api, "_persist_autotune_cache", lambda: None)
+    monkeypatch.setattr(
+        fused_api,
+        "_candidate_block_sizes",
+        lambda impl_name, inferred_block_sizes: [inferred_block_sizes, slower, faster],
+    )
+
+    def fake_benchmark(**kwargs):
+        calls["bench"] += 1
+        candidate = kwargs["candidate"]
+        return 1.0 if candidate.v_block_size == 256 else 2.0
+
+    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+
+    def fake_impl(x_raw, labels_raw, w_raw, **kwargs):
+        del x_raw, labels_raw, w_raw, kwargs
+        return jnp.zeros((4,), dtype=jnp.float32), jnp.zeros((4,), dtype=jnp.float32)
+
+    winner_1 = fused_api._autotune_block_sizes_on_miss(
+        impl_name="pallas_tpu",
+        fn=fake_impl,
+        x=x,
+        labels=y,
+        w=w,
+        inferred=inferred,
+        dtype=jnp.float32,
+        logit_soft_cap=None,
+        precision=None,
+        return_argmax=False,
+    )
+    winner_2 = fused_api._autotune_block_sizes_on_miss(
+        impl_name="pallas_tpu",
+        fn=fake_impl,
+        x=x,
+        labels=y,
+        w=w,
+        inferred=inferred,
+        dtype=jnp.float32,
+        logit_soft_cap=None,
+        precision=None,
+        return_argmax=False,
+    )
+
+    assert winner_1 == faster
+    assert winner_2 == faster
+    assert calls["bench"] == 3
+
+
+def test_fused_ce_autotune_cache_url_uses_jax_cache_subdir(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        autotune_cache_utils,
+        "get_jax_compilation_cache_dir",
+        lambda: "gs://my-cache-root/compiled",
+    )
+
+    cache_url = fused_api._kernel_autotune_cache_url()
+
+    assert (
+        cache_url
+        == "gs://my-cache-root/compiled/levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v1.json"
+    )
+
+
+def test_fused_ce_autotune_jaxpr_hash_is_stable_for_same_inputs():
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes=None, **_kwargs):
+        del labels_raw, block_sizes
+        batch = x_raw.shape[0]
+        logits = jnp.einsum("bh,hv->bv", x_raw, w_raw)
+        return jnp.sum(logits, axis=-1), jnp.zeros((batch,), dtype=jnp.float32)
+
+    hash_1 = fused_api._autotune_jaxpr_hash(
+        fn=fake_impl,
+        inferred=inferred,
+        x=x,
+        labels=y,
+        w=w,
+        dtype=jnp.float32,
+        logit_soft_cap=None,
+        precision=None,
+        return_argmax=False,
+    )
+    hash_2 = fused_api._autotune_jaxpr_hash(
+        fn=fake_impl,
+        inferred=inferred,
+        x=x,
+        labels=y,
+        w=w,
+        dtype=jnp.float32,
+        logit_soft_cap=None,
+        precision=None,
+        return_argmax=False,
+    )
+
+    assert hash_1 is not None
+    assert hash_1 == hash_2
 
 
 def test_fused_cross_entropy_pallas_bwd_matches_reference():

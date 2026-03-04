@@ -579,6 +579,25 @@ def infer_block_sizes(
     Returns:
         BlockSizes chosen from the tuned table, or the default if no match.
     """
+    block_sizes, _ = infer_block_sizes_with_tuned_match(
+        b,
+        h,
+        v,
+        dtype=dtype,
+        device_kind=device_kind,
+    )
+    return block_sizes
+
+
+def infer_block_sizes_with_tuned_match(
+    b: int,
+    h: int,
+    v: int,
+    *,
+    dtype: Optional[jnp.dtype],
+    device_kind: Optional[str] = None,
+) -> tuple[BlockSizes, bool]:
+    """Infer block sizes and report whether they came from tuned lookup data."""
     normalized_device_kind = _normalized_device_kind(device_kind)
     dtype_name = _dtype_name(dtype)
     device_key = _device_key(normalized_device_kind)
@@ -603,7 +622,7 @@ def infer_block_sizes(
                     device_key=device_key,
                     device_kind=normalized_device_kind,
                 ):
-                    return entry
+                    return entry, True
 
     default_entry = BlockSizes.get_default()
     if _is_valid_for_pallas_shape(
@@ -613,13 +632,16 @@ def infer_block_sizes(
         device_key=device_key,
         device_kind=normalized_device_kind,
     ):
-        return default_entry
-    return _sanitize_for_pallas(
-        default_entry,
-        b=b,
-        h=h,
-        device_key=device_key,
-        device_kind=normalized_device_kind,
+        return default_entry, False
+    return (
+        _sanitize_for_pallas(
+            default_entry,
+            b=b,
+            h=h,
+            device_key=device_key,
+            device_kind=normalized_device_kind,
+        ),
+        False,
     )
 
 
@@ -653,5 +675,6 @@ __all__ = [
     "TUNED_BLOCK_SIZES",
     "SHAPE_BUCKETS",
     "infer_block_sizes",
+    "infer_block_sizes_with_tuned_match",
     "infer_xla_v_block_size",
 ]
