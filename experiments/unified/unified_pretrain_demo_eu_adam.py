@@ -95,6 +95,7 @@ MULTIMODAL_WEIGHT = float(os.environ.get("MULTIMODAL_WEIGHT", "2.0"))
 LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "3e-4"))
 W_VISUAL = float(os.environ.get("W_VISUAL", "1.0"))
 UND_GEN_RATIO = float(os.environ.get("UND_GEN_RATIO", "1.0"))
+Z_LOSS_WEIGHT = float(os.environ.get("Z_LOSS_WEIGHT", "0.0"))
 
 
 def _merge_xla_flags(existing: str, required_flags: list[str]) -> str:
@@ -456,7 +457,11 @@ def unified_data_config(
     return data_config
 
 
-def _demo_train_config(learning_rate: float = 3e-4, num_train_steps: int = NUM_STEPS) -> SimpleTrainConfig:
+def _demo_train_config(
+    learning_rate: float = 3e-4,
+    num_train_steps: int = NUM_STEPS,
+    z_loss_weight: float = 0.0,
+) -> SimpleTrainConfig:
     return SimpleTrainConfig(
         resources=ResourceConfig.with_tpu(TPU_TYPE, slice_count=1),
         train_batch_size=256,
@@ -469,6 +474,7 @@ def _demo_train_config(learning_rate: float = 3e-4, num_train_steps: int = NUM_S
         per_device_parallelism=1,
         steps_per_eval=500,
         steps_per_export=1000,
+        z_loss_weight=z_loss_weight or None,
     )
 
 
@@ -505,6 +511,7 @@ def make_unified_0_6b(
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
+    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-0.6b-demo",
@@ -517,7 +524,7 @@ def make_unified_0_6b(
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_0_6b,
-        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps),
+        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps, z_loss_weight=z_loss_weight),
         tags=["unified", "scaling", "qwen3", "0.6b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -536,6 +543,7 @@ def make_unified_1_7b(
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
+    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-1.7b-demo",
@@ -548,7 +556,7 @@ def make_unified_1_7b(
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_1_7b,
-        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps),
+        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps, z_loss_weight=z_loss_weight),
         tags=["unified", "scaling", "qwen3", "1.7b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -566,6 +574,7 @@ def make_unified_4b(
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
+    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-4b-demo",
@@ -578,7 +587,7 @@ def make_unified_4b(
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_4b,
-        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps),
+        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps, z_loss_weight=z_loss_weight),
         tags=["unified", "scaling", "qwen3", "4b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -588,7 +597,7 @@ def make_unified_4b(
 
 
 if __name__ == "__main__":
-    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, num_train_steps=NUM_STEPS, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
+    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, num_train_steps=NUM_STEPS, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO, z_loss_weight=Z_LOSS_WEIGHT)]
     steps = [
         make_unified_1_7b(
             text_weight=TEXT_WEIGHT,
@@ -597,9 +606,10 @@ if __name__ == "__main__":
             num_train_steps=NUM_STEPS,
             w_visual=W_VISUAL,
             und_gen_ratio=UND_GEN_RATIO,
+            z_loss_weight=Z_LOSS_WEIGHT,
         )
     ]
-    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, num_train_steps=NUM_STEPS, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
+    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, num_train_steps=NUM_STEPS, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO, z_loss_weight=Z_LOSS_WEIGHT)]
     executor_main(
         steps,
         description="Unified image-text model pre-training with Qwen3 architecture",

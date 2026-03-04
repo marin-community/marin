@@ -100,6 +100,7 @@ ADAM_LR = float(os.environ.get("ADAM_LR", "0.0012"))
 W_VISUAL = float(os.environ.get("W_VISUAL", "1.0"))
 UND_GEN_RATIO = float(os.environ.get("UND_GEN_RATIO", "1.0"))
 LR_SCHEDULE = os.environ.get("LR_SCHEDULE", "cosine")
+Z_LOSS_WEIGHT = float(os.environ.get("Z_LOSS_WEIGHT", "0.0"))
 
 
 def _merge_xla_flags(existing: str, required_flags: list[str]) -> str:
@@ -521,6 +522,7 @@ def _demo_train_config(
     adam_lr: float = 0.0012,
     num_train_steps: int = NUM_STEPS,
     lr_schedule: str = "cosine",
+    z_loss_weight: float = 0.0,
 ) -> SimpleTrainConfig:
     optimizer = MuonConfig(
         learning_rate=muon_lr,
@@ -550,6 +552,7 @@ def _demo_train_config(
         steps_per_eval=500,
         steps_per_export=1000,
         optimizer_config=optimizer,
+        z_loss_weight=z_loss_weight or None,
     )
 
 
@@ -588,6 +591,7 @@ def make_unified_0_6b(
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
+    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-0.6b-demo",
@@ -601,7 +605,8 @@ def make_unified_0_6b(
         ),
         model_config=qwen3_0_6b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule
+            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            z_loss_weight=z_loss_weight,
         ),
         tags=["unified", "scaling", "qwen3", "0.6b", "demo"],
         eval_harness_tasks=[],
@@ -623,6 +628,7 @@ def make_unified_1_7b(
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
+    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-1.7b-demo",
@@ -636,7 +642,8 @@ def make_unified_1_7b(
         ),
         model_config=qwen3_1_7b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule
+            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            z_loss_weight=z_loss_weight,
         ),
         tags=["unified", "scaling", "qwen3", "1.7b", "demo"],
         eval_harness_tasks=[],
@@ -657,6 +664,7 @@ def make_unified_4b(
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
+    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-4b-demo",
@@ -670,7 +678,8 @@ def make_unified_4b(
         ),
         model_config=qwen3_4b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule
+            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            z_loss_weight=z_loss_weight,
         ),
         tags=["unified", "scaling", "qwen3", "4b", "demo"],
         eval_harness_tasks=[],
@@ -694,13 +703,15 @@ def make_visual_only_0_6b(
     num_train_steps: int = NUM_STEPS,
     lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
+    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "visual-only-qwen3-0.6b",
         tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
         model_config=qwen3_0_6b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule
+            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            z_loss_weight=z_loss_weight,
         ),
         tags=["visual-only", "scaling", "qwen3", "0.6b"],
         eval_harness_tasks=[],
@@ -716,13 +727,15 @@ def make_visual_only_1_7b(
     num_train_steps: int = NUM_STEPS,
     lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
+    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "visual-only-qwen3-1.7b",
         tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
         model_config=qwen3_1_7b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule
+            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            z_loss_weight=z_loss_weight,
         ),
         tags=["visual-only", "scaling", "qwen3", "1.7b"],
         eval_harness_tasks=[],
@@ -738,13 +751,15 @@ def make_visual_only_4b(
     num_train_steps: int = NUM_STEPS,
     lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
+    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "visual-only-qwen3-4b",
         tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
         model_config=qwen3_4b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule
+            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps, lr_schedule=lr_schedule,
+            z_loss_weight=z_loss_weight,
         ),
         tags=["visual-only", "scaling", "qwen3", "4b"],
         eval_harness_tasks=[],
@@ -759,6 +774,7 @@ if __name__ == "__main__":
     #     text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT,
     #     muon_lr=MUON_LR, adam_lr=ADAM_LR, num_train_steps=NUM_STEPS,
     #     lr_schedule=LR_SCHEDULE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO,
+    #     z_loss_weight=Z_LOSS_WEIGHT,
     # )]
     steps = [
         make_unified_1_7b(
@@ -770,16 +786,18 @@ if __name__ == "__main__":
             lr_schedule=LR_SCHEDULE,
             w_visual=W_VISUAL,
             und_gen_ratio=UND_GEN_RATIO,
+            z_loss_weight=Z_LOSS_WEIGHT,
         )
     ]
     # steps = [make_unified_4b(
     #     text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT,
     #     muon_lr=MUON_LR, adam_lr=ADAM_LR, num_train_steps=NUM_STEPS,
     #     lr_schedule=LR_SCHEDULE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO,
+    #     z_loss_weight=Z_LOSS_WEIGHT,
     # )]
     # steps = [make_visual_only_1_7b(
     #     muon_lr=MUON_LR, adam_lr=ADAM_LR, num_train_steps=NUM_STEPS,
-    #     lr_schedule=LR_SCHEDULE,
+    #     lr_schedule=LR_SCHEDULE, z_loss_weight=Z_LOSS_WEIGHT,
     # )]
     executor_main(
         steps,
