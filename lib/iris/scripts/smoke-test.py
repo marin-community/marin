@@ -675,16 +675,16 @@ class SmokeTestRunner:
         self._background_procs: list[BackgroundProc] = []
         # Set once we have a controller connection (for RPC diagnostics at teardown)
         self._controller_url: str | None = None
+        # Local bundle directory for cleanup (only set in local mode)
+        self._bundle_dir: Path | None = None
         # Unique bundle prefix for snapshot storage across controller restarts.
         # Must be isolated per run so we don't restore stale snapshots from
         # previous smoke test runs.
-        self._bundle_dir = Path(tempfile.mkdtemp(prefix="iris-smoke-bundles-"))
         if config.local:
+            self._bundle_dir = Path(tempfile.mkdtemp(prefix="iris-smoke-bundles-"))
             self._bundle_prefix = f"file://{self._bundle_dir}"
         else:
-            from iris.marin_fs import marin_temp_bucket
-
-            self._bundle_prefix = marin_temp_bucket(ttl_days=1, prefix=f"iris/smoke-bundles/{self._run_id}")
+            self._bundle_prefix = f"gs://marin-tmp-us-central2/ttl=1d/iris/smoke-bundles/{self._run_id}"
 
     def run(self) -> bool:
         """Run the smoke test. Returns True if all tests pass."""
@@ -1365,8 +1365,8 @@ class SmokeTestRunner:
             except Exception as e:
                 logger.warning("Error stopping remote cluster: %s", e)
 
-        # Clean up bundle directory used for snapshot storage
-        if self._bundle_dir.exists():
+        # Clean up local bundle directory used for snapshot storage
+        if self._bundle_dir is not None and self._bundle_dir.exists():
             shutil.rmtree(self._bundle_dir, ignore_errors=True)
 
 
