@@ -241,6 +241,62 @@ def test_group_by_generator_reducer(zephyr_ctx):
     assert results[3] == {"cat": "B", "val": 5, "from_group": True}
 
 
+def test_group_by_secondary_sort(zephyr_ctx):
+    """Test group_by with sort_by delivers items in sorted order within each group."""
+    data = [
+        {"user": "A", "ts": 3, "event": "c"},
+        {"user": "B", "ts": 2, "event": "b"},
+        {"user": "A", "ts": 1, "event": "a"},
+        {"user": "B", "ts": 5, "event": "e"},
+        {"user": "A", "ts": 2, "event": "b"},
+        {"user": "B", "ts": 1, "event": "a"},
+    ]
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["user"],
+        reducer=lambda key, items: {"user": key, "events": [i["event"] for i in items]},
+        sort_by=lambda x: x["ts"],
+    )
+
+    results = list(zephyr_ctx.execute(ds))
+    results = sorted(results, key=lambda x: x["user"])
+
+    # Items within each group should be sorted by timestamp
+    assert results[0] == {"user": "A", "events": ["a", "b", "c"]}
+    assert results[1] == {"user": "B", "events": ["a", "b", "e"]}
+
+
+def test_group_by_secondary_sort_with_generator_reducer(zephyr_ctx):
+    """Test sort_by combined with a generator reducer."""
+    data = [
+        {"cat": "X", "rank": 2, "val": "second"},
+        {"cat": "X", "rank": 1, "val": "first"},
+        {"cat": "Y", "rank": 3, "val": "third"},
+        {"cat": "Y", "rank": 1, "val": "first"},
+    ]
+
+    def ranked_explode(key, items):
+        for item in items:
+            yield {"cat": key, "val": item["val"], "rank": item["rank"]}
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["cat"],
+        reducer=ranked_explode,
+        sort_by=lambda x: x["rank"],
+    )
+
+    results = list(zephyr_ctx.execute(ds))
+    results = sorted(results, key=lambda x: (x["cat"], x["rank"]))
+
+    # Items should arrive at reducer sorted by rank
+    assert results == [
+        {"cat": "X", "val": "first", "rank": 1},
+        {"cat": "X", "val": "second", "rank": 2},
+        {"cat": "Y", "val": "first", "rank": 1},
+        {"cat": "Y", "val": "third", "rank": 3},
+    ]
+
+
 def test_group_by_with_none_and_filter(zephyr_ctx):
     """Test group_by with None results followed by filter operations."""
     data = [
