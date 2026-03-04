@@ -70,6 +70,12 @@ MAX_REPLICAS_PER_JOB = 10000
 DEFAULT_MAX_RETRIES_PREEMPTION = 100
 """Default preemption retries. High because worker failures are typically transient."""
 
+RESERVATION_HOLDER_JOB_NAME = ":reservation:"
+"""Well-known name component for synthetic reservation holder child jobs.
+
+Uses colons to clearly distinguish from user-created jobs and avoid
+accidental collision with normal job names."""
+
 HEARTBEAT_FAILURE_THRESHOLD = 10
 """Consecutive heartbeat failures before marking worker as failed."""
 
@@ -523,6 +529,13 @@ class ControllerJob:
     # Incremental task state tracking
     num_tasks: int = 0
     task_state_counts: Counter[int] = field(default_factory=Counter)
+
+    # Reservation holder flag. When True, this is a synthetic child job
+    # whose tasks generate demand to keep reserved capacity alive. Its
+    # tasks participate in scheduling but consume zero resources and are
+    # never dispatched (no entrypoint). The constraints/taints on claimed
+    # workers ensure only peer jobs can use the reserved resources.
+    is_reservation_holder: bool = False
 
     # --- Task State Tracking ---
 
@@ -1141,6 +1154,43 @@ class ControllerState:
             job.task_state_counts[task.state] += 1
             txn.log("task_created", task.task_id, job_id=str(event.job_id))
 
+        # Create a synthetic child job for reservation entries. The child
+        # job ``{parent}/:reservation:`` has one task per reservation entry,
+        # using each entry's own resources and constraints. Holder tasks
+        # participate in scheduling but consume zero resources, generating
+        # demand to keep reserved capacity alive. They are never dispatched
+        # (no entrypoint). The constraints/taints on claimed workers ensure
+        # only peer jobs can use the reserved resources.
+        # When the parent finishes, ``_cancel_child_jobs`` cleans them up.
+        if job.request.HasField("reservation"):
+            entries = job.request.reservation.entries
+            holder_job_id = job.job_id.child(RESERVATION_HOLDER_JOB_NAME)
+            # Each entry carries its own resources and constraints, so the
+            # holder job uses the first entry's spec. When entries differ
+            # the demand still scales correctly because replicas == len(entries).
+            # For heterogeneous entries a per-entry job split would be needed,
+            # but in practice all entries share the same device type.
+            first_entry = entries[0]
+            holder_request = cluster_pb2.Controller.LaunchJobRequest(
+                name=holder_job_id.to_wire(),
+                entrypoint=job.request.entrypoint,
+                resources=first_entry.resources,
+                environment=job.request.environment,
+                replicas=len(entries),
+                max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
+            )
+            holder_request.constraints.extend(first_entry.constraints or job.request.constraints)
+            holder_event = JobSubmittedEvent(
+                job_id=holder_job_id,
+                request=holder_request,
+                timestamp=event.timestamp,
+            )
+            self._on_job_submitted(txn, holder_event)
+            # Tag the child as a reservation holder after submission.
+            holder_job = self._jobs[holder_job_id]
+            holder_job.is_reservation_holder = True
+            txn.log("reservation_holder_job_created", holder_job_id, num_entries=len(entries))
+
         txn.log("job_submitted", event.job_id, num_tasks=job.num_tasks)
 
     def _on_job_cancelled(self, txn: TransactionLog, event: JobCancelledEvent) -> None:
@@ -1200,10 +1250,16 @@ class ControllerState:
         old_state = task.state
         task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_ASSIGNED)
 
-        # Commit resources and add to running_tasks
-        worker.assign_task(event.task_id, job.request.resources)
+        # Holder tasks consume zero resources — they exist only to generate
+        # demand and keep reserved capacity alive via taints.
+        if not job.is_reservation_holder:
+            worker.assign_task(event.task_id, job.request.resources)
+        else:
+            # Still track the task in running_tasks for lifecycle management,
+            # but don't commit any resources.
+            worker.running_tasks.add(event.task_id)
+            worker.task_history.add(event.task_id)
 
-        # Update job counters (state stays PENDING, so no job state change expected)
         new_job_state = job.on_task_transition(old_state, task.state)
         if new_job_state is not None:
             job.state = new_job_state
@@ -1340,9 +1396,8 @@ class ControllerState:
                 is_finished,
             )
 
-        # Coscheduled group failure: if one task fails terminally, kill all running siblings.
-        # For multi-host TPU jobs, if one host fails the other hosts cannot continue
-        # (collective ops will timeout), so we immediately kill all running siblings.
+        # Coscheduled group failure: if one task fails terminally, kill all
+        # running siblings. Holder jobs are never coscheduled.
         if (
             job.is_coscheduled
             and task.is_finished()
@@ -1354,7 +1409,6 @@ class ControllerState:
         ):
             self._cascade_coscheduled_failure(task, job, txn)
 
-        # Update job state counters and finalize if needed
         new_job_state = job.on_task_transition(old_state, task.state)
         if new_job_state is not None:
             killed_tasks = self._finalize_job_state(job, new_job_state, txn)
@@ -1406,7 +1460,11 @@ class ControllerState:
         if worker_id:
             worker = self._workers.get(worker_id)
             if worker and task.task_id in worker.running_tasks:
-                worker.unassign_task(task.task_id, job.request.resources)
+                if job.is_reservation_holder:
+                    # Holder tasks consume zero resources, just remove from running set.
+                    worker.running_tasks.discard(task.task_id)
+                else:
+                    worker.unassign_task(task.task_id, job.request.resources)
                 txn.log("task_unassigned", task.task_id, worker_id=str(worker_id))
 
         self._remove_endpoints_for_task(task.task_id)
@@ -1500,7 +1558,6 @@ class ControllerState:
             if tasks is None:
                 tasks = expand_job_to_tasks(job)
 
-            # Initialize task state counts
             job.num_tasks = len(tasks)
             for task in tasks:
                 self._tasks[task.task_id] = task
@@ -1641,7 +1698,7 @@ class ControllerState:
             job.error = self._get_first_task_error(job.job_id)
             killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job exceeded max_task_failures", txn)
         elif new_state == cluster_pb2.JOB_STATE_SUCCEEDED:
-            pass
+            killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job succeeded", txn)
         elif new_state == cluster_pb2.JOB_STATE_KILLED:
             job.error = self._get_first_task_error(job.job_id)
             killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job was terminated.", txn)
@@ -1649,10 +1706,10 @@ class ControllerState:
             job.error = self._get_first_task_error(job.job_id)
             killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job could not be scheduled.", txn)
 
-        # Cascade termination to child jobs when parent reaches terminal state
-        if new_state != cluster_pb2.JOB_STATE_SUCCEEDED:
-            child_killed_tasks = self._cancel_child_jobs(job.job_id, txn)
-            killed_tasks.update(child_killed_tasks)
+        # Cascade termination to child jobs for ALL terminal states,
+        # including SUCCESS. This cleans up reservation holder child jobs.
+        child_killed_tasks = self._cancel_child_jobs(job.job_id, txn)
+        killed_tasks.update(child_killed_tasks)
 
         return killed_tasks
 
@@ -1735,21 +1792,24 @@ class ControllerState:
             task.finished_at = now
             task.error = error
 
-            # Update job's task state counts
             if job:
                 job.task_state_counts[old_state] -= 1
                 job.task_state_counts[cluster_pb2.TASK_STATE_KILLED] += 1
 
             tasks_to_remove_from_queue.add(task_id)
 
-            # Only track tasks with workers assigned for kill RPC
-            if had_worker:
+            # Holder job tasks were never dispatched so there is nothing to abort.
+            if had_worker and not (job and job.is_reservation_holder):
                 tasks_needing_kill_rpc.add(task_id)
 
             if task.worker_id and job:
                 worker = self._workers.get(task.worker_id)
                 if worker:
-                    worker.unassign_task(task_id, job.request.resources)
+                    if job.is_reservation_holder:
+                        # Holder tasks consume zero resources, just remove from running set.
+                        worker.running_tasks.discard(task_id)
+                    else:
+                        worker.unassign_task(task_id, job.request.resources)
             self._remove_endpoints_for_task(task_id)
 
             txn.log("task_killed", task_id, old_state=old_state, error=error)
@@ -1793,6 +1853,9 @@ class ControllerState:
         Must be done under the lock because the scheduling thread would otherwise
         iterate worker.running_tasks while the heartbeat thread mutates it
         (RuntimeError: Set changed size during iteration).
+
+        Reservation holder tasks are excluded: they are never dispatched, so
+        they should not consume building slots that would throttle real tasks.
         """
         with self._lock:
             counts: dict[WorkerId, int] = {}
@@ -1804,6 +1867,11 @@ class ControllerState:
                         cluster_pb2.TASK_STATE_BUILDING,
                         cluster_pb2.TASK_STATE_ASSIGNED,
                     ):
+                        # Skip holder tasks — they sit in ASSIGNED forever
+                        # and should not block real task dispatch.
+                        job = self._jobs.get(task.job_id)
+                        if job and job.is_reservation_holder:
+                            continue
                         count += 1
                 if count > 0:
                     counts[worker.worker_id] = count

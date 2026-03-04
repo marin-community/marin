@@ -191,6 +191,7 @@ def _snapshot_job(
         error=job.error or "",
         exit_code=job.exit_code or 0,
         num_tasks=job.num_tasks,
+        is_reservation_holder=job.is_reservation_holder,
     )
     snap.request.CopyFrom(job.request)
     snap.submitted_at.CopyFrom(job.submitted_at.to_proto())
@@ -371,9 +372,15 @@ def _restore_task(snap: snapshot_pb2.TaskSnapshot) -> ControllerTask:
 def _restore_job(
     snap: snapshot_pb2.JobSnapshot,
 ) -> tuple[ControllerJob, list[ControllerTask]]:
-    """Restore a job and its tasks from a snapshot."""
+    """Restore a job and its tasks from a snapshot.
+
+    The ``is_reservation_holder`` flag is persisted explicitly in the proto
+    so restore is unambiguous and cannot misclassify normal jobs.
+    """
     job_id = JobName.from_string(snap.job_id)
     tasks = [_restore_task(t) for t in snap.tasks]
+
+    is_holder = snap.is_reservation_holder
 
     # Do NOT pre-populate task_state_counts here. state.add_job() will
     # iterate the tasks and increment counts itself. Building them here
@@ -389,6 +396,7 @@ def _restore_job(
         error=snap.error if snap.error else None,
         exit_code=snap.exit_code if snap.exit_code != 0 else None,
         num_tasks=snap.num_tasks,
+        is_reservation_holder=is_holder,
     )
 
     # Restore scheduling deadline from wall-clock epoch_ms
@@ -462,12 +470,17 @@ def restore_snapshot(
         state.add_job(job, tasks)
         total_tasks += len(tasks)
 
-        # Rebuild worker running_tasks and committed resources from active task state
+        # Rebuild worker running_tasks and committed resources from active task state.
+        # Holder tasks consume zero resources — only track them in running_tasks.
         for task in tasks:
             if task.state in _ACTIVE_TASK_STATES and task.worker_id:
                 worker = workers.get(task.worker_id)
                 if worker:
-                    worker.assign_task(task.task_id, job.request.resources)
+                    if job.is_reservation_holder:
+                        worker.running_tasks.add(task.task_id)
+                        worker.task_history.add(task.task_id)
+                    else:
+                        worker.assign_task(task.task_id, job.request.resources)
 
     # Restore endpoints with their task associations
     endpoint_count = 0
