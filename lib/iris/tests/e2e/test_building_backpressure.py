@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Backpressure test: slow-starting containers must not exceed max_building_tasks_per_worker."""
