@@ -9,6 +9,7 @@ import re
 import shutil
 import socket
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -444,11 +445,36 @@ class DefaultEnvironmentProvider:
         return marin_temp_bucket(ttl_days=30, prefix="iris-logs")
 
 
+def _read_net_dev_bytes() -> tuple[int, int]:
+    """Read cumulative network bytes from /proc/net/dev, summing all non-loopback interfaces.
+
+    Returns (recv_bytes, sent_bytes). Works in Docker/K8s containers since
+    /proc/net/dev reflects the container's network namespace.
+    """
+    recv_total = 0
+    sent_total = 0
+    with open("/proc/net/dev") as f:
+        for line in f:
+            # Skip header lines (contain "|")
+            if "|" in line:
+                continue
+            parts = line.split()
+            if len(parts) < 10:
+                continue
+            iface = parts[0].rstrip(":")
+            if iface == "lo":
+                continue
+            recv_total += int(parts[1])  # bytes received
+            sent_total += int(parts[9])  # bytes sent
+    return recv_total, sent_total
+
+
 class HostMetricsCollector:
     """Collects host-level resource metrics using /proc and standard library.
 
-    CPU utilization is computed as a delta between consecutive calls, so the
-    first call always reports 0% CPU. Memory and disk are instantaneous snapshots.
+    CPU utilization and network bandwidth are computed as deltas between
+    consecutive calls, so the first call always reports 0% CPU and 0 B/s
+    network. Memory and disk are instantaneous snapshots.
     Gracefully returns partial data on non-Linux systems (macOS, etc.).
     """
 
@@ -456,6 +482,9 @@ class HostMetricsCollector:
         self._disk_path = disk_path
         self._prev_cpu_total = 0
         self._prev_cpu_idle = 0
+        self._prev_net_recv = 0
+        self._prev_net_sent = 0
+        self._prev_net_time: float = 0.0
 
     def collect(self) -> cluster_pb2.WorkerResourceSnapshot:
         snapshot = cluster_pb2.WorkerResourceSnapshot()
@@ -464,6 +493,7 @@ class HostMetricsCollector:
         self._collect_memory(snapshot)
         self._collect_disk(snapshot)
         self._collect_cpu(snapshot)
+        self._collect_network(snapshot)
 
         return snapshot
 
@@ -509,5 +539,27 @@ class HostMetricsCollector:
 
                 self._prev_cpu_total = total
                 self._prev_cpu_idle = idle
+        except (OSError, ValueError, IndexError):
+            pass
+
+    def _collect_network(self, snapshot: cluster_pb2.WorkerResourceSnapshot) -> None:
+        """Compute network bandwidth as bytes/sec delta from /proc/net/dev.
+
+        Sums all non-loopback interfaces. Works inside Docker/K8s containers
+        since /proc/net/dev reflects the container's network namespace.
+        The first call establishes a baseline and reports 0 B/s.
+        """
+        try:
+            recv, sent = _read_net_dev_bytes()
+            now = time.monotonic()
+
+            dt = now - self._prev_net_time
+            if self._prev_net_time > 0 and dt > 0:
+                snapshot.net_recv_bps = max(0, int((recv - self._prev_net_recv) / dt))
+                snapshot.net_sent_bps = max(0, int((sent - self._prev_net_sent) / dt))
+
+            self._prev_net_recv = recv
+            self._prev_net_sent = sent
+            self._prev_net_time = now
         except (OSError, ValueError, IndexError):
             pass

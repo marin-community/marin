@@ -233,7 +233,7 @@ class ResourceUsage(_message.Message):
     def __init__(self, memory_mb: _Optional[int] = ..., disk_mb: _Optional[int] = ..., cpu_millicores: _Optional[int] = ..., memory_peak_mb: _Optional[int] = ..., cpu_percent: _Optional[int] = ..., process_count: _Optional[int] = ...) -> None: ...
 
 class WorkerResourceSnapshot(_message.Message):
-    __slots__ = ("timestamp", "cpu_percent", "memory_used_bytes", "memory_total_bytes", "disk_used_bytes", "disk_total_bytes", "running_task_count", "total_process_count")
+    __slots__ = ("timestamp", "cpu_percent", "memory_used_bytes", "memory_total_bytes", "disk_used_bytes", "disk_total_bytes", "running_task_count", "total_process_count", "net_recv_bps", "net_sent_bps")
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
     MEMORY_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
@@ -242,6 +242,8 @@ class WorkerResourceSnapshot(_message.Message):
     DISK_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
     RUNNING_TASK_COUNT_FIELD_NUMBER: _ClassVar[int]
     TOTAL_PROCESS_COUNT_FIELD_NUMBER: _ClassVar[int]
+    NET_RECV_BPS_FIELD_NUMBER: _ClassVar[int]
+    NET_SENT_BPS_FIELD_NUMBER: _ClassVar[int]
     timestamp: _time_pb2.Timestamp
     cpu_percent: int
     memory_used_bytes: int
@@ -250,7 +252,9 @@ class WorkerResourceSnapshot(_message.Message):
     disk_total_bytes: int
     running_task_count: int
     total_process_count: int
-    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., cpu_percent: _Optional[int] = ..., memory_used_bytes: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., disk_used_bytes: _Optional[int] = ..., disk_total_bytes: _Optional[int] = ..., running_task_count: _Optional[int] = ..., total_process_count: _Optional[int] = ...) -> None: ...
+    net_recv_bps: int
+    net_sent_bps: int
+    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., cpu_percent: _Optional[int] = ..., memory_used_bytes: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., disk_used_bytes: _Optional[int] = ..., disk_total_bytes: _Optional[int] = ..., running_task_count: _Optional[int] = ..., total_process_count: _Optional[int] = ..., net_recv_bps: _Optional[int] = ..., net_sent_bps: _Optional[int] = ...) -> None: ...
 
 class BuildMetrics(_message.Message):
     __slots__ = ("build_started", "build_finished", "from_cache", "image_tag")
