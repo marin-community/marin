@@ -189,6 +189,12 @@ def build_image(
     for t in all_tags:
         cmd.extend(["-t", t])
     cmd.extend(["-f", str(dockerfile_path)])
+
+    # Use the weekly GHCR image as a build cache source so that cold builds
+    # (new runner, branch switch) only rebuild layers that actually changed.
+    cache_ref = f"ghcr.io/{ghcr_org}/iris-{image_type}:latest"
+    cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}"])
+
     cmd.extend(["--output", f"type=docker,compression=zstd,compression-level=1,name={tag}"])
     cmd.append(str(context_path))
 
