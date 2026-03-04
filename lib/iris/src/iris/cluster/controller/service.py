@@ -1142,9 +1142,8 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetWorkerStatusRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.GetWorkerStatusResponse:
-        """Return detail for a single worker.
+        """Return detail for a single worker, keyed by worker ID.
 
-        Accepts worker_id or the host portion of the worker address (IP).
         Workers and VMs are independent: the worker detail page shows only
         worker state (health, tasks, logs). VM status lives on the Autoscaler
         tab.
@@ -1154,13 +1153,6 @@ class ControllerServiceImpl:
                 raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
 
             worker = self._state.get_worker(request.id)
-            # Fallback: the dashboard may link by IP (host portion of address)
-            # which differs from worker_id when worker_id is a VM name.
-            if not worker:
-                for w in self._state.list_all_workers():
-                    if w.address and w.address.split(":")[0] == request.id:
-                        worker = w
-                        break
             if not worker:
                 raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
 
