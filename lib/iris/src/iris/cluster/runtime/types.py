@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Container runtime protocols and data types.
@@ -24,6 +24,13 @@ from typing import Protocol
 
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
+
+
+class ContainerInfraError(RuntimeError):
+    """Container operation failed due to infrastructure issues (expired credentials,
+    unreachable registry, docker daemon problems). Uses preemption retry budget."""
+
+    pass
 
 
 class ContainerErrorKind(StrEnum):

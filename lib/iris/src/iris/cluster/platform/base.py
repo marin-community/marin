@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -464,19 +464,6 @@ class Platform(Protocol):
         - GCP/Manual: list_all_slices + terminate each + stop_controller (parallel)
         - CoreWeave: kubectl delete NodePools + controller resources
         - Local: terminate slices + stop controller
-        """
-        ...
-
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        """Reload controller and workers with updated images/config.
-
-        Each platform implements its own reload strategy:
-        - GCP/Manual: full stop + start (terminate all worker slices, then controller)
-        - CoreWeave: update ConfigMap, reload worker Pods in parallel, then
-          rolling update controller Deployment
-        - Local: restart in-process controller
-
-        Returns the controller address after reload.
         """
         ...
 

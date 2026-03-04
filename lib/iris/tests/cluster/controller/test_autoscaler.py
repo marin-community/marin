@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for Autoscaler behavior.
@@ -14,10 +14,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from iris.cluster.controller.autoscaler import (
+    AdditiveReq,
     Autoscaler,
     DemandEntry,
     ScalingAction,
     ScalingDecision,
+    compute_required_slices,
+    first_fit_decreasing,
     route_demand,
 )
 from iris.cluster.controller.scaling_group import ScalingGroup
@@ -262,7 +265,6 @@ def autoscaler_with_ready_slices(scale_group_config):
     group = ScalingGroup(
         scale_group_config,
         platform,
-        scale_down_cooldown=Duration.from_ms(0),
         idle_threshold=Duration.from_ms(0),
     )
     group.reconcile()
@@ -310,7 +312,7 @@ class TestAutoscalerScaleUp:
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
         assert decisions[0].scale_group == "test-group"
-        assert "demand=2 > capacity=0" in decisions[0].reason
+        assert "required_slices=1 > capacity=0" in decisions[0].reason
 
     @pytest.mark.parametrize(
         "discovered,demand_count,reason",
@@ -442,7 +444,6 @@ class TestAutoscalerScaleDown:
         group = ScalingGroup(
             scale_group_config,
             platform,
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(1000),
         )
         group.reconcile()
@@ -485,7 +486,6 @@ class TestAutoscalerScaleDown:
         group = ScalingGroup(
             config,
             platform,
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(0),
         )
         group.reconcile()
@@ -515,7 +515,6 @@ class TestAutoscalerScaleDown:
         group = ScalingGroup(
             scale_group_config,
             platform,
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(300_000),
         )
         group.reconcile()
@@ -545,37 +544,77 @@ class TestAutoscalerScaleDown:
 
         assert group.slice_count() == 2
 
-    def test_no_scale_down_during_cooldown(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """Does not scale down during cooldown period."""
+    def test_scale_down_rate_limited_by_token_bucket(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Scale-down is rate-limited by the token bucket (only 1 per minute with rate_limit=1)."""
+        ready_ts = Timestamp.from_ms(1_000)
         discovered = [
-            make_mock_slice_handle("slice-001", all_ready=True),
-            make_mock_slice_handle("slice-002", all_ready=True),
-            make_mock_slice_handle("slice-003", all_ready=True),
+            make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000),
+            make_mock_slice_handle("slice-002", all_ready=True, created_at_ms=200000),
+            make_mock_slice_handle("slice-003", all_ready=True, created_at_ms=300000),
         ]
         platform = make_mock_platform(slices_to_discover=discovered)
         group = ScalingGroup(
             scale_group_config,
             platform,
-            scale_down_cooldown=Duration.from_ms(3600_000),
             idle_threshold=Duration.from_ms(0),
+            scale_down_rate_limit=1,
         )
         group.reconcile()
-        group.scale_down("slice-003", timestamp=Timestamp.now())
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
+        slice_003 = group.get_slice("slice-003")
         slice_001_addr = slice_001.describe().workers[0].internal_address
         slice_002_addr = slice_002.describe().workers[0].internal_address
+        slice_003_addr = slice_003.describe().workers[0].internal_address
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
+            slice_003_addr: VmWorkerStatus(vm_address=slice_003_addr, running_task_ids=frozenset()),
         }
 
-        autoscaler.run_once(demand, vm_status_map)
-
+        # With rate_limit=1, only 1 slice should be scaled down per cycle
+        autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
         assert group.slice_count() == 2
+
+    def test_scale_down_multiple_idle_slices_in_one_cycle(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """With enough rate-limit tokens, multiple idle slices are scaled down in one cycle."""
+        ready_ts = Timestamp.from_ms(1_000)
+        discovered = [
+            make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000),
+            make_mock_slice_handle("slice-002", all_ready=True, created_at_ms=200000),
+            make_mock_slice_handle("slice-003", all_ready=True, created_at_ms=300000),
+        ]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(
+            scale_group_config,
+            platform,
+            idle_threshold=Duration.from_ms(1000),
+            scale_down_rate_limit=5,
+        )
+        group.reconcile()
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
+        slice_001 = group.get_slice("slice-001")
+        slice_002 = group.get_slice("slice-002")
+        slice_003 = group.get_slice("slice-003")
+        slice_001_addr = slice_001.describe().workers[0].internal_address
+        slice_002_addr = slice_002.describe().workers[0].internal_address
+        slice_003_addr = slice_003.describe().workers[0].internal_address
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
+            slice_003_addr: VmWorkerStatus(vm_address=slice_003_addr, running_task_ids=frozenset()),
+        }
+
+        # With rate_limit=5, all 3 idle slices should be scaled down in one cycle
+        autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
+        assert group.slice_count() == 0
 
 
 class TestAutoscalerExecution:
@@ -693,7 +732,6 @@ class TestAutoscalerIdleVerification:
         group = ScalingGroup(
             scale_group_config,
             platform,
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(0),
         )
         group.reconcile()
@@ -840,11 +878,12 @@ class TestWaterfallRouting:
 
         assert len(decisions) == 1
         assert decisions[0].scale_group == "high-priority"
-        assert group_high.current_demand == 2
+        # current_demand is required_slices (2 tiny entries pack into 1 slice)
+        assert group_high.current_demand == 1
         assert group_low.current_demand == 0
 
-    def test_demand_overflows_to_lower_priority_when_at_capacity(self):
-        """When high-priority group is at capacity, demand overflows to lower priority."""
+    def test_demand_overflows_to_lower_priority_when_at_max_slices(self):
+        """When high-priority group is at max_slices, demand falls through to lower priority."""
         config_high = make_scale_group_config(name="high-priority", max_slices=2, priority=10)
         config_low = make_scale_group_config(name="low-priority", max_slices=5, priority=20)
 
@@ -983,6 +1022,68 @@ class TestWaterfallRouting:
         assert len(decisions) == 1
         assert decisions[0].scale_group == "fallback"
         assert group_primary.current_demand == 0
+
+    def test_cooldown_does_not_cause_fallthrough(self):
+        """Groups in COOLDOWN still accept demand — demand does not fall through."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        config_a = make_scale_group_config(name="group-a", max_slices=5, priority=10)
+        config_b = make_scale_group_config(name="group-b", max_slices=5, priority=20)
+
+        group_a = ScalingGroup(
+            config_a,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(60_000),
+        )
+        group_b = ScalingGroup(
+            config_b,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+
+        ts = Timestamp.from_ms(1_000_000)
+        group_a.begin_scale_up(timestamp=ts)
+        handle = group_a.scale_up(timestamp=ts)
+        group_a.complete_scale_up(handle, ts)
+
+        eval_ts = Timestamp.from_ms(1_030_000)
+        assert group_a.availability(eval_ts).status == GroupAvailability.COOLDOWN
+
+        autoscaler = make_autoscaler({"group-a": group_a, "group-b": group_b})
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        autoscaler.evaluate(demand, timestamp=eval_ts)
+
+        # current_demand is required_slices; 2 tiny entries pack into 1 slice
+        assert group_a.current_demand == 1
+        assert group_b.current_demand == 0
+
+    def test_at_max_slices_causes_fallthrough(self):
+        """Groups at AT_MAX_SLICES reject demand, causing fallthrough to lower-priority groups."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        config_a = make_scale_group_config(name="group-a", max_slices=1, priority=10)
+        config_b = make_scale_group_config(name="group-b", max_slices=5, priority=20)
+
+        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
+        group_a = ScalingGroup(config_a, make_mock_platform(slices_to_discover=discovered))
+        group_a.reconcile()
+        assert group_a.availability().status == GroupAvailability.AT_MAX_SLICES
+
+        group_b = ScalingGroup(
+            config_b,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+
+        autoscaler = make_autoscaler({"group-a": group_a, "group-b": group_b})
+        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
+        decisions = autoscaler.evaluate(demand)
+
+        assert group_a.current_demand == 0
+        # 2 tiny entries pack into 1 slice
+        assert group_b.current_demand == 1
+        assert len(decisions) == 1
+        assert decisions[0].scale_group == "group-b"
 
 
 class TestPreemptibleRouting:
@@ -1240,13 +1341,10 @@ class TestAutoscalerWaterfallEndToEnd:
         assert group_primary.availability().status == GroupAvailability.QUOTA_EXCEEDED
         assert group_fallback.slice_count() == 0
 
-        autoscaler.run_once(demand, {})
-        time.sleep(0.1)
-        assert group_fallback.slice_count() == 1
-
+        # 2 tiny entries pack into 1 slice; cascade creates 1 fallback slice
         autoscaler.run_once(demand, {})
         autoscaler._wait_for_inflight()
-        assert group_fallback.slice_count() == 2
+        assert group_fallback.slice_count() == 1
 
     def test_quota_recovery_restores_primary_routing(self):
         """After quota timeout expires, demand routes to primary again."""
@@ -1360,9 +1458,14 @@ class TestAutoscalerWaterfallEndToEnd:
         assert group_v5lite.slice_count() == 1
 
     def test_capacity_overflow_cascades_to_lower_priority(self):
-        """When high-priority group fills up, overflow goes to lower priority."""
+        """When high-priority group fills up, overflow goes to lower priority.
 
-        config_primary = make_scale_group_config(name="primary", max_slices=2, priority=10, zones=["us-central1-a"])
+        Uses large entries (128GiB memory each) so each entry requires its own VM.
+        Primary has max_slices=1, so only 1 entry routes there. The rest cascade
+        to fallback.
+        """
+
+        config_primary = make_scale_group_config(name="primary", max_slices=1, priority=10, zones=["us-central1-a"])
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20, zones=["us-central1-a"])
 
         platform_primary = FakePlatform(FakePlatformConfig(config=config_primary))
@@ -1378,45 +1481,28 @@ class TestAutoscalerWaterfallEndToEnd:
             config=config,
         )
 
-        demand = make_demand_entries(4, device_type=DeviceType.TPU, device_variant="v5p-8")
+        big_resources = cluster_pb2.ResourceSpecProto(cpu_millicores=128000, memory_bytes=128 * 1024**3)
+        demand = [
+            DemandEntry(
+                task_ids=[f"task-{i}"],
+                coschedule_group_id=None,
+                device_type=DeviceType.TPU,
+                device_variant="v5p-8",
+                constraints=[],
+                resources=big_resources,
+            )
+            for i in range(3)
+        ]
 
-        autoscaler.run_once(demand, {})
-        autoscaler._wait_for_inflight()
-        assert group_primary.slice_count() == 1
-        assert group_fallback.slice_count() == 1
-
-        ts = Timestamp.now().epoch_ms()
-        platform_primary.tick(ts)
-        platform_fallback.tick(ts)
-        _mark_all_slices_ready(group_primary)
-        _mark_all_slices_ready(group_fallback)
-
+        # First cycle: primary gets 1 entry (remaining_vms=1), fallback gets 2.
+        # Multi-slice scale-up creates all needed slices in one cycle.
         autoscaler.run_once(demand, {})
         autoscaler._wait_for_inflight()
         assert group_primary.slice_count() == 1
         assert group_fallback.slice_count() == 2
 
-        platform_primary.tick(Timestamp.now().epoch_ms())
-        platform_fallback.tick(Timestamp.now().epoch_ms())
-        _mark_all_slices_ready(group_primary)
-        _mark_all_slices_ready(group_fallback)
-
-        autoscaler.run_once(demand, {})
-        time.sleep(0.1)
-        assert group_fallback.slice_count() == 3
-
-        for _ in range(2):
-            platform_primary.tick(Timestamp.now().epoch_ms())
-            platform_fallback.tick(Timestamp.now().epoch_ms())
-            _mark_all_slices_ready(group_primary)
-            _mark_all_slices_ready(group_fallback)
-            autoscaler.run_once(demand, {})
-            time.sleep(0.1)
-
-        autoscaler._wait_for_inflight()
-
         total = group_primary.slice_count() + group_fallback.slice_count()
-        assert total >= 4
+        assert total == 3
 
     def test_demand_cascades_through_priority_groups_on_backoff(self):
         """E2E: primary create fails → BACKOFF, second run cascades to fallback."""
@@ -1576,7 +1662,7 @@ class TestAutoscalerActionLogging:
         assert action.action_type == "scale_up"
         assert action.scale_group == "test-group"
         assert action.slice_id != ""
-        assert "demand" in action.reason
+        assert "required_slices" in action.reason
 
     def test_action_log_records_quota_exceeded(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Verify quota exceeded events are logged."""
@@ -1677,7 +1763,7 @@ class TestScalingGroupRequestingState:
 
         config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
         platform = make_mock_platform()
-        group = ScalingGroup(config, platform)
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
 
         ts = Timestamp.now()
         group.begin_scale_up()
@@ -1696,7 +1782,7 @@ class TestScalingGroupRequestingState:
 
         config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
         platform = make_mock_platform()
-        group = ScalingGroup(config, platform)
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
 
         ts = Timestamp.now()
         group.begin_scale_up()
@@ -1739,8 +1825,93 @@ class TestScalingGroupRequestingState:
         assert result.unmet_entries == []
         status_by_group = {s.group: s for s in result.group_statuses}
         assert status_by_group["group-1"].decision == "selected"
-        assert status_by_group["group-1"].launch == 1
+        # 2 tiny entries pack into 1 slice; 1 inflight slice covers it
+        assert status_by_group["group-1"].launch == 0
         assert status_by_group["group-2"].decision == "idle"
+
+
+class TestCommittedBudgetRouting:
+    """Tests for two-phase routing with committed budgets."""
+
+    def test_committed_budget_retains_demand_for_requesting_group(self):
+        """Demand sticks to a group with requesting slices even when a fresh group is available.
+
+        v6e has 3 requesting slices, v5e has 0 slices. Both priority 10.
+        All 5 entries should go to v6e (committed budget absorbs them).
+        """
+        config_v6e = make_scale_group_config(name="v6e", max_slices=30, priority=10, num_vms=4)
+        config_v5e = make_scale_group_config(name="v5e", max_slices=30, priority=10, num_vms=4)
+
+        platform_v6e = make_mock_platform()
+        platform_v5e = make_mock_platform()
+        group_v6e = ScalingGroup(config_v6e, platform_v6e, scale_up_cooldown=Duration.from_ms(0))
+        group_v5e = ScalingGroup(config_v5e, platform_v5e, scale_up_cooldown=Duration.from_ms(0))
+
+        # v6e has 3 requesting slices
+        for _ in range(3):
+            group_v6e.begin_scale_up()
+
+        ts = Timestamp.now()
+        demand = make_demand_entries(5, device_type=DeviceType.TPU, device_variant="v5p-8")
+        result = route_demand([group_v6e, group_v5e], demand, ts)
+
+        assert len(result.routed_entries.get("v6e", [])) == 5
+        assert result.routed_entries.get("v5e") is None
+        assert result.unmet_entries == []
+        # 5 tiny entries pack into 1 slice; 3 requesting slices cover it
+        assert result.group_to_launch.get("v6e", 0) == 0
+
+    def test_committed_budget_overflow_falls_to_waterfall(self):
+        """When committed budget is insufficient, overflow goes through the waterfall.
+
+        v6e has 1 requesting slice (num_vms=1), max_slices=2 → full budget = 2 VMs.
+        Each entry fills one VM (resources match VM capacity).
+        3 demand entries: 1 goes via committed, 1 more via waterfall to v6e, 1 overflows to v5e.
+        """
+        # 1 entry per VM: entry cpu matches VM capacity
+        small_resources = config_pb2.ScaleGroupResources(
+            cpu_millicores=1000,
+            memory_bytes=1024,
+            disk_bytes=1024,
+            tpu_count=8,
+        )
+        config_v6e = make_scale_group_config(name="v6e", max_slices=2, priority=10, num_vms=1)
+        config_v6e.resources.CopyFrom(small_resources)
+        config_v5e = make_scale_group_config(name="v5e", max_slices=10, priority=10, num_vms=1)
+        config_v5e.resources.CopyFrom(small_resources)
+
+        group_v6e = ScalingGroup(config_v6e, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_v5e = ScalingGroup(config_v5e, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+
+        # v6e has 1 requesting slice → committed budget = 1 VM, full budget = 2 VMs
+        group_v6e.begin_scale_up()
+
+        ts = Timestamp.now()
+        demand = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8")
+        result = route_demand([group_v6e, group_v5e], demand, ts)
+
+        assert result.unmet_entries == []
+        # v6e gets committed (1) + waterfall (1) = 2 entries
+        assert len(result.routed_entries.get("v6e", [])) == 2
+        # v5e gets the overflow
+        assert len(result.routed_entries.get("v5e", [])) == 1
+
+    def test_no_committed_budget_when_no_requesting(self):
+        """Groups with 0 requesting slices get no committed budget — normal waterfall only."""
+        config_a = make_scale_group_config(name="group-a", max_slices=5, priority=10)
+        config_b = make_scale_group_config(name="group-b", max_slices=5, priority=20)
+
+        group_a = ScalingGroup(config_a, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_b = ScalingGroup(config_b, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+
+        ts = Timestamp.now()
+        demand = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8")
+        result = route_demand([group_a, group_b], demand, ts)
+
+        # All entries go to group-a (higher priority = lower number)
+        assert len(result.routed_entries.get("group-a", [])) == 3
+        assert result.routed_entries.get("group-b") is None
+        assert result.unmet_entries == []
 
 
 class TestAutoscalerAsyncScaleUp:
@@ -2204,7 +2375,6 @@ class TestGpuScaleGroupBugs:
             config,
             platform,
             scale_up_cooldown=Duration.from_ms(0),
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(300_000),  # 5 minutes
         )
         group.reconcile()
@@ -2235,3 +2405,1090 @@ class TestGpuScaleGroupBugs:
             "With last_active=epoch(0), idle_duration is computed from epoch, "
             f"making all slices appear idle for >300s. Got slice_count={group.slice_count()}"
         )
+
+
+# --- Packing tests ---
+
+
+def _make_big_demand_entries(
+    count: int,
+    *,
+    cpu_millicores: int = 32000,
+    memory_bytes: int = 32 * 1024**3,
+    disk_bytes: int = 0,
+    device_type: DeviceType = DeviceType.CPU,
+    device_variant: str | None = None,
+    task_prefix: str = "task",
+    coschedule_group_id: str | None = None,
+) -> list[DemandEntry]:
+    """Create demand entries with explicit resource sizes for packing tests."""
+    resources = cluster_pb2.ResourceSpecProto(
+        cpu_millicores=cpu_millicores,
+        memory_bytes=memory_bytes,
+        disk_bytes=disk_bytes,
+    )
+    if coschedule_group_id:
+        # Coscheduled entries use count as num tasks
+        return [
+            DemandEntry(
+                task_ids=[f"{task_prefix}-{i}" for i in range(count)],
+                coschedule_group_id=coschedule_group_id,
+                device_type=device_type,
+                device_variant=device_variant,
+                constraints=[],
+                resources=resources,
+            )
+        ]
+    return [
+        DemandEntry(
+            task_ids=[f"{task_prefix}-{i}"],
+            coschedule_group_id=None,
+            device_type=device_type,
+            device_variant=device_variant,
+            constraints=[],
+            resources=resources,
+        )
+        for i in range(count)
+    ]
+
+
+class TestFirstFitDecreasing:
+    """Unit tests for the FFD bin packing helper."""
+
+    def test_basic_packing(self):
+        """4 requests of (50, 50) each into bins of (100, 100) → 2 VMs."""
+        reqs = [AdditiveReq(cpu_millicores=50, memory_bytes=50, disk_bytes=0) for _ in range(4)]
+        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
+        assert first_fit_decreasing(reqs, vm_cap) == 2
+
+    def test_empty_reqs_returns_zero(self):
+        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
+        assert first_fit_decreasing([], vm_cap) == 0
+
+    def test_single_item_per_bin(self):
+        """3 items that each fill a bin entirely → 3 VMs."""
+        reqs = [AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0) for _ in range(3)]
+        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
+        assert first_fit_decreasing(reqs, vm_cap) == 3
+
+    def test_heterogeneous_sizes(self):
+        """Mix of large and small items packs efficiently."""
+        reqs = [
+            AdditiveReq(cpu_millicores=70, memory_bytes=70, disk_bytes=0),
+            AdditiveReq(cpu_millicores=30, memory_bytes=30, disk_bytes=0),
+            AdditiveReq(cpu_millicores=30, memory_bytes=30, disk_bytes=0),
+            AdditiveReq(cpu_millicores=70, memory_bytes=70, disk_bytes=0),
+        ]
+        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
+        # FFD sorts descending: [70,70,30,30]. 70+30 fits in 1 bin → 2 VMs
+        assert first_fit_decreasing(reqs, vm_cap) == 2
+
+    def test_disk_dimension(self):
+        """Disk is respected as a packing dimension."""
+        reqs = [
+            AdditiveReq(cpu_millicores=10, memory_bytes=10, disk_bytes=60),
+            AdditiveReq(cpu_millicores=10, memory_bytes=10, disk_bytes=60),
+        ]
+        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=100)
+        # 60+60 > 100 disk, so these need 2 VMs
+        assert first_fit_decreasing(reqs, vm_cap) == 2
+
+
+class TestComputeRequiredSlices:
+    """Tests for compute_required_slices with different group configurations."""
+
+    def test_tiny_entries_pack_densely(self):
+        """Many small CPU entries pack into a single VM and therefore a single slice."""
+        config = make_scale_group_config(
+            name="cpu-group",
+            max_slices=5,
+            num_vms=1,
+        )
+        group = ScalingGroup(config, make_mock_platform())
+
+        # 16 entries at 1000m CPU, 1024 bytes mem → all fit in 1 VM (128 cores, 128GiB)
+        entries = make_demand_entries(16, device_type=DeviceType.CPU)
+        assert compute_required_slices(group, entries) == 1
+
+    def test_accelerator_entries_not_packed(self):
+        """Accelerator entries get 1 VM each — they are not bin-packed."""
+        config = make_scale_group_config(
+            name="tpu-group",
+            max_slices=10,
+            num_vms=1,
+        )
+        group = ScalingGroup(config, make_mock_platform())
+
+        entries = make_demand_entries(4, device_type=DeviceType.TPU, device_variant="v5p-8")
+        assert compute_required_slices(group, entries) == 4
+
+    def test_full_vm_entries_need_one_slice_each(self):
+        """Entries that fill an entire VM each need 1 slice per entry (num_vms=1)."""
+        config = make_scale_group_config(
+            name="cpu-group",
+            max_slices=5,
+            num_vms=1,
+        )
+        group = ScalingGroup(config, make_mock_platform())
+
+        entries = _make_big_demand_entries(
+            3,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        assert compute_required_slices(group, entries) == 3
+
+    def test_multi_vm_slice_packs_across_vms(self):
+        """With num_vms=4, entries that need 4 VMs fit in 1 slice."""
+        config = make_scale_group_config(
+            name="multi-vm",
+            max_slices=5,
+            num_vms=4,
+        )
+        group = ScalingGroup(config, make_mock_platform())
+
+        # 4 entries, each 128GiB = 4 VMs → ceil(4/4) = 1 slice
+        entries = _make_big_demand_entries(
+            4,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        assert compute_required_slices(group, entries) == 1
+
+    def test_multi_vm_slice_needs_multiple_slices(self):
+        """With num_vms=4, 5 full-VM entries need ceil(5/4) = 2 slices."""
+        config = make_scale_group_config(
+            name="multi-vm",
+            max_slices=5,
+            num_vms=4,
+        )
+        group = ScalingGroup(config, make_mock_platform())
+
+        entries = _make_big_demand_entries(
+            5,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        assert compute_required_slices(group, entries) == 2
+
+    def test_coscheduled_entries_use_full_slice(self):
+        """A coscheduled entry always consumes exactly 1 slice."""
+        config = make_scale_group_config(
+            name="csc-group",
+            max_slices=5,
+            num_vms=4,
+        )
+        group = ScalingGroup(config, make_mock_platform())
+
+        entries = _make_big_demand_entries(
+            4,
+            cpu_millicores=1000,
+            memory_bytes=1024,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+            coschedule_group_id="job-1",
+        )
+        assert len(entries) == 1
+        assert compute_required_slices(group, entries) == 1
+
+    def test_mixed_coscheduled_and_packable(self):
+        """Coscheduled entries add 1 slice each; non-coscheduled entries are packed."""
+        config = make_scale_group_config(
+            name="mixed-group",
+            max_slices=10,
+            num_vms=4,
+        )
+        group = ScalingGroup(config, make_mock_platform())
+
+        coscheduled = _make_big_demand_entries(
+            4,
+            cpu_millicores=1000,
+            memory_bytes=1024,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+            coschedule_group_id="job-1",
+        )
+        # 4 entries at 64GiB each → 2 VMs → ceil(2/4) = 1 slice
+        non_coscheduled = _make_big_demand_entries(
+            4,
+            cpu_millicores=64000,
+            memory_bytes=64 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+            task_prefix="noncsc",
+        )
+        entries = coscheduled + non_coscheduled
+        # 1 coscheduled slice + 1 packed slice = 2
+        assert compute_required_slices(group, entries) == 2
+
+    def test_no_resources_configured_falls_back_to_entry_count(self):
+        """Without per-VM resources, each entry = 1 slice (pre-packing behavior)."""
+        config = config_pb2.ScaleGroupConfig(
+            name="no-resources",
+            max_slices=5,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+        )
+        # Explicitly don't set resources
+        group = ScalingGroup(config, make_mock_platform())
+        assert group.resources is None
+
+        entries = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8")
+        assert compute_required_slices(group, entries) == 3
+
+    def test_empty_entries_returns_zero(self):
+        config = make_scale_group_config(name="test", max_slices=5, num_vms=1)
+        group = ScalingGroup(config, make_mock_platform())
+        assert compute_required_slices(group, []) == 0
+
+
+class TestPackingRouting:
+    """Tests for packing-aware routing and scaling decisions."""
+
+    def test_packing_allows_multiple_cpu_tasks_per_vm(self):
+        """16 CPU tasks at 32GiB each pack into 4 VMs of 128GiB.
+
+        With num_vms=4, that's exactly 1 slice. If 1 slice already exists,
+        no scale-up is needed.
+        """
+        config = make_scale_group_config(
+            name="cpu-group",
+            max_slices=5,
+            num_vms=4,
+            priority=10,
+        )
+        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
+        group = ScalingGroup(
+            config,
+            make_mock_platform(slices_to_discover=discovered),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+        group.reconcile()
+        _mark_discovered_ready(group, discovered)
+        autoscaler = make_autoscaler({"cpu-group": group})
+
+        # 16 entries x 32GiB = 512GiB total. 4 VMs x 128GiB = 512GiB capacity.
+        # Packing: 4 entries per VM → 4 VMs → ceil(4/4) = 1 slice needed.
+        entries = _make_big_demand_entries(
+            16,
+            cpu_millicores=32000,
+            memory_bytes=32 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        decisions = autoscaler.evaluate(entries)
+
+        assert len(decisions) == 0
+        assert group.current_demand == 1
+
+    def test_packing_prevents_cpu_walkup(self):
+        """CPU entries that pack within group A's capacity should not spill to group B."""
+        config_a = make_scale_group_config(
+            name="group-a",
+            max_slices=5,
+            num_vms=4,
+            priority=10,
+        )
+        config_b = make_scale_group_config(
+            name="group-b",
+            max_slices=5,
+            num_vms=4,
+            priority=20,
+        )
+
+        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
+        group_a = ScalingGroup(
+            config_a,
+            make_mock_platform(slices_to_discover=discovered),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+        group_a.reconcile()
+        _mark_discovered_ready(group_a, discovered)
+
+        group_b = ScalingGroup(
+            config_b,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+
+        autoscaler = make_autoscaler({"group-a": group_a, "group-b": group_b})
+
+        # 8 entries at 32GiB each → 2 VMs needed → ceil(2/4) = 1 slice.
+        # Group A has 1 ready slice. No overflow to B.
+        entries = _make_big_demand_entries(
+            8,
+            cpu_millicores=32000,
+            memory_bytes=32 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        decisions = autoscaler.evaluate(entries)
+
+        assert len(decisions) == 0
+        assert group_a.current_demand == 1
+        assert group_b.current_demand == 0
+
+    def test_evaluate_uses_packed_capacity(self):
+        """Scale-up triggers when packed demand exceeds existing capacity."""
+        config = make_scale_group_config(
+            name="test-group",
+            max_slices=5,
+            num_vms=4,
+            priority=10,
+        )
+        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
+        group = ScalingGroup(
+            config,
+            make_mock_platform(slices_to_discover=discovered),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+        group.reconcile()
+        _mark_discovered_ready(group, discovered)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        # 4 entries at 128GiB → 4 VMs → ceil(4/4) = 1 slice. Fits in 1 ready slice.
+        small_demand = _make_big_demand_entries(
+            4,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        decisions = autoscaler.evaluate(small_demand)
+        assert len(decisions) == 0
+
+        # 5 entries at 128GiB → 5 VMs → ceil(5/4) = 2 slices. Only 1 exists.
+        big_demand = _make_big_demand_entries(
+            5,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+            task_prefix="big",
+        )
+        decisions = autoscaler.evaluate(big_demand)
+        assert len(decisions) == 1
+        assert decisions[0].action == ScalingAction.SCALE_UP
+        assert "required_slices=2 > capacity=1" in decisions[0].reason
+
+    def test_scale_down_target_uses_packed_demand(self):
+        """Scale-down uses packed required_slices, not entry count."""
+        ready_ts = Timestamp.from_ms(1_000)
+        config = make_scale_group_config(
+            name="test-group",
+            max_slices=5,
+            num_vms=4,
+            priority=10,
+        )
+        discovered = [
+            make_mock_slice_handle("slice-0", all_ready=True, created_at_ms=100),
+            make_mock_slice_handle("slice-1", all_ready=True, created_at_ms=200),
+        ]
+        group = ScalingGroup(
+            config,
+            make_mock_platform(slices_to_discover=discovered),
+            scale_up_cooldown=Duration.from_ms(0),
+            idle_threshold=Duration.from_ms(1000),
+        )
+        group.reconcile()
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        # 4 entries at 32GiB each → 1 VM → ceil(1/4) = 1 slice. But we have 2 slices.
+        entries = _make_big_demand_entries(
+            4,
+            cpu_millicores=32000,
+            memory_bytes=32 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+
+        # First run to set current_demand (required_slices=1)
+        autoscaler.evaluate(entries, timestamp=Timestamp.from_ms(2_000))
+        assert group.current_demand == 1
+
+        # Now run_once with vm_status_map showing all VMs idle
+        slice_0 = group.get_slice("slice-0")
+        slice_1 = group.get_slice("slice-1")
+        addr_0 = slice_0.describe().workers[0].internal_address
+        addr_1 = slice_1.describe().workers[0].internal_address
+        vm_status_map = {
+            addr_0: VmWorkerStatus(vm_address=addr_0, running_task_ids=frozenset()),
+            addr_1: VmWorkerStatus(vm_address=addr_1, running_task_ids=frozenset()),
+        }
+        autoscaler.run_once(entries, vm_status_map, timestamp=Timestamp.from_ms(10_000))
+
+        # target_capacity = max(1, 0) = 1. One idle slice should be scaled down.
+        assert group.slice_count() == 1
+
+    def test_group_to_launch_uses_packing(self):
+        """route_demand computes group_to_launch from packing, not entry count."""
+        config = make_scale_group_config(
+            name="test-group",
+            max_slices=5,
+            num_vms=4,
+            priority=10,
+        )
+        group = ScalingGroup(
+            config,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+
+        # 16 entries at 32GiB → 4 VMs → ceil(4/4) = 1 slice.
+        # No existing capacity → group_to_launch = 1.
+        entries = _make_big_demand_entries(
+            16,
+            cpu_millicores=32000,
+            memory_bytes=32 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        result = route_demand([group], entries)
+        assert result.group_to_launch.get("test-group") == 1
+
+    def test_group_to_launch_with_existing_capacity(self):
+        """group_to_launch subtracts existing ready + inflight slices."""
+        config = make_scale_group_config(
+            name="test-group",
+            max_slices=5,
+            num_vms=4,
+            priority=10,
+        )
+        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
+        group = ScalingGroup(
+            config,
+            make_mock_platform(slices_to_discover=discovered),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+        group.reconcile()
+        _mark_discovered_ready(group, discovered)
+
+        # 16 entries → 1 slice needed, 1 exists → group_to_launch = 0
+        entries = _make_big_demand_entries(
+            16,
+            cpu_millicores=32000,
+            memory_bytes=32 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        result = route_demand([group], entries)
+        assert result.group_to_launch.get("test-group", 0) == 0
+
+
+class TestMultiSliceScaleUp:
+    """Tests for multi-slice scale-up in a single evaluation cycle."""
+
+    def test_multi_slice_scale_up(self):
+        """Group with 0 existing slices scales up to meet full demand in one cycle."""
+        config = make_scale_group_config(name="test-group", max_slices=5, num_vms=1, priority=10)
+        group = ScalingGroup(
+            config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0), scale_up_rate_limit=1000
+        )
+        autoscaler = make_autoscaler({"test-group": group})
+
+        # 5 big entries, each fills 1 VM, num_vms=1 → 5 slices needed
+        demand = _make_big_demand_entries(
+            5,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        decisions = autoscaler.evaluate(demand)
+
+        assert len(decisions) == 5
+        assert all(d.action == ScalingAction.SCALE_UP for d in decisions)
+        assert all(d.scale_group == "test-group" for d in decisions)
+
+    def test_multi_slice_capped_by_max_slices(self):
+        """Scale-up decisions are capped by max_slices."""
+        config = make_scale_group_config(name="test-group", max_slices=3, num_vms=1, priority=10)
+        group = ScalingGroup(
+            config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0), scale_up_rate_limit=1000
+        )
+        autoscaler = make_autoscaler({"test-group": group})
+
+        # 5 big entries, each fills 1 VM → 5 slices needed, but max=3
+        demand = _make_big_demand_entries(
+            5,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        decisions = autoscaler.evaluate(demand)
+
+        assert len(decisions) == 3
+        assert all(d.action == ScalingAction.SCALE_UP for d in decisions)
+
+    def test_cooldown_group_accepts_demand_but_blocks_scale_up(self):
+        """A group in COOLDOWN accepts demand routing but blocks scale-up until cooldown expires."""
+        from iris.cluster.controller.scaling_group import GroupAvailability
+
+        config = make_scale_group_config(name="test-group", max_slices=5, num_vms=1, priority=10)
+        platform = make_mock_platform()
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(3600_000))
+
+        # Put group into COOLDOWN: scale up, then complete
+        ts = Timestamp.now()
+        group.begin_scale_up()
+        handle = group.scale_up(timestamp=ts)
+        group.complete_scale_up(handle, ts)
+        assert group.availability(ts).status == GroupAvailability.COOLDOWN
+
+        autoscaler = make_autoscaler({"test-group": group})
+
+        # 3 big entries that need 3 slices, but only 1 exists and group is in cooldown
+        demand = _make_big_demand_entries(
+            3,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        decisions = autoscaler.evaluate(demand, timestamp=ts)
+
+        # Demand is routed (current_demand > 0) but no scale-up during cooldown
+        assert group.current_demand > 0
+        assert len(decisions) == 0
+
+    def test_available_group_pre_seeded(self):
+        """A group in AVAILABLE state is pre-seeded and accepts demand without a second loop."""
+        config = make_scale_group_config(name="test-group", max_slices=5, priority=10)
+        group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        autoscaler = make_autoscaler({"test-group": group})
+
+        demand = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8")
+        decisions = autoscaler.evaluate(demand)
+
+        assert len(decisions) >= 1
+        assert decisions[0].scale_group == "test-group"
+        assert group.current_demand > 0
+
+    def test_small_entries_route_with_ready_vm_budget(self):
+        """Entries route using budget from ready VMs, not just headroom.
+
+        With max_slices=4, 1 ready (num_vms=1): remaining_vms = (1+0+3)*1 = 4.
+        4 tiny CPU entries should all route (not just 3 from headroom alone).
+        """
+        config = make_scale_group_config(name="test-group", max_slices=4, num_vms=1, priority=10)
+        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
+        group = ScalingGroup(
+            config,
+            make_mock_platform(slices_to_discover=discovered),
+            scale_up_cooldown=Duration.from_ms(0),
+        )
+        group.reconcile()
+        _mark_discovered_ready(group, discovered)
+
+        demand = make_demand_entries(4, device_type=DeviceType.TPU, device_variant="v5p-8")
+        result = route_demand([group], demand)
+
+        assigned = len(result.routed_entries.get("test-group", []))
+        assert assigned == 4
+        assert len(result.unmet_entries) == 0
+
+    def test_incremental_demand_growth_triggers_scale_up(self):
+        """Starting with small demand then adding more triggers appropriate multi-slice scale-up.
+
+        Phase 1: 4 big entries → 4 VMs → 4 slices (num_vms=1). 0 existing → 4 decisions.
+        Execute and mark ready.
+        Phase 2: 12 total entries → 12 slices needed. 4 exist → 8 more, capped by max_slices=10 → 6 decisions.
+        """
+        config = make_scale_group_config(name="test-group", max_slices=10, num_vms=1, priority=10)
+        platform = FakePlatform(FakePlatformConfig(config=config))
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0), scale_up_rate_limit=1000)
+
+        as_config = config_pb2.AutoscalerConfig()
+        as_config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        autoscaler = make_autoscaler({"test-group": group}, config=as_config)
+
+        # Phase 1: 4 big entries, each fills 1 VM
+        demand_4 = _make_big_demand_entries(
+            4,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+            task_prefix="phase1",
+        )
+        autoscaler.run_once(demand_4, {})
+        autoscaler._wait_for_inflight()
+        assert group.slice_count() == 4
+
+        # Mark all slices ready
+        platform.tick(Timestamp.now().epoch_ms())
+        _mark_all_slices_ready(group)
+
+        # Phase 2: add 8 more entries (12 total)
+        demand_12 = demand_4 + _make_big_demand_entries(
+            8,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+            task_prefix="phase2",
+        )
+        decisions = autoscaler.evaluate(demand_12)
+        # 12 slices needed, 4 exist → 6 more (capped by max_slices=10)
+        assert len(decisions) == 6
+        assert all(d.action == ScalingAction.SCALE_UP for d in decisions)
+
+        # Execute and verify
+        autoscaler.execute(decisions, Timestamp.now())
+        autoscaler._wait_for_inflight()
+        assert group.slice_count() == 10
+
+    def test_marin_style_lifecycle(self):
+        """Full lifecycle with marin.yaml-style groups: 5 tiers of 2^N VMs per slice.
+
+        Simulates the autoscaler being called repeatedly with growing demand.
+        Slices transition through REQUESTING → BOOTING → READY via platform ticks.
+        Each entry fills exactly 1 VM (128 CPU, 128GB RAM).
+
+        Verifies:
+        1. During cooldown, demand stays routed to the current group (no cascade)
+        2. When cooldown expires, the group scales up to serve the routed demand
+        3. Only after a group reaches max_slices does demand cascade to the next
+        4. The lowest-priority group (tpu-16vm) never receives any load
+
+        Groups (mimicking marin.yaml's TPU v5e tiers):
+          tpu-1vm:  num_vms=1,  max_slices=4, priority=10  (capacity:  4 VMs)
+          tpu-2vm:  num_vms=2,  max_slices=4, priority=20  (capacity:  8 VMs)
+          tpu-4vm:  num_vms=4,  max_slices=4, priority=30  (capacity: 16 VMs)
+          tpu-8vm:  num_vms=8,  max_slices=4, priority=40  (capacity: 32 VMs)
+          tpu-16vm: num_vms=16, max_slices=4, priority=50  (capacity: 64 VMs) ← no load
+        Total capacity of first 4: 4+8+16+32 = 60 VMs. Demand never exceeds 28.
+        """
+        COOLDOWN_MS = 1000
+
+        platforms: dict[str, FakePlatform] = {}
+        groups: dict[str, ScalingGroup] = {}
+
+        for num_vms, priority in [(1, 10), (2, 20), (4, 30), (8, 40), (16, 50)]:
+            name = f"tpu-{num_vms}vm"
+            cfg = make_scale_group_config(name=name, max_slices=4, num_vms=num_vms, priority=priority)
+            plat = FakePlatform(FakePlatformConfig(config=cfg))
+            platforms[name] = plat
+            groups[name] = ScalingGroup(cfg, plat, scale_up_cooldown=Duration.from_ms(COOLDOWN_MS))
+
+        as_config = config_pb2.AutoscalerConfig()
+        as_config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        autoscaler = make_autoscaler(groups, config=as_config)
+
+        def make_demand(count):
+            return _make_big_demand_entries(
+                count,
+                cpu_millicores=128000,
+                memory_bytes=128 * 1024**3,
+                device_type=DeviceType.TPU,
+                device_variant="v5p-8",
+            )
+
+        def advance(ts):
+            for plat in platforms.values():
+                plat.tick(ts.epoch_ms())
+            for g in groups.values():
+                _mark_all_slices_ready(g)
+
+        def routed(group_name):
+            return len(autoscaler._last_routing_decision.routed_entries.get(group_name, []))
+
+        def assert_no_load_on_last():
+            assert routed("tpu-16vm") == 0, "tpu-16vm should never receive load"
+            assert groups["tpu-16vm"].slice_count() == 0
+
+        # ── Phase 1: Fill tpu-1vm (highest priority) ──
+
+        # Cycle 1 (t=0): demand=2 → tpu-1vm scales up 2 slices
+        t = Timestamp.from_ms(10_000)
+        autoscaler.run_once(make_demand(2), {}, timestamp=t)
+        autoscaler._wait_for_inflight()
+        assert groups["tpu-1vm"].slice_count() == 2
+        assert_no_load_on_last()
+
+        # Cycle 2 (t+500ms): demand grows to 4, cooldown blocks scale-up
+        t = Timestamp.from_ms(10_500)
+        advance(t)
+        autoscaler.run_once(make_demand(4), {}, timestamp=t)
+        autoscaler._wait_for_inflight()
+        assert groups["tpu-1vm"].slice_count() == 2, "cooldown blocks scale-up"
+        assert routed("tpu-1vm") == 4, "demand stays in tpu-1vm during cooldown"
+        assert routed("tpu-2vm") == 0, "no cascade during cooldown"
+        assert_no_load_on_last()
+
+        # Cycle 3 (t+1100ms): cooldown expired → tpu-1vm scales to max
+        t = Timestamp.from_ms(11_100)
+        advance(t)
+        autoscaler.run_once(make_demand(4), {}, timestamp=t)
+        autoscaler._wait_for_inflight()
+        assert groups["tpu-1vm"].slice_count() == 4, "tpu-1vm at max_slices"
+        assert_no_load_on_last()
+
+        # ── Phase 2: tpu-1vm at max → cascade fills tpu-2vm ──
+
+        # Cycle 4 (t+2200ms): demand=8, all cascade past tpu-1vm
+        t = Timestamp.from_ms(12_200)
+        advance(t)
+        autoscaler.run_once(make_demand(8), {}, timestamp=t)
+        autoscaler._wait_for_inflight()
+        assert groups["tpu-1vm"].slice_count() == 4, "tpu-1vm unchanged"
+        assert routed("tpu-2vm") == 8, "all demand cascades to tpu-2vm"
+        # 8 entries / 2 vms_per_slice = 4 slices (fills to max)
+        assert groups["tpu-2vm"].slice_count() == 4, "tpu-2vm filled to max"
+        assert_no_load_on_last()
+
+        # ── Phase 3: tpu-2vm at max → cascade to tpu-4vm with cooldown ──
+
+        # Cycle 5 (t+3300ms): demand=8, cascades to tpu-4vm
+        # tpu-4vm: 8 entries / 4 vms_per_slice = 2 slices (partial fill)
+        t = Timestamp.from_ms(13_300)
+        advance(t)
+        autoscaler.run_once(make_demand(8), {}, timestamp=t)
+        autoscaler._wait_for_inflight()
+        assert groups["tpu-4vm"].slice_count() == 2
+        assert_no_load_on_last()
+
+        # Cycle 6 (t+3800ms): demand=16, tpu-4vm in cooldown
+        # remaining_vms=(2+0+2)*4=16, routes all 16, but cooldown blocks scale-up
+        t = Timestamp.from_ms(13_800)
+        advance(t)
+        autoscaler.run_once(make_demand(16), {}, timestamp=t)
+        autoscaler._wait_for_inflight()
+        assert groups["tpu-4vm"].slice_count() == 2, "cooldown blocks scale-up"
+        assert routed("tpu-4vm") == 16, "demand stays in tpu-4vm during cooldown"
+        assert routed("tpu-8vm") == 0, "no cascade to tpu-8vm during cooldown"
+        assert_no_load_on_last()
+
+        # Cycle 7 (t+4400ms): cooldown expired → tpu-4vm scales to max
+        # need ceil(16/4)=4 slices, have 2, create 2 more
+        t = Timestamp.from_ms(14_400)
+        advance(t)
+        autoscaler.run_once(make_demand(16), {}, timestamp=t)
+        autoscaler._wait_for_inflight()
+        assert groups["tpu-4vm"].slice_count() == 4, "tpu-4vm at max_slices"
+        assert_no_load_on_last()
+
+        # ── Phase 4: cascade to tpu-8vm ──
+
+        # Cycle 8 (t+5500ms): demand=28, cascades to tpu-8vm
+        # tpu-8vm: 28 entries, remaining_vms=(0+0+4)*8=32, routes 28
+        # ceil(28/8) = 4 slices → fills to max in one shot
+        t = Timestamp.from_ms(15_500)
+        advance(t)
+        autoscaler.run_once(make_demand(28), {}, timestamp=t)
+        autoscaler._wait_for_inflight()
+        assert routed("tpu-8vm") == 28
+        assert groups["tpu-8vm"].slice_count() == 4, "tpu-8vm at max_slices"
+        assert_no_load_on_last()
+
+        # ── Verify final state ──
+        expected_slices = {
+            "tpu-1vm": 4,
+            "tpu-2vm": 4,
+            "tpu-4vm": 4,
+            "tpu-8vm": 4,
+            "tpu-16vm": 0,
+        }
+        for name, expected in expected_slices.items():
+            assert (
+                groups[name].slice_count() == expected
+            ), f"{name}: expected {expected} slices, got {groups[name].slice_count()}"
+
+
+class TestRoutingBinPacking:
+    """Tests for per-VM bin packing during routing.
+
+    The routing budget packs entries into VM bins during route_demand(), preventing
+    premature overflow to lower-priority groups when multiple small entries fit
+    in a single VM.
+    """
+
+    def _make_group(
+        self,
+        name: str = "group-a",
+        max_slices: int = 1,
+        priority: int = 10,
+        memory_bytes: int = 128 * 1024**3,
+        **kwargs,
+    ) -> ScalingGroup:
+        resources = config_pb2.ScaleGroupResources(
+            cpu_millicores=128000,
+            memory_bytes=memory_bytes,
+            disk_bytes=100 * 1024**3,
+            gpu_count=8,
+            tpu_count=8,
+        )
+        config = config_pb2.ScaleGroupConfig(
+            name=name,
+            max_slices=max_slices,
+            priority=priority,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            **kwargs,
+        )
+        config.resources.CopyFrom(resources)
+        config.num_vms = kwargs.pop("num_vms", 1)
+        config.slice_template.gcp.zone = "us-central1-a"
+        return ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+
+    def _make_entries(self, count: int, memory_bytes: int = 32 * 1024**3) -> list[DemandEntry]:
+        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=memory_bytes)
+        return [
+            DemandEntry(
+                task_ids=[f"task-{i}"],
+                coschedule_group_id=None,
+                device_type=DeviceType.TPU,
+                device_variant="v5p-8",
+                constraints=[],
+                resources=resources,
+            )
+            for i in range(count)
+        ]
+
+    def test_routing_packs_small_entries_into_shared_vm(self):
+        """4 entries x 32GiB on group with 128GiB VMs, max_slices=1. All 4 route."""
+        group = self._make_group(max_slices=1, memory_bytes=128 * 1024**3)
+        entries = self._make_entries(4, memory_bytes=32 * 1024**3)
+
+        result = route_demand([group], entries)
+
+        assert len(result.routed_entries.get("group-a", [])) == 4
+        assert result.unmet_entries == []
+        assert result.group_required_slices["group-a"] == 1
+
+    def test_routing_overflow_when_vm_actually_full(self):
+        """5 entries x 32GiB on group A (max_slices=1, 128GiB). 4 pack, 5th overflows to B."""
+        group_a = self._make_group(name="group-a", max_slices=1, priority=10, memory_bytes=128 * 1024**3)
+        group_b = self._make_group(name="group-b", max_slices=5, priority=20, memory_bytes=128 * 1024**3)
+        entries = self._make_entries(5, memory_bytes=32 * 1024**3)
+
+        result = route_demand([group_a, group_b], entries)
+
+        assert len(result.routed_entries.get("group-a", [])) == 4
+        assert len(result.routed_entries.get("group-b", [])) == 1
+        assert result.unmet_entries == []
+
+    def test_routing_no_resources_falls_back_to_one_per_vm(self):
+        """When vm_capacity is None in RoutingBudget, 1 entry = 1 VM (no packing)."""
+        from iris.cluster.controller.autoscaler import RoutingBudget
+
+        group = self._make_group(name="group-a", max_slices=2, memory_bytes=128 * 1024**3)
+        budget = RoutingBudget(
+            group=group,
+            vm_capacity=None,  # Force no-resource fallback
+            max_vms=2,
+            packable_bins=[],
+            coscheduled_slices=0,
+            assigned_entries=[],
+        )
+
+        entries = self._make_entries(3, memory_bytes=32 * 1024**3)
+        results = [budget.try_assign(e) for e in entries]
+
+        assert results == [True, True, False]
+        assert len(budget.assigned_entries) == 2
+        assert len(budget.packable_bins) == 2
+
+    def test_routing_opens_new_bins_from_headroom(self):
+        """Entries fill existing VM bins, then headroom allows new bins until max_slices exhausted."""
+        group = self._make_group(max_slices=2, memory_bytes=64 * 1024**3)
+        entries = self._make_entries(4, memory_bytes=32 * 1024**3)
+
+        result = route_demand([group], entries)
+
+        assert len(result.routed_entries.get("group-a", [])) == 4
+        assert result.unmet_entries == []
+        assert result.group_required_slices["group-a"] == 2
+
+    def test_routing_coscheduled_still_consumes_full_slice(self):
+        """Coscheduled entries consume num_vms from budget, not bin-packed."""
+        config = config_pb2.ScaleGroupConfig(
+            name="csc-group",
+            max_slices=3,
+            priority=10,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            num_vms=2,
+        )
+        config.resources.CopyFrom(DEFAULT_RESOURCES)
+        config.slice_template.gcp.zone = "us-central1-a"
+        group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+
+        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+        entries = [
+            DemandEntry(
+                task_ids=["t0", "t1"],
+                coschedule_group_id="job-1",
+                device_type=DeviceType.TPU,
+                device_variant="v5p-8",
+                constraints=[],
+                resources=resources,
+            ),
+            DemandEntry(
+                task_ids=["t2", "t3"],
+                coschedule_group_id="job-2",
+                device_type=DeviceType.TPU,
+                device_variant="v5p-8",
+                constraints=[],
+                resources=resources,
+            ),
+        ]
+
+        result = route_demand([group], entries)
+
+        assert len(result.routed_entries.get("csc-group", [])) == 2
+        assert result.group_required_slices["csc-group"] == 2
+
+    def test_routing_budget_required_slices_mixed(self):
+        """Verify required_slices for mixed coscheduled + packable entries."""
+        config = config_pb2.ScaleGroupConfig(
+            name="mixed",
+            max_slices=5,
+            priority=10,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            num_vms=2,
+        )
+        config.resources.CopyFrom(DEFAULT_RESOURCES)
+        config.slice_template.gcp.zone = "us-central1-a"
+        group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+
+        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+        entries = [
+            # 1 coscheduled entry (needs 1 slice = 2 VMs)
+            DemandEntry(
+                task_ids=["t0", "t1"],
+                coschedule_group_id="job-1",
+                device_type=DeviceType.TPU,
+                device_variant="v5p-8",
+                constraints=[],
+                resources=resources,
+            ),
+            # 3 packable entries (all fit in 1 VM → ceil(1/2) = 1 slice)
+            *[
+                DemandEntry(
+                    task_ids=[f"t-pack-{i}"],
+                    coschedule_group_id=None,
+                    device_type=DeviceType.TPU,
+                    device_variant="v5p-8",
+                    constraints=[],
+                    resources=resources,
+                )
+                for i in range(3)
+            ],
+        ]
+
+        result = route_demand([group], entries)
+
+        assert len(result.routed_entries.get("mixed", [])) == 4
+        # 1 coscheduled slice + ceil(1 bin / 2 vms_per_slice) = 1 packable slice = 2 total
+        assert result.group_required_slices["mixed"] == 2
+
+
+class TestScaleUpRateLimiting:
+    """Tests for per-group token bucket rate limiting of scale-up execution."""
+
+    def test_rate_limited_scale_up_logs_action(self):
+        """With rate_limit=1, 5 decisions produce 1 executed + 4 rate_limited actions."""
+        config = make_scale_group_config(name="test-group", max_slices=10, num_vms=1, priority=10)
+        platform = FakePlatform(FakePlatformConfig(config=config))
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0), scale_up_rate_limit=1)
+
+        as_config = config_pb2.AutoscalerConfig()
+        as_config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        autoscaler = make_autoscaler({"test-group": group}, config=as_config)
+
+        demand = _make_big_demand_entries(
+            5,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        ts = Timestamp.from_ms(100_000)
+        decisions = autoscaler.evaluate(demand, timestamp=ts)
+        assert len(decisions) == 5
+
+        autoscaler.execute(decisions, ts)
+        autoscaler._wait_for_inflight()
+
+        # Only 1 should have actually executed (rate_limit=1)
+        assert group.slice_count() == 1
+
+        # Check action log: 1 scale_up + 4 rate_limited
+        actions = list(autoscaler._action_log)
+        rate_limited = [a for a in actions if a.action_type == "rate_limited"]
+        scale_ups = [a for a in actions if a.action_type == "scale_up"]
+        assert len(rate_limited) == 4
+        assert len(scale_ups) == 1
+
+    def test_rate_limited_decisions_served_next_cycle(self):
+        """Deferred decisions get served on subsequent evaluate+execute cycles as tokens refill."""
+        config = make_scale_group_config(name="test-group", max_slices=10, num_vms=1, priority=10)
+        platform = FakePlatform(FakePlatformConfig(config=config))
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0), scale_up_rate_limit=2)
+
+        as_config = config_pb2.AutoscalerConfig()
+        as_config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        autoscaler = make_autoscaler({"test-group": group}, config=as_config)
+
+        demand = _make_big_demand_entries(
+            6,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+
+        # Cycle 1: 6 decisions, only 2 pass rate limit
+        ts = Timestamp.from_ms(100_000)
+        decisions = autoscaler.evaluate(demand, timestamp=ts)
+        assert len(decisions) == 6
+        autoscaler.execute(decisions, ts)
+        autoscaler._wait_for_inflight()
+        assert group.slice_count() == 2
+
+        # Advance time by 1 minute for full refill, mark slices ready
+        platform.tick(ts.epoch_ms())
+        _mark_all_slices_ready(group)
+        ts2 = ts.add_ms(60_000)
+
+        # Cycle 2: re-evaluate with same demand, 4 remaining needed
+        decisions2 = autoscaler.evaluate(demand, timestamp=ts2)
+        assert len(decisions2) == 4  # 6 needed - 2 existing = 4
+        autoscaler.execute(decisions2, ts2)
+        autoscaler._wait_for_inflight()
+        # 2 more tokens available after 1 minute refill
+        assert group.slice_count() == 4
+
+    def test_high_rate_limit_allows_all_decisions(self):
+        """With a high rate limit, all decisions execute in one cycle."""
+        config = make_scale_group_config(name="test-group", max_slices=10, num_vms=1, priority=10)
+        platform = FakePlatform(FakePlatformConfig(config=config))
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0), scale_up_rate_limit=1000)
+
+        as_config = config_pb2.AutoscalerConfig()
+        as_config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        autoscaler = make_autoscaler({"test-group": group}, config=as_config)
+
+        demand = _make_big_demand_entries(
+            10,
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            device_type=DeviceType.TPU,
+            device_variant="v5p-8",
+        )
+        ts = Timestamp.from_ms(100_000)
+        decisions = autoscaler.evaluate(demand, timestamp=ts)
+        assert len(decisions) == 10
+        autoscaler.execute(decisions, ts)
+        autoscaler._wait_for_inflight()
+        assert group.slice_count() == 10

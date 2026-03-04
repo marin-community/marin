@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Ray backend for fray v2 Client protocol."""
@@ -413,6 +413,8 @@ def _actor_ray_options(resources: ResourceConfig, actor_config: ActorConfig = Ac
     # initialization beyond __init__.
     if actor_config.max_restarts is not None:
         options["max_restarts"] = actor_config.max_restarts
+    if actor_config.max_task_retries is not None:
+        options["max_task_retries"] = actor_config.max_task_retries
     if actor_config.max_concurrency > 1:
         options["max_concurrency"] = actor_config.max_concurrency
     return options

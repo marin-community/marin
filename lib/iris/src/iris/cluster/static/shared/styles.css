@@ -1081,6 +1081,7 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
   background: #eaeef2;
   border-radius: 2px;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .inline-gauge__fill {
@@ -1092,5 +1093,22 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--color-text-secondary);
-  min-width: 28px;
+  white-space: nowrap;
+}
+
+/* === Sparkline (inline trend chart) === */
+.sparkline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Sparkline paired with an inline gauge in a table cell */
+.resource-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.resource-cell .sparkline {
+  flex-shrink: 0;
 }

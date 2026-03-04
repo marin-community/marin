@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -441,16 +441,6 @@ class ManualPlatform:
         label_prefix: str | None = None,
     ) -> list[str]:
         return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
-
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        label_prefix = config.platform.label_prefix or "iris"
-        labels = Labels(label_prefix)
-        all_slices = self.list_all_slices(labels={labels.iris_managed: "true"})
-        for s in all_slices:
-            logger.info("Terminating slice %s for reload", s.slice_id)
-            s.terminate()
-        self.stop_controller(config)
-        return self.start_controller(config)
 
     # ========================================================================
     # Internal helpers

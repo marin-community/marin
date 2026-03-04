@@ -1,15 +1,14 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Cluster management CLI commands.
 
-All cluster subcommands live here: lifecycle (start/stop/restart/reload/status),
+All cluster subcommands live here: lifecycle (start/stop/restart/status),
 controller VM management, VM operations via controller RPC, and the dashboard tunnel.
 """
 
 import signal
 import threading
-from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
@@ -22,8 +21,6 @@ from iris.cli.build import (
     push_to_ghcr,
 )
 from iris.cli.main import require_controller_url
-from iris.client import IrisClient
-from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.config import IrisConfig, make_local_config
 from iris.cluster.manager import stop_all
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
@@ -221,8 +218,11 @@ def cluster(ctx):
 
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
+@click.option(
+    "--bundle-prefix", default=None, help="Override bundle/snapshot storage prefix (e.g. file:///tmp/iris-bundles)"
+)
 @click.pass_context
-def cluster_start(ctx, local: bool):
+def cluster_start(ctx, local: bool, bundle_prefix: str | None):
     """Start controller and wait for health.
 
     Each platform handles its own controller lifecycle:
@@ -237,6 +237,8 @@ def cluster_start(ctx, local: bool):
         raise click.ClickException("--config is required for cluster start")
     if local:
         config = make_local_config(config)
+    if bundle_prefix:
+        config.storage.bundle_prefix = bundle_prefix
     is_local = config.controller.WhichOneof("controller") == "local"
     if not is_local:
         _pin_latest_images(config)
@@ -305,44 +307,6 @@ def cluster_restart(ctx):
     ctx.invoke(cluster_stop)
     click.echo("")
     ctx.invoke(cluster_start)
-
-
-@cluster.command("reload")
-@click.option("--no-build", is_flag=True, help="Skip image building")
-@click.option("--validate", is_flag=True, help="Submit a health check after reload")
-@click.pass_context
-def cluster_reload(ctx, no_build: bool, validate: bool):
-    """Rebuild images and reload the cluster (controller + workers)."""
-    config = ctx.obj.get("config")
-    if not config:
-        raise click.ClickException("--config is required for cluster reload")
-    is_local = config.controller.WhichOneof("controller") == "local"
-    if not is_local:
-        _pin_latest_images(config)
-    if not no_build:
-        built = _build_cluster_images(config)
-        if built:
-            click.echo("Built image tags:")
-            for name, tag in built.items():
-                click.echo(f"  {name}: {tag}")
-    iris_config = IrisConfig(config)
-    platform = iris_config.platform()
-    click.echo("Reloading cluster (workers + controller)...")
-    try:
-        address = platform.reload(config)
-        click.echo(f"Cluster reloaded. Controller at {address}")
-    except Exception as e:
-        click.echo(f"Failed to reload cluster: {e}", err=True)
-        raise SystemExit(1) from e
-    if validate:
-        click.echo("\nValidating cluster health...")
-        controller_url = require_controller_url(ctx)
-        try:
-            _validate_cluster_health(controller_url)
-            click.echo("Cluster validation passed.")
-        except Exception as e:
-            click.echo(f"Cluster validation failed: {e}", err=True)
-            raise SystemExit(1) from e
 
 
 @cluster.command("status")
@@ -479,23 +443,117 @@ def vm_logs(ctx, vm_id):
 
 
 # =============================================================================
-# Internal helpers
+# Controller subcommands (RPC-based controller operations)
 # =============================================================================
 
 
-def _validate_cluster_health(controller_url: str) -> None:
-    click.echo(f"  Connected to controller at {controller_url}")
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+@cluster.group()
+@click.pass_context
+def controller(ctx):
+    """Controller management commands."""
+    pass
 
-    def _validate_hello():
-        print("Reload validation job OK")
-        return 42
 
-    click.echo("  Submitting validation job...")
-    job = client.submit(
-        entrypoint=Entrypoint.from_callable(_validate_hello), name="reload-validate", resources=ResourceSpec(cpu=1)
-    )
-    click.echo(f"  Job submitted: {job.job_id}")
-    click.echo("  Waiting for job (workers may need to scale up)...")
-    status = job.wait(timeout=600, raise_on_failure=True)
-    click.echo(f"  Job completed: {cluster_pb2.JobState.Name(status.state)}")
+@controller.command("checkpoint")
+@click.option("--stop", is_flag=True, default=False, help="Stop the controller after taking a checkpoint")
+@click.pass_context
+def controller_checkpoint(ctx, stop: bool):
+    """Take a checkpoint of the controller state.
+
+    Calls BeginCheckpoint on the running controller, which pauses scheduling
+    briefly and writes a consistent snapshot to storage.
+    """
+    controller_url = require_controller_url(ctx)
+    client = cluster_connect.ControllerServiceClientSync(controller_url)
+    try:
+        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+    except Exception as e:
+        click.echo(f"Checkpoint failed: {e}", err=True)
+        raise SystemExit(1) from e
+
+    click.echo(f"Snapshot written: {resp.snapshot_path}")
+    click.echo(f"  Jobs:    {resp.job_count}")
+    click.echo(f"  Tasks:   {resp.task_count}")
+    click.echo(f"  Workers: {resp.worker_count}")
+
+    if stop:
+        click.echo("Stopping controller...")
+        config = ctx.obj.get("config")
+        if not config:
+            click.echo("--stop requires --config", err=True)
+            raise SystemExit(1)
+        from iris.cluster.config import IrisConfig
+
+        iris_config = IrisConfig(config)
+        platform = iris_config.platform()
+        try:
+            platform.stop_controller(config)
+            click.echo("Controller stopped.")
+        except Exception as e:
+            click.echo(f"Failed to stop controller: {e}", err=True)
+            raise SystemExit(1) from e
+
+
+@controller.command("restart")
+@click.option("--bundle-prefix", default=None, help="Override bundle/snapshot storage prefix (e.g. gs://bucket/path)")
+@click.pass_context
+def controller_restart(ctx, bundle_prefix: str | None):
+    """Restart controller with state preservation (remote platforms only).
+
+    Takes a checkpoint, builds fresh images, stops the controller, and starts
+    a new one. The new controller auto-restores from the checkpoint.
+    Workers on separate VMs survive the restart.
+    """
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required")
+
+    is_local = config.controller.WhichOneof("controller") == "local"
+    if is_local:
+        raise click.ClickException(
+            "controller restart is not supported for local clusters. "
+            "Stop and restart the 'iris cluster start --local' process instead."
+        )
+
+    if bundle_prefix:
+        config.storage.bundle_prefix = bundle_prefix
+
+    controller_url = require_controller_url(ctx)
+
+    # Checkpoint
+    client = cluster_connect.ControllerServiceClientSync(controller_url)
+    try:
+        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+    except Exception as e:
+        click.echo(f"Checkpoint failed: {e}", err=True)
+        raise SystemExit(1) from e
+    finally:
+        client.close()
+    click.echo(f"Checkpoint: {resp.snapshot_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
+
+    # Build fresh images so the new controller VM gets the latest code
+    _pin_latest_images(config)
+    verbose = ctx.obj.get("verbose", False)
+    built = _build_cluster_images(config, verbose=verbose)
+    if built:
+        click.echo("Built image tags:")
+        for name, tag in built.items():
+            click.echo(f"  {name}: {tag}")
+
+    # Stop controller
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
+    try:
+        platform.stop_controller(config)
+    except Exception as e:
+        click.echo(f"Failed to stop controller: {e}", err=True)
+        raise SystemExit(1) from e
+    click.echo("Controller stopped.")
+
+    # Start new controller (auto-restores from latest.json in storage)
+    try:
+        address = platform.start_controller(config)
+    except Exception as e:
+        click.echo(f"Failed to start controller: {e}", err=True)
+        raise SystemExit(1) from e
+    click.echo(f"Controller restarted at {address}")

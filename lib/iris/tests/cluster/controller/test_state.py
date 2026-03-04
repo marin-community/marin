@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for controller state management.
@@ -2103,3 +2103,348 @@ def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
     # Verify job is succeeded
     job = state.get_job(tasks[0].job_id)
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+# =============================================================================
+# Demand Dry-Run Scheduling Tests
+#
+# These tests verify that compute_demand_entries runs a dry-run scheduling pass
+# to absorb tasks into existing worker capacity, and only emits demand for
+# truly unschedulable tasks (not building-limited ones).
+# =============================================================================
+
+
+def _gpu_worker_metadata(
+    *,
+    cpu: int = 128,
+    memory_gb: int = 256,
+    variant: str = "H100",
+    gpu_count: int = 8,
+) -> cluster_pb2.WorkerMetadata:
+    """Create worker metadata for a GPU worker."""
+    return cluster_pb2.WorkerMetadata(
+        hostname="gpu-worker",
+        ip_address="10.0.0.1",
+        cpu_count=cpu,
+        memory_bytes=memory_gb * 1024**3,
+        disk_bytes=100 * 1024**3,
+        device=cluster_pb2.DeviceConfig(
+            gpu=cluster_pb2.GpuDevice(variant=variant, count=gpu_count),
+        ),
+    )
+
+
+def _tpu_worker_metadata(
+    *,
+    cpu: int = 128,
+    memory_gb: int = 256,
+    variant: str = "v5litepod-16",
+    chip_count: int = 8,
+) -> cluster_pb2.WorkerMetadata:
+    """Create worker metadata for a TPU worker."""
+    return cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="10.0.0.1",
+        cpu_count=cpu,
+        memory_bytes=memory_gb * 1024**3,
+        disk_bytes=100 * 1024**3,
+        device=cluster_pb2.DeviceConfig(
+            tpu=cluster_pb2.TpuDevice(variant=variant, chip_count=chip_count),
+        ),
+    )
+
+
+def _cpu_worker_metadata(
+    *,
+    cpu: int = 128,
+    memory_gb: int = 256,
+) -> cluster_pb2.WorkerMetadata:
+    return cluster_pb2.WorkerMetadata(
+        hostname="cpu-worker",
+        ip_address="10.0.0.1",
+        cpu_count=cpu,
+        memory_bytes=memory_gb * 1024**3,
+        disk_bytes=100 * 1024**3,
+        device=cluster_pb2.DeviceConfig(
+            cpu=cluster_pb2.CpuDevice(variant="cpu"),
+        ),
+    )
+
+
+def test_demand_excludes_building_limited_tasks():
+    """Worker has resources but is at building limit -> no demand emitted."""
+    state = ControllerState()
+    scheduler = Scheduler(max_building_tasks_per_worker=2)
+
+    # Register a CPU worker with plenty of capacity
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _cpu_worker_metadata(cpu=128, memory_gb=256))
+
+    # Submit a job with 1 pending CPU task
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="cpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    # Fill the worker with 2 building tasks (at the building limit).
+    # These use minimal resources so the worker still has plenty of capacity.
+    build_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="build-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=100,
+            memory_bytes=1024**2,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=2,
+    )
+    build_tasks = submit_job(state, "build-job", build_req)
+    for bt in build_tasks:
+        dispatch_task(state, bt, wid)
+        transition_task(state, bt.task_id, cluster_pb2.TASK_STATE_BUILDING)
+
+    # Now w1 has 2 building tasks (at limit), but has plenty of CPU/memory.
+    # The pending task from j1 should be building-limited, not truly unschedulable.
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    assert len(task_demand) == 0, "Building-limited task should not generate demand"
+
+
+def test_demand_includes_truly_unschedulable_tasks():
+    """No worker with matching device type -> demand IS emitted."""
+    state = ControllerState()
+    scheduler = Scheduler()
+
+    # Register a CPU-only worker
+    register_worker(state, "w1", "10.0.0.1:8080", _cpu_worker_metadata())
+
+    # Submit a job requiring H100 GPUs
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="gpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    assert len(task_demand) == 1, "Task with no matching device should generate demand"
+
+
+def test_demand_includes_resource_exhausted_tasks():
+    """Worker has right device but insufficient CPU -> demand IS emitted."""
+    state = ControllerState()
+    scheduler = Scheduler()
+
+    # Register a GPU worker with only 1 CPU core
+    register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata(cpu=1))
+
+    # Submit a job requiring 4 CPU cores
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="gpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=4000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    assert len(task_demand) == 1, "Task exceeding worker CPU should generate demand"
+
+
+def test_demand_still_includes_reservations():
+    """Reservation entries always generate demand regardless of worker capacity."""
+    state = ControllerState()
+    scheduler = Scheduler()
+
+    # Register a large GPU worker
+    register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+
+    # Submit a job with reservation
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=2,
+    )
+    submit_job(state, "j1", req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
+    assert len(reservation_demand) == 2, "Reservation demand should always be emitted"
+
+
+def test_demand_absorbs_capacity_before_emitting():
+    """2 workers fit 1 task each, 3 pending tasks -> only 1 demand entry."""
+    state = ControllerState()
+    scheduler = Scheduler()
+
+    # Register 2 GPU workers, each with enough capacity for 1 task
+    register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata(cpu=2, memory_gb=4))
+    register_worker(state, "w2", "10.0.0.2:8080", _gpu_worker_metadata(cpu=2, memory_gb=4))
+
+    # Submit 3 tasks each needing 2 CPU cores (each worker fits exactly 1)
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="gpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=2000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=3,
+    )
+    submit_job(state, "j1", req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    assert len(task_demand) == 1, "Only 1 of 3 tasks should generate demand (2 absorbed)"
+
+
+def test_demand_no_workers_falls_back_to_all_pending():
+    """When no workers provided, all pending tasks generate demand (backward compat)."""
+    state = ControllerState()
+
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="gpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=3,
+    )
+    submit_job(state, "j1", req)
+
+    # No scheduler, no workers -> all tasks become demand
+    demand = compute_demand_entries(state)
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    assert len(task_demand) == 3
+
+
+def test_demand_building_limited_with_multiple_workers():
+    """All matching workers at building limit -> no demand, even with multiple workers."""
+    state = ControllerState()
+    scheduler = Scheduler(max_building_tasks_per_worker=1)
+
+    # Register 2 CPU workers
+    wid1 = register_worker(state, "w1", "10.0.0.1:8080", _cpu_worker_metadata())
+    wid2 = register_worker(state, "w2", "10.0.0.2:8080", _cpu_worker_metadata())
+
+    # Fill both workers with 1 building task each (at limit since max=1).
+    # Use minimal resources so workers retain plenty of capacity.
+    for i, wid in enumerate([wid1, wid2]):
+        build_req = cluster_pb2.Controller.LaunchJobRequest(
+            name=f"build-{i}",
+            entrypoint=_make_test_entrypoint(),
+            resources=cluster_pb2.ResourceSpecProto(
+                cpu_millicores=100,
+                memory_bytes=1024**2,
+            ),
+            environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        build_tasks = submit_job(state, f"build-{i}", build_req)
+        dispatch_task(state, build_tasks[0], wid)
+        transition_task(state, build_tasks[0].task_id, cluster_pb2.TASK_STATE_BUILDING)
+
+    # Submit a new task
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="pending-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "pending-job", req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    assert len(task_demand) == 0, "All workers at building limit -> no demand"
+
+
+def test_demand_mixed_building_limited_and_unschedulable():
+    """Some tasks building-limited, some truly unschedulable -> only unschedulable emit demand."""
+    state = ControllerState()
+    scheduler = Scheduler(max_building_tasks_per_worker=1)
+
+    # Register 1 GPU worker at building limit.
+    # Use a minimal CPU task to fill the building slot so GPU capacity stays intact.
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    build_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="build-0",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=100,
+            memory_bytes=1024**2,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    build_tasks = submit_job(state, "build-0", build_req)
+    dispatch_task(state, build_tasks[0], wid)
+    transition_task(state, build_tasks[0].task_id, cluster_pb2.TASK_STATE_BUILDING)
+
+    # Task 1: H100 job (building-limited, worker has resources but at limit)
+    h100_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="h100-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "h100-job", h100_req)
+
+    # Task 2: A100 job (truly unschedulable, no A100 workers exist)
+    a100_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="a100-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_a100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "a100-job", a100_req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+
+    assert len(task_demand) == 1
+    assert "a100-job" in task_demand[0].task_ids[0], "Only A100 task should emit demand"

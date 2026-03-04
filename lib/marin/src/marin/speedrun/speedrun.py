@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,8 +17,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
-import fsspec
 from fray.cluster import ResourceConfig
+from iris.marin_fs import open_url
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -331,7 +331,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     logger.info(f"Speedrun info and results: {run_info}")
 
     output_data = {"runs": [{"run_info": run_info}]}
-    with fsspec.open(config.output_path, "w") as f:
+    with open_url(config.output_path, "w") as f:
         json.dump(output_data, f, indent=2, sort_keys=True)
     logger.info(f"Speedrun info and results written to {config.output_path}")
 

@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -95,6 +95,16 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
         ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
         ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
+        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
+    },
+    "TPU v6": {
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
+        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
+        ("bfloat16", "mid-h-large-vocab"): BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=1024),
+        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
+        ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
+        ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
+        ("float32", "mid-h-large-vocab"): BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=1024),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
     },
     "TPU v5p": {
@@ -212,10 +222,15 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             h_block_size=512,
             v_block_size=1024,
         ),
+        ("bfloat16", "mid-h-large-vocab"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=1024,
+            v_block_size=256,
+        ),
         ("bfloat16", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
-            h_block_size=256,
-            v_block_size=256,
+            h_block_size=512,
+            v_block_size=1024,
         ),
         ("bfloat16", "medium-batch-medium-h"): BlockSizes(
             b_block_size=1024,
@@ -232,10 +247,15 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             h_block_size=512,
             v_block_size=1024,
         ),
+        ("float32", "mid-h-large-vocab"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=1024,
+            v_block_size=256,
+        ),
         ("float32", "large-batch-small-h"): BlockSizes(
             b_block_size=1024,
-            h_block_size=256,
-            v_block_size=256,
+            h_block_size=512,
+            v_block_size=1024,
         ),
         ("float32", "medium-batch-medium-h"): BlockSizes(
             b_block_size=1024,
@@ -244,7 +264,6 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ),
     },
 }
-
 
 SHAPE_BUCKETS: list[ShapeBucket] = [
     ShapeBucket(
@@ -293,6 +312,15 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         v_max=262144,
     ),
     ShapeBucket(
+        name="mid-h-large-vocab",
+        b_min=4096,
+        b_max=32768,
+        h_min=768,
+        h_max=1536,
+        v_min=120000,
+        v_max=131072,
+    ),
+    ShapeBucket(
         name="huge-batch-llama3-ish",
         b_min=65536,
         b_max=1048576,
@@ -304,7 +332,7 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
     ShapeBucket(
         name="large-batch-small-h",
         b_min=32768,
-        b_max=1048576,
+        b_max=131072,
         h_min=256,
         h_max=1024,
         v_min=120000,
@@ -334,19 +362,24 @@ _HUGE_BATCH_BUCKET = "huge-batch-llama3-ish"
 _FAST_HUGE_BATCH_SOURCE_BUCKET = "llama3-ish"
 _SCOPED_VMEM_LIMIT_ARG = "xla_tpu_scoped_vmem_limit_kib="
 _WARNED_HUGE_BATCH_SAFE_FALLBACK = False
-_TPU_LABEL_LAYOUT_DEVICE_KEYS = {"TPU v4", "TPU v5", "TPU v5p"}
 
 
 def _is_tpu_device(device_key: Optional[str]) -> bool:
     return bool(device_key and device_key.startswith("TPU"))
 
 
-def _device_key(device_kind: Optional[str]) -> Optional[str]:
+def _normalized_device_kind(device_kind: Optional[str]) -> Optional[str]:
     if device_kind is None and jax.devices():
-        device_kind = jax.devices()[0].device_kind.lower()
+        device_kind = jax.devices()[0].device_kind
     if not device_kind:
         return None
-    device_kind = device_kind.lower()
+    return device_kind.lower()
+
+
+def _device_key(device_kind: Optional[str]) -> Optional[str]:
+    device_kind = _normalized_device_kind(device_kind)
+    if not device_kind:
+        return None
     if "nvidia" in device_kind:
         if "gb10" in device_kind:
             return "NVIDIA GB10"
@@ -365,6 +398,8 @@ def _device_key(device_kind: Optional[str]) -> Optional[str]:
         return "TPU v5e"
     if "v5" in device_kind:
         return "TPU v5"
+    if "tpu" in device_kind:
+        return "TPU"
     return None
 
 
@@ -374,8 +409,10 @@ def _dtype_name(dtype: Optional[jnp.dtype]) -> Optional[str]:
     return jnp.dtype(dtype).name
 
 
-def _shape_bucket(b: int, h: int, v: int) -> Optional[str]:
+def _shape_bucket(b: int, h: int, v: int, *, device_key: Optional[str]) -> Optional[str]:
     for bucket in SHAPE_BUCKETS:
+        if bucket.name.startswith("gb10-") and device_key != "NVIDIA GB10":
+            continue
         if bucket.matches(b, h, v):
             return bucket.name
     return None
@@ -439,19 +476,33 @@ def _largest_divisor_multiple_of_128(dim: int, preferred: int) -> int:
     return preferred
 
 
+def _largest_divisor_multiple_of_1024(dim: int, preferred: int) -> int:
+    """Return the largest multiple-of-1024 divisor of `dim` up to `preferred`."""
+    upper = min(dim, preferred)
+    upper -= upper % 1024
+
+    for block in range(upper, 1023, -1024):
+        if dim % block == 0:
+            return block
+
+    return preferred
+
+
 def _is_valid_for_pallas_shape(
     block_sizes: BlockSizes,
     *,
     b: int,
     h: int,
     device_key: Optional[str],
+    device_kind: Optional[str],
 ) -> bool:
+    del device_kind
     if _is_tpu_device(device_key):
         if block_sizes.b_block_size % 128 != 0 or block_sizes.h_block_size % 128 != 0:
             return False
         if b % block_sizes.b_block_size != 0 or h % block_sizes.h_block_size != 0:
             return False
-        if device_key in _TPU_LABEL_LAYOUT_DEVICE_KEYS and b >= 1024 and block_sizes.b_block_size % 1024 != 0:
+        if b >= 1024 and block_sizes.b_block_size % 1024 != 0:
             return False
         return True
 
@@ -471,11 +522,16 @@ def _sanitize_for_pallas(
     b: int,
     h: int,
     device_key: Optional[str],
+    device_kind: Optional[str],
 ) -> BlockSizes:
     """Adjust inferred block sizes so B/H blocks divide local shapes when possible."""
+    del device_kind
     if not _is_tpu_device(device_key):
         return block_sizes
-    b_block_size = _largest_divisor_multiple_of_128(b, block_sizes.b_block_size)
+    if b >= 1024:
+        b_block_size = _largest_divisor_multiple_of_1024(b, block_sizes.b_block_size)
+    else:
+        b_block_size = _largest_divisor_multiple_of_128(b, block_sizes.b_block_size)
     h_block_size = _largest_divisor_multiple_of_128(h, block_sizes.h_block_size)
     return BlockSizes(
         b_block_size=b_block_size,
@@ -504,9 +560,10 @@ def infer_block_sizes(
     Returns:
         BlockSizes chosen from the tuned table, or the default if no match.
     """
+    normalized_device_kind = _normalized_device_kind(device_kind)
     dtype_name = _dtype_name(dtype)
-    device_key = _device_key(device_kind)
-    bucket = _shape_bucket(b, h, v)
+    device_key = _device_key(normalized_device_kind)
+    bucket = _shape_bucket(b, h, v, device_key=device_key)
 
     if dtype_name and bucket:
         for key in (device_key, DEFAULT_DEVICE_KEY):
@@ -520,13 +577,31 @@ def infer_block_sizes(
                     bucket=bucket,
                     device_key=device_key,
                 )
-                if _is_valid_for_pallas_shape(entry, b=b, h=h, device_key=device_key):
+                if _is_valid_for_pallas_shape(
+                    entry,
+                    b=b,
+                    h=h,
+                    device_key=device_key,
+                    device_kind=normalized_device_kind,
+                ):
                     return entry
 
     default_entry = BlockSizes.get_default()
-    if _is_valid_for_pallas_shape(default_entry, b=b, h=h, device_key=device_key):
+    if _is_valid_for_pallas_shape(
+        default_entry,
+        b=b,
+        h=h,
+        device_key=device_key,
+        device_kind=normalized_device_kind,
+    ):
         return default_entry
-    return _sanitize_for_pallas(default_entry, b=b, h=h, device_key=device_key)
+    return _sanitize_for_pallas(
+        default_entry,
+        b=b,
+        h=h,
+        device_key=device_key,
+        device_kind=normalized_device_kind,
+    )
 
 
 def infer_xla_v_block_size(

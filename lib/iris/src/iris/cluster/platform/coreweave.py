@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,7 +48,6 @@ from urllib.parse import urlparse
 from google.protobuf.json_format import MessageToDict
 
 from iris.cluster.config import config_to_dict
-from iris.cluster.controller.scaling_group import prepare_slice_config
 from iris.cluster.k8s.kubectl import Kubectl
 from iris.cluster.platform.base import (
     CloudSliceState,
@@ -1149,87 +1148,6 @@ class CoreweavePlatform:
 
         self.stop_controller(config)
         return target_names
-
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        """Reload workers and controller with updated images/config.
-
-        Workers are reloaded first (in parallel) to minimize downtime.
-        Then the controller Deployment image is updated and rolled out.
-        """
-        # Phase 1: Update ConfigMap
-        config_json = self._config_json_for_configmap(config)
-        configmap_manifest = {
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {"name": "iris-cluster-config", "namespace": self._namespace},
-            "data": {"config.json": config_json},
-        }
-        self._kubectl.apply_json(configmap_manifest)
-        logger.info("ConfigMap iris-cluster-config updated for reload")
-
-        # Phase 2: Reload worker Pods in parallel
-        self._reload_worker_pods(config)
-
-        # Phase 3: Rolling update controller Deployment
-        controller_image = config.controller.image
-        if controller_image:
-            self._kubectl.set_image(
-                "deployment",
-                "iris-controller",
-                "iris-controller",
-                controller_image,
-                namespaced=True,
-            )
-            self._kubectl.rollout_status(
-                "deployment",
-                "iris-controller",
-                timeout=_DEPLOYMENT_READY_TIMEOUT,
-                namespaced=True,
-            )
-            logger.info("Controller Deployment updated to image %s", controller_image)
-
-        return self.discover_controller(config.controller)
-
-    def _reload_worker_pods(self, config: config_pb2.IrisClusterConfig) -> None:
-        """Delete and recreate all managed worker Pods in parallel with updated images."""
-        worker_config = config.defaults.worker
-        slices = self.list_all_slices()
-        if not slices:
-            logger.info("No worker slices to reload")
-            return
-
-        def _reload_one(slice_handle: CoreweaveSliceHandle) -> None:
-            pod_name = _worker_pod_name(slice_handle.slice_id)
-            cm_name = _worker_config_cm_name(slice_handle.slice_id)
-            logger.info("Reloading worker Pod %s", pod_name)
-            self._kubectl.delete("pod", pod_name, force=True)
-            self._kubectl.delete("configmap", cm_name)
-
-            sg_name = slice_handle.scale_group
-            sg_config = config.scale_groups.get(sg_name)
-            if sg_config is None:
-                logger.warning(
-                    "Scale group %s not in config, skipping Pod recreation for slice %s",
-                    sg_name,
-                    slice_handle.slice_id,
-                )
-                return
-
-            slice_config = prepare_slice_config(sg_config.slice_template, sg_config, self._label_prefix)
-            self._create_worker_pod(slice_handle, slice_config, worker_config)
-            self._wait_for_pod_ready(slice_handle)
-            logger.info("Worker Pod %s reloaded", pod_name)
-
-        futures = [self._executor.submit(_reload_one, s) for s in slices]
-        errors: list[Exception] = []
-        for future in futures:
-            try:
-                future.result(timeout=_POD_READY_TIMEOUT + 60)
-            except Exception as e:
-                errors.append(e)
-
-        if errors:
-            raise PlatformError(f"Failed to reload {len(errors)}/{len(slices)} worker Pods: {errors[0]}")
 
     def _wait_for_deployment_ready(self) -> None:
         """Poll controller Deployment until availableReplicas >= 1.

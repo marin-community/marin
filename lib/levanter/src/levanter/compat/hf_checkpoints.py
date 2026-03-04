@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING, Callable, Generic, Optional, Tuple, Type, Type
 
 import draccus
 import equinox as eqx
-import fsspec
 import haliax
+from iris.marin_fs import url_to_fs
 import huggingface_hub
 import humanfriendly
 import jax
@@ -259,7 +259,7 @@ def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
 def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
     """Stream a safetensors shard from remote storage and return JAX arrays."""
     if fs is None:
-        fs, stripped = fsspec.core.url_to_fs(path, asynchronous=True)
+        fs, stripped = url_to_fs(path, asynchronous=True)
         path = stripped
     else:
         try:
@@ -674,7 +674,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         final_state_dict = {}
 
         fs: AbstractFileSystem
-        fs, path = fsspec.core.url_to_fs(url)
+        fs, path = url_to_fs(url)
 
         shard_files, loader = self._locate_shard_files(fs, path)
 
@@ -1446,7 +1446,7 @@ def _patch_hf_hub_download():
                 revision = "main"
 
             if repo_id and filename and _is_url_like(repo_id):
-                fs, path = fsspec.core.url_to_fs(repo_id)
+                fs, path = url_to_fs(repo_id)
                 remote_path = os.path.join(path, filename)
                 # local_path = os.path.join(tmpdir, filename)
                 local_path = os.path.join(

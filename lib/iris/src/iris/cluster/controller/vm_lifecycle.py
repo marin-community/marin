@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,9 +19,6 @@ Provides start_controller() and stop_controller() — both taking a Platform
 instance. These work uniformly across GCP and Manual platforms. For local
 mode, use LocalController directly (fundamentally different mechanism:
 in-process, no SSH/Docker).
-
-For reload, use platform.reload() directly — each platform implements its
-own reload strategy.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Bootstrap script generation for worker and controller VMs.
@@ -113,7 +113,7 @@ def render_template(template: str, **variables: str | int) -> str:
 
 
 # Bootstrap script template for worker VMs.
-WORKER_BOOTSTRAP_SCRIPT = """
+WORKER_BOOTSTRAP_SCRIPT = """#!/bin/bash
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"

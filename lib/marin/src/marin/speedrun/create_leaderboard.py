@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Script to generate static leaderboard data."""
@@ -10,7 +10,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import fsspec
+from iris.marin_fs import filesystem as marin_filesystem
 
 CURRENT_FILE = Path(__file__).resolve()
 
@@ -67,7 +67,7 @@ EXCLUDED_SPEEDRUNS = {
 
 def find_speedrun_results(base_path: str) -> list[str]:
     if "://" in base_path:
-        fs = fsspec.filesystem(base_path.split("://", 1)[0])
+        fs = marin_filesystem(base_path.split("://", 1)[0])
         pattern = f"{base_path}/**/speedrun_results.json"
         all_results = fs.glob(pattern)
     else:
@@ -79,7 +79,7 @@ def find_speedrun_results(base_path: str) -> list[str]:
 
 
 def load_results_file(path: str) -> dict:
-    fs = fsspec.filesystem(path.split("://", 1)[0] if "://" in path else "file")
+    fs = marin_filesystem(path.split("://", 1)[0] if "://" in path else "file")
     with fs.open(path, "r") as f:
         data = json.load(f)
         return {"runs": [data]} if "runs" not in data else data

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -95,8 +95,8 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
-import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
+from iris.marin_fs import open_url
 from fray.v2.types import ResourceConfig
 from iris.marin_fs import marin_prefix
 
@@ -944,12 +944,12 @@ class Executor:
         for step, info in zip(self.steps, executor_info_dict["steps"], strict=True):
             info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
-            with fsspec.open(info_path, "w") as f:
+            with open_url(info_path, "w") as f:
                 print(json.dumps(info, indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
         fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
-        with fsspec.open(self.executor_info_path, "w") as f:
+        with open_url(self.executor_info_path, "w") as f:
             print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
 
 

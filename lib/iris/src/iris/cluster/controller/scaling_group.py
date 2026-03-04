@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """ScalingGroup owns slices and manages scaling state for a single group.
@@ -16,9 +16,16 @@ from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 
 from iris.cluster.platform.base import Labels, Platform, SliceHandle
-from iris.cluster.types import DeviceType, VmWorkerStatusMap, get_gpu_count, get_tpu_count
-from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.cluster.types import (
+    DeviceType,
+    REGION_ATTRIBUTE_KEY,
+    VmWorkerStatusMap,
+    ZONE_ATTRIBUTE_KEY,
+    get_gpu_count,
+    get_tpu_count,
+)
+from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, time_pb2, vm_pb2
+from iris.time_utils import Deadline, Duration, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -47,30 +54,25 @@ class SliceLifecycleState(StrEnum):
 
 
 class GroupAvailability(Enum):
-    """Availability state for a scale group in waterfall routing.
+    """Availability state for waterfall routing.
 
-    Determines whether demand is routed to this group or falls through
-    to lower-priority groups. States are checked in priority order by
-    availability() — the first matching state wins.
+    ACCEPTING states (demand stays here, scale-up may be deferred):
+    - AVAILABLE: can create new slices immediately
+    - COOLDOWN: recently scaled up, next scale-up deferred until cooldown expires
+    - REQUESTING: scale-up in progress, capacity incoming
+
+    REJECTING states (demand falls through to lower-priority groups):
+    - BACKOFF: slice creation failed, exponential backoff active
+    - QUOTA_EXCEEDED: cloud quota exhausted
+    - AT_MAX_SLICES: configured slice limit reached
     """
 
     AVAILABLE = "available"
-    """Group can accept demand and create new slices."""
-
-    BACKOFF = "backoff"
-    """Recent slice creation failed; group is waiting before retrying.
-    Demand falls through to lower-priority groups during backoff."""
-
-    AT_CAPACITY = "at_capacity"
-    """Group is at max_slices. Existing ready/inflight slices can still
-    serve demand, but no new slices will be created. Excess demand
-    falls through to lower-priority groups."""
-
-    QUOTA_EXCEEDED = "quota_exceeded"
-    """Cloud quota exhausted. Demand falls through to lower-priority groups."""
-
+    COOLDOWN = "cooldown"
     REQUESTING = "requesting"
-    """Scale-up in progress. Group accepts demand since new capacity is incoming."""
+    AT_MAX_SLICES = "at_max_slices"
+    BACKOFF = "backoff"
+    QUOTA_EXCEEDED = "quota_exceeded"
 
 
 @dataclass(frozen=True)
@@ -82,8 +84,9 @@ class AvailabilityState:
     until: Timestamp | None = None
 
 
+DEFAULT_SCALE_UP_RATE_LIMIT = 5  # per minute
+DEFAULT_SCALE_DOWN_RATE_LIMIT = 5  # per minute
 DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
-DEFAULT_SCALE_DOWN_COOLDOWN = Duration.from_minutes(5)
 DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
 DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
 DEFAULT_BACKOFF_FACTOR = 2.0
@@ -209,12 +212,13 @@ class ScalingGroup:
         platform: Platform,
         label_prefix: str = "iris",
         scale_up_cooldown: Duration = DEFAULT_SCALE_UP_COOLDOWN,
-        scale_down_cooldown: Duration = DEFAULT_SCALE_DOWN_COOLDOWN,
         backoff_initial: Duration = DEFAULT_BACKOFF_INITIAL,
         backoff_max: Duration = DEFAULT_BACKOFF_MAX,
         backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
         idle_threshold: Duration = DEFAULT_IDLE_THRESHOLD,
         quota_timeout: Duration = DEFAULT_QUOTA_TIMEOUT,
+        scale_up_rate_limit: int = DEFAULT_SCALE_UP_RATE_LIMIT,
+        scale_down_rate_limit: int = DEFAULT_SCALE_DOWN_RATE_LIMIT,
     ):
         self._config = config
         self._platform = platform
@@ -241,12 +245,28 @@ class ScalingGroup:
         self._last_scale_up: Timestamp = Timestamp.from_ms(0)
         self._last_scale_down: Timestamp = Timestamp.from_ms(0)
         self._scale_up_cooldown = scale_up_cooldown
-        self._scale_down_cooldown = scale_down_cooldown
-
         # Quota state (set by scale_up when QuotaExhaustedError is raised)
         self._quota_exceeded_until: Deadline | None = None
         self._quota_reason: str = ""
         self._quota_timeout = quota_timeout
+
+        # Per-group token bucket rate limiter for scale-up API calls
+        self._scale_up_bucket = TokenBucket(capacity=scale_up_rate_limit, refill_period=Duration.from_minutes(1))
+
+        # Per-group token bucket rate limiter for scale-down API calls.
+        # This replaces the old cooldown-only gate so that multiple idle slices
+        # can be terminated in a single cycle, up to the token budget.
+        self._scale_down_bucket = TokenBucket(capacity=scale_down_rate_limit, refill_period=Duration.from_minutes(1))
+
+    @property
+    def platform(self) -> Platform:
+        """Platform instance for this scale group."""
+        return self._platform
+
+    @property
+    def label_prefix(self) -> str:
+        """Label prefix used for slice labels."""
+        return self._label_prefix
 
     @property
     def config(self) -> config_pb2.ScaleGroupConfig:
@@ -279,6 +299,34 @@ class ScalingGroup:
     def max_slices(self) -> int:
         """Maximum number of VM groups allowed."""
         return self._config.max_slices
+
+    @property
+    def region(self) -> str | None:
+        """Region derived from worker attributes or slice template."""
+        if self._config.HasField("worker"):
+            region = self._config.worker.attributes.get(REGION_ATTRIBUTE_KEY, "").strip()
+            if region:
+                return region
+        template = self._config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone.rsplit("-", 1)[0]
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
+
+    @property
+    def zone(self) -> str | None:
+        """Zone derived from worker attributes or slice template."""
+        if self._config.HasField("worker"):
+            zone = self._config.worker.attributes.get(ZONE_ATTRIBUTE_KEY, "").strip()
+            if zone:
+                return zone
+        template = self._config.slice_template
+        if template.HasField("gcp") and template.gcp.zone:
+            return template.gcp.zone
+        if template.HasField("coreweave") and template.coreweave.region:
+            return template.coreweave.region
+        return None
 
     @property
     def current_demand(self) -> int:
@@ -549,13 +597,17 @@ class ScalingGroup:
         vm_status_map: VmWorkerStatusMap,
         target_capacity: int,
         timestamp: Timestamp,
-    ) -> SliceHandle | None:
-        """Scale down one idle slice if we're over target capacity.
+    ) -> list[SliceHandle]:
+        """Scale down idle slices that exceed target capacity.
 
-        This method handles the complete scale-down decision and execution:
+        Terminates multiple idle slices in a single call, rate-limited by a
+        token bucket (matching the scale-up rate limiter).  This replaces the
+        old behaviour of terminating at most one slice per 5-minute cooldown.
+
+        Steps:
         1. Update slice activity based on worker idle status
         2. Check if we're over target capacity (using ready + pending)
-        3. Find an eligible idle slice and terminate it
+        3. Find eligible idle slices and terminate them (up to the token budget)
 
         Args:
             vm_status_map: Map of VM address to worker status
@@ -563,7 +615,7 @@ class ScalingGroup:
             timestamp: Current timestamp for idle calculation
 
         Returns:
-            The terminated slice handle, or None if no scale-down occurred
+            List of terminated slice handles (may be empty).
         """
         # Update activity tracking
         self.update_slice_activity(vm_status_map, timestamp)
@@ -575,19 +627,35 @@ class ScalingGroup:
 
         # Don't scale down if total capacity (ready + pending) is at or below target
         if ready + pending <= target_capacity:
-            return None
+            return []
 
         # Don't scale down ready slices if we're still waiting for pending
         if ready <= target_capacity:
-            return None
+            return []
 
         if not self.can_scale_down(timestamp):
-            logger.debug("Scale group %s: scale down blocked by cooldown", self.name)
-            return None
+            logger.debug("Scale group %s: scale down blocked (at min_slices)", self.name)
+            return []
+
+        terminated: list[SliceHandle] = []
 
         # Find idle slices and verify they're still idle before termination
         idle_slices = self.get_idle_slices(timestamp)
         for slice_state in idle_slices:
+            # Stop once we've scaled down to the target
+            if ready - len(terminated) <= target_capacity:
+                break
+
+            # Stop once we've scaled down to min_slices
+            with self._slices_lock:
+                current_count = len(self._slices)
+            if current_count <= self._config.min_slices:
+                break
+
+            if not self.acquire_scale_down_token(timestamp):
+                logger.info("Scale group %s: scale down rate-limited after %d terminations", self.name, len(terminated))
+                break
+
             if self._verify_slice_idle(slice_state, vm_status_map):
                 with self._slices_lock:
                     state = self._slices.get(slice_state.handle.slice_id)
@@ -606,9 +674,9 @@ class ScalingGroup:
                     target_capacity,
                 )
                 self.scale_down(slice_state.handle.slice_id, timestamp)
-                return slice_state.handle
+                terminated.append(slice_state.handle)
 
-        return None
+        return terminated
 
     def _verify_slice_idle(self, state: SliceState, vm_status_map: VmWorkerStatusMap) -> bool:
         """Verify all workers in a slice are idle before termination (lookup by VM address).
@@ -652,19 +720,23 @@ class ScalingGroup:
     def can_scale_down(self, timestamp: Timestamp | None = None) -> bool:
         """Check if scale-down is allowed.
 
-        Scale-down is blocked if:
-        - Scale-down cooldown period has not elapsed
-        - Already at min_slices
+        Scale-down is blocked if already at min_slices.
+        Per-operation rate limiting is handled by acquire_scale_down_token().
         """
         timestamp = timestamp or Timestamp.now()
-        cooldown_end = self._last_scale_down.add(self._scale_down_cooldown)
-        if self._last_scale_down.epoch_ms() > 0 and timestamp.before(cooldown_end):
-            return False
         with self._slices_lock:
             count = len(self._slices)
         if count <= self._config.min_slices:
             return False
         return True
+
+    def acquire_scale_up_token(self, timestamp: Timestamp | None = None) -> bool:
+        """Try to acquire a scale-up rate limit token. Returns False if rate-limited."""
+        return self._scale_up_bucket.try_acquire(now=timestamp)
+
+    def acquire_scale_down_token(self, timestamp: Timestamp | None = None) -> bool:
+        """Try to acquire a scale-down rate limit token. Returns False if rate-limited."""
+        return self._scale_down_bucket.try_acquire(now=timestamp)
 
     def record_quota_exceeded(self, reason: str, timestamp: Timestamp | None = None) -> None:
         """Record a quota exhaustion event, blocking scale-up until the quota timeout elapses."""
@@ -734,12 +806,11 @@ class ScalingGroup:
     def availability(self, timestamp: Timestamp | None = None) -> AvailabilityState:
         """Compute current availability state for waterfall routing.
 
-        All states are computed from timestamps—no external state setting.
-        Priority: QUOTA_EXCEEDED > BACKOFF > REQUESTING > AT_CAPACITY > AVAILABLE
+        All states are computed from timestamps — no external state setting.
+        Priority: QUOTA_EXCEEDED > BACKOFF > REQUESTING > AT_MAX_SLICES > COOLDOWN > AVAILABLE
         """
         timestamp = timestamp or Timestamp.now()
 
-        # Quota exceeded
         if self._quota_exceeded_until is not None and not self._quota_exceeded_until.expired(now=timestamp):
             return AvailabilityState(
                 GroupAvailability.QUOTA_EXCEEDED,
@@ -747,7 +818,6 @@ class ScalingGroup:
                 self._quota_exceeded_until.as_timestamp(),
             )
 
-        # Backoff from failures
         if self._backoff_until is not None and not self._backoff_until.expired(now=timestamp):
             return AvailabilityState(
                 GroupAvailability.BACKOFF,
@@ -755,7 +825,6 @@ class ScalingGroup:
                 self._backoff_until.as_timestamp(),
             )
 
-        # Requesting (scale-up in progress)
         with self._slices_lock:
             pending = self._pending_scale_ups
             count = len(self._slices) + pending
@@ -765,24 +834,25 @@ class ScalingGroup:
                 "scale-up in progress",
             )
 
-        # At capacity
         if count >= self._config.max_slices:
-            return AvailabilityState(GroupAvailability.AT_CAPACITY)
+            return AvailabilityState(GroupAvailability.AT_MAX_SLICES)
+
+        cooldown_end = self._last_scale_up.add(self._scale_up_cooldown)
+        if self._last_scale_up.epoch_ms() > 0 and timestamp.before(cooldown_end):
+            return AvailabilityState(GroupAvailability.COOLDOWN, "scale-up cooldown", cooldown_end)
 
         return AvailabilityState(GroupAvailability.AVAILABLE)
 
     def can_accept_demand(self, timestamp: Timestamp | None = None) -> bool:
         """Whether this group can accept demand for waterfall routing.
 
-        BACKOFF and QUOTA_EXCEEDED groups reject demand so it falls through
-        to lower-priority groups. AT_CAPACITY groups accept demand because
-        their existing ready/inflight slices can still serve it — this keeps
-        current_demand accurate and prevents premature scale-down.
+        ACCEPTING states keep demand here: AVAILABLE, COOLDOWN, REQUESTING.
+        REJECTING states cause demand to fall through: BACKOFF, QUOTA_EXCEEDED, AT_MAX_SLICES.
         """
         return self.availability(timestamp).status in {
             GroupAvailability.AVAILABLE,
+            GroupAvailability.COOLDOWN,
             GroupAvailability.REQUESTING,
-            GroupAvailability.AT_CAPACITY,
         }
 
     def _get_slice_vm_addresses(self, state: SliceState) -> list[str]:
@@ -806,6 +876,67 @@ class ScalingGroup:
             self._pending_scale_ups = 0
         for handle in snapshot:
             handle.terminate()
+
+    def to_snapshot(self) -> snapshot_pb2.ScalingGroupSnapshot:
+        """Serialize this group's state for checkpointing.
+
+        Captures slice inventory and timing state under lock. Deadlines are
+        stored as wall-clock timestamps for portability across restarts.
+        """
+
+        snap = snapshot_pb2.ScalingGroupSnapshot(
+            name=self.name,
+            consecutive_failures=self._consecutive_failures,
+        )
+
+        with self._slices_lock:
+            for slice_id, slice_state in self._slices.items():
+                slice_snap = snapshot_pb2.SliceSnapshot(
+                    slice_id=slice_id,
+                    scale_group=self.name,
+                    lifecycle=slice_state.lifecycle.value,
+                    error_message=slice_state.error_message,
+                )
+                slice_snap.vm_addresses.extend(slice_state.vm_addresses)
+                slice_snap.created_at.CopyFrom(slice_state.handle.created_at.to_proto())
+                slice_snap.last_active.CopyFrom(slice_state.last_active.to_proto())
+                snap.slices.append(slice_snap)
+
+        if self._backoff_until is not None:
+            snap.backoff_until.CopyFrom(self._backoff_until.as_timestamp().to_proto())
+
+        if self._last_scale_up.epoch_ms() > 0:
+            snap.last_scale_up.CopyFrom(self._last_scale_up.to_proto())
+        if self._last_scale_down.epoch_ms() > 0:
+            snap.last_scale_down.CopyFrom(self._last_scale_down.to_proto())
+
+        if self._quota_exceeded_until is not None:
+            snap.quota_exceeded_until.CopyFrom(self._quota_exceeded_until.as_timestamp().to_proto())
+        snap.quota_reason = self._quota_reason
+
+        return snap
+
+    def restore_from_snapshot(
+        self,
+        slices: dict[str, SliceState],
+        consecutive_failures: int,
+        last_scale_up: Timestamp,
+        last_scale_down: Timestamp,
+        backoff_until: Deadline | None,
+        quota_exceeded_until: Deadline | None,
+        quota_reason: str,
+    ) -> None:
+        """Restore state from a snapshot. Called before the autoscaler loop starts."""
+        with self._slices_lock:
+            self._slices = slices
+        self._consecutive_failures = consecutive_failures
+        self._last_scale_up = last_scale_up
+        self._last_scale_down = last_scale_down
+        if backoff_until is not None:
+            self._backoff_until = backoff_until
+        if quota_exceeded_until is not None:
+            self._quota_exceeded_until = quota_exceeded_until
+            self._quota_reason = quota_reason
 
     def to_status(self) -> vm_pb2.ScaleGroupStatus:
         """Build a ScaleGroupStatus proto for the status API."""
