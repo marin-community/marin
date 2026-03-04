@@ -47,7 +47,7 @@ Marin experiments are defined as a set of steps that can depend on each other an
 like a Makefile.
 
 As a brief example of how you can use Marin, here is a complete script for training a tiny model on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories).
-You can check out the [full script](https://github.com/marin-community/marin/blob/main/experiments/tutorial/train_tiny_model_cpu.py) for more details.
+You can check out the [full script](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_cpu.py) for more details.
 
 <!--marin-example-start-->
 
