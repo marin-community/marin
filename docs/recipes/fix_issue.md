@@ -25,6 +25,23 @@ already have. Follow these rules in all comments you post:
   arrow_flight.py where the implementation copies data from TPU to CPU".
   Good: `arrow_flight.py#L384` - TPU→CPU copy.
 
+## Evidence Integrity (Required)
+
+Before posting any issue/PR comment, verify all concrete claims:
+
+- Every file path you mention exists in the current branch.
+- Every command you report as "ran" was actually executed in this run.
+- Every test count ("N/N passed") comes from real output from this run.
+- Every code link in "Relevant code" points to a real symbol/path.
+
+Use shell checks before posting when needed:
+
+- `test -f <path>` or `ls <path>` for files
+- `rg -n "<symbol>" <path>` for symbol/link checks
+- `gh pr view <num> --json files,statusCheckRollup` for PR/CI claims
+
+If evidence is incomplete, say so explicitly instead of guessing.
+
 ## Research
 
 Use `gh` to fetch the issue. Read the codebase to find all relevant source
