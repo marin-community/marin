@@ -69,7 +69,7 @@ class SweepSettings:
 # Edit this single object to tune the sweep.
 SWEEP = SweepSettings(
     # Common edits.
-    experiment_name="ref-sweep-grug-130m-vizier-v5",
+    experiment_name="ref-sweep-grug-130m-vizier",
     num_loops=10,
     suggestions_per_loop=4,
     search_space={
