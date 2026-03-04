@@ -427,7 +427,7 @@ def test_restore_preserves_backoff_state(reconciliation_env: ReconciliationEnv):
     )
     # Set backoff_until to 5 minutes in the future
     backoff_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() + 300_000)
-    snapshot.backoff_until.CopyFrom(backoff_ts.to_proto())
+    snapshot.backoff_until.CopyFrom(timestamp_to_proto(backoff_ts))
 
     result = restore_scaling_group(
         group_snapshot=snapshot,
@@ -449,7 +449,7 @@ def test_restore_expired_backoff_is_inactive(reconciliation_env: ReconciliationE
     )
     # Set backoff_until to 1 minute in the past
     backoff_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() - 60_000)
-    snapshot.backoff_until.CopyFrom(backoff_ts.to_proto())
+    snapshot.backoff_until.CopyFrom(timestamp_to_proto(backoff_ts))
 
     result = restore_scaling_group(
         group_snapshot=snapshot,
@@ -471,7 +471,7 @@ def test_restore_preserves_quota_exceeded_state(reconciliation_env: Reconciliati
     )
     # Set quota_exceeded_until to 5 minutes in the future
     quota_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() + 300_000)
-    snapshot.quota_exceeded_until.CopyFrom(quota_ts.to_proto())
+    snapshot.quota_exceeded_until.CopyFrom(timestamp_to_proto(quota_ts))
 
     result = restore_scaling_group(
         group_snapshot=snapshot,

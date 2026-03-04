@@ -241,6 +241,7 @@ members = [
     "levanter",
     "marin",
     "marin-root",
+    "rigging",
     "zephyr",
 ]
 overrides = [
@@ -2318,6 +2319,7 @@ dependencies = [
     { name = "iris" },
     { name = "mergedeep" },
     { name = "pyyaml" },
+    { name = "rigging" },
     { name = "tabulate" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
@@ -2366,6 +2368,7 @@ requires-dist = [
     { name = "mergedeep" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ray", marker = "extra == 'ray'", specifier = "==2.53.0" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
@@ -3548,6 +3551,7 @@ dependencies = [
     { name = "humanfriendly" },
     { name = "pydantic" },
     { name = "pyyaml" },
+    { name = "rigging" },
     { name = "s3fs" },
     { name = "starlette" },
     { name = "tabulate" },
@@ -3589,6 +3593,7 @@ requires-dist = [
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "s3fs", specifier = ">=2024.0.0" },
     { name = "starlette", specifier = ">=0.50.0" },
     { name = "tabulate", specifier = ">=0.9.0" },
@@ -4306,6 +4311,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pytimeparse" },
     { name = "ray", extra = ["default"] },
+    { name = "rigging" },
     { name = "safetensors", extra = ["numpy"] },
     { name = "tblib" },
     { name = "tensorstore" },
@@ -4426,6 +4432,7 @@ requires-dist = [
     { name = "pydantic", specifier = "<3" },
     { name = "pytimeparse", specifier = ">=1.1.8" },
     { name = "ray", extras = ["default"], specifier = "==2.53.0" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "safetensors", extras = ["numpy"], specifier = ">=0.4.2,<0.7.0" },
     { name = "tblib", specifier = ">=1.7.0,<4.0.0" },
     { name = "tensorboard", marker = "extra == 'profiling'", specifier = ">=2.16" },
@@ -5047,6 +5054,7 @@ dependencies = [
     { name = "regex" },
     { name = "requests" },
     { name = "resiliparse" },
+    { name = "rigging" },
     { name = "s3fs" },
     { name = "toml" },
     { name = "tqdm" },
@@ -5228,6 +5236,7 @@ requires-dist = [
     { name = "regex" },
     { name = "requests" },
     { name = "resiliparse", specifier = ">=0.17.2", index = "https://marin-community.github.io/chatnoir-resiliparse/simple" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "s3fs", specifier = ">=2024" },
     { name = "sqlalchemy", marker = "extra == 'evalchemy'" },
     { name = "sympy", marker = "extra == 'evalchemy'", specifier = ">=1.12.1,<1.14" },
@@ -5335,6 +5344,7 @@ dependencies = [
     { name = "iris" },
     { name = "levanter" },
     { name = "marin" },
+    { name = "rigging" },
     { name = "watchdog" },
     { name = "zephyr" },
 ]
@@ -5346,6 +5356,7 @@ requires-dist = [
     { name = "iris", editable = "lib/iris" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "watchdog" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
@@ -8950,6 +8961,37 @@ wheels = [
 ]
 
 [[package]]
+name = "rigging"
+version = "0.1.0"
+source = { editable = "lib/rigging" }
+dependencies = [
+    { name = "cloudpickle" },
+    { name = "fsspec" },
+    { name = "gcsfs" },
+    { name = "google-cloud-storage" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cloudpickle", specifier = ">=3.1.2" },
+    { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "gcsfs", specifier = ">=2024.0.0" },
+    { name = "google-cloud-storage" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
 name = "rignore"
 version = "0.7.6"
 source = { registry = "https://pypi.org/simple" }
@@ -12173,6 +12215,7 @@ dependencies = [
     { name = "iris" },
     { name = "msgspec" },
     { name = "numpy" },
+    { name = "rigging" },
     { name = "tqdm-loggable" },
     { name = "typing-extensions" },
     { name = "vortex-data" },
@@ -12204,6 +12247,7 @@ requires-dist = [
     { name = "iris", editable = "lib/iris" },
     { name = "msgspec", specifier = ">=0.18.0" },
     { name = "numpy", specifier = ">=2.0" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "tqdm-loggable", specifier = ">=0.2" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "vortex-data", specifier = ">=0.1.0" },
