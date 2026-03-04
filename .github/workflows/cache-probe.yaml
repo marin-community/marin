@@ -1,0 +1,254 @@
+name: Cache Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  cw-cluster-start:
+    name: CW Cluster Start (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [baseline, verbose]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Write CoreWeave kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.CW_KUBECONFIG }}" > ~/.kube/coreweave-iris
+          chmod 600 ~/.kube/coreweave-iris
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Inspect buildx builder
+        run: docker buildx inspect | tee builder-inspect.txt
+
+      - name: Start CoreWeave cluster
+        id: start
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ matrix.mode }}" == "verbose" ]]; then
+            export BUILDKIT_PROGRESS=plain
+            iris_args=(-v)
+          else
+            iris_args=()
+          fi
+
+          start_ts=$(date +%s)
+          .venv/bin/iris "${iris_args[@]}" --config=lib/iris/examples/coreweave.yaml cluster start 2>&1 | tee cluster-start.log
+          end_ts=$(date +%s)
+
+          echo "elapsed_seconds=$((end_ts - start_ts))" >> "$GITHUB_OUTPUT"
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Summarize cluster-start logs
+        if: always()
+        shell: bash
+        env:
+          ELAPSED_SECONDS: ${{ steps.start.outputs.elapsed_seconds }}
+        run: |
+          set -euo pipefail
+
+          log_file=cluster-start.log
+          line_count=0
+          cached_count=0
+          done_count=0
+
+          if [[ -f "$log_file" ]]; then
+            line_count=$(wc -l < "$log_file" | tr -d ' ')
+            cached_count=$(grep -c ' CACHED' "$log_file" || true)
+            done_count=$(grep -cE '^#.* DONE( |$)' "$log_file" || true)
+          fi
+
+          {
+            echo "## CW cluster start: ${{ matrix.mode }}"
+            echo
+            echo "- elapsed_seconds: ${ELAPSED_SECONDS:-unknown}"
+            echo "- log_lines: ${line_count}"
+            echo "- cached_lines: ${cached_count}"
+            echo "- done_lines: ${done_count}"
+            echo "- step_outcome: ${{ steps.start.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload cluster-start logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cw-cluster-start-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            builder-inspect.txt
+            cluster-start.log
+          if-no-files-found: warn
+
+      - name: Stop CoreWeave cluster
+        if: always()
+        continue-on-error: true
+        run: .venv/bin/iris --config=lib/iris/examples/coreweave.yaml cluster stop
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+  seed-iris-task:
+    name: Seed iris-task (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [noinline, inline]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Seed cache image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cache_ref="ghcr.io/marin-community/iris-task:cache-probe-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}"
+          extra_args=()
+          if [[ "${{ matrix.mode }}" == "inline" ]]; then
+            extra_args+=(--cache-to type=inline)
+          fi
+
+          docker buildx build \
+            --platform linux/amd64 \
+            --progress plain \
+            --build-arg "IRIS_GIT_HASH=$(git rev-parse --short HEAD)" \
+            --tag "$cache_ref" \
+            "${extra_args[@]}" \
+            --push \
+            -f lib/iris/Dockerfile.task \
+            .
+
+          {
+            echo "## Seed iris-task: ${{ matrix.mode }}"
+            echo
+            echo "- cache_ref: $cache_ref"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  measure-iris-task:
+    name: Measure iris-task (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: seed-iris-task
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [noinline, inline]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Inspect buildx builder
+        run: docker buildx inspect | tee builder-inspect.txt
+
+      - name: Measure cache reuse
+        id: measure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cache_ref="ghcr.io/marin-community/iris-task:cache-probe-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}"
+          probe_tag="iris-task:probe-${{ matrix.mode }}"
+
+          start_ts=$(date +%s)
+          docker buildx build \
+            --platform linux/amd64 \
+            --progress plain \
+            --build-arg "IRIS_GIT_HASH=$(git rev-parse --short HEAD)" \
+            --tag "$probe_tag" \
+            --cache-from "type=registry,ref=$cache_ref" \
+            --output "type=docker,name=$probe_tag" \
+            -f lib/iris/Dockerfile.task \
+            . \
+            2>&1 | tee measure.log
+          end_ts=$(date +%s)
+
+          echo "elapsed_seconds=$((end_ts - start_ts))" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize measurement logs
+        if: always()
+        shell: bash
+        env:
+          ELAPSED_SECONDS: ${{ steps.measure.outputs.elapsed_seconds }}
+        run: |
+          set -euo pipefail
+
+          line_count=0
+          cached_count=0
+          done_count=0
+
+          if [[ -f measure.log ]]; then
+            line_count=$(wc -l < measure.log | tr -d ' ')
+            cached_count=$(grep -c ' CACHED' measure.log || true)
+            done_count=$(grep -cE '^#.* DONE( |$)' measure.log || true)
+          fi
+
+          {
+            echo "## Measure iris-task: ${{ matrix.mode }}"
+            echo
+            echo "- cache_ref: ghcr.io/marin-community/iris-task:cache-probe-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}"
+            echo "- elapsed_seconds: ${ELAPSED_SECONDS:-unknown}"
+            echo "- log_lines: ${line_count}"
+            echo "- cached_lines: ${cached_count}"
+            echo "- done_lines: ${done_count}"
+            echo "- step_outcome: ${{ steps.measure.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload measurement logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-task-measure-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            builder-inspect.txt
+            measure.log
+          if-no-files-found: warn
