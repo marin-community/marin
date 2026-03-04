@@ -26,7 +26,11 @@ from iris.cluster.controller.controller import (
     RpcWorkerStubFactory,
 )
 from iris.cluster.controller.vm_lifecycle import ControllerStatus
-from iris.cluster.controller.scaling_group import DEFAULT_SCALE_UP_RATE_LIMIT, ScalingGroup
+from iris.cluster.controller.scaling_group import (
+    DEFAULT_SCALE_DOWN_RATE_LIMIT,
+    DEFAULT_SCALE_UP_RATE_LIMIT,
+    ScalingGroup,
+)
 from iris.cluster.platform.base import find_free_port
 from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -100,6 +104,7 @@ def create_local_autoscaler(
             scale_up_cooldown=scale_up_delay,
             scale_down_cooldown=scale_down_delay,
             scale_up_rate_limit=sg_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
+            scale_down_rate_limit=sg_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
         )
 
     autoscaler = Autoscaler.from_config(

@@ -355,24 +355,23 @@ class TestScalingGroupScalingPolicy:
         assert group.slice_count() == 1  # min_slices
         assert not group.can_scale_down()
 
-    def test_cannot_scale_down_during_cooldown(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """can_scale_down() returns False during cooldown period."""
-        discovered = [make_mock_slice_handle("slice-001"), make_mock_slice_handle("slice-002")]
-        platform = make_mock_platform(slice_handles_to_discover=discovered)
+    def test_scale_down_rate_limited_by_token_bucket(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """acquire_scale_down_token() returns False when the token bucket is exhausted."""
+        platform = make_mock_platform()
         group = ScalingGroup(
             unbounded_config,
             platform,
-            scale_down_cooldown=Duration.from_ms(10000),
+            scale_down_rate_limit=1,
         )
-        group.reconcile()
 
         ts = Timestamp.from_ms(1000000)
-        group.scale_down("slice-001", timestamp=ts)
 
-        # During cooldown
-        assert not group.can_scale_down(timestamp=Timestamp.from_ms(1005000))
-        # After cooldown expires
-        assert group.can_scale_down(timestamp=Timestamp.from_ms(1015000))
+        # First token succeeds
+        assert group.acquire_scale_down_token(ts)
+        # Bucket exhausted — second acquire fails at same timestamp
+        assert not group.acquire_scale_down_token(ts)
+        # After enough time passes (1 minute refill), token is available again
+        assert group.acquire_scale_down_token(Timestamp.from_ms(ts.epoch_ms() + 61_000))
 
 
 class TestScalingGroupBackoff:
@@ -618,7 +617,7 @@ class TestScalingGroupIdleTracking:
             vm_status_map_idle, target_capacity=1, timestamp=Timestamp.from_ms(10_000)
         )
 
-        assert scaled_down is not None
+        assert len(scaled_down) == 1
         assert group.slice_count() == 1  # One slice was terminated
 
     def test_scale_down_if_idle_respects_target_capacity(self, unbounded_config: config_pb2.ScaleGroupConfig):
@@ -637,7 +636,7 @@ class TestScalingGroupIdleTracking:
         # Target = 1, ready = 1, should not scale down
         scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity=1, timestamp=Timestamp.from_ms(10_000))
 
-        assert scaled_down is None
+        assert len(scaled_down) == 0
         assert group.slice_count() == 1
 
     def test_scale_down_cleans_up_idle_tracking(self, unbounded_config: config_pb2.ScaleGroupConfig):

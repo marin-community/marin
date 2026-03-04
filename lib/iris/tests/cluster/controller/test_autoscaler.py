@@ -548,37 +548,77 @@ class TestAutoscalerScaleDown:
 
         assert group.slice_count() == 2
 
-    def test_no_scale_down_during_cooldown(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """Does not scale down during cooldown period."""
+    def test_scale_down_rate_limited_by_token_bucket(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Scale-down is rate-limited by the token bucket (only 1 per minute with rate_limit=1)."""
+        ready_ts = Timestamp.from_ms(1_000)
         discovered = [
-            make_mock_slice_handle("slice-001", all_ready=True),
-            make_mock_slice_handle("slice-002", all_ready=True),
-            make_mock_slice_handle("slice-003", all_ready=True),
+            make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000),
+            make_mock_slice_handle("slice-002", all_ready=True, created_at_ms=200000),
+            make_mock_slice_handle("slice-003", all_ready=True, created_at_ms=300000),
         ]
         platform = make_mock_platform(slices_to_discover=discovered)
         group = ScalingGroup(
             scale_group_config,
             platform,
-            scale_down_cooldown=Duration.from_ms(3600_000),
             idle_threshold=Duration.from_ms(0),
+            scale_down_rate_limit=1,
         )
         group.reconcile()
-        group.scale_down("slice-003", timestamp=Timestamp.now())
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
+        slice_003 = group.get_slice("slice-003")
         slice_001_addr = slice_001.describe().workers[0].internal_address
         slice_002_addr = slice_002.describe().workers[0].internal_address
+        slice_003_addr = slice_003.describe().workers[0].internal_address
         vm_status_map = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
+            slice_003_addr: VmWorkerStatus(vm_address=slice_003_addr, running_task_ids=frozenset()),
         }
 
-        autoscaler.run_once(demand, vm_status_map)
-
+        # With rate_limit=1, only 1 slice should be scaled down per cycle
+        autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
         assert group.slice_count() == 2
+
+    def test_scale_down_multiple_idle_slices_in_one_cycle(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """With enough rate-limit tokens, multiple idle slices are scaled down in one cycle."""
+        ready_ts = Timestamp.from_ms(1_000)
+        discovered = [
+            make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000),
+            make_mock_slice_handle("slice-002", all_ready=True, created_at_ms=200000),
+            make_mock_slice_handle("slice-003", all_ready=True, created_at_ms=300000),
+        ]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(
+            scale_group_config,
+            platform,
+            idle_threshold=Duration.from_ms(1000),
+            scale_down_rate_limit=5,
+        )
+        group.reconcile()
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
+        slice_001 = group.get_slice("slice-001")
+        slice_002 = group.get_slice("slice-002")
+        slice_003 = group.get_slice("slice-003")
+        slice_001_addr = slice_001.describe().workers[0].internal_address
+        slice_002_addr = slice_002.describe().workers[0].internal_address
+        slice_003_addr = slice_003.describe().workers[0].internal_address
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
+            slice_003_addr: VmWorkerStatus(vm_address=slice_003_addr, running_task_ids=frozenset()),
+        }
+
+        # With rate_limit=5, all 3 idle slices should be scaled down in one cycle
+        autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
+        assert group.slice_count() == 0
 
 
 class TestAutoscalerExecution:
