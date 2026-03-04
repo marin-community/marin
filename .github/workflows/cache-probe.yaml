@@ -1,6 +1,9 @@
 name: Cache Probe
 
 on:
+  push:
+    branches:
+      - agent/cache-probe-*
   workflow_dispatch:
 
 permissions:
