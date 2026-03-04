@@ -11,17 +11,16 @@ import sqlite3
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from typing import Any
 
 import fsspec
 from levanter.optim import AdamHConfig
 from levanter.tracker.wandb import WandbConfig
-from vizier.service import clients
-from vizier.service import pyvizier as vz
 
 from experiments.defaults import default_validation_sets
 from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.grug.base.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.pretraining_datasets.main import nemotron_mix
+from experiments.pretraining_datasets.nemotron import nemotron_mix
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize import add_validation_sets_to_mixture
@@ -171,6 +170,8 @@ def _local_vizier_db_path(study_id: str) -> str:
 
 
 def _configure_vizier_local_db(local_path: str) -> None:
+    from vizier.service import clients
+
     clients.environment_variables.servicer_kwargs["database_url"] = f"sqlite:///{local_path}"
 
 
@@ -244,7 +245,9 @@ def _serialize_parameters(parameters: Mapping[str, object]) -> dict[str, float |
     return serialized
 
 
-def _metric_goal(mode: str) -> vz.ObjectiveMetricGoal:
+def _metric_goal(mode: str) -> Any:
+    from vizier.service import pyvizier as vz
+
     if mode == "min":
         return vz.ObjectiveMetricGoal.MINIMIZE
     if mode == "max":
@@ -328,6 +331,9 @@ def _build_base_launch_config() -> GrugBaseLaunchConfig:
 
 def run_vizier_suggest(config: VizierSuggestConfig) -> None:
     """Create or load a Vizier study, suggest trials, and persist the study DB."""
+    from vizier.service import clients
+    from vizier.service import pyvizier as vz
+
     local_db_path = _local_vizier_db_path(config.study_id)
     output_db_path = os.path.join(config.output_path, VIZIER_DB_FILENAME)
     if not _sync_vizier_db_from_gcs(output_db_path, local_db_path):
@@ -421,6 +427,9 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
 
 def run_vizier_update(config: VizierUpdateConfig) -> None:
     """Load trial results, update Vizier, and write summary output."""
+    from vizier.service import clients
+    from vizier.service import pyvizier as vz
+
     local_db_path = _local_vizier_db_path(config.study_id)
     if not config.input_db_path:
         raise ValueError("input_db_path is required for run_vizier_update")
@@ -489,6 +498,8 @@ def run_vizier_update(config: VizierUpdateConfig) -> None:
 
 def run_vizier_optimal(config: VizierOptimalConfig) -> None:
     """Load the final Vizier study and report optimal trials."""
+    from vizier.service import clients
+
     local_db_path = _local_vizier_db_path(config.study_id)
     if not _sync_vizier_db_from_gcs(config.input_db_path, local_db_path):
         raise FileNotFoundError(f"Could not load Vizier DB from: {config.input_db_path}")
@@ -535,6 +546,8 @@ def _build_suggest_step(
             search_space=SWEEP.search_space,
             loop_index=loop_index,
         ),
+        pip_dependency_groups=["vizier"],
+        resources=ResourceConfig.with_cpu(),
     )
 
 
@@ -587,6 +600,8 @@ def _build_update_step(
             output_path=this_output_path(),
             loop_index=loop_index,
         ),
+        pip_dependency_groups=["vizier"],
+        resources=ResourceConfig.with_cpu(),
     )
 
 
@@ -604,6 +619,8 @@ def _build_optimal_step(
             input_db_path=input_db_path,
             output_path=this_output_path(),
         ),
+        pip_dependency_groups=["vizier"],
+        resources=ResourceConfig.with_cpu(),
     )
 
 

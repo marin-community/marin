@@ -24,7 +24,6 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "google-vizier[jax]",
     "haliax",
     "jax==0.8.0",  # vllm-tpu currently requires this exact version
     "jaxopt>=0.8.3",
@@ -163,6 +162,10 @@ evalchemy = [
     "sqlalchemy",  # Required by evalchemy's database models
     # For code evals
     "fire",
+]
+
+vizier = [
+    "google-vizier[jax]",
 ]
 
 vllm =[
