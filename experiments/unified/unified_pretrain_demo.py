@@ -38,6 +38,8 @@ import numpy as np
 from levanter.data.text import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
 
+from levanter.optim import MuonConfig
+
 from experiments.defaults import default_train, default_validation_sets
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import tokenize_nemotron
@@ -93,9 +95,11 @@ TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
 TEXT_WEIGHT = float(os.environ.get("TEXT_WEIGHT", "1.0"))
 MULTIMODAL_WEIGHT = float(os.environ.get("MULTIMODAL_WEIGHT", "2.0"))
-LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "3e-4"))
+MUON_LR = float(os.environ.get("MUON_LR", "0.004"))
+ADAM_LR = float(os.environ.get("ADAM_LR", "0.0012"))
 W_VISUAL = float(os.environ.get("W_VISUAL", "1.0"))
 UND_GEN_RATIO = float(os.environ.get("UND_GEN_RATIO", "1.0"))
+LR_SCHEDULE = os.environ.get("LR_SCHEDULE", "cosine")
 
 
 def _merge_xla_flags(existing: str, required_flags: list[str]) -> str:
@@ -478,19 +482,37 @@ def unified_data_config(
     return data_config
 
 
-def _demo_train_config(learning_rate: float = 3e-4) -> SimpleTrainConfig:
+def _demo_train_config(
+    muon_lr: float = 0.004, adam_lr: float = 0.0012, lr_schedule: str = "cosine"
+) -> SimpleTrainConfig:
+    optimizer = MuonConfig(
+        learning_rate=muon_lr,
+        adam_lr=adam_lr,
+        weight_decay=0.1,
+        momentum=0.98,
+        beta1=0.8,
+        beta2=0.98,
+        epsilon=1e-15,
+        muon_epsilon=1e-5,
+        max_grad_norm=1.0,
+        lr_schedule=lr_schedule,
+        decay=1.0,
+        min_lr_ratio=0,
+        warmup=0,
+    )
     return SimpleTrainConfig(
         resources=ResourceConfig.with_tpu(TPU_TYPE, slice_count=1),
         train_batch_size=256,
         num_train_steps=DEMO_TRAIN_STEPS,
-        learning_rate=learning_rate,
-        warmup=0.01,
-        lr_schedule="cosine",
+        learning_rate=muon_lr,
+        warmup=0,
+        lr_schedule=lr_schedule,
         weight_decay=0.1,
         max_grad_norm=1.0,
         per_device_parallelism=4,
         steps_per_eval=500,
         steps_per_export=1000,
+        optimizer_config=optimizer,
     )
 
 
@@ -521,7 +543,9 @@ DEFAULT_TEXT_EVAL_BENCHMARKS = [
 def make_unified_0_6b(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
-    learning_rate: float = 3e-4,
+    muon_lr: float = 0.008,
+    adam_lr: float = 0.0024,
+    lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
@@ -538,7 +562,7 @@ def make_unified_0_6b(
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_0_6b,
-        train_config=_demo_train_config(learning_rate=learning_rate),
+        train_config=_demo_train_config(muon_lr=muon_lr, adam_lr=adam_lr, lr_schedule=lr_schedule),
         tags=["unified", "scaling", "qwen3", "0.6b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -551,7 +575,9 @@ def make_unified_0_6b(
 def make_unified_1_7b(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
-    learning_rate: float = 3e-4,
+    muon_lr: float = 0.004,
+    adam_lr: float = 0.0012,
+    lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
@@ -568,7 +594,7 @@ def make_unified_1_7b(
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_1_7b,
-        train_config=_demo_train_config(learning_rate=learning_rate),
+        train_config=_demo_train_config(muon_lr=muon_lr, adam_lr=adam_lr, lr_schedule=lr_schedule),
         tags=["unified", "scaling", "qwen3", "1.7b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -580,7 +606,9 @@ def make_unified_1_7b(
 def make_unified_4b(
     text_weight: float = 1.0,
     multimodal_weight: float = 1.0,
-    learning_rate: float = 1.5e-4,
+    muon_lr: float = 0.002,
+    adam_lr: float = 0.0006,
+    lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
     und_gen_ratio: float = 1.0,
@@ -597,7 +625,7 @@ def make_unified_4b(
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_4b,
-        train_config=_demo_train_config(learning_rate=learning_rate),
+        train_config=_demo_train_config(muon_lr=muon_lr, adam_lr=adam_lr, lr_schedule=lr_schedule),
         tags=["unified", "scaling", "qwen3", "4b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -607,17 +635,27 @@ def make_unified_4b(
 
 
 if __name__ == "__main__":
-    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
+    # steps = [make_unified_0_6b(
+    #     text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT,
+    #     muon_lr=MUON_LR, adam_lr=ADAM_LR, lr_schedule=LR_SCHEDULE,
+    #     w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO,
+    # )]
     steps = [
         make_unified_1_7b(
             text_weight=TEXT_WEIGHT,
             multimodal_weight=MULTIMODAL_WEIGHT,
-            learning_rate=LEARNING_RATE,
+            muon_lr=MUON_LR,
+            adam_lr=ADAM_LR,
+            lr_schedule=LR_SCHEDULE,
             w_visual=W_VISUAL,
             und_gen_ratio=UND_GEN_RATIO,
         )
     ]
-    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
+    # steps = [make_unified_4b(
+    #     text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT,
+    #     muon_lr=MUON_LR, adam_lr=ADAM_LR, lr_schedule=LR_SCHEDULE,
+    #     w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO,
+    # )]
     executor_main(
         steps,
         description="Unified image-text model pre-training with Qwen3 architecture",
