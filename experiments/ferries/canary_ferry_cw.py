@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """CoreWeave canary ferry: llama-150M on SlimPajama-6B, 1B tokens, 8x H100.
