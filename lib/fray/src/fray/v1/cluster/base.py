@@ -372,7 +372,7 @@ class ResourceConfig:
         return ResourceConfig(device=device, replicas=slice_count, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs) -> ResourceConfig:
+    def with_gpu(gpu_type: str, count: int = 1, **kwargs) -> ResourceConfig:
         device = GpuConfig(variant=gpu_type, count=count)
         return ResourceConfig(device=device, **kwargs)
 

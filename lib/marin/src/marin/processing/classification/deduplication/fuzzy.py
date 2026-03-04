@@ -9,7 +9,7 @@ from marin.utils import rebase_file_path
 import pyarrow as pa
 from fray.v2.local_backend import LocalClient
 from marin.processing.classification.deduplication.dedup_commons import (
-    DedupConfig,
+    DEFAULT_FILETYPES,
     DedupMode,
     DupCounters,
     _collect_input_files,
@@ -71,18 +71,31 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
     return shard_dup_map
 
 
-def dedup_fuzzy_document(config: DedupConfig):
+def dedup_fuzzy_document(
+    *,
+    input_paths: str | list[str],
+    output_path: str,
+    text_field: str = "text",
+    filetypes: list[str] | None = None,
+    fuzzy_minhash_num_perms: int = 286,
+    fuzzy_minhash_num_bands: int = 26,
+    fuzzy_minhash_ngram_size: int = 5,
+    fuzzy_minhash_seed: int = 42,
+) -> dict:
     """Perform fuzzy document-level deduplication"""
 
-    if config.fuzzy_minhash_num_perms % config.fuzzy_minhash_num_bands != 0:
+    if fuzzy_minhash_num_perms % fuzzy_minhash_num_bands != 0:
         raise ValueError(
-            f"minhash_num_perms ({config.fuzzy_minhash_num_perms}) must be divisible by "
-            f"minhash_num_bands ({config.fuzzy_minhash_num_bands})"
+            f"minhash_num_perms ({fuzzy_minhash_num_perms}) must be divisible by "
+            f"minhash_num_bands ({fuzzy_minhash_num_bands})"
         )
 
-    input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
+    if filetypes is None:
+        filetypes = DEFAULT_FILETYPES
 
-    _init_wandb(config)
+    input_files = _collect_input_files(input_paths=input_paths, filetypes=filetypes)
+
+    _init_wandb(mode=DedupMode.FUZZY_DOCUMENT, input_paths=input_paths)
 
     def compute_minhash_lsh_batches(batch: pa.RecordBatch) -> Iterator[dict]:
         """
@@ -90,17 +103,17 @@ def dedup_fuzzy_document(config: DedupConfig):
         Yields {bucket: str, id: Any} for each bucket hit.
         """
         pipeline = [
-            dupekit.Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
-            dupekit.Transformation.CleanText(input_col=config.text_field, output_col="clean_text"),
+            dupekit.Transformation.ResolveIds(text_col=text_field, id_col="id", output_col="resolved_id"),
+            dupekit.Transformation.CleanText(input_col=text_field, output_col="clean_text"),
             dupekit.Transformation.MinHash(
                 input_col="clean_text",
                 output_col="signature",
-                num_perms=config.fuzzy_minhash_num_perms,
-                ngram_size=config.fuzzy_minhash_ngram_size,
-                seed=config.fuzzy_minhash_seed,
+                num_perms=fuzzy_minhash_num_perms,
+                ngram_size=fuzzy_minhash_ngram_size,
+                seed=fuzzy_minhash_seed,
             ),
             dupekit.Transformation.MinHashLSH(
-                input_col="signature", output_col="buckets", num_bands=config.fuzzy_minhash_num_bands
+                input_col="signature", output_col="buckets", num_bands=fuzzy_minhash_num_bands
             ),
             dupekit.Transformation.SelectColumns(columns=["resolved_id", "buckets"]),
         ]
@@ -121,10 +134,10 @@ def dedup_fuzzy_document(config: DedupConfig):
     ctx = ZephyrContext(name="fuzzy-dedup")
     doc_minhash_lsh = (
         Dataset.from_list(input_files)
-        .flat_map(lambda f: _load_batches(f, columns=[config.text_field, "id"]))
+        .flat_map(lambda f: _load_batches(f, columns=[text_field, "id"]))
         .flat_map(compute_minhash_lsh_batches)
     )
-    converged, cc_files = connected_components(doc_minhash_lsh, ctx, output_dir=f"{config.output_path}/metadata/cc")
+    converged, cc_files = connected_components(doc_minhash_lsh, ctx, output_dir=f"{output_path}/metadata/cc")
     if not converged:
         # TODO (rav): log the number of changed nodes?
         logger.warning("Connected components did not converge")
@@ -138,7 +151,7 @@ def dedup_fuzzy_document(config: DedupConfig):
             }
         )
         .reshard(num_shards=42)
-        .write_parquet(f"{config.output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
+        .write_parquet(f"{output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
         verbose=True,
     )
 
@@ -158,7 +171,7 @@ def dedup_fuzzy_document(config: DedupConfig):
             doc["attributes"][str(DedupMode.FUZZY_DOCUMENT)] = is_fuzzy_dup
             yield doc
 
-    base_path = _find_base_path(config.input_paths, input_files)
+    base_path = _find_base_path(input_paths, input_files)
     ctx.execute(
         Dataset.from_list(input_files).flat_map(lambda p: load_file(InputFileSpec(path=p, columns=["id"])))
         # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
@@ -167,7 +180,7 @@ def dedup_fuzzy_document(config: DedupConfig):
             output_pattern=lambda shard_idx, total: rebase_file_path(
                 base_path,
                 input_files[shard_idx],
-                f"{config.output_path}/data",
+                f"{output_path}/data",
                 old_extension=_get_extension(input_files[shard_idx]),
                 new_extension=".jsonl.gz",
             ),

@@ -5,6 +5,7 @@
 
 import logging
 import queue
+import sys
 import threading
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
@@ -21,6 +22,7 @@ from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
     SchedulingContext,
+    WorkerSnapshot,
     _evaluate_constraint,
     device_compatible,
     device_variant_matches,
@@ -33,6 +35,7 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerWorker,
     HeartbeatSnapshot,
+    ReservationClaim,
 )
 from iris.cluster.types import (
     REGION_ATTRIBUTE_KEY,
@@ -47,13 +50,25 @@ from iris.cluster.types import (
     get_device_variant,
     normalize_constraints,
 )
-from iris.logging import get_global_buffer
+from iris.cluster.controller.snapshot import (
+    SnapshotResult,
+    create_snapshot,
+    read_latest_snapshot,
+    restore_scaling_group,
+    restore_snapshot,
+    restore_tracked_workers,
+    write_snapshot,
+)
+from iris.logging import get_global_buffer, slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, snapshot_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, Timer
+from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
 
 logger = logging.getLogger(__name__)
+
+# Sentinel for dry-run scheduling with per-worker limits disabled.
+_UNLIMITED = sys.maxsize
 
 _SLOW_HEARTBEAT_MS = 5000
 _HEALTH_SUMMARY_INTERVAL = 6  # every ~30s at 5s heartbeat interval
@@ -75,21 +90,88 @@ def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
     )
 
 
-def compute_demand_entries(state: ControllerState) -> list[DemandEntry]:
-    """Compute demand entries from controller state.
+def compute_demand_entries(
+    state: ControllerState,
+    scheduler: Scheduler | None = None,
+    workers: list[WorkerSnapshot] | None = None,
+    reservation_claims: dict[WorkerId, ReservationClaim] | None = None,
+) -> list[DemandEntry]:
+    """Compute demand entries for the autoscaler from controller state.
 
-    Combines demand from pending tasks and from reservation entries.
-    Reservation entries produce persistent demand that keeps the autoscaler
-    from scaling down reserved capacity.
+    Runs a dry-run scheduling pass with building limits disabled to absorb
+    pending tasks into existing worker capacity. Only tasks that remain
+    unscheduled generate demand entries — this means only tasks that are truly
+    unschedulable (wrong device, insufficient resources, no matching workers).
+
+    Tasks blocked only by transient conditions like the building-task concurrency
+    limit are absorbed by the dry-run (since it ignores building limits) and do
+    NOT generate demand. This prevents the autoscaler from scaling up for work
+    that existing workers can handle once their current builds complete.
+
+    When no scheduler/workers are provided, falls back to treating all pending
+    tasks as demand (pre-existing behavior for tests that don't set up workers).
+
+    Reservation entries always generate demand regardless of worker capacity.
+
+    Args:
+        state: Controller state to read pending tasks and jobs from.
+        scheduler: Scheduler for dry-run pass. If None, skips dry-run.
+        workers: Available workers for dry-run. If None, skips dry-run.
+        reservation_claims: Reservation claims to apply taint injection in the
+            dry-run, matching the real scheduling path. If None, no taints applied.
     """
     demand_entries: list[DemandEntry] = []
 
     # Demand from pending tasks
     tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
+    schedulable_tasks: list[ControllerTask] = []
     for task in state.peek_pending_tasks():
         if not task.can_be_scheduled():
             continue
         tasks_by_job[task.job_id].append(task)
+        schedulable_tasks.append(task)
+
+    # Build job requirements once, shared between dry-run and demand emission.
+    # Also track which jobs have reservations so we can apply taint injection.
+    jobs: dict[JobName, JobRequirements] = {}
+    has_reservation: set[JobName] = set()
+    for task in schedulable_tasks:
+        if task.job_id not in jobs:
+            job = state.get_job(task.job_id)
+            if job:
+                jobs[task.job_id] = job_requirements_from_job(job)
+                if job.request.HasField("reservation"):
+                    has_reservation.add(task.job_id)
+                elif _find_reservation_ancestor(state, task.job_id) is not None:
+                    has_reservation.add(task.job_id)
+
+    # Dry-run scheduling with building/assignment limits disabled.
+    # This absorbs all tasks that would fit on existing workers if there were no
+    # per-worker limits. Tasks that remain unscheduled after this pass are truly
+    # unschedulable and need new capacity from the autoscaler.
+    #
+    # We apply the same reservation taint injection as the real scheduler so that
+    # non-reservation tasks don't appear "absorbed" by claimed workers they can't
+    # actually land on.
+    absorbed_task_ids: set[JobName] = set()
+    if scheduler is not None and workers is not None and workers:
+        building_counts = state.snapshot_building_counts()
+        task_ids = [t.task_id for t in schedulable_tasks]
+        claims = reservation_claims or {}
+        dry_run_workers = _inject_reservation_taints(workers, claims)
+        dry_run_jobs = _inject_taint_constraints(jobs, has_reservation)
+
+        context = scheduler.create_scheduling_context(
+            dry_run_workers,
+            building_counts=building_counts,
+            pending_tasks=task_ids,
+            jobs=dry_run_jobs,
+            max_building_tasks=_UNLIMITED,
+            max_assignments_per_worker=_UNLIMITED,
+        )
+        result = scheduler.find_assignments(context)
+        for task_id, _ in result.assignments:
+            absorbed_task_ids.add(task_id)
 
     for job_id, tasks in tasks_by_job.items():
         job = state.get_job(job_id)
@@ -118,10 +200,13 @@ def compute_demand_entries(state: ControllerState) -> list[DemandEntry]:
         reservation_budget = _build_reservation_budget(job)
 
         if job.is_coscheduled:
-            # For coscheduled jobs, absorb the entire group against the budget.
-            # Each task in the group consumes one unit for its device key.
+            # Coscheduled jobs place exactly 1 task per worker, so the dry-run's
+            # find_assignments correctly absorbs them (it handles coscheduled
+            # atomically via group_by). Any task not absorbed is truly unschedulable.
             remaining_ids = []
             for t in tasks:
+                if t.task_id in absorbed_task_ids:
+                    continue
                 key = (device_type, device_variant)
                 if reservation_budget[key] > 0:
                     reservation_budget[key] -= 1
@@ -144,6 +229,8 @@ def compute_demand_entries(state: ControllerState) -> list[DemandEntry]:
             continue
 
         for task in tasks:
+            if task.task_id in absorbed_task_ids:
+                continue
             key = (device_type, device_variant)
             if reservation_budget[key] > 0:
                 reservation_budget[key] -= 1
@@ -244,19 +331,6 @@ def _build_reservation_budget(job: ControllerJob) -> Counter[tuple[DeviceType, s
         dv = get_device_variant(device) if dt != DeviceType.CPU else None
         budget[(dt, dv)] += 1
     return budget
-
-
-@dataclass(frozen=True)
-class ReservationClaim:
-    """A claim binding a worker to a specific reservation entry.
-
-    The controller assigns unclaimed workers to unsatisfied reservation entries
-    each scheduling cycle. Once every entry for a job is claimed, the
-    reservation gate opens and the job's tasks can be scheduled.
-    """
-
-    job_id: str
-    entry_idx: int
 
 
 def _worker_matches_reservation_entry(
@@ -445,7 +519,7 @@ def _preference_pass(
 
         job_wire = job_id.to_wire()
         for wid in claimed_by_job.get(job_wire, ()):
-            if wid in context.scheduled_workers:
+            if context.assignment_counts.get(wid, 0) >= context.max_assignments_per_worker:
                 continue
             capacity = context.capacities.get(wid)
             if capacity is None:
@@ -453,7 +527,7 @@ def _preference_pass(
             if capacity.can_fit(req) is not None:
                 continue
             capacity.deduct(req)
-            context.scheduled_workers.add(wid)
+            context.assignment_counts[wid] = context.assignment_counts.get(wid, 0) + 1
             assignments.append((task_id, wid))
             preference_scheduled.add(task_id)
             break
@@ -526,6 +600,10 @@ class ControllerConfig:
 
     autoscaler_enabled: bool = False
     worker_access_address: str = ""
+
+    checkpoint_interval: Duration | None = None
+    """If set, take a periodic best-effort snapshot this often.
+    Runs in the autoscaler loop thread; does not pause scheduling."""
 
 
 class Controller:
@@ -616,6 +694,27 @@ class Controller:
 
         self._heartbeat_iteration = 0
 
+        # Set to True once start() is called. Used to gate operations that
+        # are only valid before the controller loops begin (e.g. LoadCheckpoint).
+        self._started = False
+
+        # Checkpoint coordination flag. When set, scheduling and autoscaler
+        # loops skip their work so the snapshot captures a quiescent state.
+        self._checkpoint_in_progress = False
+
+        # Serializes heartbeat rounds against checkpoint snapshots so that
+        # begin_checkpoint cannot fire while dispatches from begin_heartbeat()
+        # are in flight (but not yet applied by complete_heartbeat).
+        self._heartbeat_lock = threading.Lock()
+
+        # Rate-limits periodic (best-effort) checkpoint writes.
+        # None when checkpoint_interval is not configured.
+        self._periodic_checkpoint_limiter: RateLimiter | None = (
+            RateLimiter(interval_seconds=config.checkpoint_interval.to_seconds())
+            if config.checkpoint_interval is not None
+            else None
+        )
+
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
 
@@ -626,8 +725,14 @@ class Controller:
         """
         self._wake_event.set()
 
+    @property
+    def started(self) -> bool:
+        """Whether the controller loops have been started."""
+        return self._started
+
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
+        self._started = True
         self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
         self._heartbeat_thread = self._threads.spawn(self._run_heartbeat_loop, name="heartbeat-loop")
 
@@ -684,34 +789,47 @@ class Controller:
 
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Scheduling loop: task assignment and worker timeout checks only."""
+        limiter = RateLimiter(interval_seconds=self._config.scheduler_interval.to_seconds())
         while not stop_event.is_set():
-            self._wake_event.wait(timeout=self._config.scheduler_interval.to_seconds())
+            self._wake_event.wait(timeout=limiter.time_until_next())
             self._wake_event.clear()
+            limiter.mark_run()
 
             if stop_event.is_set():
                 break
+
+            if self._checkpoint_in_progress:
+                continue
 
             self._run_scheduling()
 
     def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
         """Autoscaler loop: runs on its own thread so blocking cloud API calls
         don't stall scheduling or heartbeats."""
+        limiter = RateLimiter(interval_seconds=self._autoscaler.evaluation_interval.to_seconds())
         while not stop_event.is_set():
-            stop_event.wait(timeout=self._autoscaler.evaluation_interval.to_seconds())
-            if stop_event.is_set():
+            if not limiter.wait(cancel=stop_event):
                 break
+            if self._checkpoint_in_progress:
+                continue
             try:
                 self._run_autoscaler_once()
             except Exception:
                 logger.exception("Autoscaler loop iteration failed")
 
+            self._maybe_periodic_checkpoint()
+
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
+        limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
         while not stop_event.is_set():
-            self._heartbeat_event.wait(timeout=self._config.heartbeat_interval.to_seconds())
+            self._heartbeat_event.wait(timeout=limiter.time_until_next())
             self._heartbeat_event.clear()
+            limiter.mark_run()
             if stop_event.is_set():
                 break
+            if self._checkpoint_in_progress:
+                continue
             self._heartbeat_all_workers()
 
     def _is_reservation_satisfied(self, job: ControllerJob) -> bool:
@@ -799,8 +917,9 @@ class Controller:
         self._claim_workers_for_reservations()
 
         timer = Timer()
-        pending_tasks = self._state.peek_pending_tasks()
-        workers = self._state.get_available_workers()
+        with slow_log(logger, "scheduling state reads", threshold_ms=50):
+            pending_tasks = self._state.peek_pending_tasks()
+            workers = self._state.get_available_workers()
         state_read_ms = timer.elapsed_ms()
 
         if not pending_tasks:
@@ -838,7 +957,8 @@ class Controller:
         modified_workers = _inject_reservation_taints(workers, self._reservation_claims)
         jobs = _inject_taint_constraints(jobs, has_reservation)
 
-        building_counts = self._state.snapshot_building_counts()
+        with slow_log(logger, "snapshot_building_counts", threshold_ms=50):
+            building_counts = self._state.snapshot_building_counts()
         context = self._scheduler.create_scheduling_context(
             modified_workers,
             building_counts=building_counts,
@@ -855,7 +975,8 @@ class Controller:
 
         all_assignments = preference_assignments + result.assignments
         if all_assignments:
-            self._buffer_assignments(all_assignments)
+            with slow_log(logger, "buffer_assignments", threshold_ms=200):
+                self._buffer_assignments(all_assignments)
             logger.debug(
                 "Scheduling cycle: %d assignments (%d preferred, %d normal), %dms (state read: %dms)",
                 len(all_assignments),
@@ -1000,18 +1121,23 @@ class Controller:
         When fail_heartbeat causes a worker to exceed the failure threshold,
         _on_worker_failed prunes it from state. We detect this (worker no longer
         in state) and evict the cached stub + notify the autoscaler.
+
+        Holds _heartbeat_lock for the entire round so begin_checkpoint() can
+        wait for a complete quiescent state before snapshotting.
         """
+        with self._heartbeat_lock:
+            self._heartbeat_all_workers_inner()
+
+    def _heartbeat_all_workers_inner(self) -> None:
         round_timer = Timer()
 
         # Phase 1: create snapshots for all healthy workers (lock-acquiring).
-        # Timing this phase separately gives a lock-contention signal.
-        snapshot_timer = Timer()
-        snapshots: list[HeartbeatSnapshot] = []
-        for w in self._state.get_available_workers():
-            snapshot = self._state.begin_heartbeat(w.worker_id)
-            if snapshot:
-                snapshots.append(snapshot)
-        snapshot_ms = snapshot_timer.elapsed_ms()
+        with slow_log(logger, "heartbeat phase 1 (snapshot)", threshold_ms=100):
+            snapshots: list[HeartbeatSnapshot] = []
+            for w in self._state.get_available_workers():
+                snapshot = self._state.begin_heartbeat(w.worker_id)
+                if snapshot:
+                    snapshots.append(snapshot)
 
         if not snapshots:
             return
@@ -1043,24 +1169,25 @@ class Controller:
         # Phase 3: consume all responses; per-worker RPC timeout determines failures.
         fail_count = 0
         failed_workers: list[str] = []
-        for _ in snapshots:
-            snapshot, response, error = result_queue.get()
-            if error is not None:
-                fail_count += 1
-                failed_workers.append(snapshot.worker_id)
-                logger.debug("Heartbeat error for %s: %s", snapshot.worker_id, error)
-                self._handle_heartbeat_failure(snapshot, error)
-                continue
-            if response is not None:
-                self._state.complete_heartbeat(snapshot, response)
+        with slow_log(logger, "heartbeat phase 3 (process results)", threshold_ms=500):
+            for _ in snapshots:
+                snapshot, response, error = result_queue.get()
+                if error is not None:
+                    fail_count += 1
+                    failed_workers.append(snapshot.worker_id)
+                    logger.debug("Heartbeat error for %s: %s", snapshot.worker_id, error)
+                    self._handle_heartbeat_failure(snapshot, error)
+                    continue
+                if response is not None:
+                    self._state.complete_heartbeat(snapshot, response)
 
         for future in worker_futures:
             future.cancel()
 
         elapsed = round_timer.elapsed_ms()
         level = logging.WARNING if elapsed > _SLOW_HEARTBEAT_MS else logging.DEBUG
-        fmt = "Heartbeat round: %d workers, %d failed, %dms (snapshot: %dms)"
-        args: list[object] = [len(snapshots), fail_count, elapsed, snapshot_ms]
+        fmt = "Heartbeat round: %d workers, %d failed, %dms"
+        args: list[object] = [len(snapshots), fail_count, elapsed]
         if failed_workers:
             fmt += " failed=[%s]"
             args.append(", ".join(failed_workers))
@@ -1137,7 +1264,13 @@ class Controller:
 
         vm_status_map = self._build_vm_status_map()
         self._autoscaler.refresh(vm_status_map)
-        demand_entries = compute_demand_entries(self._state)
+        workers = self._state.get_available_workers()
+        demand_entries = compute_demand_entries(
+            self._state,
+            self._scheduler,
+            workers,
+            reservation_claims=self._reservation_claims,
+        )
         self._autoscaler.update(demand_entries)
 
     def _build_vm_status_map(self) -> VmWorkerStatusMap:
@@ -1164,6 +1297,147 @@ class Controller:
                 running_task_ids=frozenset(tid.to_wire() for tid in list(worker.running_tasks)),
             )
         return result
+
+    @property
+    def _snapshot_storage_prefix(self) -> str:
+        return self._config.bundle_prefix or ""
+
+    def _maybe_periodic_checkpoint(self) -> None:
+        """Write a best-effort periodic snapshot if the configured interval has elapsed.
+
+        Unlike begin_checkpoint(), this does NOT set _checkpoint_in_progress — it
+        captures a point-in-time snapshot without pausing scheduling or heartbeats.
+        Suitable for crash recovery; not guaranteed to be fully quiescent.
+        """
+        if self._periodic_checkpoint_limiter is None:
+            return
+        if self._checkpoint_in_progress:
+            return
+        prefix = self._snapshot_storage_prefix
+        if not prefix:
+            return
+        if not self._periodic_checkpoint_limiter.should_run():
+            return
+        try:
+            result = create_snapshot(
+                self._state,
+                autoscaler=self._autoscaler,
+                reservation_claims=self._reservation_claims,
+            )
+            path = write_snapshot(result.proto, prefix)
+            logger.info(
+                "Periodic checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                path,
+                result.job_count,
+                result.task_count,
+                result.worker_count,
+            )
+        except Exception:
+            logger.exception("Periodic checkpoint failed")
+
+    def begin_checkpoint(self) -> tuple[str, SnapshotResult]:
+        """Pause loops, snapshot state, write to storage. Returns (path, result).
+
+        Sets _checkpoint_in_progress so the scheduling and autoscaler loops
+        idle, waits for in-flight heartbeat dispatches to drain, then takes
+        a consistent snapshot and writes it to remote storage.
+        """
+        prefix = self._snapshot_storage_prefix
+        if not prefix:
+            raise ValueError("Cannot checkpoint: no storage prefix configured (bundle_prefix is empty)")
+
+        self._checkpoint_in_progress = True
+        try:
+            # Wait for any in-flight heartbeat round to complete.
+            with self._heartbeat_lock:
+                result = create_snapshot(
+                    self._state,
+                    autoscaler=self._autoscaler,
+                    reservation_claims=self._reservation_claims,
+                )
+                path = write_snapshot(result.proto, prefix)
+            logger.info(
+                "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                path,
+                result.job_count,
+                result.task_count,
+                result.worker_count,
+            )
+            return path, result
+        finally:
+            self._checkpoint_in_progress = False
+
+    def restore_from_snapshot(self, proto: snapshot_pb2.ControllerSnapshot | None = None) -> bool:
+        """Restore full controller state from a snapshot proto or from storage.
+
+        When proto is None, reads the latest snapshot from storage.
+        Called during startup, before background loops are started.
+        Returns True if a snapshot was found and restored.
+        """
+        if proto is None:
+            prefix = self._snapshot_storage_prefix
+            if not prefix:
+                return False
+            proto = read_latest_snapshot(prefix)
+            if proto is None:
+                logger.info("No snapshot found at %s, starting fresh", prefix)
+                return False
+
+        result = restore_snapshot(proto, self._state)
+        logger.info(
+            "Restored snapshot: jobs=%d tasks=%d workers=%d endpoints=%d",
+            result.job_count,
+            result.task_count,
+            result.worker_count,
+            result.endpoint_count,
+        )
+
+        # Restore autoscaler scaling groups
+        if self._autoscaler is not None:
+            for group_snap in proto.scaling_groups:
+                group = self._autoscaler.groups.get(group_snap.name)
+                if group is None:
+                    logger.warning(
+                        "Snapshot references scaling group %s which does not exist in config, skipping",
+                        group_snap.name,
+                    )
+                    continue
+                restore_result = restore_scaling_group(
+                    group_snap,
+                    group.platform,
+                    group.config,
+                    group.label_prefix,
+                )
+                group.restore_from_snapshot(
+                    slices=restore_result.slices,
+                    consecutive_failures=restore_result.consecutive_failures,
+                    last_scale_up=restore_result.last_scale_up,
+                    last_scale_down=restore_result.last_scale_down,
+                    backoff_until=restore_result.backoff_until,
+                    quota_exceeded_until=restore_result.quota_exceeded_until,
+                    quota_reason=restore_result.quota_reason,
+                )
+
+            # Workers from discarded slices remain in ControllerState as healthy.
+            # They will naturally fail heartbeat checks and be pruned once
+            # consecutive failures exceed the threshold. This is intentional:
+            # the heartbeat failure path handles cleanup of stale workers
+            # including task reassignment and resource release.
+
+            # Restore tracked workers into the autoscaler
+            restored_workers = restore_tracked_workers(proto)
+            self._autoscaler.restore_tracked_workers(restored_workers)
+            logger.info("Restored %d tracked workers", len(restored_workers))
+
+        # Restore reservation claims
+        for claim_snap in proto.reservation_claims:
+            worker_id = WorkerId(claim_snap.worker_id)
+            self._reservation_claims[worker_id] = ReservationClaim(
+                job_id=claim_snap.job_id,
+                entry_idx=claim_snap.entry_idx,
+            )
+
+        return True
 
     def launch_job(
         self,

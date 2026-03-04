@@ -1,4 +1,4 @@
-// Copyright 2025 The Marin Authors
+// Copyright The Marin Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -169,6 +169,9 @@ message WorkerResourceSnapshot {
   // Aggregate task stats
   int32 running_task_count = 7;
   int32 total_process_count = 8;
+  // Network bandwidth (bytes/sec, computed as delta between heartbeats)
+  int64 net_recv_bps = 9;
+  int64 net_sent_bps = 10;
 }
 
 message BuildMetrics {
@@ -667,6 +670,16 @@ message Controller {
     repeated TransactionAction actions = 1;
   }
 
+  // --- Checkpoint ---
+  message BeginCheckpointRequest {}
+  message BeginCheckpointResponse {
+    string snapshot_path = 1;
+    iris.time.Timestamp created_at = 2;
+    int32 job_count = 3;
+    int32 task_count = 4;
+    int32 worker_count = 5;
+  }
+
   // --- Cluster Summary ---
   message GetClusterSummaryRequest {}
   message GetClusterSummaryResponse {
@@ -900,6 +913,9 @@ service ControllerService {
 
   // Unified worker detail (VM + worker + logs in one call)
   rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
+
+  // Checkpoint
+  rpc BeginCheckpoint(Controller.BeginCheckpointRequest) returns (Controller.BeginCheckpointResponse);
 }
 
 service WorkerService {

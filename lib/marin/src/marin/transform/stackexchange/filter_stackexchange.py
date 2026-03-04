@@ -18,8 +18,10 @@ uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
 """
 
 import dataclasses
+import json
 
 import draccus
+from iris.marin_fs import open_url
 from zephyr import Dataset, ZephyrContext
 
 
@@ -41,13 +43,9 @@ def _process_file_with_filtering(file_path: str, config: FilterStackExchangeConf
     Yields:
         Records that pass the vote threshold and are unique within this file
     """
-    import json
-
-    import fsspec
-
     seen_ids = set() if config.remove_duplicate_questions else None
 
-    with fsspec.open(file_path, "rt", compression="infer") as f:
+    with open_url(file_path, "rt", compression="infer") as f:
         for line in f:
             line = line.strip()
             if not line:

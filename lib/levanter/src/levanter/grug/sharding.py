@@ -12,4 +12,4 @@ Pvocab = P(None, None)
 
 
 def unshard(x: jax.Array) -> jax.Array:
-    return reshard(x, P((None,)))
+    return reshard(x, P(None))

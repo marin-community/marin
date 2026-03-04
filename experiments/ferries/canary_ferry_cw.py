@@ -28,7 +28,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 
 CANARY_DATE = os.environ.get("CANARY_DATE", datetime.date.today().isoformat())
 
-BATCH_SIZE = 4096
+BATCH_SIZE = 512
 SEQ_LEN = 1024
 TARGET_TOKENS = 1_000_000_000
 NUM_STEPS = TARGET_TOKENS // (BATCH_SIZE * SEQ_LEN)
@@ -58,7 +58,7 @@ data_config = lm_data_config(
 )
 
 train_config = SimpleTrainConfig(
-    resources=ResourceConfig.with_gpu(count=8, cpu=32, ram="256g", disk="256g"),
+    resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", disk="256g"),
     train_batch_size=BATCH_SIZE,
     num_train_steps=NUM_STEPS,
     learning_rate=3e-3,

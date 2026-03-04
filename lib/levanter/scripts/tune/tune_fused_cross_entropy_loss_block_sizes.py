@@ -1,12 +1,14 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import atexit
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
 import itertools
 import json
 import os
+import sys
 import time
 
 import jax
@@ -17,7 +19,6 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
 
-_DISABLE_MEGACORE_ENV = "LEVANTER_PALLAS_TPU_DISABLE_MEGACORE"
 _SKIP_LABEL_LOGITS_ENV = "LEVANTER_PALLAS_TPU_SKIP_LABEL_LOGITS_BENCH"
 _FWD_XW_BF16_ENV = "LEVANTER_PALLAS_TPU_FWD_XW_BF16_BENCH"
 _FWD_DOT_ACCUM_BF16_ENV = "LEVANTER_PALLAS_TPU_FWD_DOT_ACCUM_BF16_BENCH"
@@ -33,11 +34,62 @@ _FWD_LSE_STORE_PATH_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_STORE_PATH_BENCH"
 _MAX_ERROR_CHARS = 600
 
 
+class _TeeStream:
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self._streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
+
+
+def _append_xla_flag(flag: str) -> None:
+    current = os.environ.get("XLA_FLAGS", "")
+    parts = current.split()
+    if flag in parts:
+        return
+    os.environ["XLA_FLAGS"] = (current + " " + flag).strip()
+
+
+def _configure_xla_dump_dir(xla_dump_dir: str | None) -> str | None:
+    if xla_dump_dir is None:
+        return None
+    resolved = os.path.abspath(xla_dump_dir)
+    os.makedirs(resolved, exist_ok=True)
+    _append_xla_flag(f"--xla_dump_to={resolved}")
+    _append_xla_flag("--xla_dump_hlo_as_text")
+    return resolved
+
+
+@contextmanager
+def _tee_stdio(log_path: str | None):
+    if log_path is None:
+        yield
+        return
+    resolved = os.path.abspath(log_path)
+    parent = os.path.dirname(resolved)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(resolved, "a", encoding="utf-8") as handle:
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout = _TeeStream(old_stdout, handle)
+        sys.stderr = _TeeStream(old_stderr, handle)
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+
 @dataclass(frozen=True, slots=True)
 class BenchVariant:
     name: str
     implementation: str
-    disable_megacore: bool = False
     skip_label_logits: bool = False
     fwd_xw_bf16: bool = False
     fwd_dot_accum_bf16: bool = False
@@ -63,7 +115,7 @@ def _parse_args() -> argparse.Namespace:
         "--implementation",
         type=str,
         default="pallas_tpu",
-        choices=("pallas_tpu", "linear_ce_tpu", "linear_ce_tpu_pallas_bwd", "xla", "reference"),
+        choices=("pallas_tpu", "xla", "reference"),
         help="Kernel backend implementation to benchmark.",
     )
     parser.add_argument("--input-dtype", type=str, default="bfloat16", help="Input dtype for x and w.")
@@ -92,7 +144,6 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also benchmark infer/default behavior (block_sizes=None) for pallas_tpu.",
     )
-    parser.add_argument("--disable-megacore", action="store_true", help="Disable megacore path in pallas.")
     parser.add_argument(
         "--skip-label-logits", action="store_true", help="Skip label-logit extraction (benchmark-only)."
     )
@@ -152,7 +203,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--variant-sweep",
         action="store_true",
-        help="Run pallas variants: baseline and no-megacore.",
+        help="Run pallas variant sweep.",
     )
     parser.add_argument(
         "--compare-xla",
@@ -214,6 +265,18 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="When --variant-sweep is set for pallas, also benchmark one-pass LSE store path mode.",
     )
+    parser.add_argument(
+        "--xla-dump-dir",
+        type=str,
+        default=None,
+        help="Optional directory for XLA HLO dumps (sets XLA_FLAGS dump flags before backend init).",
+    )
+    parser.add_argument(
+        "--compiler-log-path",
+        type=str,
+        default=None,
+        help="Optional path to tee stdout/stderr so TPU/XLA compiler diagnostics are preserved.",
+    )
     return parser.parse_args()
 
 
@@ -237,7 +300,6 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
             BenchVariant(
                 name="single",
                 implementation=args.implementation,
-                disable_megacore=args.disable_megacore if args.implementation == "pallas_tpu" else False,
                 skip_label_logits=args.skip_label_logits if args.implementation == "pallas_tpu" else False,
                 fwd_xw_bf16=args.fwd_xw_bf16 if args.implementation == "pallas_tpu" else False,
                 fwd_dot_accum_bf16=args.fwd_dot_accum_bf16 if args.implementation == "pallas_tpu" else False,
@@ -257,12 +319,7 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
 
     variants: list[BenchVariant] = []
     if args.implementation == "pallas_tpu":
-        variants.extend(
-            [
-                BenchVariant(name="pallas_baseline", implementation="pallas_tpu"),
-                BenchVariant(name="pallas_no_megacore", implementation="pallas_tpu", disable_megacore=True),
-            ]
-        )
+        variants.append(BenchVariant(name="pallas_baseline", implementation="pallas_tpu"))
         if args.compare_no_label_logits:
             variants.append(
                 BenchVariant(name="pallas_no_label_logits", implementation="pallas_tpu", skip_label_logits=True)
@@ -432,7 +489,6 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
 @contextmanager
 def _variant_env(variant: BenchVariant):
     previous = {
-        _DISABLE_MEGACORE_ENV: os.environ.get(_DISABLE_MEGACORE_ENV),
         _SKIP_LABEL_LOGITS_ENV: os.environ.get(_SKIP_LABEL_LOGITS_ENV),
         _FWD_XW_BF16_ENV: os.environ.get(_FWD_XW_BF16_ENV),
         _FWD_DOT_ACCUM_BF16_ENV: os.environ.get(_FWD_DOT_ACCUM_BF16_ENV),
@@ -447,7 +503,6 @@ def _variant_env(variant: BenchVariant):
         _FWD_LSE_STORE_PATH_ENV: os.environ.get(_FWD_LSE_STORE_PATH_ENV),
     }
     updates = {
-        _DISABLE_MEGACORE_ENV: "1" if variant.disable_megacore else None,
         _SKIP_LABEL_LOGITS_ENV: "1" if variant.skip_label_logits else None,
         _FWD_XW_BF16_ENV: "1" if variant.fwd_xw_bf16 else None,
         _FWD_DOT_ACCUM_BF16_ENV: "1" if variant.fwd_dot_accum_bf16 else None,
@@ -529,7 +584,20 @@ def main() -> None:
     if args.fwd_lse_fori_loop and not args.fwd_split_label_dot:
         raise ValueError("--fwd-lse-fori-loop currently requires --fwd-split-label-dot.")
 
+    resolved_xla_dump_dir = _configure_xla_dump_dir(args.xla_dump_dir)
+    resolved_compiler_log_path = os.path.abspath(args.compiler_log_path) if args.compiler_log_path else None
+    if resolved_compiler_log_path is not None:
+        log_capture = _tee_stdio(resolved_compiler_log_path)
+        log_capture.__enter__()
+        atexit.register(log_capture.__exit__, None, None, None)
+
     print("devices:", jax.devices())
+    print("xla_flags", os.environ.get("XLA_FLAGS", ""))
+    print("libtpu_init_args", os.environ.get("LIBTPU_INIT_ARGS", ""))
+    if resolved_xla_dump_dir is not None:
+        print("xla_dump_dir", resolved_xla_dump_dir)
+    if resolved_compiler_log_path is not None:
+        print("compiler_log_path", resolved_compiler_log_path)
 
     tokens = args.batch * args.seq_len
     if tokens % args.data_shards != 0:
@@ -610,11 +678,7 @@ def main() -> None:
             # Env vars affect compile-time kernel behavior, so force retrace.
             jax.clear_caches()
 
-        variant_configs = (
-            pallas_configs
-            if variant.implementation in ("pallas_tpu", "linear_ce_tpu", "linear_ce_tpu_pallas_bwd")
-            else [("none", None)]
-        )
+        variant_configs = pallas_configs if variant.implementation == "pallas_tpu" else [("none", None)]
         with _variant_env(variant):
             for label, cfg in variant_configs:
                 print("variant", variant.name, variant.implementation, label, cfg)
@@ -627,7 +691,6 @@ def main() -> None:
                     "variant": variant.name,
                     "label": label,
                     "implementation": variant.implementation,
-                    "disable_megacore": int(variant.disable_megacore),
                     "skip_label_logits": int(variant.skip_label_logits),
                     "fwd_xw_bf16": int(variant.fwd_xw_bf16),
                     "fwd_dot_accum_bf16": int(variant.fwd_dot_accum_bf16),
@@ -640,6 +703,10 @@ def main() -> None:
                     "fwd_lse_fori_loop": int(variant.fwd_lse_fori_loop),
                     "fwd_lse_fori_v_mult": int(variant.fwd_lse_fori_v_mult),
                     "fwd_lse_store_path": int(variant.fwd_lse_store_path),
+                    "xla_dump_dir": resolved_xla_dump_dir or "",
+                    "compiler_log_path": resolved_compiler_log_path or "",
+                    "xla_flags": os.environ.get("XLA_FLAGS", ""),
+                    "libtpu_init_args": os.environ.get("LIBTPU_INIT_ARGS", ""),
                     "status": "failed",
                 }
                 try:

@@ -132,6 +132,24 @@ Useful flags:
 - Keep core training/eval metrics aligned with classic Levanter (`train/loss`, `throughput/*`, `eval/*`).
 - Prefer shared helpers only for generic infrastructure; keep variant behavior local to the template.
 
+## Variant contract (enforced by tests)
+
+`tests/test_grug_variant_contracts.py` treats each subdirectory under `experiments/grug/` as a variant and
+enforces these minimum interfaces:
+
+- If `<variant>/model.py` exists, it must define:
+  - `GrugModelConfig` constructable as `GrugModelConfig(vocab_size=...)`
+  - `Transformer` with `next_token_loss(...)`
+  - `debug_mesh_and_token_pspec(num_devices: int)`
+- If `<variant>/train.py` exists, it must define:
+  - `initial_state(model_config, *, optimizer, mp, key)` (all required)
+  - `_make_train_step(...)`
+  - `run_grug(...)`
+- If both `model.py` and `train.py` exist, the variant must lower a one-step train path under abstract mesh via
+  `eqx.filter_eval_shape`.
+- Escape hatch: add `# GRUG NOVERIFY` anywhere in `<variant>/train.py` to exclude that variant from these contract
+  checks.
+
 ## Further guidance
 
 - Grug principles: [`/.agents/projects/grugformer.md`](../../.agents/projects/grugformer.md)

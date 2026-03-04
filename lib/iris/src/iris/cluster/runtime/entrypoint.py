@@ -69,9 +69,9 @@ def build_runtime_entrypoint(
     link_mode_flag = "--link-mode symlink"
     setup_commands.append("echo 'syncing deps'")
     if uv_sync_flags:
-        setup_commands.append(f"uv sync {link_mode_flag} {python_flag} {uv_sync_flags}".strip())
+        setup_commands.append(f"uv sync --quiet {link_mode_flag} {python_flag} {uv_sync_flags}".strip())
     else:
-        setup_commands.append(f"uv sync {link_mode_flag} {python_flag}".strip())
+        setup_commands.append(f"uv sync --quiet {link_mode_flag} {python_flag}".strip())
     setup_commands.append("echo 'installing pip deps'")
     if pip_install_args:
         setup_commands.append(f"uv pip install {link_mode_flag} {pip_install_args}")

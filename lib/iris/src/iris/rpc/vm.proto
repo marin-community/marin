@@ -1,4 +1,4 @@
-// Copyright 2025 The Marin Authors
+// Copyright The Marin Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -125,7 +125,7 @@ message ScaleGroupStatus {
 // Autoscaler action/event log entry
 message AutoscalerAction {
   iris.time.Timestamp timestamp = 1;
-  string action_type = 2;     // "scale_up", "scale_down", "quota_exceeded", "backoff_triggered", "worker_failed"
+  string action_type = 2;     // "scale_up", "scale_down", "quota_exceeded", "backoff_triggered", "worker_failed", "rate_limited"
   string scale_group = 3;
   string slice_id = 4;        // Empty for group-level actions
   string reason = 5;

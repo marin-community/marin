@@ -503,6 +503,11 @@ class FrayIrisClient:
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
         entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
+
+        retry_kwargs: dict[str, Any] = {}
+        if actor_config.max_task_retries is not None:
+            retry_kwargs["max_retries_failure"] = actor_config.max_task_retries
+
         job = self._iris.submit(
             entrypoint=entrypoint,
             name=name,
@@ -511,6 +516,7 @@ class FrayIrisClient:
             constraints=iris_constraints if iris_constraints else None,
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
+            **retry_kwargs,
         )
 
         return IrisActorGroup(

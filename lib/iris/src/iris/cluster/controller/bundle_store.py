@@ -6,9 +6,9 @@
 import hashlib
 import logging
 
-import fsspec.core
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.marin_fs import url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class BundleStore:
         bundle_hash = hashlib.sha256(blob).hexdigest()
         bundle_path = f"{self._prefix}/{bundle_hash}/bundle.zip"
         try:
-            fs, path = fsspec.core.url_to_fs(bundle_path)
+            fs, path = url_to_fs(bundle_path)
             parent_dir = path.rsplit("/", 1)[0]
             fs.makedirs(parent_dir, exist_ok=True)
             with fs.open(path, "wb") as f:

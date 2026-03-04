@@ -42,9 +42,11 @@ import logging
 import os
 import queue
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -206,15 +208,9 @@ def _run_iris(*args: str, config_path: Path, timeout: float = DEFAULT_CLI_TIMEOU
     subprocess.TimeoutExpired if the command exceeds timeout.
     """
     cmd = ["uv", "run", "iris", "--config", str(config_path), *args]
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(IRIS_ROOT), timeout=timeout)
+    result = subprocess.run(cmd, capture_output=False, text=True, cwd=str(IRIS_ROOT), timeout=timeout)
     if result.returncode != 0:
-        logger.error(
-            "Command failed (exit %d): %s\nstdout: %s\nstderr: %s",
-            result.returncode,
-            " ".join(cmd),
-            result.stdout,
-            result.stderr,
-        )
+        logger.error("Command failed (exit %d): %s\nstdout: %s\nstderr: %s", result.returncode, " ".join(cmd))
         result.check_returncode()
     return result
 
@@ -623,6 +619,7 @@ class SmokeTestConfig:
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
     mode: Literal["full", "keep", "redeploy", "local"] = "full"
     screenshot_dir: Path | None = None
+    no_snapshot_cycle: bool = False
 
     @property
     def local(self) -> bool:
@@ -678,6 +675,16 @@ class SmokeTestRunner:
         self._background_procs: list[BackgroundProc] = []
         # Set once we have a controller connection (for RPC diagnostics at teardown)
         self._controller_url: str | None = None
+        # Local bundle directory for cleanup (only set in local mode)
+        self._bundle_dir: Path | None = None
+        # Unique bundle prefix for snapshot storage across controller restarts.
+        # Must be isolated per run so we don't restore stale snapshots from
+        # previous smoke test runs.
+        if config.local:
+            self._bundle_dir = Path(tempfile.mkdtemp(prefix="iris-smoke-bundles-"))
+            self._bundle_prefix = f"file://{self._bundle_dir}"
+        else:
+            self._bundle_prefix = f"gs://marin-tmp-us-central2/ttl=1d/iris/smoke-bundles/{self._run_id}"
 
     def run(self) -> bool:
         """Run the smoke test. Returns True if all tests pass."""
@@ -786,8 +793,9 @@ class SmokeTestRunner:
         args = ["cluster", "start"]
         if self.config.local:
             args.append("--local")
+        args.extend(["--bundle-prefix", self._bundle_prefix])
 
-        logger.info("Starting cluster (background)...")
+        logger.info("Starting cluster...")
         bg = _run_iris_background(*args, config_path=self.config.config_path)
         bg.name = "cluster-start"
         self._background_procs.append(bg)
@@ -816,10 +824,115 @@ class SmokeTestRunner:
     # ----- Test execution -----
 
     def _run_tests(self, controller_url: str):
-        """Run test jobs against the cluster."""
+        """Run test jobs in two phases with an optional snapshot/restore cycle between them."""
         tests = self._build_test_cases()
+
+        # Phase 1: initial test run
+        logger.info("=== Phase 1: Initial test run ===")
+        phase1_start = time.monotonic()
         self._run_test_cases_parallel(controller_url, tests)
-        self._capture_dashboard("after-tests")
+        phase1_duration = time.monotonic() - phase1_start
+        logger.info("Phase 1 completed in %.1fs", phase1_duration)
+        self._capture_dashboard("after-phase1")
+
+        if self._interrupted or self.config.no_snapshot_cycle:
+            return
+
+        # Snapshot/restore cycle
+        controller_url = self._do_snapshot_restore_cycle()
+        self._controller_url = controller_url
+
+        if self._interrupted:
+            return
+
+        # Validate restored state: Phase 1 jobs should appear as SUCCEEDED
+        self._validate_restored_state(controller_url)
+
+        # Phase 2: re-run tests on restored cluster
+        self._run_id = datetime.now().strftime("%H%M%S")
+        logger.info("=== Phase 2: Post-restore test run ===")
+        phase2_tests = self._build_test_cases()
+        phase2_start = time.monotonic()
+        self._run_test_cases_parallel(controller_url, phase2_tests)
+        phase2_duration = time.monotonic() - phase2_start
+        logger.info("Phase 2 completed in %.1fs (Phase 1 was %.1fs)", phase2_duration, phase1_duration)
+        self._capture_dashboard("after-phase2")
+
+    def _do_snapshot_restore_cycle(self) -> str:
+        """Checkpoint, restart controller, return new controller URL.
+
+        For local mode: checkpoint via RPC, kill background process, start new one.
+        For remote/redeploy mode: use CLI controller restart command, reconnect dashboard tunnel.
+        """
+        logger.info("--- Snapshot/Restore Cycle ---")
+        if self.config.local:
+            return self._do_local_restart()
+        return self._do_remote_restart()
+
+    def _do_local_restart(self) -> str:
+        """Checkpoint local controller via RPC, kill it, and start a new one."""
+        from iris.rpc.cluster_connect import ControllerServiceClientSync
+
+        assert self._controller_url is not None
+        client = ControllerServiceClientSync(self._controller_url)
+        try:
+            resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+            logger.info(
+                "Checkpoint: %s (%d jobs, %d workers)",
+                resp.snapshot_path,
+                resp.job_count,
+                resp.worker_count,
+            )
+        finally:
+            client.close()
+
+        # Kill background cluster-start process
+        for bg in list(self._background_procs):
+            if bg.name == "cluster-start":
+                bg.terminate()
+                self._background_procs.remove(bg)
+
+        # Start new cluster (same --bundle-prefix → auto-restores from latest.json)
+        return self._start_cluster()
+
+    def _do_remote_restart(self) -> str:
+        """Restart remote controller via CLI and reconnect."""
+        # Kill dashboard tunnel (controller will go down)
+        for bg in list(self._background_procs):
+            if bg.name == "dashboard-tunnel":
+                bg.terminate()
+                self._background_procs.remove(bg)
+
+        # Restart via CLI (checkpoint + stop + start)
+        _run_iris(
+            "cluster",
+            "controller",
+            "restart",
+            "--bundle-prefix",
+            self._bundle_prefix,
+            config_path=self.config.config_path,
+            timeout=self.config.boot_timeout_seconds,
+        )
+
+        # Reconnect via new dashboard tunnel
+        return self._connect_remote()
+
+    def _validate_restored_state(self, controller_url: str) -> None:
+        """Verify that restored controller preserved Phase 1 job state."""
+        result = _run_iris_rpc(controller_url, "controller", "list-jobs")
+        if result.returncode != 0:
+            logger.warning("Could not validate restored state: %s", result.stderr)
+            return
+        jobs = json.loads(result.stdout).get("jobs", [])
+        smoke_jobs = [j for j in jobs if "smoke-" in j.get("name", "")]
+        succeeded = [j for j in smoke_jobs if j.get("state") == "JOB_STATE_SUCCEEDED"]
+        logger.info(
+            "Restored state: %d/%d smoke jobs preserved as SUCCEEDED",
+            len(succeeded),
+            len(smoke_jobs),
+        )
+        if not succeeded:
+            logger.warning("No succeeded jobs found after restore — snapshot may not have persisted")
 
     def _build_test_cases(self) -> list[SmokeTestCase]:
         """Build the test list based on accelerator type and local mode."""
@@ -1252,6 +1365,10 @@ class SmokeTestRunner:
             except Exception as e:
                 logger.warning("Error stopping remote cluster: %s", e)
 
+        # Clean up local bundle directory used for snapshot storage
+        if self._bundle_dir is not None and self._bundle_dir.exists():
+            shutil.rmtree(self._bundle_dir, ignore_errors=True)
+
 
 # =============================================================================
 # CLI
@@ -1296,12 +1413,20 @@ class SmokeTestRunner:
     type=click.Path(path_type=Path),
     help="Directory to save dashboard screenshots. Requires Playwright. " f"Default: {DEFAULT_SCREENSHOT_DIR}",
 )
+@click.option(
+    "--no-snapshot-cycle",
+    "no_snapshot_cycle",
+    is_flag=True,
+    default=False,
+    help="Skip the snapshot/restore cycle between test phases",
+)
 def main(
     config_path: Path,
     boot_timeout_seconds: int,
     job_timeout_seconds: int,
     mode: str,
     screenshot_dir: Path | None,
+    no_snapshot_cycle: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
 
@@ -1338,6 +1463,7 @@ def main(
         job_timeout_seconds=job_timeout_seconds,
         mode=mode,  # type: ignore
         screenshot_dir=screenshot_dir,
+        no_snapshot_cycle=no_snapshot_cycle,
     )
 
     runner = SmokeTestRunner(config)

@@ -13,6 +13,7 @@ from typing import Any, Generic, Literal, TypeVar, cast
 
 import fsspec
 from braceexpand import braceexpand
+from iris.marin_fs import url_to_fs
 
 from zephyr.expr import Expr
 
@@ -344,7 +345,7 @@ class Dataset(Generic[T]):
         # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
         pattern = re.sub(r"(?<!:)//+", "/", pattern)
 
-        fs, _ = fsspec.core.url_to_fs(pattern)
+        fs, _ = url_to_fs(pattern)
         protocol = fsspec.core.split_protocol(pattern)[0]
 
         files = []

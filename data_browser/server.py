@@ -11,6 +11,7 @@ from pathlib import Path
 import draccus
 import fsspec
 import requests
+from iris.marin_fs import filesystem as marin_filesystem
 import zstandard as zstd
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_limiter import Limiter
@@ -65,7 +66,7 @@ class Server:
         # Lazily instantiate remote filesystems to avoid triggering cloud
         # auth during local-only development.
         self.fs_cache = {
-            None: fsspec.filesystem("local"),
+            None: marin_filesystem("local"),
         }
 
     def fs(self, path: str):
@@ -73,11 +74,11 @@ class Server:
         protocol, _ = fsspec.core.split_protocol(path)
         if protocol not in self.fs_cache:
             if protocol == "gs":
-                self.fs_cache[protocol] = fsspec.filesystem("gcs")
+                self.fs_cache[protocol] = marin_filesystem("gcs")
             elif protocol == "s3":
-                self.fs_cache[protocol] = fsspec.filesystem("s3")
+                self.fs_cache[protocol] = marin_filesystem("s3")
             else:
-                self.fs_cache[protocol] = fsspec.filesystem("local")
+                self.fs_cache[protocol] = marin_filesystem("local")
         return self.fs_cache[protocol]
 
 

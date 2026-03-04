@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-import fsspec
+from iris.marin_fs import open_url
 from pydantic import BaseModel
 
 
@@ -47,7 +47,7 @@ def write_provenance_json(output_path, metadata: dict[str, Any]) -> None:
     print(f"[*] Writing Dataset `provenance.json` to `{output_path}`")
     metadata["access_time"] = datetime.now(timezone.utc).isoformat()
 
-    with fsspec.open(f"{output_path}/provenance.json", "w") as f:
+    with open_url(f"{output_path}/provenance.json", "w") as f:
         json.dump(metadata, f, indent=4, sort_keys=True)
 
 

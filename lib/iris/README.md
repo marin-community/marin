@@ -240,7 +240,6 @@ iris --config=cluster.yaml cluster start
 iris --config=cluster.yaml cluster start --local   # Local cluster for testing
 iris --config=cluster.yaml cluster stop
 iris --config=cluster.yaml cluster restart
-iris --config=cluster.yaml cluster reload           # Rebuild images + redeploy on existing VMs
 iris --config=cluster.yaml cluster status
 ```
 

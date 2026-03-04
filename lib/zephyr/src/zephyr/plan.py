@@ -21,8 +21,8 @@ from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any
 
-import fsspec
 import msgspec
+from iris.marin_fs import url_to_fs
 
 from zephyr.dataset import (
     Dataset,
@@ -758,7 +758,7 @@ def run_stage(
             output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
 
             if op.skip_existing:
-                fs = fsspec.core.url_to_fs(output_path)[0]
+                fs = url_to_fs(output_path)[0]
                 if op.writer_type == "levanter_cache":
                     test_path = os.path.join(output_path, ".success")
                 else:

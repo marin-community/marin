@@ -17,8 +17,8 @@ import os
 import time
 from dataclasses import dataclass
 
-import fsspec
 import humanfriendly
+from iris.marin_fs import open_url
 from jax.random import PRNGKey
 from levanter.data.text import (
     HfDatasetSourceConfig,
@@ -146,7 +146,7 @@ def _create_readme(
     Create a README file for the cache.
     """
     readme_path = f"{output_path}/README.md"
-    with fsspec.open(readme_path, "w") as f:
+    with open_url(readme_path, "w") as f:
         f.write("# Marin/Levanter Subsampled Pretokenized Dataset\n\n")
         f.write("## Dataset\n\n")
         f.write(_short_desc_from_lm_config(input_config))

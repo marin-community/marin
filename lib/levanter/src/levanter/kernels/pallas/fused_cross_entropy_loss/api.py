@@ -18,8 +18,6 @@ from .xla import linear_softmax_cross_entropy_loss_xla
 
 Implementation: TypeAlias = Literal[
     "pallas_tpu",
-    "linear_ce_tpu",
-    "linear_ce_tpu_pallas_bwd",
     "pallas_gpu",
     "xla",
     "reference",
@@ -41,14 +39,10 @@ _PALLAS_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 try:
     from .pallas_tpu import (
         PallasUnsupportedError,
-        linear_softmax_cross_entropy_loss_linear_ce_tpu,
-        linear_softmax_cross_entropy_loss_linear_ce_tpu_pallas_bwd,
         linear_softmax_cross_entropy_loss_pallas,
     )
 
     IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
-    IMPLEMENTATIONS["linear_ce_tpu"] = linear_softmax_cross_entropy_loss_linear_ce_tpu
-    IMPLEMENTATIONS["linear_ce_tpu_pallas_bwd"] = linear_softmax_cross_entropy_loss_linear_ce_tpu_pallas_bwd
 except ImportError:
     PallasUnsupportedError = NotImplementedError  # type: ignore[assignment]
 

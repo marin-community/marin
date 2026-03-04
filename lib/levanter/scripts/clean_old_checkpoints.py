@@ -9,21 +9,21 @@ import os
 import sys
 from datetime import datetime, timezone
 
-import fsspec
+from iris.marin_fs import filesystem as marin_filesystem
 
 
 AGE = 30  # days
 
 
 def is_dir_of_checkpoints(path):
-    fs = fsspec.filesystem("gcs")
+    fs = marin_filesystem("gcs")
     # if the children are named like step-XXXXX, then it's a checkpoint directory
     children = fs.ls(path)
     return any("step-" in child for child in children)
 
 
 def list_deletable_directories(base_dir, age):
-    fs = fsspec.filesystem("gcs")
+    fs = marin_filesystem("gcs")
     run_ids = fs.ls(base_dir)
 
     for run_id in run_ids:

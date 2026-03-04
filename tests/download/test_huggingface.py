@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pandas as pd
 import pytest
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf, stream_file_to_fsspec
 from marin.download.huggingface.stream_remove_columns import (
     DatasetConfig,
     prune_hf_dataset,
@@ -168,3 +168,48 @@ def test_prune_hf_dataset(tmp_path):
     assert output_file.exists()
     result_df = pd.read_parquet(output_file)
     assert list(result_df.columns) == ["id", "text"]
+
+
+def test_stream_file_to_fsspec_retries_on_timeout(tmp_path):
+    """A socket timeout while reading should trigger retry and then succeed."""
+    file_path = "datasets/test-org/test-dataset/data/file1.txt"
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    destination = output_path / "data" / "file1.txt"
+
+    content = b"retry me"
+
+    hf_fs = MagicMock()
+    read_attempts = {"count": 0}
+
+    class FlakyReader:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, chunk_size):
+            read_attempts["count"] += 1
+            if read_attempts["count"] == 1:
+                raise TimeoutError("simulated timeout")
+            if read_attempts["count"] == 2:
+                return content
+            return b""
+
+    hf_fs.open.side_effect = lambda path, mode="rb": FlakyReader()
+
+    with (
+        patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
+        patch("marin.download.huggingface.download_hf.time.sleep", return_value=None),
+    ):
+        result = stream_file_to_fsspec(
+            str(output_path),
+            file_path,
+            str(destination),
+            expected_size=len(content),
+        )
+
+    assert result["status"] == "success"
+    assert destination.read_bytes() == content
+    assert read_attempts["count"] >= 3

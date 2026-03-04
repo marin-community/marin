@@ -1,6 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
+from iris.marin_fs import open_url, url_to_fs
+
 
 def get_id_from_row(row: dict, id_path: tuple[str, ...]) -> str | None:
     """Traverse a tuple path in a row to extract the ID, or return None if missing."""
@@ -22,21 +26,17 @@ def get_finished_ids(output_filename: str, id_path: tuple[str, ...]) -> set:
     Returns:
         Set of IDs that have already been processed
     """
-    import json
-
-    import fsspec
-
     finished_ids = set()
 
     try:
         # Check if file exists on local or remote filesystem
-        fs, _ = fsspec.core.url_to_fs(output_filename)
+        fs, _ = url_to_fs(output_filename)
         if not fs.exists(output_filename):
             return finished_ids
 
         if output_filename.endswith((".jsonl.gz", ".jsonl.zst", ".jsonl")):
             # Read JSON lines and extract IDs
-            with fsspec.open(output_filename, "rt", compression="infer") as f:
+            with open_url(output_filename, "rt", compression="infer") as f:
                 for line in f:
                     try:
                         row = json.loads(line)
@@ -49,7 +49,7 @@ def get_finished_ids(output_filename: str, id_path: tuple[str, ...]) -> set:
             # Read parquet and extract IDs
             import pyarrow.parquet as pq
 
-            with fsspec.open(output_filename, "rb") as f:
+            with open_url(output_filename, "rb") as f:
                 table = pq.read_table(f, columns=[id_path[0]])
                 for row in table.to_pylist():
                     id_value = get_id_from_row(row, id_path)

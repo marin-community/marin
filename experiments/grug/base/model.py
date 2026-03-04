@@ -194,7 +194,7 @@ class Transformer(eqx.Module):
         hidden = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=Pbatch)
 
-    def compute_next_token_loss(
+    def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
         loss_weight: Float[Array, "B S"],
@@ -224,6 +224,26 @@ def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float
     return std * random.truncated_normal(key, -3, 3, shape)
 
 
+def debug_mesh_and_token_pspec(num_devices: int, model_axis_size: int = 1) -> tuple[jax.sharding.AbstractMesh, P]:
+    """Return a small abstract mesh and token sharding for lowering contract tests."""
+    if num_devices <= 0:
+        raise ValueError(f"num_devices must be positive, got {num_devices}")
+    if model_axis_size <= 0:
+        raise ValueError(f"model_axis_size must be positive, got {model_axis_size}")
+    if num_devices % model_axis_size != 0:
+        raise ValueError(f"num_devices ({num_devices}) must be divisible by model_axis_size ({model_axis_size})")
+    data_axis_size = num_devices // model_axis_size
+    mesh = jax.sharding.AbstractMesh(
+        axis_sizes=(data_axis_size, model_axis_size),
+        axis_names=("data", "model"),
+        axis_types=(
+            jax.sharding.AxisType.Explicit,
+            jax.sharding.AxisType.Explicit,
+        ),
+    )
+    return mesh, P(("data",), None)
+
+
 __all__ = [
     "MLP",
     "Block",
@@ -231,4 +251,5 @@ __all__ = [
     "GrugModelConfig",
     "RMSNorm",
     "Transformer",
+    "debug_mesh_and_token_pspec",
 ]

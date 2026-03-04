@@ -117,7 +117,7 @@ class TokenPassingActor:
             result = f"Complete: {self.actor_id} received token after {len(token.path)} hops"
             print(f"[{self.actor_id}] Token passing complete! Total hops: {len(token.path)}")
             # Notify collector
-            collector = ActorClient(self._resolver, "collector", resolve_timeout=30.0)
+            collector = ActorClient(self._resolver, "collector", call_timeout=30.0)
             collector.notify_complete(result)
             return
 
@@ -127,7 +127,7 @@ class TokenPassingActor:
 
         # Pick random next actor and send
         next_actor_name = random.choice(self.all_actor_names)
-        next_client = ActorClient(self._resolver, next_actor_name, resolve_timeout=300.0)
+        next_client = ActorClient(self._resolver, next_actor_name, call_timeout=300.0)
         token.round_num += 1
         token.sender_id = self.actor_id
         next_client.send_token(token)
@@ -190,7 +190,7 @@ def main(rounds: int = 5, delay: float = 0.5):
     print("\nInitiating token passing...")
     initial_token = Token(round_num=1, sender_id="initiator", path=["initiator"])
 
-    client = ActorClient(resolver, "actor1", resolve_timeout=300.0)
+    client = ActorClient(resolver, "actor1", call_timeout=300.0)
     client.send_token(initial_token)
 
     # Wait for completion via collector

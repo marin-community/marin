@@ -3,10 +3,10 @@
 
 import json
 from typing import TypeVar, overload, Any
-from dataclasses import dataclass, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from marin.execution.step_spec import StepSpec
 
-import fsspec
+from iris.marin_fs import open_url
 from pydantic import BaseModel
 
 T = TypeVar("T")
@@ -30,7 +30,7 @@ class Artifact:
         if isinstance(base_path, StepSpec):
             base_path = base_path.output_path
 
-        with fsspec.open(f"{base_path}/{cls.__artifact_file_name}", "rb") as fd:
+        with open_url(f"{base_path}/{cls.__artifact_file_name}", "rb") as fd:
             if artifact_type is None:
                 return json.load(fd)
             if issubclass(artifact_type, BaseModel):
@@ -42,11 +42,13 @@ class Artifact:
     @classmethod
     def save(cls, artifact: T, base_path: str) -> None:
         """Saves an Artifact instance to the specified output base path"""
-        with fsspec.open(f"{base_path}/{cls.__artifact_file_name}", "wb") as fd:
+        with open_url(f"{base_path}/{cls.__artifact_file_name}", "wb") as fd:
             if isinstance(artifact, BaseModel):
                 fd.write(artifact.model_dump_json().encode("utf-8"))
             elif is_dataclass(artifact):
-                fd.write(json.dumps(artifact.__dict__).encode("utf-8"))
+                # `asdict` recursively converts nested dataclasses (for example ResourceConfig),
+                # avoiding non-serializable objects in `__dict__`.
+                fd.write(json.dumps(asdict(artifact)).encode("utf-8"))
             else:
                 # TODO: should the error to serialize be ignored/logged instead of raising an exception?
                 fd.write(json.dumps(artifact).encode("utf-8"))

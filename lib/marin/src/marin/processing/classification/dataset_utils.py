@@ -21,9 +21,9 @@ import os
 from dataclasses import dataclass
 from typing import TypedDict
 
-import fsspec
 import numpy as np
 import pandas as pd
+from iris.marin_fs import open_url, url_to_fs
 
 logger = logging.getLogger("ray")
 
@@ -133,19 +133,19 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
 
         # If appending and local temp doesn't exist, hydrate it from remote (if present)
         if append and not os.path.exists(tmp_path):
-            fs, _ = fsspec.core.url_to_fs(output_filename)
+            fs, _ = url_to_fs(output_filename)
             if fs.exists(output_filename):
-                with fsspec.open(output_filename, "rb") as src, open(tmp_path, "wb") as dst:
+                with open_url(output_filename, "rb") as src, open(tmp_path, "wb") as dst:
                     shutil.copyfileobj(src, dst)
 
         # Turn on compression inference to have fsspec auto-compress files according to the suffix
-        with fsspec.open(tmp_path, mode, compression="infer") as f:
+        with open_url(tmp_path, mode, compression="infer") as f:
             for row in rows_iterator:
                 row = make_json_serializable(row)
                 f.write((json.dumps(row) + "\n").encode("utf-8"))
 
         # Upload temp file to destination (overwrite remote with full content)
-        with fsspec.open(output_filename, "wb") as dst, open(tmp_path, "rb") as src:
+        with open_url(output_filename, "wb") as dst, open(tmp_path, "rb") as src:
             shutil.copyfileobj(src, dst)
         return
     if output_filename.endswith(".parquet"):
@@ -158,14 +158,14 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
             df = pd.DataFrame(rows)
             table = pa.Table.from_pandas(df)
 
-            fs, _ = fsspec.core.url_to_fs(output_filename)
+            fs, _ = url_to_fs(output_filename)
             if append and fs.exists(output_filename):
                 # Read existing parquet and append
-                with fsspec.open(output_filename, "rb") as f:
+                with open_url(output_filename, "rb") as f:
                     existing_table = pq.read_table(f)
                 table = pa.concat_tables([existing_table, table])
 
-            with fsspec.open(output_filename, "wb") as f:
+            with open_url(output_filename, "wb") as f:
                 pq.write_table(table, f)
         return
 
