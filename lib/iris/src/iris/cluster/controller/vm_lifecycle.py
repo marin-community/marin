@@ -381,6 +381,37 @@ def start_controller(
     return address, vm
 
 
+def restart_controller(
+    platform: Platform,
+    config: config_pb2.IrisClusterConfig,
+) -> tuple[str, StandaloneWorkerHandle]:
+    """Restart controller container in-place on existing VM.
+
+    Re-runs the bootstrap script on the existing controller VM, which stops the
+    running container, pulls the latest image, and starts a new container.
+    Much faster than a full stop+start cycle since it skips VM creation.
+    """
+    label_prefix = config.platform.label_prefix or "iris"
+    zones = _controller_zones(config)
+    port = _controller_port(config)
+
+    vm = _discover_controller_vm(platform, zones, label_prefix)
+    if vm is None:
+        raise RuntimeError("No existing controller VM found. Use 'iris cluster start' to create one first.")
+
+    logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
+
+    bootstrap_script = build_controller_bootstrap_script_from_config(config, platform=platform)
+    vm.bootstrap(bootstrap_script)
+
+    address = f"http://{vm.internal_address}:{port}"
+    if not wait_healthy(vm, port):
+        raise RuntimeError(f"Controller at {address} failed health check after restart")
+
+    logger.info("Controller container restarted at %s", address)
+    return address, vm
+
+
 def stop_controller(platform: Platform, config: config_pb2.IrisClusterConfig) -> None:
     """Find and terminate the controller VM."""
     label_prefix = config.platform.label_prefix or "iris"
