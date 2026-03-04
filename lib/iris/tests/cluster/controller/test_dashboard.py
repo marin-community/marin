@@ -724,6 +724,63 @@ def test_get_worker_status_by_worker_id(client, state, make_worker_metadata):
     assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
 
 
+def test_worker_id_consistent_across_list_and_detail(client, state, make_worker_metadata, job_request):
+    """Worker ID from ListWorkers resolves in GetWorkerStatus — the link chain must be consistent.
+
+    The fleet tab creates links using worker_id from ListWorkers, and the worker
+    detail page looks up by that same ID. This test verifies the full chain works
+    with various worker_id formats (simple names, IPs, VM-style names).
+    """
+    for wid, addr in [
+        ("10.164.0.78", "10.164.0.78:8080"),
+        ("marin-tpu_v6e_4-europe-west4-a-1772594381898-vm-0", "10.0.0.5:9090"),
+        ("simple-worker", "192.168.1.1:8080"),
+    ]:
+        register_worker(state, wid, addr, make_worker_metadata())
+
+    # ListWorkers returns worker_ids
+    list_resp = rpc_post(client, "ListWorkers", {})
+    listed_ids = {w["workerId"] for w in list_resp.get("workers", [])}
+    assert "10.164.0.78" in listed_ids
+    assert "marin-tpu_v6e_4-europe-west4-a-1772594381898-vm-0" in listed_ids
+    assert "simple-worker" in listed_ids
+
+    # Each listed worker_id resolves in GetWorkerStatus (the detail page lookup)
+    for w in list_resp["workers"]:
+        detail_resp = rpc_post(client, "GetWorkerStatus", {"id": w["workerId"]})
+        assert detail_resp["worker"]["workerId"] == w["workerId"]
+
+
+def test_task_worker_id_matches_fleet_worker_id(client, state, make_worker_metadata, job_request):
+    """Task worker_id in job detail matches the worker_id from fleet/ListWorkers.
+
+    When a task is assigned to a worker, the worker_id on the task must be the same
+    ID used in ListWorkers and GetWorkerStatus. This ensures worker links from the
+    job detail page resolve correctly.
+    """
+    wid = register_worker(state, "10.164.0.78", "10.164.0.78:8080", make_worker_metadata())
+    job_id = submit_job(state, "link-test", job_request)
+    task_id = job_id.task(0)
+
+    state.handle_event(TaskAssignedEvent(task_id=task_id, worker_id=wid))
+    state.handle_event(TaskStateChangedEvent(task_id=task_id, new_state=cluster_pb2.TASK_STATE_RUNNING, attempt_id=0))
+
+    # Task's worker_id matches the worker_id from ListWorkers
+    tasks_resp = rpc_post(client, "ListTasks", {"jobId": job_id.to_wire()})
+    task_worker_id = tasks_resp["tasks"][0]["workerId"]
+
+    list_resp = rpc_post(client, "ListWorkers", {})
+    fleet_worker_ids = {w["workerId"] for w in list_resp.get("workers", [])}
+
+    assert (
+        task_worker_id in fleet_worker_ids
+    ), f"Task worker_id '{task_worker_id}' not found in fleet worker_ids {fleet_worker_ids}"
+
+    # And it resolves in GetWorkerStatus
+    detail_resp = rpc_post(client, "GetWorkerStatus", {"id": task_worker_id})
+    assert detail_resp["worker"]["workerId"] == task_worker_id
+
+
 def test_get_worker_status_unknown_id_returns_error(client):
     """GetWorkerStatus returns 404 for unknown IDs (no VM fallback)."""
     resp = client.post(
