@@ -1,837 +1,621 @@
-6]{1,0:T(4,128)S(1)} parameter(2)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376549   25096 2a886c8_compiler_base.cc:2613] eq.36 = s32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_2.1384), dimensions={0,1}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376558   25096 2a886c8_compiler_base.cc:2613] broadcast.591 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(constant.1544), dimensions={}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376567   25096 2a886c8_compiler_base.cc:2613] iota.66 = s32[4,4096,144640]{2,1,0:T(8,128)} iota(), iota_dimension=2
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376579   25096 2a886c8_compiler_base.cc:2613] eq.35 = pred[4,4096,144640]{2,1,0:T(8,128)(4,1)} compare(eq.36, iota.66), direction=EQ
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376589   25096 2a886c8_compiler_base.cc:2613] mul.1874 = f32[4,4096,144640]{2,1,0:T(8,128)} multiply(broadcast_in_dim.423, exp.46)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376603   25096 2a886c8_compiler_base.cc:2613] sub.71 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_3.954), dimensions={0,1}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376613   25096 2a886c8_compiler_base.cc:2613] convert_element_type.808 = f32[4,4096,144640]{2,1,0:T(8,128)} convert(param_4.698)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376622   25096 2a886c8_compiler_base.cc:2613] sub.70 = f32[4,4096,144640]{2,1,0:T(8,128)} subtract(convert_element_type.808, sub.71)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376631   25096 2a886c8_compiler_base.cc:2613] exp.46 = f32[4,4096,144640]{2,1,0:T(8,128)} exponential(sub.70)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376642   25096 2a886c8_compiler_base.cc:2613] param_0.1501 = f32[4,4096]{1,0:T(4,128)S(1)} parameter(0)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376652   25096 2a886c8_compiler_base.cc:2613] broadcast_in_dim.423 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_0.1501), dimensions={0,1}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376661   25096 2a886c8_compiler_base.cc:2613] mul.1874 = f32[4,4096,144640]{2,1,0:T(8,128)} multiply(broadcast_in_dim.423, exp.46)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376673   25096 2a886c8_compiler_base.cc:2613] constant.1544 = f32[]{:T(128)} constant(0)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376683   25096 2a886c8_compiler_base.cc:2613] broadcast.591 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(constant.1544), dimensions={}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376694   25096 2a886c8_compiler_base.cc:2613] param_1.1713 = f32[4,4096]{1,0:T(4,128)S(1)} parameter(1)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376704   25096 2a886c8_compiler_base.cc:2613] dot_general.235 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_1.1713), dimensions={0,1}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376718   25096 2a886c8_compiler_base.cc:2613] iota.66 = s32[4,4096,144640]{2,1,0:T(8,128)} iota(), iota_dimension=2
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376727   25096 2a886c8_compiler_base.cc:2613] eq.36 = s32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_2.1384), dimensions={0,1}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376736   25096 2a886c8_compiler_base.cc:2613] eq.35 = pred[4,4096,144640]{2,1,0:T(8,128)(4,1)} compare(eq.36, iota.66), direction=EQ
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376753   25096 2a886c8_compiler_base.cc:2613] dot_general.234 = f32[4,4096,144640]{2,1,0:T(8,128)} select(eq.35, dot_general.235, broadcast.591)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376763   25096 2a886c8_compiler_base.cc:2613] neg.107 = f32[4,4096,144640]{2,1,0:T(8,128)} negate(dot_general.234)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.376772   25096 2a886c8_compiler_base.cc:2613] add_any.202 = f32[4,4096,144640]{2,1,0:T(8,128)} add(neg.107, mul.1874)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377502   25096 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377520   25096 2a886c8_compiler_base.cc:2613] param_2.1624 = s32[4,4096]{1,0:T(4,128)S(1)} parameter(2)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377529   25096 2a886c8_compiler_base.cc:2613] eq.40 = s32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_2.1624), dimensions={0,1}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377538   25096 2a886c8_compiler_base.cc:2613] broadcast.609 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(constant.1815), dimensions={}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377547   25096 2a886c8_compiler_base.cc:2613] iota.76 = s32[4,4096,144640]{2,1,0:T(8,128)} iota(), iota_dimension=2
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377566   25096 2a886c8_compiler_base.cc:2613] eq.39 = pred[4,4096,144640]{2,1,0:T(8,128)(4,1)} compare(eq.40, iota.76), direction=EQ
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377575   25096 2a886c8_compiler_base.cc:2613] mul.2194 = f32[4,4096,144640]{2,1,0:T(8,128)} multiply(broadcast_in_dim.535, exp.64)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377585   25096 2a886c8_compiler_base.cc:2613] sub.81 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_3.1104), dimensions={0,1}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377597   25096 2a886c8_compiler_base.cc:2613] convert_element_type.1046 = f32[4,4096,144640]{2,1,0:T(8,128)} convert(param_4.805)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377607   25096 2a886c8_compiler_base.cc:2613] sub.80 = f32[4,4096,144640]{2,1,0:T(8,128)} subtract(convert_element_type.1046, sub.81)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377619   25096 2a886c8_compiler_base.cc:2613] exp.64 = f32[4,4096,144640]{2,1,0:T(8,128)} exponential(sub.80)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377629   25096 2a886c8_compiler_base.cc:2613] param_0.1921 = f32[4,4096]{1,0:T(4,128)S(1)} parameter(0)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377641   25096 2a886c8_compiler_base.cc:2613] broadcast_in_dim.535 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_0.1921), dimensions={0,1}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377650   25096 2a886c8_compiler_base.cc:2613] mul.2194 = f32[4,4096,144640]{2,1,0:T(8,128)} multiply(broadcast_in_dim.535, exp.64)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377660   25096 2a886c8_compiler_base.cc:2613] constant.1815 = f32[]{:T(128)} constant(0)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377671   25096 2a886c8_compiler_base.cc:2613] broadcast.609 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(constant.1815), dimensions={}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377681   25096 2a886c8_compiler_base.cc:2613] param_1.2007 = f32[4,4096]{1,0:T(4,128)S(1)} parameter(1)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377694   25096 2a886c8_compiler_base.cc:2613] dot_general.241 = f32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_1.2007), dimensions={0,1}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377703   25096 2a886c8_compiler_base.cc:2613] iota.76 = s32[4,4096,144640]{2,1,0:T(8,128)} iota(), iota_dimension=2
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377712   25096 2a886c8_compiler_base.cc:2613] eq.40 = s32[4,4096,144640]{2,1,0:T(8,128)} broadcast(param_2.1624), dimensions={0,1}
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377724   25096 2a886c8_compiler_base.cc:2613] eq.39 = pred[4,4096,144640]{2,1,0:T(8,128)(4,1)} compare(eq.40, iota.76), direction=EQ
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377733   25096 2a886c8_compiler_base.cc:2613] dot_general.240 = f32[4,4096,144640]{2,1,0:T(8,128)} select(eq.39, dot_general.241, broadcast.609)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377742   25096 2a886c8_compiler_base.cc:2613] neg.137 = f32[4,4096,144640]{2,1,0:T(8,128)} negate(dot_general.240)
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:55.377754   25096 2a886c8_compiler_base.cc:2613] add_any.214 = f32[4,4096,144640]{2,1,0:T(8,128)} add(neg.137, mul.2194)
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408595   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408609   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408673   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408730   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408785   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408849   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408907   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.408981   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409047   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409112   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409175   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409232   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409299   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409356   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409412   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409513   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409568   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409629   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409685   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409748   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409805   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.409860   24744 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.410189   24744 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.410246   24744 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.410320   24744 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.412224   24744 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.414502   24744 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.414627   24744 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.414730   24744 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.414961   24744 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.415024   24744 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.415170   24744 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.415980   24744 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.416127   24744 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.416160   24744 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.416207   24744 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22475, ip=10.164.0.78) E0301 18:28:55.417206   24744 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496074   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496089   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496152   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496209   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496265   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496331   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496397   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496461   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496526   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496591   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496653   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496719   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496774   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496832   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496887   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.496986   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497041   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497102   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497156   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497220   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497275   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497332   25133 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497647   25133 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497708   25133 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.497774   25133 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.499601   25133 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.501873   25133 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.501973   25133 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.502075   25133 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.502323   25133 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.502391   25133 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.502556   25133 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.503363   25133 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.503511   25133 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.503543   25133 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.503592   25133 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22826, ip=10.164.0.64) E0301 18:28:55.504573   25133 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568031   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568045   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568108   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568166   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568222   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568284   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568346   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568409   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568472   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568555   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568617   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568678   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568733   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568788   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568843   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568943   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.568998   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569057   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569111   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569175   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569230   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569286   25282 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569616   25282 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569670   25282 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.569739   25282 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.571541   25282 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.573616   25282 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.573717   25282 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.573816   25282 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.574045   25282 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.574107   25282 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.574244   25282 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.575067   25282 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.575212   25282 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.575240   25282 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.575284   25282 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=23009, ip=10.164.0.179) E0301 18:28:55.576263   25282 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579425   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579450   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579537   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579599   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579655   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579721   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579781   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579853   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579918   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.579983   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580048   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580104   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580167   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580223   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580280   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580378   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580441   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580504   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580563   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580626   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580681   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.580738   25141 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.581047   25141 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.581108   25141 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.581173   25141 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.583042   25141 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585316   25141 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585415   25141 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585524   25141 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585757   25141 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585820   25141 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.585969   25141 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.586799   25141 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.586947   25141 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.586976   25141 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.587023   25141 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22876, ip=10.164.0.134) E0301 18:28:55.588029   25141 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.661848   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.661862   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.661932   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.661988   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662043   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662108   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662166   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662242   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662306   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662368   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662429   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662485   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662549   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662604   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662660   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662756   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662810   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662872   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662924   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.662985   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.663057   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.663110   27938 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.663428   27938 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.663488   27938 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.663560   27938 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.665428   27938 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.667688   27938 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.667785   27938 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.667886   27938 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.668113   27938 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.668174   27938 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.668309   27938 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.669147   27938 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.669292   27938 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.669324   27938 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.669371   27938 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=25351, ip=10.164.0.79) E0301 18:28:55.670360   27938 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658433   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658447   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658508   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658561   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658615   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658676   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658736   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658792   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658846   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658902   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.658958   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659013   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659062   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659109   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659157   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659260   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659307   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659361   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659413   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659467   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659515   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659563   25245 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659876   25245 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659925   25245 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.659992   25245 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.661876   25245 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.663996   25245 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.664082   25245 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.664175   25245 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.664402   25245 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.664464   25245 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.664588   25245 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.665401   25245 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.665534   25245 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.665565   25245 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.665608   25245 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22987, ip=10.164.0.87) E0301 18:28:55.666585   25245 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679286   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679299   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679360   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679414   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679468   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679527   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679589   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679649   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679712   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679774   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679832   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679916   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.679970   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680024   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680079   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680172   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680224   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680280   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680332   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680391   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680443   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680496   25564 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680831   25564 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680890   25564 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.680956   25564 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.682829   25564 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685039   25564 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685132   25564 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685227   25564 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685453   25564 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685514   25564 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.685647   25564 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.686463   25564 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.686610   25564 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.686641   25564 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.686710   25564 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22855, ip=10.164.0.146) E0301 18:28:55.687689   25564 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.701924   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.701938   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702000   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702052   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702106   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702163   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702216   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702276   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702331   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702386   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702439   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702487   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702540   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702589   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702637   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702726   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702774   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702831   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702878   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702931   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.702979   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.703028   25107 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.703358   25107 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.703413   25107 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.703480   25107 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.705332   25107 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.707491   25107 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.707579   25107 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.707686   25107 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.707911   25107 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.707970   25107 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.708099   25107 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.708906   25107 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.709033   25107 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.709065   25107 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.709109   25107 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22842, ip=10.164.0.70) E0301 18:28:55.710057   25107 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699088   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699102   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699165   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699220   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699275   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699338   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699393   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699462   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699526   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699590   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699651   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699709   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699771   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699827   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699882   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.699981   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700036   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700098   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700152   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700212   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700268   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700322   25117 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700640   25117 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700706   25117 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.700768   25117 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.702650   25117 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.704911   25117 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.705012   25117 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.705114   25117 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.705338   25117 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.705400   25117 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.705541   25117 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.706349   25117 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.706496   25117 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.706528   25117 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.706576   25117 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22870, ip=10.164.0.171) E0301 18:28:55.707543   25117 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759262   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759276   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759340   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759398   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759453   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759526   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759589   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759654   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759718   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759784   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759846   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759909   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.759965   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760020   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760075   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760172   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760226   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760285   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760339   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760399   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760455   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760513   25204 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760823   25204 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760879   25204 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.760949   25204 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.762810   25204 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765127   25204 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765230   25204 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765328   25204 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765555   25204 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765618   25204 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.765760   25204 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.766571   25204 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.766721   25204 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.766761   25204 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.766810   25204 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22945, ip=10.164.0.110) E0301 18:28:55.767793   25204 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.746839   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.746853   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.746917   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.746975   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747031   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747103   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747164   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747235   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747300   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747367   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747433   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747490   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747554   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747611   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747668   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747775   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747830   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747891   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.747946   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748010   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748067   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748131   25298 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748469   25298 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748533   25298 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.748601   25298 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.750521   25298 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.752836   25298 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.752937   25298 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.753035   25298 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.753272   25298 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.753338   25298 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.753481   25298 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.754306   25298 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.754457   25298 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.754490   25298 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.754539   25298 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=23040, ip=10.164.0.158) E0301 18:28:55.755556   25298 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.709755   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.709769   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.709831   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.709886   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.709940   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710000   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710055   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710115   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710170   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710224   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710277   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710324   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710378   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710425   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710473   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710562   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710613   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710665   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710713   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710766   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710814   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.710862   25101 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.711175   25101 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.711232   25101 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.711299   25101 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.713145   25101 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715303   25101 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715388   25101 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715478   25101 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715731   25101 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715789   25101 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.715919   25101 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.716729   25101 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.716856   25101 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.716889   25101 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.716936   25101 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22868, ip=10.164.0.127) E0301 18:28:55.717901   25101 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846497   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846511   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846575   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846631   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846695   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846758   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846822   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846888   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.846954   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847021   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847082   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847146   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847203   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847261   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847318   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847427   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847484   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847546   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847603   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847665   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847727   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.847783   25194 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.848103   25194 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.848159   25194 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.848231   25194 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.850167   25194 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.852357   25194 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.852457   25194 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.852563   25194 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.852799   25194 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.852862   25194 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.853011   25194 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.853843   25194 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.853990   25194 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.854026   25194 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.854095   25194 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22944, ip=10.164.0.187) E0301 18:28:55.855133   25194 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867405   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867419   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867482   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867540   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867597   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867662   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867735   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867801   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867866   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867931   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.867994   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868058   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868114   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868170   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868226   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868321   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868376   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868437   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868494   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868556   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868611   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868667   25379 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.868996   25379 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.869052   25379 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.869121   25379 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.870960   25379 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873104   25379 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873202   25379 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873302   25379 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873532   25379 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873593   25379 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.873733   25379 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.874552   25379 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.874702   25379 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.874746   25379 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.874789   25379 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=23085, ip=10.164.0.84) E0301 18:28:55.875773   25379 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906351   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906365   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906429   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906485   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906543   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906605   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906668   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906734   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906798   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906865   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906927   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.906990   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907047   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907104   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907160   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907271   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907328   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907388   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907443   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907506   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907563   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907620   25111 2a886c8_compiler_base.cc:2587] 
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907940   25111 2a886c8_compiler_base.cc:2608] region_8.11
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.907999   25111 2a886c8_compiler_base.cc:2608] region_12.14
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.908068   25111 2a886c8_compiler_base.cc:2608] region_24.27
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.910012   25111 2a886c8_compiler_base.cc:2608] main.103_spmd
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912280   25111 2a886c8_compiler_base.cc:2608] fused_computation.325
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912381   25111 2a886c8_compiler_base.cc:2608] fused_computation.329
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912486   25111 2a886c8_compiler_base.cc:2608] fused_computation.349
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912718   25111 2a886c8_compiler_base.cc:2608] fused_computation.404
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912782   25111 2a886c8_compiler_base.cc:2608] fused_computation.408
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.912925   25111 2a886c8_compiler_base.cc:2608] fused_computation.411
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.913792   25111 2a886c8_compiler_base.cc:2608] fused_computation.527
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.913946   25111 2a886c8_compiler_base.cc:2608] fused_computation.336.clone.clone
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.913984   25111 2a886c8_compiler_base.cc:2608] fused_computation.334.clone.clone
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.914032   25111 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.1.clone.clone
-(<lambda> pid=22863, ip=10.164.0.68) E0301 18:28:55.915054   25111 2a886c8_compiler_base.cc:2608] fused_computation.328.clone.clone.clone.clone.clone
-(run_on_pod_ray pid=41604, ip=10.164.1.197) Task error ray::<lambda>() (pid=22825, ip=10.164.0.83)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     trainer.train(state, train_loader)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 541, in train
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     for info in self.training_steps(state, train_loader):
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     info = self.train_step(state, example)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 478, in train_step
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 753, in _maybe_save_jaxpr
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/haliax/src/haliax/partitioning.py", line 392, in __call__
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     return self._call(False, *args, **kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     return self.__func__(self.__self__, *args, **kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/haliax/src/haliax/partitioning.py", line 464, in _call
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197) jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm. Used 19.88G of 15.75G hbm. Exceeded hbm capacity by 4.13G.
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) Total hbm usage >= 20.13G:
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     reserved        258.03M 
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     program          19.88G 
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     arguments            0B 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) Output size 0B; shares 0B with arguments.
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) --------------------
-(run_on_pod_ray pid=41604, ip=10.164.1.197) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-(run_on_pod_ray pid=41604, ip=10.164.1.197) Traceback (most recent call last):
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=41604, ip=10.164.1.197)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     return func(*args, **kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=41604, ip=10.164.1.197)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=41604, ip=10.164.1.197) ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=22825, ip=10.164.0.83)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     trainer.train(state, train_loader)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 541, in train
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     for info in self.training_steps(state, train_loader):
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     info = self.train_step(state, example)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 478, in train_step
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/levanter/src/levanter/trainer.py", line 753, in _maybe_save_jaxpr
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/haliax/src/haliax/partitioning.py", line 392, in __call__
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     return self._call(False, *args, **kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/pip/edb55977f3e468c6cf198ae86f77772d90521397/virtualenv/lib/python3.11/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     return self.__func__(self.__self__, *args, **kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/haliax/src/haliax/partitioning.py", line 464, in _call
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197) jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm. Used 19.88G of 15.75G hbm. Exceeded hbm capacity by 4.13G.
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) Total hbm usage >= 20.13G:
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     reserved        258.03M 
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     program          19.88G 
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     arguments            0B 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) Output size 0B; shares 0B with arguments.
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) --------------------
-(run_on_pod_ray pid=41604, ip=10.164.1.197) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-(run_on_pod_ray pid=41604, ip=10.164.1.197) --------------------
-(run_on_pod_ray pid=41604, ip=10.164.1.197) For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-(SliceActor pid=24828, ip=10.164.0.79) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=22825, ip=10.164.0.83)
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(SliceActor pid=24828, ip=10.164.0.79) 
-(<lambda> pid=22825, ip=10.164.0.83) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f8de0118ea0>
-(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
-(<lambda> pid=22825, ip=10.164.0.83)     conn.teardown(hooks.exit_code)
-(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
-(<lambda> pid=22825, ip=10.164.0.83)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
-(<lambda> pid=22825, ip=10.164.0.83)     return future.result()
-(<lambda> pid=22825, ip=10.164.0.83)            ^^^^^^^^^^^^^^^
-(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=22825, ip=10.164.0.83)     return self.__get_result()
-(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=22825, ip=10.164.0.83)     raise self._exception
-(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=22825, ip=10.164.0.83)     return await fn()
-(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=22825, ip=10.164.0.83)     await self._client.close()
-(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=22825, ip=10.164.0.83)     await self._writer.wait_closed()
-(<lambda> pid=22825, ip=10.164.0.83)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=22825, ip=10.164.0.83)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=22825, ip=10.164.0.83) BrokenPipeError: [Errno 32] Broken pipe
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:56.677414   24816 slice_configuration.cc:637] tpu18:pe1:3:p1:x has unexpectedly gone down.
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:56.972831   24818 slice_configuration.cc:637] tpu18:pe1:2:p1:y has unexpectedly gone down.
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:56.985093   24819 slice_configuration.cc:637] tpu18:pe1:1:p2:y has unexpectedly gone down.
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.274673   24815 slice_configuration.cc:637] tpu18:pe1:0:p1:y has unexpectedly gone down.
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.279672   24815 slice_configuration.cc:637] tpu18:pe1:0:p2:x has unexpectedly gone down.
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.581329   24819 slice_configuration.cc:637] tpu18:pe1:1:p1:x has unexpectedly gone down.
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.598701   24818 slice_configuration.cc:637] tpu18:pe1:2:p2:x has unexpectedly gone down.
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.615923   24816 slice_configuration.cc:637] tpu18:pe1:3:p2:y has unexpectedly gone down.
-(<lambda> pid=22825, ip=10.164.0.83) E0301 18:28:57.800877   24393 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=22825, ip=10.164.0.83) F0301 18:28:57.800909   24393 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=22825, ip=10.164.0.83) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
-(<lambda> pid=22825, ip=10.164.0.83) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"}
-(run_on_pod_ray pid=41604, ip=10.164.1.197) Failed 2 times. Continuing to retry.
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_358162679fe9a1d1/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     return func(*args, **kwargs)
-(run_on_pod_ray pid=41604, ip=10.164.1.197)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=41604, ip=10.164.1.197)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=41604, ip=10.164.1.197)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=41604, ip=10.164.1.197) ray.exceptions.RayTaskError(JaxRuntimeError): ray::<lambda>() (pid=22825, ip=10.164.0.83)
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
-(run_on_pod_ray pid=41604, ip=10.164.1.197) 
+(<lambda> pid=13870, ip=10.164.0.62) 2026-03-03T19:03:00 - 3 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 [repeated 30x across cluster]
+(<lambda> pid=13577, ip=10.164.0.105) 2026-03-03T19:03:50 - 24 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1002 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmp4kad44sm
+(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:03:50 - 9 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1002 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpafcgufqm
+(<lambda> pid=3725, ip=10.164.1.26) 2026-03-03T19:03:50 - 5 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1002 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmphfztjbba
+(<lambda> pid=14015, ip=10.164.0.26) 2026-03-03T19:03:50 - 23 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1002 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpnhleyktg
+(<lambda> pid=3724, ip=10.164.0.43) 2026-03-03T19:03:51 - 13 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1014 - INFO :: Saving shard model-00002-of-00002.safetensors (1.84 GB, 26.93% of model)
+(<lambda> pid=13727, ip=10.164.1.58) 2026-03-03T19:03:54 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 6.82GB/6.82GB rate:88,242,769.7B/s remaining:00:00 elapsed:01:03 postfix:-
+(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:03:54 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000
+(autoscaler +2h10m20s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +2h10m20s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +2h10m20s) Resized to 23400 CPUs, 780 TPUs.
+(<lambda> pid=13784, ip=10.164.0.63) 2026-03-03T19:04:13 - 8 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1031 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.99 GB
+(<lambda> pid=13784, ip=10.164.0.63) 2026-03-03T19:04:13 - 8 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmp094vs6sb
+(<lambda> pid=13784, ip=10.164.0.63) 2026-03-03T19:04:13 - 8 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1048 - INFO :: Saving tokenizer
+(<lambda> pid=13787, ip=10.164.0.76) 2026-03-03T19:03:54 - 28 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 [repeated 31x across cluster]
+(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:03:51 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1002 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpp_d0wnyu [repeated 28x across cluster]
+(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:03:52 - 21 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1014 - INFO :: Saving shard model-00002-of-00002.safetensors (1.84 GB, 26.93% of model) [repeated 31x across cluster]
+(<lambda> pid=13787, ip=10.164.0.76) 2026-03-03T19:03:54 - 28 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 6.82GB/6.82GB rate:88,659,147.1B/s remaining:00:00 elapsed:01:02 postfix:- [repeated 31x across cluster]
+(<lambda> pid=3818, ip=10.164.1.40) 2026-03-03T19:04:13 - 31 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpwqvmb_qd
+(<lambda> pid=13577, ip=10.164.0.105) 2026-03-03T19:04:13 - 24 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpptvctycx
+(<lambda> pid=3727, ip=10.164.0.14) 2026-03-03T19:04:13 - 25 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpqkrvwtod
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:04:13 - 15 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpzuluezil
+(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:13 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000
+(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:13 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpmg_vebra
+(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:13 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000
+(<lambda> pid=3724, ip=10.164.0.43) 2026-03-03T19:04:14 - 13 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1072 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000
+(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:14 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000
+(<lambda> pid=13577, ip=10.164.0.105) 2026-03-03T19:04:15 - 24 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.00kit/30.0kit rate:47.9s/it remaining:345:38:40 elapsed:23:57 postfix:loss=4.28
+(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:13 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1031 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.99 GB [repeated 31x across cluster]
+(<lambda> pid=3725, ip=10.164.1.26) 2026-03-03T19:04:13 - 5 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmp9ls8mh6y [repeated 26x across cluster]
+(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:13 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1048 - INFO :: Saving tokenizer [repeated 31x across cluster]
+(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:04:13 - 9 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 [repeated 31x across cluster]
+(<lambda> pid=13857, ip=10.164.1.35) 2026-03-03T19:04:14 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 6.82GB/6.82GB rate:79,688,340.7B/s remaining:00:00 elapsed:01:32 postfix:- [repeated 32x across cluster]
+(<lambda> pid=13857, ip=10.164.1.35) 2026-03-03T19:04:14 - 17 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1072 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 [repeated 31x across cluster]
+(<lambda> pid=13851, ip=10.164.1.29) 2026-03-03T19:05:16 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.06kit/30.0kit rate:1.1s/it remaining:8:08:58 elapsed:24:58 postfix:loss=4.35 [repeated 32x across cluster]
+(<lambda> pid=3722, ip=10.164.1.63) 2026-03-03T19:06:17 - 7 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.11kit/30.0kit rate:1.2s/it remaining:8:30:08 elapsed:25:59 postfix:loss=4.42 [repeated 32x across cluster]
+(<lambda> pid=3726, ip=10.164.1.60) 2026-03-03T19:07:18 - 27 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.16kit/30.0kit rate:1.1s/it remaining:7:57:00 elapsed:27:00 postfix:loss=4.29 [repeated 32x across cluster]
+(autoscaler +2h14m1s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +2h14m1s) Resized to 23400 CPUs, 780 TPUs.
+(<lambda> pid=3727, ip=10.164.0.14) 2026-03-03T19:08:18 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.21kit/30.0kit rate:1.1s/it remaining:7:59:36 elapsed:28:00 postfix:loss=4.41 [repeated 32x across cluster]
+(<lambda> pid=13577, ip=10.164.0.105) 2026-03-03T19:09:18 - 24 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.27kit/30.0kit rate:1.1s/it remaining:7:54:30 elapsed:29:00 postfix:loss=4.28 [repeated 32x across cluster]
+(autoscaler +2h15m58s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +2h15m58s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +2h15m58s) Resized to 23400 CPUs, 780 TPUs.
+(<lambda> pid=3728, ip=10.164.0.97) 2026-03-03T19:10:18 - 18 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.32kit/30.0kit rate:1.1s/it remaining:8:00:05 elapsed:30:01 postfix:loss=4.28 [repeated 32x across cluster]
+(<lambda> pid=3726, ip=10.164.1.60) 2026-03-03T19:11:19 - 27 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.38kit/30.0kit rate:1.2s/it remaining:8:31:52 elapsed:31:01 postfix:loss=4.46 [repeated 32x across cluster]
+(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:11:40 - 21 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 4391.
+(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:11:40 - 21 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 4391 to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/step-4391
+(<lambda> pid=3724, ip=10.164.0.43) 2026-03-03T19:11:19 - 13 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.38kit/30.0kit rate:1.2s/it remaining:8:31:52 elapsed:31:01 postfix:loss=4.46 [repeated 31x across cluster]
+(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:11:40 - 21 - levanter.checkpoint - checkpoint.py:337 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/step-4391 for step 4391
+(autoscaler +2h18m19s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +2h18m19s) Resized to 23400 CPUs, 780 TPUs.
+(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:11:40 - 9 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 4391. [repeated 31x across cluster]
+(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:11:40 - 9 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 4391 to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/step-4391 [repeated 31x across cluster]
+(<lambda> pid=14169, ip=10.164.1.25) 2026-03-03T19:12:20 - 29 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.42kit/30.0kit rate:1.1s/it remaining:8:01:49 elapsed:32:03 postfix:loss=4.15
+(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:11:40 - 9 - levanter.checkpoint - checkpoint.py:337 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/step-4391 for step 4391 [repeated 31x across cluster]
+(<lambda> pid=13851, ip=10.164.1.29) 2026-03-03T19:12:20 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.42kit/30.0kit rate:1.1s/it remaining:8:01:49 elapsed:32:03 postfix:loss=4.15
+(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:13:01 - 0 - levanter.checkpoint - checkpoint.py:345 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/step-4391 for step 4391
+(<lambda> pid=13784, ip=10.164.0.63) 2026-03-03T19:12:20 - 8 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.42kit/30.0kit rate:1.1s/it remaining:8:01:49 elapsed:32:03 postfix:loss=4.15 [repeated 30x across cluster]
+(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:13:21 - 21 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.48kit/30.0kit rate:1.1s/it remaining:7:50:26 elapsed:33:03 postfix:loss=4.35
+(<lambda> pid=13857, ip=10.164.1.35) 2026-03-03T19:13:21 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.48kit/30.0kit rate:1.1s/it remaining:7:50:26 elapsed:33:03 postfix:loss=4.35
+(autoscaler +2h19m55s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +2h19m55s) Resized to 23400 CPUs, 780 TPUs.
+(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:13:46 - 9 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/374 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:13:21 - 30 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.48kit/30.0kit rate:1.1s/it remaining:7:50:26 elapsed:33:03 postfix:loss=4.35 [repeated 30x across cluster]
+(raylet, ip=10.164.0.49) [2026-03-03 19:13:54,751 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(<lambda> pid=3727, ip=10.164.0.14) 2026-03-03T19:13:46 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/374 rate:- remaining:? elapsed:00:00 postfix:- [repeated 31x across cluster]
+(raylet, ip=10.164.0.8) [2026-03-03 19:14:08,576 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.49) [2026-03-03 19:14:08,918 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.27) [2026-03-03 19:14:13,495 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.0.8) [2026-03-03 19:14:20,668 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.0.49) [2026-03-03 19:14:27,133 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
+(raylet, ip=10.164.0.8) [2026-03-03 19:14:32,756 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
+(<lambda> pid=13944, ip=10.164.1.27) 2026-03-03T19:14:36 - 14 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 374it/374it rate:7.1it/s remaining:00:00 elapsed:00:50 postfix:-
+(raylet, ip=10.164.0.88) [2026-03-03 19:14:37,933 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 7x across cluster]
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:257 - INFO :: eval loss: 4.374
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 3.700
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 3.773
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 3.495
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 3.836
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 5.111
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: understanding loss: 4.325
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 4.298
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: generation loss: 5.839
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 5.675
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_understanding_text_only loss: 1.422
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_understanding_visual_only loss: 6.556
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_generation_text_only loss: 1.509
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_generation_visual_only loss: 6.488
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_understanding_wo_visual loss: 1.601
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_generation_wo_language loss: 6.570
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval loss: 6.567
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_textvqa loss: 6.709
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_chartqa loss: 5.934
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_ai2d loss: 3.439
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_mmmu loss: 2.152
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_cifar10_small loss: 6.617
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 7.472
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text loss: 1.684
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text_eval_hellaswag loss: 1.060
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text_eval_winogrande loss: 6.713
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text_eval_arc_easy loss: 4.424
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text_eval_arc_challenge loss: 3.761
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text_eval_mmlu loss: 2.737
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/4chan loss: 2.946
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/c4_100_domains loss: 3.513
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/c4_en loss: 3.600
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/dolma-v1_5 loss: 3.506
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_programing_languages loss: 3.414
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_subreddits loss: 3.798
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 3.708
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 4.868
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_s2orc_unsplit loss: 3.263
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_wikipedia_unsplit loss: 3.252
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 3.828
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/mc4 loss: 3.262
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 4.055
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 3.649
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 5.108
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 3.225
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 4.561
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 4.123
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 3.432
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 3.553
+(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 3.571
+(<lambda> pid=13912, ip=10.164.1.46) 2026-03-03T19:14:36 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 374it/374it rate:7.1it/s remaining:00:00 elapsed:00:50 postfix:- [repeated 31x across cluster]
+(raylet, ip=10.164.0.49) [2026-03-03 19:14:43,256 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 11x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: eval loss: 6.567 [repeated 62x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 3.700 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 3.773 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 3.495 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 3.836 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 5.111 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: understanding loss: 4.325 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 4.298 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: generation loss: 5.839 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 5.675 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_understanding_text_only loss: 1.422 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_understanding_visual_only loss: 6.556 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_generation_text_only loss: 1.509 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_generation_visual_only loss: 6.488 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_understanding_wo_visual loss: 1.601 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_generation_wo_language loss: 6.570 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: eval_textvqa loss: 6.709 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: eval_chartqa loss: 5.934 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/ao3_english loss: 3.949 [repeated 405x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: eval_mmmu loss: 2.152 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 7.472 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text loss: 1.684 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text_eval_hellaswag loss: 1.060 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text_eval_winogrande loss: 6.713 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text_eval_arc_easy loss: 4.424 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text_eval_arc_challenge loss: 3.761 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text_eval_mmlu loss: 2.737 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 3.708 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 4.868 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 3.828 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 4.055 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 3.649 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 5.108 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 3.225 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 4.561 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 4.123 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 3.432 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 3.553 [repeated 31x across cluster]
+(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 3.571 [repeated 31x across cluster]
+(raylet, ip=10.164.0.66) [2026-03-03 19:14:48,365 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 14x across cluster]
+(raylet, ip=10.164.0.27) [2026-03-03 19:14:53,737 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 9x across cluster]
+(raylet, ip=10.164.0.88) [2026-03-03 19:14:59,712 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.0.104) [2026-03-03 19:15:07,977 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.0.49) [2026-03-03 19:15:13,290 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
+(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:15:14 - 21 - gcsfs - retry.py:164 - ERROR :: _request out of retries on exception: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429
+(<lambda> pid=13782, ip=10.164.1.28) Traceback (most recent call last):
+(<lambda> pid=13782, ip=10.164.1.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
+(<lambda> pid=13782, ip=10.164.1.28)     return await func(*args, **kwargs)
+(<lambda> pid=13782, ip=10.164.1.28)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=13782, ip=10.164.1.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
+(<lambda> pid=13782, ip=10.164.1.28)     validate_response(status, contents, path, args)
+(<lambda> pid=13782, ip=10.164.1.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 122, in validate_response
+(<lambda> pid=13782, ip=10.164.1.28)     raise HttpError(error)
+(<lambda> pid=13782, ip=10.164.1.28) gcsfs.retry.HttpError: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429
+(SliceActor pid=2746, ip=10.164.1.40) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=13782, ip=10.164.1.28)
+(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(SliceActor pid=2746, ip=10.164.1.40)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=2746, ip=10.164.1.40)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+(SliceActor pid=2746, ip=10.164.1.40)     trainer.train(state, train_loader)
+(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 541, in train
+(SliceActor pid=2746, ip=10.164.1.40)     for info in self.training_steps(state, train_loader):
+(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+(SliceActor pid=2746, ip=10.164.1.40)     info = self.train_step(state, example)
+(SliceActor pid=2746, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 496, in train_step
+(SliceActor pid=2746, ip=10.164.1.40)     self.run_hooks(info)
+(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
+(SliceActor pid=2746, ip=10.164.1.40)     self.hooks.run_hooks(info, force=force)
+(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
+(SliceActor pid=2746, ip=10.164.1.40)     hook.fn.on_step(info, force=force)
+(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
+(SliceActor pid=2746, ip=10.164.1.40)     self.fn(info)
+(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/eval.py", line 228, in eval_callback
+(SliceActor pid=2746, ip=10.164.1.40)     with fs.open(metrics_file, "a") as f:
+(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2178, in close
+(SliceActor pid=2746, ip=10.164.1.40)     self.flush(force=True)
+(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2041, in flush
+(SliceActor pid=2746, ip=10.164.1.40)     if self._upload_chunk(final=force) is not False:
+(SliceActor pid=2746, ip=10.164.1.40)        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1896, in _upload_chunk
+(SliceActor pid=2746, ip=10.164.1.40)     headers, contents = self.gcsfs.call(
+(SliceActor pid=2746, ip=10.164.1.40)                         ^^^^^^^^^^^^^^^^
+(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
+(SliceActor pid=2746, ip=10.164.1.40)     return sync(self.loop, func, *args, **kwargs)
+(SliceActor pid=2746, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
+(SliceActor pid=2746, ip=10.164.1.40)     raise return_result
+(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
+(SliceActor pid=2746, ip=10.164.1.40)     result[0] = await coro
+(SliceActor pid=2746, ip=10.164.1.40)                 ^^^^^^^^^^
+(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
+(SliceActor pid=2746, ip=10.164.1.40)     status, headers, info, contents = await self._request(
+(SliceActor pid=2746, ip=10.164.1.40)                                       ^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
+(SliceActor pid=2746, ip=10.164.1.40)     return await caller(func, *(extras + args), **kw)
+(SliceActor pid=2746, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=2746, ip=10.164.1.40)     raise e
+(<lambda> pid=13782, ip=10.164.1.28) E0303 19:15:14.325648   15460 preemption_sync_manager.cc:161] Failed to cancel preemption barrier: FAILED_PRECONDITION: Tried to cancel non-existent barrier PREEMPTION_SYNC_BARRIER. [type.googleapis.com/tensorflow.CoordinationServiceError='']
+(<lambda> pid=13782, ip=10.164.1.28) E0303 19:15:14.325878   15460 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=13782, ip=10.164.1.28) F0303 19:15:14.325888   15460 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=13782, ip=10.164.1.28) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
+(<lambda> pid=13782, ip=10.164.1.28) :UNKNOWN:Error received from peer  {grpc_message:"Socket closed", grpc_status:14}
+(run_on_pod_ray pid=4857, ip=10.164.1.99) Task error ray::<lambda>() (pid=13782, ip=10.164.1.28)
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     return func(*args, **kwargs)
+(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=4857, ip=10.164.1.99)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=4857, ip=10.164.1.99) ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
+(run_on_pod_ray pid=4857, ip=10.164.1.99) Failed 11 times. Continuing to retry.
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     return func(*args, **kwargs)
+(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=4857, ip=10.164.1.99)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=4857, ip=10.164.1.99) ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
+(run_on_pod_ray pid=4857, ip=10.164.1.99) Failed too many times
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     return func(*args, **kwargs)
+(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=4857, ip=10.164.1.99)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=4857, ip=10.164.1.99) ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
+2026-03-03 19:15:17,135 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(HttpError): ray::run_levanter_train_lm() (pid=4781, ip=10.164.1.99)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
+    job.wait(raise_on_failure=True)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
+    return self._wait_ref(timeout, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(HttpError): ray::run_on_pod_ray() (pid=4857, ip=10.164.1.99)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 541, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+    info = self.train_step(state, example)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 496, in train_step
+    self.run_hooks(info)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
+    self.hooks.run_hooks(info, force=force)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
+    hook.fn.on_step(info, force=force)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
+    self.fn(info)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/eval.py", line 228, in eval_callback
+    with fs.open(metrics_file, "a") as f:
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2178, in close
+    self.flush(force=True)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2041, in flush
+    if self._upload_chunk(final=force) is not False:
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1896, in _upload_chunk
+    headers, contents = self.gcsfs.call(
+                        ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
+    return sync(self.loop, func, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
+    raise return_result
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
+    result[0] = await coro
+                ^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
+    status, headers, info, contents = await self._request(
+                                      ^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
+    return await caller(func, *(extras + args), **kw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 165, in retry_request
+    raise e
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
+    return await func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
+    validate_response(status, contents, path, args)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 122, in validate_response
+    raise HttpError(error)
+gcsfs.retry.HttpError: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429
+2026-03-03 19:15:17,137 INFO executor.py:806 -- Waiting for ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 to finish for step checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8
+2026-03-03 19:15:17,137 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(HttpError): ray::run_levanter_train_lm() (pid=4781, ip=10.164.1.99)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
+    job.wait(raise_on_failure=True)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
+    return self._wait_ref(timeout, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(HttpError): ray::run_on_pod_ray() (pid=4857, ip=10.164.1.99)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 541, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+    info = self.train_step(state, example)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 496, in train_step
+    self.run_hooks(info)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
+    self.hooks.run_hooks(info, force=force)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
+    hook.fn.on_step(info, force=force)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
+    self.fn(info)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/eval.py", line 228, in eval_callback
+    with fs.open(metrics_file, "a") as f:
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2178, in close
+    self.flush(force=True)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2041, in flush
+    if self._upload_chunk(final=force) is not False:
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1896, in _upload_chunk
+    headers, contents = self.gcsfs.call(
+                        ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
+    return sync(self.loop, func, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
+    raise return_result
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
+    result[0] = await coro
+                ^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
+    status, headers, info, contents = await self._request(
+                                      ^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
+    return await caller(func, *(extras + args), **kw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 165, in retry_request
+    raise e
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
+    return await func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
+    validate_response(status, contents, path, args)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 122, in validate_response
+    raise HttpError(error)
+gcsfs.retry.HttpError: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429
+2026-03-03 19:15:17,138 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(HttpError): ray::run_levanter_train_lm() (pid=4781, ip=10.164.1.99)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
+    job.wait(raise_on_failure=True)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
+    return self._wait_ref(timeout, raise_on_failure)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(HttpError): ray::run_on_pod_ray() (pid=4857, ip=10.164.1.99)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
+    raise problem or RuntimeError("TPU job failed too many times")
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+                                                 ^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
+    trainer.train(state, train_loader)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 541, in train
+    for info in self.training_steps(state, train_loader):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
+    info = self.train_step(state, example)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 496, in train_step
+    self.run_hooks(info)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
+    self.hooks.run_hooks(info, force=force)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
+    hook.fn.on_step(info, force=force)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
+    self.fn(info)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/eval.py", line 228, in eval_callback
+    with fs.open(metrics_file, "a") as f:
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2178, in close
+    self.flush(force=True)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2041, in flush
+    if self._upload_chunk(final=force) is not False:
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1896, in _upload_chunk
+    headers, contents = self.gcsfs.call(
+                        ^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
+    return sync(self.loop, func, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
+    raise return_result
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
+    result[0] = await coro
+                ^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
+    status, headers, info, contents = await self._request(
+                                      ^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
+    return await caller(func, *(extras + args), **kw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 165, in retry_request
+    raise e
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
+    return await func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
+    validate_response(status, contents, path, args)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 122, in validate_response
+    raise HttpError(error)
+gcsfs.retry.HttpError: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429
+2026-03-03 19:15:17,437 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8 failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 192, in wait
+    raise RuntimeError(f"Job {self.job_id} failed")
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 192, in wait
+    raise RuntimeError(f"Job {self.job_id} failed")
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 failed
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/experiments/unified/unified_pretrain_demo_eu.py", line 603, in <module>
+    executor_main(
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
+    executor.run(
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 747, in run
+    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed, max_concurrent=max_concurrent)
+  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
+    raise RuntimeError(message) from failure_exceptions[0]
+RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8']
+(raylet) The node with node id: b7c83455c9af135df1bcfd1d3a69f4574d927065bb07e1d70ee322a9 and address: 10.164.0.50 and node name: 10.164.0.50 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 15x across cluster]
+(raylet, ip=10.164.0.115) [2026-03-03 19:15:16,446 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99) Traceback (most recent call last): [repeated 3x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request [repeated 10x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     return await func(*args, **kwargs) [repeated 5x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request [repeated 5x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     validate_response(status, contents, path, args) [repeated 5x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 122, in validate_response [repeated 5x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise HttpError(error) [repeated 5x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99) gcsfs.retry.HttpError: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429 [repeated 5x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     trainer.train(state, train_loader) [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 541, in train [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     for info in self.training_steps(state, train_loader): [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     info = self.train_step(state, example) [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 8x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 496, in train_step [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     self.run_hooks(info) [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks [repeated 8x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     self.hooks.run_hooks(info, force=force) [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     hook.fn.on_step(info, force=force) [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     self.fn(info) [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/eval.py", line 228, in eval_callback [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     with fs.open(metrics_file, "a") as f: [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2178, in close [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     self.flush(force=True) [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2041, in flush [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     if self._upload_chunk(final=force) is not False: [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1896, in _upload_chunk [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     headers, contents = self.gcsfs.call( [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)                         ^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper [repeated 7x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     return sync(self.loop, func, *args, **kwargs) [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise return_result [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     result[0] = await coro [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)                 ^^^^^^^^^^ [repeated 7x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     status, headers, info, contents = await self._request( [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)                                       ^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     return await caller(func, *(extras + args), **kw) [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise e [repeated 4x across cluster]
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}     -e TPU_TYPE v5litepod-128  -e EXP_NAME unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8 -e TEXT_WEIGHT 1.0  -e MULTIMODAL_WEIGHT 2.0 -e W_VISUAL 0.5  -e UND_GEN_RATIO 1 -e LEARNING_RATE 3e-4 -e NUM_STEPS 30000     -- python experiments/unified/unified_pretrain_demo_eu.py^C
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ 
