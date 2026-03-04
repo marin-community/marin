@@ -291,6 +291,7 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
+        self._heartbeat_log_cursor: int = 0
 
     @property
     def container_id(self) -> str | None:
@@ -311,6 +312,16 @@ class TaskAttempt:
         if self._log_sink is None:
             return []
         return self._log_sink.query_recent(max_entries=max_entries)
+
+    def drain_heartbeat_logs(self, max_entries: int = 5000) -> list[logging_pb2.LogEntry]:
+        """Drain log entries since the last heartbeat for delta forwarding."""
+        if self._log_sink is None:
+            return []
+        entries, new_cursor = self._log_sink.drain_since(self._heartbeat_log_cursor)
+        if len(entries) > max_entries:
+            entries = entries[-max_entries:]
+        self._heartbeat_log_cursor = new_cursor
+        return entries
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
