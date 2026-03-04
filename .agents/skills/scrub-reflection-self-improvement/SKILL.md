@@ -33,4 +33,7 @@ Use this skill on scheduled scrub turns to identify and land high-leverage impro
 
 - Keep rationale explicit: observed gap, change made (or plan), and expected impact.
 - Prefer durable artifacts over transient notes: land guidance updates in `AGENTS.md` and/or recipe docs when that is the primary improvement.
+- Treat local-only edits as incomplete work. If you modify files, publish the result (commit/push and open or update a PR) before finishing this scrub run.
+- If publish is blocked (auth, permissions, CI infra, etc.), report the blocker and set a future `needs_followup_at` instead of ending the run.
+- If you choose no-op, include explicit inspected signals and why no justified improvement exists now.
 - Always end with the required `HARNESS_SCRUB_LOOP` footer (provided by the base scrub contract).
