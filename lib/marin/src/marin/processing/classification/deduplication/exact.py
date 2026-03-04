@@ -61,7 +61,7 @@ def dedup_exact_paragraph(
             .flat_map(lambda batch: batch.to_pylist())
             .group_by(
                 lambda key_fn: key_fn["hash"],
-                partial(_count_reduce, canonical_id="doc_id"),
+                reducer=partial(_count_reduce, canonical_id="doc_id"),
                 num_output_shards=42,
             )
             .write_parquet(f"{output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
@@ -146,7 +146,7 @@ def dedup_exact_document(
             .flat_map(lambda batch: batch.to_pylist())
             .group_by(
                 lambda key_fn: key_fn["hash"],
-                partial(_count_reduce, canonical_id="resolved_id"),
+                reducer=partial(_count_reduce, canonical_id="resolved_id"),
                 num_output_shards=42,
             )
             .write_parquet(f"{output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),

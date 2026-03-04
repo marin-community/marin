@@ -731,9 +731,10 @@ class Dataset(Generic[T]):
     def group_by(
         self,
         key: Callable[[T], object],
+        *,
         reducer: Callable[[object, Iterator[T]], R],
-        num_output_shards: int | None = None,
         sort_by: Callable[[T], object] | None = None,
+        num_output_shards: int | None = None,
     ) -> Dataset[R]:
         """Group items by key and apply reducer function.
 
@@ -742,9 +743,9 @@ class Dataset(Generic[T]):
         Args:
             key: Function extracting grouping key from item (must be hashable)
             reducer: Function from (key, Iterator[items]) -> result
-            num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
             sort_by: Optional function extracting a sort key from each item. When provided,
                 items within each group are delivered to the reducer sorted by this key.
+            num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
 
         Returns:
             New dataset with group_by operation appended
