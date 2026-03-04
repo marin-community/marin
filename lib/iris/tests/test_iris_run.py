@@ -17,6 +17,7 @@ from iris.cli.job import (
     load_env_vars,
     parse_gpu_spec,
     parse_reservation_spec,
+    resolve_multinode_tpu_defaults,
     run_iris_job,
 )
 from iris.cluster.types import ConstraintOp
@@ -326,3 +327,99 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
     assert len(zone_constraints) == 1
     assert zone_constraints[0].op == ConstraintOp.EQ
     assert zone_constraints[0].value == "us-central2-b"
+
+
+# --- Multinode TPU auto-detection tests ---
+
+
+def test_resolve_multinode_tpu_defaults_no_tpu():
+    """No TPU → replicas defaults to 1, no coscheduling."""
+    replicas, cosched = resolve_multinode_tpu_defaults(tpu=None, replicas=None)
+    assert replicas == 1
+    assert cosched is None
+
+
+def test_resolve_multinode_tpu_defaults_single_host():
+    """Single-host TPU (v6e-4, vm_count=1) → no auto-expansion."""
+    replicas, cosched = resolve_multinode_tpu_defaults(tpu="v6e-4", replicas=None)
+    assert replicas == 1
+    assert cosched is None
+
+
+def test_resolve_multinode_tpu_defaults_multinode_auto():
+    """Multinode TPU with replicas=None auto-sets replicas to vm_count."""
+    replicas, cosched = resolve_multinode_tpu_defaults(tpu="v6e-32", replicas=None)
+    assert replicas == 8
+    assert cosched is not None
+    assert cosched.group_by == "tpu-name"
+
+
+def test_resolve_multinode_tpu_defaults_multinode_explicit():
+    """Multinode TPU with explicit replicas keeps the value but adds coscheduling."""
+    replicas, cosched = resolve_multinode_tpu_defaults(tpu="v6e-32", replicas=16)
+    assert replicas == 16
+    assert cosched is not None
+    assert cosched.group_by == "tpu-name"
+
+
+def test_resolve_multinode_tpu_defaults_unknown_tpu():
+    """Unknown TPU topology → defaults to 1, no coscheduling."""
+    replicas, cosched = resolve_multinode_tpu_defaults(tpu="v99-unknown", replicas=None)
+    assert replicas == 1
+    assert cosched is None
+
+
+def test_resolve_multinode_tpu_defaults_v5litepod_16():
+    """v5litepod-16 has vm_count=4 and should auto-expand."""
+    replicas, cosched = resolve_multinode_tpu_defaults(tpu="v5litepod-16", replicas=None)
+    assert replicas == 4
+    assert cosched is not None
+    assert cosched.group_by == "tpu-name"
+
+
+def test_run_iris_job_multinode_tpu_auto_replicas(monkeypatch):
+    """run_iris_job auto-sets replicas and coscheduling for multinode TPUs."""
+    captured: dict[str, object] = {}
+
+    def _fake_submit_and_wait_job(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
+
+    exit_code = run_iris_job(
+        controller_url="http://controller:10000",
+        command=[sys.executable, "-c", "print('ok')"],
+        env_vars={},
+        wait=False,
+        tpu="v6e-32",
+    )
+
+    assert exit_code == 0
+    assert captured["replicas"] == 8
+    cosched = captured["coscheduling"]
+    assert cosched is not None
+    assert cosched.group_by == "tpu-name"
+
+
+def test_run_iris_job_single_host_tpu_no_coscheduling(monkeypatch):
+    """run_iris_job does not add coscheduling for single-host TPUs."""
+    captured: dict[str, object] = {}
+
+    def _fake_submit_and_wait_job(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
+
+    exit_code = run_iris_job(
+        controller_url="http://controller:10000",
+        command=[sys.executable, "-c", "print('ok')"],
+        env_vars={},
+        wait=False,
+        tpu="v6e-4",
+    )
+
+    assert exit_code == 0
+    assert captured["replicas"] == 1
+    assert captured["coscheduling"] is None

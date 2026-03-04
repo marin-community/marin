@@ -27,6 +27,7 @@ from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.types import (
     Constraint,
+    CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     JobName,
@@ -288,6 +289,54 @@ def generate_job_name(command: list[str]) -> str:
     return f"iris-run-{script_name}-{timestamp}"
 
 
+def resolve_multinode_tpu_defaults(
+    tpu: str | None,
+    replicas: int | None,
+) -> tuple[int, CoschedulingConfig | None]:
+    """Auto-detect multinode TPU topology and set replicas/coscheduling.
+
+    When a multinode TPU (vm_count > 1) is requested and the caller did not
+    explicitly set replicas, this function sets replicas to the topology's
+    vm_count and enables coscheduling by ``tpu-name`` so that all tasks land
+    on workers in the same TPU slice.
+
+    Args:
+        tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
+        replicas: Explicit replica count from the caller, or ``None`` if not
+            specified (meaning the default should be inferred).
+
+    Returns:
+        A ``(replicas, coscheduling)`` tuple.  ``coscheduling`` is ``None``
+        for single-host TPUs or non-TPU jobs.
+    """
+    if not tpu:
+        return replicas or 1, None
+
+    try:
+        topo = get_tpu_topology(tpu)
+    except ValueError:
+        return replicas or 1, None
+
+    if topo.vm_count <= 1:
+        return replicas or 1, None
+
+    # Multinode TPU: auto-set replicas and coscheduling.
+    if replicas is None:
+        replicas = topo.vm_count
+        logger.info(
+            f"Multinode TPU '{tpu}' detected (vm_count={topo.vm_count}). "
+            f"Auto-setting replicas={replicas} and coscheduling by tpu-name."
+        )
+    else:
+        logger.info(
+            f"Multinode TPU '{tpu}' detected (vm_count={topo.vm_count}). "
+            f"Using explicit replicas={replicas} with coscheduling by tpu-name."
+        )
+
+    coscheduling = CoschedulingConfig(group_by="tpu-name")
+    return replicas, coscheduling
+
+
 def run_iris_job(
     command: list[str],
     env_vars: dict[str, str],
@@ -299,7 +348,7 @@ def run_iris_job(
     disk: str = "5GB",
     wait: bool = True,
     job_name: str | None = None,
-    replicas: int = 1,
+    replicas: int | None = None,
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
@@ -328,6 +377,8 @@ def run_iris_job(
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
+    replicas, coscheduling = resolve_multinode_tpu_defaults(tpu, replicas)
+
     constraints: list[Constraint] = []
     if regions:
         constraints.append(region_constraint(list(regions)))
@@ -348,6 +399,10 @@ def run_iris_job(
     if resources.device and resources.device.HasField("gpu"):
         gpu_dev = resources.device.gpu
         logger.info(f"GPU: {gpu_dev.count}x {gpu_dev.variant or 'any'}")
+    if replicas > 1:
+        logger.info(f"Replicas: {replicas}")
+    if coscheduling:
+        logger.info(f"Coscheduling: group_by={coscheduling.group_by}")
     if regions:
         logger.info(f"Region constraint: {', '.join(regions)}")
     if zone:
@@ -370,6 +425,7 @@ def run_iris_job(
         include_children_logs=include_children_logs,
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
+        coscheduling=coscheduling,
         user=user,
         reservation=reservation,
     )
@@ -389,6 +445,7 @@ def _submit_and_wait_job(
     include_children_logs: bool = True,
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
+    coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     reservation: list[ReservationEntry] | None = None,
 ) -> int:
@@ -407,6 +464,7 @@ def _submit_and_wait_job(
         resources=resources,
         environment=EnvironmentSpec(env_vars=env_vars, extras=extras or []),
         constraints=constraints,
+        coscheduling=coscheduling,
         replicas=replicas,
         max_retries_failure=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
@@ -484,7 +542,9 @@ Examples:
 @click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
 @click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
 @click.option("--user", type=str, help="Override the user prefix for the submitted job.")
-@click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
+@click.option(
+    "--replicas", type=int, default=None, help="Number of tasks for gang scheduling (auto-detected for multinode TPUs)"
+)
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
@@ -518,7 +578,7 @@ def run(
     no_wait: bool,
     job_name: str | None,
     user: str | None,
-    replicas: int,
+    replicas: int | None,
     max_retries: int,
     timeout: int,
     region: tuple[str, ...],
