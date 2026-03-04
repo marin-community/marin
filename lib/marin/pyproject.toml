@@ -177,6 +177,12 @@ dedup = [
     "dupekit",
 ]
 
+embedding = [
+    "anthropic",
+    "scikit-learn",
+    "sentence-transformers",
+]
+
 math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]

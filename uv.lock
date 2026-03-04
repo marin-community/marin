@@ -5067,6 +5067,11 @@ cpu = [
 dedup = [
     { name = "dupekit" },
 ]
+embedding = [
+    { name = "anthropic" },
+    { name = "scikit-learn" },
+    { name = "sentence-transformers" },
+]
 eval = [
     { name = "lm-eval", extra = ["api", "math"] },
 ]
@@ -5184,6 +5189,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", marker = "extra == 'embedding'" },
     { name = "antlr4-python3-runtime", marker = "extra == 'evalchemy'", specifier = "==4.11" },
     { name = "bespokelabs-curator", marker = "extra == 'evalchemy'" },
     { name = "braceexpand" },
@@ -5229,6 +5235,8 @@ requires-dist = [
     { name = "requests" },
     { name = "resiliparse", specifier = ">=0.17.2", index = "https://marin-community.github.io/chatnoir-resiliparse/simple" },
     { name = "s3fs", specifier = ">=2024" },
+    { name = "scikit-learn", marker = "extra == 'embedding'" },
+    { name = "sentence-transformers", marker = "extra == 'embedding'" },
     { name = "sqlalchemy", marker = "extra == 'evalchemy'" },
     { name = "sympy", marker = "extra == 'evalchemy'", specifier = ">=1.12.1,<1.14" },
     { name = "sympy", marker = "extra == 'math'" },
@@ -5252,7 +5260,7 @@ requires-dist = [
     { name = "warcio" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
-provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vllm", "harbor", "dedup", "math"]
+provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vllm", "harbor", "dedup", "embedding", "math"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -9335,6 +9343,28 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c5/f0/184b4b5f8d00f2a92cf96eec8967a3d550b52cf94362dad1100df9e48d57/send2trash-2.1.0.tar.gz", hash = "sha256:1c72b39f09457db3c05ce1d19158c2cbef4c32b8bedd02c155e49282b7ea7459", size = 17255, upload-time = "2026-01-14T06:27:36.056Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1c/78/504fdd027da3b84ff1aecd9f6957e65f35134534ccc6da8628eb71e76d3f/send2trash-2.1.0-py3-none-any.whl", hash = "sha256:0da2f112e6d6bb22de6aa6daa7e144831a4febf2a87261451c4ad849fe9a873c", size = 17610, upload-time = "2026-01-14T06:27:35.218Z" },
+]
+
+[[package]]
+name = "sentence-transformers"
+version = "5.2.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "torch", version = "2.9.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-5-marin-cpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'darwin' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "torch", version = "2.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-gpu' and extra != 'extra-5-marin-tpu')" },
+    { name = "torch", version = "2.9.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'arm64' and extra == 'extra-5-marin-cpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "torch", version = "2.9.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "tqdm" },
+    { name = "transformers" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5b/30/21664028fc0776eb1ca024879480bbbab36f02923a8ff9e4cae5a150fa35/sentence_transformers-5.2.3.tar.gz", hash = "sha256:3cd3044e1f3fe859b6a1b66336aac502eaae5d3dd7d5c8fc237f37fbf58137c7", size = 381623, upload-time = "2026-02-17T14:05:20.238Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/9f/dba4b3e18ebbe1eaa29d9f1764fbc7da0cd91937b83f2b7928d15c5d2d36/sentence_transformers-5.2.3-py3-none-any.whl", hash = "sha256:6437c62d4112b615ddebda362dfc16a4308d604c5b68125ed586e3e95d5b2e30", size = 494225, upload-time = "2026-02-17T14:05:18.596Z" },
 ]
 
 [[package]]
