@@ -275,6 +275,7 @@ def _make_train_step(
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
+                include_router_aux_loss=True,
                 return_router_metrics=True,
             )
 
@@ -481,6 +482,8 @@ def run_grug(config: GrugRunConfig) -> None:
                 router_metrics = {key: value for key, value in metrics.items() if key.startswith("train/router/")}
                 if router_metrics:
                     levanter.tracker.log(router_metrics, step=step)
+                if "train/cross_entropy_loss" in metrics:
+                    levanter.tracker.log({"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]}, step=step)
 
                 if watch_stats is not None:
                     levanter.tracker.log(watch_stats, step=step)

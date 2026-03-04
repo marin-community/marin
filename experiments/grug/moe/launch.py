@@ -86,6 +86,11 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     return tracker
 
 
+def _resolve_tpu_type(default_tpu_type: str) -> str:
+    """Resolve TPU type for executor resource requests."""
+    return os.environ.get("GRUG_MOE_TPU_TYPE", default_tpu_type)
+
+
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     # Map template launch knobs onto full Levanter TrainerConfig.
     trainer = TrainerConfig(
@@ -120,6 +125,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
 
 
 RESOLVED_RUN_ID = _resolve_run_id("grug-moe-trial")
+RESOLVED_TPU_TYPE = _resolve_tpu_type("v6e-8")
 
 
 grug_moe_trial = ExecutorStep(
@@ -169,7 +175,7 @@ grug_moe_trial = ExecutorStep(
             )
         ),
     ),
-    resources=ResourceConfig.with_tpu("v5p-8"),
+    resources=ResourceConfig.with_tpu(RESOLVED_TPU_TYPE),
 )
 
 
