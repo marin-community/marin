@@ -11,7 +11,7 @@ from pathlib import Path
 import draccus
 import fsspec
 import requests
-from iris.marin_fs import filesystem as marin_filesystem
+from rigging.marin_fs import filesystem as marin_filesystem
 import zstandard as zstd
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_limiter import Limiter

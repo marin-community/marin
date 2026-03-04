@@ -25,7 +25,7 @@ from iris.cluster.runtime.types import (
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 from tests.test_utils import wait_for_condition
 
 # ============================================================================

@@ -8,7 +8,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.rpc.errors import call_with_retry, connect_error_with_traceback, extract_error_details
-from iris.time_utils import ExponentialBackoff
+from rigging.time_utils import ExponentialBackoff
 
 
 def test_connect_error_with_traceback_populates_timestamp() -> None:

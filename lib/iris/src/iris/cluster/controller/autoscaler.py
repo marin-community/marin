@@ -37,7 +37,7 @@ from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

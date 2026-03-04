@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Callable, Generic, Optional, Tuple, Type, Type
 import draccus
 import equinox as eqx
 import haliax
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 import huggingface_hub
 import humanfriendly
 import jax

@@ -34,7 +34,7 @@ from dataclasses import dataclass
 
 import draccus
 import requests
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 from marin.utils import fsspec_size
 from tqdm_loggable.auto import tqdm
 from zephyr import Dataset, ZephyrContext, atomic_rename, load_jsonl

@@ -38,7 +38,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

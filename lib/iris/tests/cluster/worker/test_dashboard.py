@@ -11,7 +11,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.types import Entrypoint, JobName
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.runtime.docker import DockerRuntime

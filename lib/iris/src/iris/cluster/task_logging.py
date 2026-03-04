@@ -16,10 +16,10 @@ from urllib.parse import urlsplit, urlunsplit
 from google.protobuf import json_format
 
 from iris.logging import BufferedLogRecord, LogBuffer
-from iris.marin_fs import filesystem
+from rigging.marin_fs import filesystem
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 MAX_LINE_LENGTH = 64 * 1024

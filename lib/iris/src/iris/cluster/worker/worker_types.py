@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState
-from iris.time_utils import Timestamp
+from rigging.time_utils import Timestamp
 
 
 class LogLine(BaseModel):

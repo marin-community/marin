@@ -8,9 +8,9 @@ from pathlib import Path
 import cloudpickle
 
 from marin.execution.artifact import Artifact
-from marin.execution.disk_cache import disk_cache
-from marin.execution.distributed_lock import distributed_lock
-from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile
+from rigging.execution.disk_cache import disk_cache
+from rigging.execution.distributed_lock import distributed_lock
+from rigging.execution.executor_step_status import STATUS_SUCCESS, StatusFile
 from marin.execution.step_spec import StepSpec
 
 

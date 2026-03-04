@@ -48,7 +48,7 @@ from iris.cluster.platform.remote_exec import (
     DirectSshRemoteExec,
 )
 from iris.rpc import config_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

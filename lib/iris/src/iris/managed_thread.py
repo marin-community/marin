@@ -50,7 +50,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from typing import Any
 
-from iris.time_utils import Deadline, Duration
+from rigging.time_utils import Deadline, Duration
 
 logger = logging.getLogger(__name__)
 

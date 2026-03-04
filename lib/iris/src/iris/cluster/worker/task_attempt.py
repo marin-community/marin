@@ -40,7 +40,7 @@ from iris.cluster.task_logging import LogSink
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

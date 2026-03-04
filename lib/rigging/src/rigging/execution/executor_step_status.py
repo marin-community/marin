@@ -18,7 +18,7 @@ import time
 from dataclasses import asdict, dataclass
 
 from google.cloud import storage
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 
 logger = logging.getLogger("ray")
 

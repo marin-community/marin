@@ -55,7 +55,7 @@ from iris.cluster.types import (
     validate_tpu_replicas,
 )
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

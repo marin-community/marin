@@ -18,7 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import draccus
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 

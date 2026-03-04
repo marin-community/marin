@@ -25,7 +25,7 @@ from iris.cluster.types import (
     get_tpu_count,
 )
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, time_pb2, vm_pb2
-from iris.time_utils import Deadline, Duration, Timestamp, TokenBucket
+from rigging.time_utils import Deadline, Duration, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
 

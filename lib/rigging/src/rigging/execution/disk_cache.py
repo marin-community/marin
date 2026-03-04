@@ -12,10 +12,10 @@ from collections.abc import Callable
 from typing import Generic, TypeVar, ParamSpec
 
 import cloudpickle
-from iris.marin_fs import marin_temp_bucket, open_url
+from rigging.marin_fs import marin_temp_bucket, open_url
 
-from marin.execution.distributed_lock import StepAlreadyDone
-from marin.execution.executor_step_status import (
+from rigging.execution.distributed_lock import StepAlreadyDone
+from rigging.execution.executor_step_status import (
     STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,

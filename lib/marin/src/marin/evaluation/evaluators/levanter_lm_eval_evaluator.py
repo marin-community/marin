@@ -7,7 +7,7 @@ import logging
 import os
 
 import jmp
-from iris.marin_fs import filesystem as marin_filesystem
+from rigging.marin_fs import filesystem as marin_filesystem
 import levanter
 import levanter.eval_harness as eval_harness
 from levanter.compat.hf_checkpoints import HFCheckpointConverter

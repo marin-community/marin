@@ -19,7 +19,7 @@ from .executor import (
     unwrap_versioned_value,
     versioned,
 )
-from .executor_step_status import (
+from rigging.execution.executor_step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_RUNNING,

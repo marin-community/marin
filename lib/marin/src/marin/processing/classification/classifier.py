@@ -10,7 +10,7 @@ from typing import Any, ClassVar
 
 import lz4.frame
 import ray
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 
 
 class BaseClassifier:

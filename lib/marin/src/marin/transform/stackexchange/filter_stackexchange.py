@@ -21,7 +21,7 @@ import dataclasses
 import json
 
 import draccus
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 from zephyr import Dataset, ZephyrContext
 
 

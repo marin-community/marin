@@ -41,6 +41,7 @@ dependencies = [
     "regex",
     "requests",
     "resiliparse>=0.17.2",
+    "rigging",
     "s3fs>=2024",
     "toml",
     "tqdm",

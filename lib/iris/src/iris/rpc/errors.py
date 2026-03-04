@@ -15,7 +15,7 @@ from connectrpc.errors import ConnectError
 from google.protobuf.any_pb2 import Any as AnyProto
 
 from iris.rpc import errors_pb2
-from iris.time_utils import ExponentialBackoff, Timestamp
+from rigging.time_utils import ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 

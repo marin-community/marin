@@ -18,7 +18,7 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import requests
-from iris.marin_fs import marin_prefix
+from rigging.marin_fs import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 

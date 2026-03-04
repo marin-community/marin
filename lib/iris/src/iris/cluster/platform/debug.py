@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from iris.cluster.platform.base import Labels
-from iris.time_utils import Deadline
+from rigging.time_utils import Deadline
 
 logger = logging.getLogger(__name__)
 

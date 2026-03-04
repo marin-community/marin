@@ -16,7 +16,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 import numpy as np
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 from fray.v1.job import get_default_job_ctx
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats

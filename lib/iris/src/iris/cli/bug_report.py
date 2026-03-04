@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Timestamp
+from rigging.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 

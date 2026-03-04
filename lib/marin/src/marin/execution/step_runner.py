@@ -25,10 +25,10 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from iris.marin_fs import open_url, url_to_fs
+from rigging.marin_fs import open_url, url_to_fs
 
 from fray.v2.client import JobHandle, JobStatus
-from marin.execution.executor_step_status import (
+from rigging.execution.executor_step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_SUCCESS,
@@ -39,7 +39,7 @@ from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 # Re-export for backward compatibility
-from marin.execution.executor_step_status import PreviousTaskFailedError, should_run, worker_id  # noqa: F401
+from rigging.execution.executor_step_status import PreviousTaskFailedError, should_run, worker_id  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

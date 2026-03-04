@@ -10,7 +10,7 @@ Migrated from tests/chaos/test_vm_failures.py.
 import pytest
 from iris.cluster.platform.base import CloudWorkerState, QuotaExhaustedError
 from iris.rpc import config_pb2
-from iris.time_utils import Timestamp
+from rigging.time_utils import Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
 
 pytestmark = pytest.mark.e2e

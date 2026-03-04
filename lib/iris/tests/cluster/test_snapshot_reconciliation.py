@@ -17,7 +17,7 @@ from iris.cluster.controller.snapshot import (
 )
 from iris.cluster.platform.base import Labels
 from iris.rpc import config_pb2, snapshot_pb2
-from iris.time_utils import Timestamp
+from rigging.time_utils import Timestamp
 from tests.cluster.platform.fakes import (
     FakePlatform,
     FakePlatformConfig,

@@ -469,7 +469,7 @@ class TestSshConfigMerging:
 
     def test_uses_cluster_default_ssh_config(self):
         """get_ssh_config returns cluster defaults when no group override."""
-        from iris.time_utils import Duration
+        from rigging.time_utils import Duration
 
         ssh_config_proto = config_pb2.SshConfig(
             user="ubuntu",
@@ -510,7 +510,7 @@ class TestSshConfigMerging:
 
     def test_partial_per_group_overrides_merge_with_defaults(self):
         """Per-group overrides merge with cluster defaults for unset fields."""
-        from iris.time_utils import Duration
+        from rigging.time_utils import Duration
 
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"

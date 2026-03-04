@@ -39,7 +39,7 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
-from iris.time_utils import Deadline, Duration
+from rigging.time_utils import Deadline, Duration
 
 logger = logging.getLogger(__name__)
 

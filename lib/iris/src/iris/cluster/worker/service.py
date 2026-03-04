@@ -17,7 +17,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.errors import rpc_error_handler
-from iris.time_utils import Timer
+from rigging.time_utils import Timer
 
 logger = logging.getLogger(__name__)
 

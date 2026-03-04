@@ -40,7 +40,7 @@ from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.proto_utils import job_state_name, task_state_name
-from iris.time_utils import Timer, Timestamp
+from rigging.time_utils import Timer, Timestamp
 
 logger = logging.getLogger(__name__)
 

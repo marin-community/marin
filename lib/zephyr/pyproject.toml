@@ -11,6 +11,7 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
     "iris",
     "fray[ray]",
+    "rigging",
     "typing-extensions>=4.0",
     "click>=8.0",
     "cloudpickle>=3.0",

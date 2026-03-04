@@ -22,7 +22,7 @@ from itertools import groupby, islice
 from typing import Any
 
 import msgspec
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 
 from zephyr.dataset import (
     Dataset,

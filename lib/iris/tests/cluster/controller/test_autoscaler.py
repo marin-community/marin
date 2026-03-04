@@ -34,7 +34,7 @@ from iris.cluster.platform.base import (
 )
 from iris.cluster.types import REGION_ATTRIBUTE_KEY, ZONE_ATTRIBUTE_KEY, DeviceType, VmWorkerStatus
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.time_utils import Duration, Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
 
 # --- Test fixtures and helpers ---

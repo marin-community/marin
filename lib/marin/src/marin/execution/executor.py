@@ -96,14 +96,13 @@ from urllib.parse import urlparse
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url, marin_prefix
 from fray.v2.types import ResourceConfig
-from iris.marin_fs import marin_prefix
 
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, worker_id
 from marin.execution.remote import RemoteCallable
-from marin.execution.executor_step_status import (
+from rigging.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
 )

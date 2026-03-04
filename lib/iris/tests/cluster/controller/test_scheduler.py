@@ -24,7 +24,7 @@ from iris.cluster.controller.scheduler import (
 from iris.cluster.controller.state import ControllerState, ControllerTask
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from rigging.time_utils import Timestamp
 
 
 def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
@@ -182,7 +182,7 @@ def job_request():
         memory_bytes: int = 1024**3,
         scheduling_timeout_seconds: int = 0,
     ) -> cluster_pb2.Controller.LaunchJobRequest:
-        from iris.time_utils import Duration
+        from rigging.time_utils import Duration
 
         job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
         request = cluster_pb2.Controller.LaunchJobRequest(
@@ -371,7 +371,7 @@ def test_scheduler_detects_timed_out_tasks(state, worker_metadata):
     """
     import time
 
-    from iris.time_utils import Deadline, Duration
+    from rigging.time_utils import Deadline, Duration
 
     register_worker(state, "w1", "addr", worker_metadata(cpu=2))
 

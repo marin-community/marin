@@ -46,7 +46,7 @@ from iris.cluster.types import (
     get_tpu_count,
 )
 from iris.rpc import cluster_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

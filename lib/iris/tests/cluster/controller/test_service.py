@@ -389,7 +389,7 @@ def test_terminate_job_only_affects_descendants(service, job_request):
 def test_terminate_job_skips_already_finished_children(service, state, job_request):
     """Verify terminate_job skips children already in terminal state."""
     from iris.cluster.controller.state import ControllerJob
-    from iris.time_utils import Timestamp
+    from rigging.time_utils import Timestamp
 
     # Launch parent via RPC
     service.launch_job(job_request("parent"), None)

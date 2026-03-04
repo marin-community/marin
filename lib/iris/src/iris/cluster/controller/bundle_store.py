@@ -8,7 +8,7 @@ import logging
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 
 logger = logging.getLogger(__name__)
 

@@ -44,7 +44,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from iris.test_util import SentinelFile
-from iris.time_utils import Deadline, Duration
+from rigging.time_utils import Deadline, Duration
 
 
 def wait_for_condition(

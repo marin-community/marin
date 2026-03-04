@@ -17,7 +17,7 @@ from collections.abc import Callable
 from threading import Event, Thread
 from typing import TypeVar
 
-from marin.execution.executor_step_status import (
+from rigging.execution.executor_step_status import (
     HEARTBEAT_INTERVAL,
     StatusFile,
     should_run,

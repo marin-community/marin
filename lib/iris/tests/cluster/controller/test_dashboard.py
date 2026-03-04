@@ -24,7 +24,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Timestamp
+from rigging.time_utils import Timestamp
 
 
 def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:

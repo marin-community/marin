@@ -12,7 +12,7 @@ Tests that Iris handles RPC failures gracefully:
 import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 
 from .helpers import _quick, _slow
 

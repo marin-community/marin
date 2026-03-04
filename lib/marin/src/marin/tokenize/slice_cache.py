@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 
 import humanfriendly
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 from jax.random import PRNGKey
 from levanter.data.text import (
     HfDatasetSourceConfig,

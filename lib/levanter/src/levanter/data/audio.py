@@ -14,7 +14,7 @@ import braceexpand
 import datasets
 import equinox as eqx
 import haliax as hax
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 import jax
 import numpy as np
 from draccus import field

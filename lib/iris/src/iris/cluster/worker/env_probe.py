@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
-from iris.marin_fs import marin_temp_bucket
+from rigging.marin_fs import marin_temp_bucket
 from iris.rpc import cluster_pb2, config_pb2
-from iris.time_utils import Timestamp
+from rigging.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 

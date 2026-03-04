@@ -12,7 +12,7 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_fini
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry
-from iris.time_utils import Deadline, Duration, ExponentialBackoff
+from rigging.time_utils import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 

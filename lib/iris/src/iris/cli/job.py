@@ -40,7 +40,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

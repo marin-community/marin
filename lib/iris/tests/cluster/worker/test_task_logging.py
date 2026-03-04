@@ -16,7 +16,7 @@ from iris.cluster.task_logging import (
 )
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
-from iris.time_utils import Timestamp
+from rigging.time_utils import Timestamp
 
 TASK_ID = JobName.from_wire("/job/test/task/0")
 

@@ -15,7 +15,7 @@ import itertools
 import os
 from typing import Any
 
-from iris.marin_fs import open_url, url_to_fs
+from rigging.marin_fs import open_url, url_to_fs
 import msgspec
 import logging
 

@@ -23,7 +23,7 @@ from typing import TypedDict
 
 import numpy as np
 import pandas as pd
-from iris.marin_fs import open_url, url_to_fs
+from rigging.marin_fs import open_url, url_to_fs
 
 logger = logging.getLogger("ray")
 

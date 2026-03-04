@@ -25,7 +25,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, ZONE_ATTRIBUTE_KEY, parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 

@@ -13,7 +13,7 @@ import json
 import operator
 import sys
 
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 
 from marin.execution.executor import Executor
 

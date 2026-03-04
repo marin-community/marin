@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import haliax as hax
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 import jax
 import jax.random as jrandom
 import jmp

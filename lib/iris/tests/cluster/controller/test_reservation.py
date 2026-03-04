@@ -35,7 +35,7 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler, Schedu
 from iris.cluster.controller.state import ControllerState, ControllerWorker
 from iris.cluster.types import AttributeValue, JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from rigging.time_utils import Timestamp
 
 # =============================================================================
 # Helpers

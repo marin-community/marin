@@ -26,7 +26,7 @@ def test_128_tasks_concurrent_scheduling(multi_worker_cluster, sentinel):
     enable_chaos("controller.heartbeat.iteration", delay_seconds=0.01)
 
     def waiting_task(s):
-        from iris.time_utils import Duration
+        from rigging.time_utils import Duration
 
         s.wait(timeout=Duration.from_seconds(2))
         return "done"

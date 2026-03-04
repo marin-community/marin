@@ -13,7 +13,7 @@ from typing import Any, Generic, Literal, TypeVar, cast
 
 import fsspec
 from braceexpand import braceexpand
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 
 from zephyr.expr import Expr
 

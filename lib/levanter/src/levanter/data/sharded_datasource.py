@@ -11,7 +11,7 @@ from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, S
 
 import datasets
 import numpy as np
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 import pyarrow.parquet as pq
 
 from levanter.utils import fsspec_utils

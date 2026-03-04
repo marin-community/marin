@@ -15,6 +15,7 @@ dependencies = [
     "haliax",
     "levanter",
     "marin",
+    "rigging",
     "zephyr",
     # top level deps. try to keep these small.
     "watchdog",
@@ -37,6 +38,7 @@ members = [
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
+    "lib/rigging",
     "lib/zephyr",
 ]
 
@@ -46,6 +48,7 @@ fray = { workspace = true }
 haliax = { workspace = true }
 levanter = { workspace = true }
 marin = { workspace = true }
+rigging = { workspace = true }
 zephyr = { workspace = true }
 # NOTE: dupekit and harbor are optional dependencies. Declaring them as path
 # dependencies (not workspace members) avoids pulling their dev dependency
@@ -95,6 +98,7 @@ project-includes = [
     "lib/haliax/src/**/*.py",
     "lib/fray/src/**/*.py",
     "lib/iris/src/**/*.py",
+    "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
 ]
 
@@ -105,6 +109,7 @@ search-path = [
     "lib/marin/src",
     "lib/levanter/src",
     "lib/haliax/src",
+    "lib/rigging/src",
     "lib/zephyr/src",
     "lib/fray/src",
     "lib/iris/src",

@@ -37,7 +37,7 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.time_utils import Duration, ExponentialBackoff
 
 
 def create_local_autoscaler(

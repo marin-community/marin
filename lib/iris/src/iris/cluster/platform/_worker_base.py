@@ -38,7 +38,7 @@ from iris.cluster.platform.remote_exec import (
     run_streaming_with_retry,
     wait_for_connection,
 )
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 

@@ -15,7 +15,7 @@ from iris.cluster.manager import connect_cluster
 from iris.cluster.types import Constraint, ConstraintOp
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 
 from .conftest import IRIS_ROOT, IrisTestCluster, assert_visible, dashboard_goto, wait_for_dashboard_ready
 

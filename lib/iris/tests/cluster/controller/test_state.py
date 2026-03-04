@@ -32,7 +32,7 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, DeviceType, JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.time_utils import Duration, Timestamp
 
 # =============================================================================
 # Test Helpers

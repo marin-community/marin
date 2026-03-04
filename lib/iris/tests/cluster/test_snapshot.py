@@ -28,7 +28,7 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import AttributeValue, JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.time_utils import Deadline, Duration, Timestamp
 
 
 def _make_request(name: str = "test-job", replicas: int = 1) -> cluster_pb2.Controller.LaunchJobRequest:

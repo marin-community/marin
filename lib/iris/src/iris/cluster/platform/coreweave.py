@@ -62,7 +62,7 @@ from iris.cluster.platform.base import (
     find_free_port,
 )
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
+from rigging.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 

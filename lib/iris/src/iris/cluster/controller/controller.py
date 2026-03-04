@@ -64,7 +64,7 @@ from iris.logging import get_global_buffer, slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, snapshot_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
+from rigging.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
 
 logger = logging.getLogger(__name__)
 
