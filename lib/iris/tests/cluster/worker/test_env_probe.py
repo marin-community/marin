@@ -3,9 +3,16 @@
 
 """Tests for worker environment probing."""
 
+import time
 
 import iris.cluster.worker.env_probe as env_probe
-from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, HardwareProbe, build_worker_metadata
+from iris.cluster.worker.env_probe import (
+    DefaultEnvironmentProvider,
+    HardwareProbe,
+    HostMetricsCollector,
+    _read_net_dev_bytes,
+    build_worker_metadata,
+)
 from iris.rpc import config_pb2
 
 
@@ -175,3 +182,68 @@ def test_build_worker_metadata_cpu_fallback():
     assert metadata.device.HasField("cpu")
     assert metadata.hostname == "test-host"
     assert metadata.ip_address == "10.0.0.1"
+
+
+def test_read_net_dev_bytes_returns_nonzero_on_linux():
+    """On Linux, /proc/net/dev should be readable and return non-negative values."""
+    try:
+        recv, sent = _read_net_dev_bytes()
+        assert recv >= 0
+        assert sent >= 0
+    except OSError:
+        # Non-Linux systems won't have /proc/net/dev
+        pass
+
+
+def test_host_metrics_collector_network_first_call_returns_zero():
+    """First network collection establishes baseline and reports 0 B/s."""
+    collector = HostMetricsCollector()
+    snapshot = collector.collect()
+    # First call should report 0 since there's no previous measurement to delta against
+    assert snapshot.net_recv_bps == 0
+    assert snapshot.net_sent_bps == 0
+
+
+def test_host_metrics_collector_network_delta(monkeypatch):
+    """Second network collection computes bytes/sec from the delta."""
+    fake_time = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: fake_time[0])
+
+    # Simulate /proc/net/dev with known values
+    call_count = [0]
+    net_values = [
+        (1000, 2000),  # First call: baseline
+        (6000, 12000),  # Second call: 5000 recv, 10000 sent over 5s
+    ]
+
+    def fake_read_net():
+        idx = min(call_count[0], len(net_values) - 1)
+        call_count[0] += 1
+        return net_values[idx]
+
+    monkeypatch.setattr(env_probe, "_read_net_dev_bytes", fake_read_net)
+
+    collector = HostMetricsCollector()
+
+    # First collect: establishes baseline
+    snapshot1 = collector.collect()
+    assert snapshot1.net_recv_bps == 0
+    assert snapshot1.net_sent_bps == 0
+
+    # Advance time by 5 seconds
+    fake_time[0] = 105.0
+
+    # Second collect: should compute rates
+    snapshot2 = collector.collect()
+    assert snapshot2.net_recv_bps == 1000  # (6000-1000) / 5 = 1000 B/s
+    assert snapshot2.net_sent_bps == 2000  # (12000-2000) / 5 = 2000 B/s
+
+
+def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
+    """Network collection silently returns 0 on systems without /proc/net/dev."""
+    monkeypatch.setattr(env_probe, "_read_net_dev_bytes", lambda: (_ for _ in ()).throw(OSError("no /proc/net/dev")))
+
+    collector = HostMetricsCollector()
+    snapshot = collector.collect()
+    assert snapshot.net_recv_bps == 0
+    assert snapshot.net_sent_bps == 0

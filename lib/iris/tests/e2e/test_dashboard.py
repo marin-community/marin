@@ -129,6 +129,30 @@ def test_worker_detail_metric_cards(cluster, page, screenshot):
     screenshot("worker-detail-metric-cards")
 
 
+def test_worker_detail_shows_network_and_disk_sparklines(cluster, page, screenshot):
+    """Worker detail page shows network bandwidth and disk sparkline in Live Utilization."""
+    job = cluster.submit(_quick, "worker-net-disk")
+    cluster.wait(job, timeout=30)
+
+    task_status = cluster.task_status(job)
+    worker_id = task_status.worker_id
+    assert worker_id
+
+    dashboard_goto(page, f"{cluster.url}/worker/{worker_id}")
+
+    if not _is_noop_page(page):
+        page.wait_for_function(
+            "() => document.querySelector('.resource-section') !== null",
+            timeout=10000,
+        )
+    # Live Utilization section should show CPU, Memory, Disk (all with sparklines) and Net
+    assert_visible(page, "text=Live Utilization")
+    assert_visible(page, "text=CPU")
+    assert_visible(page, "text=Disk")
+    assert_visible(page, "text=Net")
+    screenshot("worker-detail-net-disk-sparklines")
+
+
 def _allocate_memory_and_wait():
     """Allocate ~50 MB and sleep long enough for at least one stats collection cycle."""
     import time
