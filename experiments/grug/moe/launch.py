@@ -21,6 +21,7 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import lm_data_config
 
@@ -73,9 +74,10 @@ TINYSTORIES_TOKENIZED = default_tokenize(
     format=TextLmDatasetFormat(),
     sample_count=versioned(1000),
 )
+TINYSTORIES_DATASET_KEY = os.path.basename(TINYSTORIES_TOKENIZED.name)
 TINYSTORIES_DATA = lm_data_config(
     TINYSTORIES_TOKENIZED,
-    num_validation_sequences={TINYSTORIES_HF_ID: 64},
+    num_validation_sequences={TINYSTORIES_DATASET_KEY: 64},
 )
 
 
@@ -105,6 +107,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
+        mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
