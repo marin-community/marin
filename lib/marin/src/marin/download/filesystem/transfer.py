@@ -6,7 +6,7 @@ import random
 import time
 from dataclasses import dataclass
 
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 from zephyr import Dataset, ZephyrContext
 
 from marin.utils import fsspec_exists, fsspec_glob

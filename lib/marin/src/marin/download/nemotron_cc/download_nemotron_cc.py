@@ -16,7 +16,7 @@ import os
 from dataclasses import dataclass
 
 import requests
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 from marin.download.nemotron_cc.utils import decompress_zstd_stream
 from marin.execution import THIS_OUTPUT_PATH
 from marin.utils import fsspec_exists

@@ -38,7 +38,7 @@ from iris.cluster.platform.bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timer
+from rigging.time_utils import Deadline, Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
 

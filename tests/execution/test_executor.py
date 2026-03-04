@@ -23,7 +23,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from marin.execution.executor_step_status import (
+from rigging.status_file import (
     STATUS_SUCCESS,
     StatusFile,
 )
@@ -615,7 +615,7 @@ def test_parent_will_run_if_some_child_is_not_skippable():
 
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     """Test taking over a stale lock from a dead worker and then refreshing it."""
-    from marin.execution.executor_step_status import HEARTBEAT_TIMEOUT, Lease
+    from rigging.status_file import HEARTBEAT_TIMEOUT, Lease
 
     # Simulate worker A creating a stale lock (as if it died)
     dead_worker = StatusFile(tmp_path, worker_id="dead-worker")

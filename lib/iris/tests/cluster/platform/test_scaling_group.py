@@ -26,7 +26,7 @@ from iris.cluster.platform.base import (
 )
 from iris.cluster.types import VmWorkerStatus
 from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.time_utils import Duration, Timestamp
 
 DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
     cpu_millicores=64000,

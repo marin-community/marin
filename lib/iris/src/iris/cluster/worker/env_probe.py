@@ -18,9 +18,10 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
-from iris.marin_fs import marin_temp_bucket
+from rigging.marin_fs import marin_temp_bucket
 from iris.rpc import cluster_pb2, config_pb2
-from iris.time_utils import Timestamp
+from iris.rpc.time_conversions import timestamp_to_proto
+from rigging.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -488,7 +489,7 @@ class HostMetricsCollector:
 
     def collect(self) -> cluster_pb2.WorkerResourceSnapshot:
         snapshot = cluster_pb2.WorkerResourceSnapshot()
-        snapshot.timestamp.CopyFrom(Timestamp.now().to_proto())
+        snapshot.timestamp.CopyFrom(timestamp_to_proto(Timestamp.now()))
 
         self._collect_memory(snapshot)
         self._collect_disk(snapshot)

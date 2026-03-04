@@ -71,7 +71,7 @@ manifests (Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding) are defin
 
 ### Time Utilities
 
-Use `iris.time_utils` for all time-related operations instead of raw `datetime` or `time`:
+Use `rigging.time_utils` for all time-related operations instead of raw `datetime` or `time`:
 
 | Class | Purpose |
 |-------|---------|
@@ -83,7 +83,7 @@ Use `iris.time_utils` for all time-related operations instead of raw `datetime` 
 
 Example:
 ```python
-from iris.time_utils import Timestamp, Duration, Deadline
+from rigging.time_utils import Timestamp, Duration, Deadline
 
 created_at = Timestamp.now()
 timeout = Duration.from_seconds(30.0)

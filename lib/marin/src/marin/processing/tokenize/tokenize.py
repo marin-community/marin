@@ -18,7 +18,7 @@ from collections.abc import Iterator, Sequence
 
 import draccus
 import transformers
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
 from fray.v2.local_backend import LocalClient

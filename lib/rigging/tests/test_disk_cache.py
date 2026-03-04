@@ -7,11 +7,9 @@ from pathlib import Path
 
 import cloudpickle
 
-from marin.execution.artifact import Artifact
-from marin.execution.disk_cache import disk_cache
-from marin.execution.distributed_lock import distributed_lock
-from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile
-from marin.execution.step_spec import StepSpec
+from rigging.disk_cache import disk_cache
+from rigging.distributed_lock import distributed_lock
+from rigging.status_file import STATUS_SUCCESS, StatusFile
 
 
 def _make_fn():
@@ -36,7 +34,7 @@ def _make_fn():
 
 def test_disk_cached_runs_and_caches(tmp_path: Path):
     fn, get_count = _make_fn()
-    output_path = StepSpec(name="step", output_path_prefix=tmp_path.as_posix()).output_path
+    output_path = str(tmp_path / "step-abc123")
 
     cached_fn = disk_cache(fn, output_path=output_path)
 
@@ -53,24 +51,22 @@ def test_disk_cached_runs_and_caches(tmp_path: Path):
 def test_disk_cached_skips_when_another_worker_completed(tmp_path: Path):
     fn, get_count = _make_fn()
 
-    # Simulate another worker having completed the step: write
-    # data.pkl (what disk_cache reads) and mark STATUS_SUCCESS.
-    spec = StepSpec(name="race", output_path_prefix=tmp_path.as_posix())
+    output_path = str(tmp_path / "race-def456")
     expected = {"value": 99, "from_other": True}
-    os.makedirs(spec.output_path, exist_ok=True)
-    with open(os.path.join(spec.output_path, "data.pkl"), "wb") as f:
+    os.makedirs(output_path, exist_ok=True)
+    with open(os.path.join(output_path, "data.pkl"), "wb") as f:
         f.write(cloudpickle.dumps(expected))
-    StatusFile(spec.output_path, "other-worker").write_status(STATUS_SUCCESS)
+    StatusFile(output_path, "other-worker").write_status(STATUS_SUCCESS)
 
-    cached_fn = disk_cache(fn, output_path=spec.output_path)
-    result = cached_fn(spec.output_path)
+    cached_fn = disk_cache(fn, output_path=output_path)
+    result = cached_fn(output_path)
 
     assert get_count() == 0
     assert result == expected
 
 
-def test_composition_with_save_load(tmp_path: Path):
-    """disk_cached + distributed_lock + save/load (the StepRunner pattern)."""
+def test_composition_with_distributed_lock(tmp_path: Path):
+    """disk_cache + distributed_lock with custom save/load."""
     call_count = 0
 
     def counting_fn(output_path: str) -> dict:
@@ -79,13 +75,22 @@ def test_composition_with_save_load(tmp_path: Path):
         os.makedirs(output_path, exist_ok=True)
         return {"value": 42}
 
-    output_path = StepSpec(name="comp", output_path_prefix=tmp_path.as_posix()).output_path
+    output_path = str(tmp_path / "comp-ghi789")
+
+    def save_fn(result, path):
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "result.json"), "w") as f:
+            json.dump(result, f)
+
+    def load_fn(path):
+        with open(os.path.join(path, "result.json")) as f:
+            return json.load(f)
 
     cached_fn = disk_cache(
         distributed_lock(counting_fn),
         output_path=output_path,
-        save_fn=Artifact.save,
-        load_fn=Artifact.load,
+        save_fn=save_fn,
+        load_fn=load_fn,
     )
 
     result1 = cached_fn(output_path)
@@ -164,23 +169,19 @@ def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):
         call_count += 1
         return {"model": name, "weights": [1, 2, 3]}
 
-    # First call: disk miss, runs the function, writes cloudpickle
     r1 = load_model("bert")
     assert call_count == 1
     assert r1 == {"model": "bert", "weights": [1, 2, 3]}
 
-    # Second call: @cache returns the in-memory result, no disk read
     r2 = load_model("bert")
     assert call_count == 1
-    assert r2 is r1  # same object identity from functools.cache
+    assert r2 is r1
 
-    # Clear the in-memory cache — next call should hit disk_cache
     load_model.cache_clear()
     r3 = load_model("bert")
-    assert call_count == 1  # still 1: disk_cache served the result
+    assert call_count == 1
     assert r3 == r1
 
-    # marin_temp_bucket places local caches under {MARIN_PREFIX}/tmp/
     tmp_dir = tmp_path / "prefix" / "tmp"
     cache_dirs = list(tmp_dir.glob("disk_cache_*"))
     assert len(cache_dirs) == 1

@@ -94,7 +94,7 @@ def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch)
 
 def test_log_prefix_uses_region_bucket_mapping(monkeypatch):
     """europe-west4 must map to marin-tmp-eu-west4 bucket naming."""
-    import iris.marin_fs as marin_fs_mod
+    import rigging.marin_fs as marin_fs_mod
 
     monkeypatch.setattr(marin_fs_mod, "region_from_metadata", lambda: "europe-west4")
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
@@ -105,7 +105,7 @@ def test_log_prefix_uses_region_bucket_mapping(monkeypatch):
 
 def test_log_prefix_unknown_region_falls_back(monkeypatch):
     """Unknown regions fall back to the marin prefix tmp path."""
-    import iris.marin_fs as marin_fs_mod
+    import rigging.marin_fs as marin_fs_mod
 
     monkeypatch.setattr(marin_fs_mod, "region_from_metadata", lambda: None)
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-antarctica-south1/scratch")

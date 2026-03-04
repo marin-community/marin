@@ -22,7 +22,7 @@ from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 
 from .conftest import DEFAULT_CONFIG
 

@@ -9,8 +9,8 @@ import time
 import psutil
 from fsspec.callbacks import TqdmCallback
 from fsspec.implementations.local import LocalFileSystem
-from iris.marin_fs import filesystem as marin_filesystem
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import filesystem as marin_filesystem
+from rigging.marin_fs import url_to_fs
 
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_mtime
 

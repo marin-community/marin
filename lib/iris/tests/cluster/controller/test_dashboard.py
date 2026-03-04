@@ -24,7 +24,8 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Timestamp
+from iris.rpc.time_conversions import timestamp_to_proto
+from rigging.time_utils import Timestamp
 
 
 def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
@@ -510,14 +511,14 @@ def mock_autoscaler():
                 current_demand=3,
                 availability_status="requesting",
                 availability_reason="scale-up in progress",
-                blocked_until=Timestamp.from_ms(0).to_proto(),
+                blocked_until=timestamp_to_proto(Timestamp.from_ms(0)),
             ),
         ],
         current_demand={"test-group": 3},
-        last_evaluation=Timestamp.from_ms(1000).to_proto(),
+        last_evaluation=timestamp_to_proto(Timestamp.from_ms(1000)),
         recent_actions=[
             vm_pb2.AutoscalerAction(
-                timestamp=Timestamp.from_ms(1000).to_proto(),
+                timestamp=timestamp_to_proto(Timestamp.from_ms(1000)),
                 action_type="scale_up",
                 scale_group="test-group",
                 slice_id="slice-1",

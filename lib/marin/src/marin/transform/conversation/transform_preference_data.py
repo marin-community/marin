@@ -25,7 +25,7 @@ import datasets
 import draccus
 import fsspec
 from datasets import get_dataset_config_info
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 from zephyr import Dataset, ZephyrContext, write_jsonl_file
 
 from marin.utils import is_path_like

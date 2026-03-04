@@ -13,7 +13,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Protocol
 
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ from iris.cli.main import iris
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.snapshot import read_latest_snapshot, read_snapshot_from_path
 from iris.cluster.controller.state import ControllerState
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 
 
 class _FakeStubFactory:

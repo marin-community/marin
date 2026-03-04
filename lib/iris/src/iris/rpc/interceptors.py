@@ -3,7 +3,7 @@
 
 import logging
 
-from iris.time_utils import Timer
+from rigging.time_utils import Timer
 
 logger = logging.getLogger(__name__)
 

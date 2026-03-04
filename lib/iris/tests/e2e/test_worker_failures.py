@@ -10,7 +10,7 @@ All chaos is injected inline in worker.py.
 import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 
 from .conftest import assert_visible, dashboard_click, dashboard_goto, wait_for_dashboard_ready
 from .helpers import _quick, _slow

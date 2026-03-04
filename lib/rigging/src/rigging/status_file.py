@@ -1,14 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Each `ExecutorStep` produces an `output_path`.
-We associate each `output_path` with:
-- A status file (`output_path/.executor_status`) containing simple text: SUCCESS, FAILURE, or RUNNING
-- A LOCK file (`output_path/.executor_status.lock`) for distributed locking
+"""Lease-based distributed status tracking for filesystem paths.
 
-The LOCK file contains JSON with {worker_id, timestamp} and is refreshed periodically.
-On GCS, we use generation-based conditional writes for atomicity.
+Associates a directory path with:
+- A status file (``<path>/<status_filename>``) containing a simple text token
+  such as SUCCESS, FAILED, or RUNNING.
+- A lock file (``<status_file>.lock``) used for lease-based distributed locking.
+
+The lock file contains JSON ``{worker_id, timestamp}`` and is refreshed
+periodically.  On GCS, generation-based conditional writes provide atomicity.
 """
 
 import json
@@ -18,9 +19,9 @@ import time
 from dataclasses import asdict, dataclass
 
 from google.cloud import storage
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL = 30  # seconds between lease refreshes
 HEARTBEAT_TIMEOUT = 90  # seconds before considering a lease stale
@@ -28,40 +29,35 @@ HEARTBEAT_TIMEOUT = 90  # seconds before considering a lease stale
 STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
 STATUS_SUCCESS = "SUCCESS"
-STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
 
-
-def get_status_path(output_path: str) -> str:
-    """Return the path of the status file associated with `output_path`."""
-    return os.path.join(output_path, ".executor_status")
+DEFAULT_STATUS_FILENAME = ".status"
 
 
 @dataclass
 class Lease:
-    """A lease held by a worker for a step."""
+    """A lease held by a worker."""
 
     worker_id: str
     timestamp: float
 
     def is_stale(self) -> bool:
-        logger.debug(f"Is stale? {time.time()} {self.timestamp} {time.time() - self.timestamp}")
         return (time.time() - self.timestamp) > HEARTBEAT_TIMEOUT
 
 
 class StatusFile:
-    """Manages executor step status with distributed locking.
+    """Manages a status file with lease-based distributed locking.
 
     Two types of files:
-    - LOCK file (JSON): Single file for distributed lock acquisition.
-      Contains {worker_id, timestamp}. Must be refreshed periodically.
-    - Status file (simple text): Final state - SUCCESS, FAILURE, or RUNNING.
+    - Lock file (JSON): used for distributed lock acquisition.
+      Contains ``{worker_id, timestamp}``.  Must be refreshed periodically.
+    - Status file (plain text): final state — SUCCESS, FAILED, or RUNNING.
 
     Lock acquisition uses GCS generation-based conditional writes for atomicity.
     """
 
-    def __init__(self, output_path: str, worker_id: str):
-        self.output_path = output_path
-        self.path = get_status_path(output_path)
+    def __init__(self, path: str, worker_id: str, *, status_filename: str = DEFAULT_STATUS_FILENAME):
+        self.base_path = path
+        self.path = os.path.join(path, status_filename)
         self.worker_id = worker_id
         self._lock_path = self.path + ".lock"
         self.fs = url_to_fs(self.path, use_listings_cache=False)[0]
@@ -81,7 +77,7 @@ class StatusFile:
         """Read current status from status file.
 
         The modern representation stores a single status token, but older
-        executors wrote JSON-line event logs. We support both until the legacy
+        executors wrote JSON-line event logs.  We support both until the legacy
         files are gone.
         """
         if not self.fs.exists(self.path):
@@ -121,7 +117,7 @@ class StatusFile:
         return last_status
 
     def write_status(self, status: str) -> None:
-        """Write status (SUCCESS/FAILURE/RUNNING).
+        """Write status (SUCCESS/FAILED/RUNNING).
 
         For terminal statuses (SUCCESS/FAILED), the lock is released.
         For RUNNING, the lock is maintained so heartbeat can continue refreshing it.
@@ -137,7 +133,7 @@ class StatusFile:
         logger.debug("[%s] Wrote status %s to %s", self.worker_id, status, self.path)
 
     def _read_lock_with_generation(self) -> tuple[int, Lease | None]:
-        """Read LOCK file and its generation. Returns (0, None) if doesn't exist."""
+        """Read lock file and its generation.  Returns (0, None) if it doesn't exist."""
         if self._is_gcs:
             client = storage.Client()
             bucket_name, blob_path = self._parse_gcs_path(self._lock_path)
@@ -163,10 +159,10 @@ class StatusFile:
                 return (0, None)
 
     def _write_lock(self, lease: Lease, if_generation_match: int) -> None:
-        """Write LOCK file with generation precondition.
+        """Write lock file with generation precondition.
 
         On GCS, uses generation-based conditional writes.
-        On local, uses atomic rename then read-back to verify.
+        On local, uses flock for mutual exclusion.
         """
         data = json.dumps(asdict(lease))
 
@@ -208,7 +204,7 @@ class StatusFile:
             )
 
     def try_acquire_lock(self) -> bool:
-        """Try to acquire the lock using atomic LOCK file, or update the lock if held.
+        """Try to acquire the lock using an atomic lock file.
 
         On GCS, uses generation-based preconditions for atomicity.
         """
@@ -254,57 +250,8 @@ class StatusFile:
         return lock_data is not None and not lock_data.is_stale()
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def worker_id() -> str:
+    """Return a worker identifier based on hostname and thread ID."""
     import threading
 
     return f"{os.uname()[1]}-{threading.get_ident()}"
-
-
-class PreviousTaskFailedError(Exception):
-    """Raised when a step failed previously and force_run_failed is False."""
-
-
-def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = True) -> bool:
-    """Check if the step should run based on lease-based distributed locking.
-
-    Uses lease files for distributed locking and status file for final state.
-    """
-    wid = status_file.worker_id
-    log_once = True
-
-    while True:
-        status = status_file.status
-
-        if log_once:
-            logger.info(f"[{wid}] Status {step_name}: {status}")
-            log_once = False
-
-        if status == STATUS_SUCCESS:
-            logger.info(f"[{wid}] Step {step_name} has already succeeded.")
-            return False
-
-        if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
-            if force_run_failed:
-                logger.info(f"[{wid}] Force running {step_name}, previous status: {status}")
-            else:
-                raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-        elif status == STATUS_RUNNING and status_file.has_active_lock():
-            logger.debug(f"[{wid}] Step {step_name} has active lock, waiting...")
-            time.sleep(5)
-            continue
-        elif status == STATUS_RUNNING:
-            logger.info(f"[{wid}] Step {step_name} has no active lock, taking over.")
-
-        logger.info(f"[{wid}] Attempting to acquire lock for {step_name}")
-        if status_file.try_acquire_lock():
-            status_file.write_status(STATUS_RUNNING)
-            logger.info(f"[{wid}] Acquired lock for {step_name}")
-            return True
-
-        logger.info(f"[{wid}] Lost lock race for {step_name}, retrying...")
-        time.sleep(1)

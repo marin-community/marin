@@ -71,7 +71,7 @@ from iris.cluster.platform.remote_exec import (
 )
 from iris.cluster.types import get_tpu_topology
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

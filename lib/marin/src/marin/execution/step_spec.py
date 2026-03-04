@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
 
-from iris.marin_fs import marin_prefix
+from rigging.marin_fs import marin_prefix
 
 
 @dataclass(frozen=True)
@@ -79,8 +79,8 @@ class StepSpec:
         entire chain runs inside the Fray job.
         """
         from marin.execution.artifact import Artifact
-        from marin.execution.disk_cache import disk_cache
-        from marin.execution.distributed_lock import distributed_lock
+        from rigging.disk_cache import disk_cache
+        from rigging.distributed_lock import distributed_lock
         from marin.execution.remote import RemoteCallable
 
         raw_fn = self.fn.fn if isinstance(self.fn, RemoteCallable) else self.fn

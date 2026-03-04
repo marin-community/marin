@@ -21,7 +21,7 @@ import dupekit
 from marin.execution.executor import THIS_OUTPUT_PATH
 import draccus
 import msgspec
-from iris.marin_fs import url_to_fs
+from rigging.marin_fs import url_to_fs
 import wandb
 
 from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY

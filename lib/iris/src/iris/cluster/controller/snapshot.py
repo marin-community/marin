@@ -37,7 +37,8 @@ from iris.cluster.controller.state import (
 from iris.cluster.platform.base import CloudWorkerState, CommandResult, Labels, Platform, SliceHandle, WorkerStatus
 from iris.cluster.types import AttributeValue, JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.rpc.time_conversions import timestamp_from_proto, timestamp_to_proto
+from rigging.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -150,11 +151,11 @@ def _snapshot_attempt(attempt: ControllerTaskAttempt) -> snapshot_pb2.TaskAttemp
         exit_code=attempt.exit_code or 0,
         error=attempt.error or "",
     )
-    snap.created_at.CopyFrom(attempt.created_at.to_proto())
+    snap.created_at.CopyFrom(timestamp_to_proto(attempt.created_at))
     if attempt.started_at:
-        snap.started_at.CopyFrom(attempt.started_at.to_proto())
+        snap.started_at.CopyFrom(timestamp_to_proto(attempt.started_at))
     if attempt.finished_at:
-        snap.finished_at.CopyFrom(attempt.finished_at.to_proto())
+        snap.finished_at.CopyFrom(timestamp_to_proto(attempt.finished_at))
     return snap
 
 
@@ -170,11 +171,11 @@ def _snapshot_task(task: ControllerTask) -> snapshot_pb2.TaskSnapshot:
         failure_count=task.failure_count,
         preemption_count=task.preemption_count,
     )
-    snap.submitted_at.CopyFrom(task.submitted_at.to_proto())
+    snap.submitted_at.CopyFrom(timestamp_to_proto(task.submitted_at))
     if task.started_at:
-        snap.started_at.CopyFrom(task.started_at.to_proto())
+        snap.started_at.CopyFrom(timestamp_to_proto(task.started_at))
     if task.finished_at:
-        snap.finished_at.CopyFrom(task.finished_at.to_proto())
+        snap.finished_at.CopyFrom(timestamp_to_proto(task.finished_at))
     for attempt in task.attempts:
         snap.attempts.append(_snapshot_attempt(attempt))
     return snap
@@ -194,12 +195,12 @@ def _snapshot_job(
         is_reservation_holder=job.is_reservation_holder,
     )
     snap.request.CopyFrom(job.request)
-    snap.submitted_at.CopyFrom(job.submitted_at.to_proto())
-    snap.root_submitted_at.CopyFrom(job.root_submitted_at.to_proto())
+    snap.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at))
+    snap.root_submitted_at.CopyFrom(timestamp_to_proto(job.root_submitted_at))
     if job.started_at:
-        snap.started_at.CopyFrom(job.started_at.to_proto())
+        snap.started_at.CopyFrom(timestamp_to_proto(job.started_at))
     if job.finished_at:
-        snap.finished_at.CopyFrom(job.finished_at.to_proto())
+        snap.finished_at.CopyFrom(timestamp_to_proto(job.finished_at))
 
     # Store scheduling deadline as wall-clock epoch_ms.
     # Deadlines are monotonic internally, so we convert the remaining time
@@ -237,7 +238,7 @@ def _snapshot_endpoint(
     )
     for k, v in endpoint.metadata.items():
         snap.metadata[k] = v
-    snap.registered_at.CopyFrom(endpoint.registered_at.to_proto())
+    snap.registered_at.CopyFrom(timestamp_to_proto(endpoint.registered_at))
     return snap
 
 
@@ -278,7 +279,7 @@ def create_snapshot(
     """
     created_at = Timestamp.now()
     proto = snapshot_pb2.ControllerSnapshot(schema_version=SCHEMA_VERSION)
-    proto.created_at.CopyFrom(created_at.to_proto())
+    proto.created_at.CopyFrom(timestamp_to_proto(created_at))
 
     total_tasks = 0
 
@@ -342,9 +343,9 @@ def _restore_attempt(snap: snapshot_pb2.TaskAttemptSnapshot) -> ControllerTaskAt
         worker_id=WorkerId(snap.worker_id) if snap.worker_id else None,
         state=snap.state,
         log_directory=snap.log_directory or None,
-        created_at=Timestamp.from_proto(snap.created_at),
-        started_at=Timestamp.from_proto(snap.started_at) if snap.started_at.epoch_ms else None,
-        finished_at=Timestamp.from_proto(snap.finished_at) if snap.finished_at.epoch_ms else None,
+        created_at=timestamp_from_proto(snap.created_at),
+        started_at=timestamp_from_proto(snap.started_at) if snap.started_at.epoch_ms else None,
+        finished_at=timestamp_from_proto(snap.finished_at) if snap.finished_at.epoch_ms else None,
         exit_code=snap.exit_code if snap.exit_code != 0 else None,
         error=snap.error if snap.error else None,
     )
@@ -358,14 +359,14 @@ def _restore_task(snap: snapshot_pb2.TaskSnapshot) -> ControllerTask:
         state=snap.state,
         error=snap.error if snap.error else None,
         exit_code=snap.exit_code if snap.exit_code != 0 else None,
-        started_at=Timestamp.from_proto(snap.started_at) if snap.started_at.epoch_ms else None,
-        finished_at=Timestamp.from_proto(snap.finished_at) if snap.finished_at.epoch_ms else None,
+        started_at=timestamp_from_proto(snap.started_at) if snap.started_at.epoch_ms else None,
+        finished_at=timestamp_from_proto(snap.finished_at) if snap.finished_at.epoch_ms else None,
         max_retries_failure=snap.max_retries_failure,
         max_retries_preemption=snap.max_retries_preemption,
         failure_count=snap.failure_count,
         preemption_count=snap.preemption_count,
         attempts=attempts,
-        submitted_at=Timestamp.from_proto(snap.submitted_at),
+        submitted_at=timestamp_from_proto(snap.submitted_at),
     )
 
 
@@ -389,10 +390,10 @@ def _restore_job(
         job_id=job_id,
         request=snap.request,
         state=snap.state,
-        submitted_at=Timestamp.from_proto(snap.submitted_at),
-        root_submitted_at=Timestamp.from_proto(snap.root_submitted_at),
-        started_at=Timestamp.from_proto(snap.started_at) if snap.started_at.epoch_ms else None,
-        finished_at=Timestamp.from_proto(snap.finished_at) if snap.finished_at.epoch_ms else None,
+        submitted_at=timestamp_from_proto(snap.submitted_at),
+        root_submitted_at=timestamp_from_proto(snap.root_submitted_at),
+        started_at=timestamp_from_proto(snap.started_at) if snap.started_at.epoch_ms else None,
+        finished_at=timestamp_from_proto(snap.finished_at) if snap.finished_at.epoch_ms else None,
         error=snap.error if snap.error else None,
         exit_code=snap.exit_code if snap.exit_code != 0 else None,
         num_tasks=snap.num_tasks,
@@ -433,7 +434,7 @@ def _restore_endpoint(snap: snapshot_pb2.EndpointSnapshot) -> tuple[ControllerEn
         address=snap.address,
         job_id=JobName.from_string(snap.job_id),
         metadata=dict(snap.metadata),
-        registered_at=Timestamp.from_proto(snap.registered_at),
+        registered_at=timestamp_from_proto(snap.registered_at),
     )
     return endpoint, task_id
 
@@ -581,7 +582,7 @@ def restore_scaling_group(
             handle=cloud_handle,
             lifecycle=lifecycle,
             vm_addresses=list(slice_snap.vm_addresses),
-            last_active=Timestamp.from_proto(slice_snap.last_active),
+            last_active=timestamp_from_proto(slice_snap.last_active),
             error_message=slice_snap.error_message,
         )
         result.slices[slice_id] = state
@@ -604,14 +605,14 @@ def restore_scaling_group(
 
     # Restore timing state
     if group_snapshot.HasField("backoff_until") and group_snapshot.backoff_until.epoch_ms > 0:
-        backoff_ts = Timestamp.from_proto(group_snapshot.backoff_until)
+        backoff_ts = timestamp_from_proto(group_snapshot.backoff_until)
         result.backoff_until = _wall_clock_to_deadline(backoff_ts)
         result.backoff_active = result.backoff_until is not None and not result.backoff_until.expired()
     else:
         result.backoff_active = False
 
     if group_snapshot.HasField("quota_exceeded_until") and group_snapshot.quota_exceeded_until.epoch_ms > 0:
-        quota_ts = Timestamp.from_proto(group_snapshot.quota_exceeded_until)
+        quota_ts = timestamp_from_proto(group_snapshot.quota_exceeded_until)
         result.quota_exceeded_until = _wall_clock_to_deadline(quota_ts)
         result.quota_exceeded_active = (
             result.quota_exceeded_until is not None and not result.quota_exceeded_until.expired()
@@ -621,9 +622,9 @@ def restore_scaling_group(
         result.quota_exceeded_active = False
 
     if group_snapshot.HasField("last_scale_up") and group_snapshot.last_scale_up.epoch_ms > 0:
-        result.last_scale_up = Timestamp.from_proto(group_snapshot.last_scale_up)
+        result.last_scale_up = timestamp_from_proto(group_snapshot.last_scale_up)
     if group_snapshot.HasField("last_scale_down") and group_snapshot.last_scale_down.epoch_ms > 0:
-        result.last_scale_down = Timestamp.from_proto(group_snapshot.last_scale_down)
+        result.last_scale_down = timestamp_from_proto(group_snapshot.last_scale_down)
 
     logger.info(
         "Restored scaling group %s: %d slices (%d discarded, %d adopted), "

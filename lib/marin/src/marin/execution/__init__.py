@@ -19,9 +19,10 @@ from .executor import (
     unwrap_versioned_value,
     versioned,
 )
-from .executor_step_status import (
-    STATUS_DEP_FAILED,
+from rigging.status_file import (
     STATUS_FAILED,
     STATUS_RUNNING,
     STATUS_SUCCESS,
 )
+
+STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed — executor-specific status

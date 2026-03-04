@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 
 import requests
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 import warcio
 from marin.utils import fsspec_glob
 from tqdm import tqdm

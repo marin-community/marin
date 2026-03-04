@@ -29,7 +29,7 @@ from typing import Any
 
 import click
 import cloudpickle
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 
 from fray.v1.cluster.base import Entrypoint
 

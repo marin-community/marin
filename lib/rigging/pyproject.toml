@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rigging"
+version = "0.1.0"
+description = "Common utilities shared across marin subprojects"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "cloudpickle>=3.1.2",
+    "fsspec>=2024.0.0",
+    "gcsfs>=2024.0.0",
+    "google-cloud-storage",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.2",
+    "pytest-timeout",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rigging"]
+
+[tool.hatch.build.targets.sdist]
+packages = ["src/rigging"]
+
+[tool.pytest.ini_options]
+timeout = 30
+filterwarnings = ["ignore::DeprecationWarning"]
+log_level = "INFO"
+log_format = "%(asctime)s %(levelname)s %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"

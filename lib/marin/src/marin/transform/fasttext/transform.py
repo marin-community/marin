@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 from marin.core.runtime import cached_or_construct_output
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

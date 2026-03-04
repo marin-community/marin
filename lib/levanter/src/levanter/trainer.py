@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from iris.marin_fs import open_url
+from rigging.marin_fs import open_url
 import haliax.tree_util
 import jax
 import jax.numpy as jnp

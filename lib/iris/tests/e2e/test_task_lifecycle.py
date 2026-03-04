@@ -13,7 +13,7 @@ from iris.chaos import enable_chaos
 from iris.cluster.types import CoschedulingConfig
 from iris.rpc import cluster_pb2
 from iris.test_util import SentinelFile
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 
 from .helpers import _block, _quick
 

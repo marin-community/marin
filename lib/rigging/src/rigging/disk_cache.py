@@ -9,13 +9,13 @@ import functools
 import hashlib
 import logging
 from collections.abc import Callable
-from typing import Generic, TypeVar, ParamSpec
+from typing import Generic, ParamSpec, TypeVar
 
 import cloudpickle
-from iris.marin_fs import marin_temp_bucket, open_url
+from rigging.marin_fs import marin_temp_bucket, open_url
 
-from marin.execution.distributed_lock import StepAlreadyDone
-from marin.execution.executor_step_status import (
+from rigging.distributed_lock import AlreadyComplete
+from rigging.status_file import (
     STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,
@@ -115,8 +115,7 @@ class disk_cache(Generic[P, T]):
         assert self._fn is not None
         try:
             result = self._fn(*args, **kwargs)
-        except StepAlreadyDone:
-            # NOTE: this is leaky but this branch handles the case of distributed lock wrapper
+        except AlreadyComplete:
             logger.info(f"disk_cache: completed by another worker for {output_path}")
             return load_result()
         except Exception:

@@ -41,7 +41,7 @@ from iris.cluster.platform.base import (
     WorkerStatus,
 )
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 
 # ============================================================================
 # Fakes

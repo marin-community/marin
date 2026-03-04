@@ -17,7 +17,8 @@ from iris.cluster.controller.snapshot import (
 )
 from iris.cluster.platform.base import Labels
 from iris.rpc import config_pb2, snapshot_pb2
-from iris.time_utils import Timestamp
+from iris.rpc.time_conversions import timestamp_to_proto
+from rigging.time_utils import Timestamp
 from tests.cluster.platform.fakes import (
     FakePlatform,
     FakePlatformConfig,
@@ -63,8 +64,8 @@ def _make_slice_snapshot(
     )
     if vm_addresses:
         snap.vm_addresses.extend(vm_addresses)
-    snap.created_at.CopyFrom(Timestamp.from_ms(created_at_ms).to_proto())
-    snap.last_active.CopyFrom(Timestamp.from_ms(created_at_ms).to_proto())
+    snap.created_at.CopyFrom(timestamp_to_proto(Timestamp.from_ms(created_at_ms)))
+    snap.last_active.CopyFrom(timestamp_to_proto(Timestamp.from_ms(created_at_ms)))
     return snap
 
 

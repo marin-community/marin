@@ -26,10 +26,10 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import cloudpickle
-from iris.marin_fs import open_url, url_to_fs
+from rigging.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
-from iris.marin_fs import marin_temp_bucket
-from iris.time_utils import ExponentialBackoff
+from rigging.marin_fs import marin_temp_bucket
+from rigging.time_utils import ExponentialBackoff
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (

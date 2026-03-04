@@ -7,7 +7,7 @@ from typing import Protocol
 
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
+from rigging.time_utils import Duration
 
 
 class TaskStateLogger(Protocol):

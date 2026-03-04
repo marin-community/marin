@@ -10,7 +10,7 @@ from iris.cluster.controller.events import WorkerRegisteredEvent
 from iris.cluster.controller.state import ControllerState
 from iris.cluster.types import WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.time_utils import Duration, Timestamp
 
 
 @pytest.fixture

@@ -11,7 +11,7 @@ import time
 import pytest
 from connectrpc.errors import ConnectError
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.time_utils import Duration, ExponentialBackoff
 
 pytestmark = pytest.mark.e2e
 

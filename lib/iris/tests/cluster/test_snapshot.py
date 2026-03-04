@@ -28,7 +28,8 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import AttributeValue, JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.rpc.time_conversions import timestamp_to_proto
+from rigging.time_utils import Deadline, Duration, Timestamp
 
 
 def _make_request(name: str = "test-job", replicas: int = 1) -> cluster_pb2.Controller.LaunchJobRequest:
@@ -241,7 +242,7 @@ def test_snapshot_write_read_roundtrip():
 
 def test_schema_version_mismatch_raises():
     proto = snapshot_pb2.ControllerSnapshot(schema_version=999)
-    proto.created_at.CopyFrom(Timestamp.now().to_proto())
+    proto.created_at.CopyFrom(timestamp_to_proto(Timestamp.now()))
     state = ControllerState()
 
     with pytest.raises(ValueError, match="Incompatible snapshot schema version"):

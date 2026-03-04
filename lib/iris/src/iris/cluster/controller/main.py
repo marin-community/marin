@@ -16,8 +16,8 @@ from iris.cluster.controller.snapshot import read_snapshot_from_path
 from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
 from iris.cluster.task_logging import ProcessLogSink
 from iris.logging import configure_logging, get_global_buffer
-from iris.marin_fs import marin_temp_bucket
-from iris.time_utils import Duration
+from rigging.marin_fs import marin_temp_bucket
+from rigging.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 

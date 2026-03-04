@@ -25,7 +25,8 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, ZONE_ATTRIBUTE_KEY, parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
+from iris.rpc.time_conversions import duration_from_proto, duration_to_proto
+from rigging.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +39,12 @@ IrisClusterConfig = config_pb2.IrisClusterConfig
 DEFAULT_CONFIG = config_pb2.DefaultsConfig(
     ssh=config_pb2.SshConfig(
         user="root",
-        connect_timeout=Duration.from_seconds(30).to_proto(),
+        connect_timeout=duration_to_proto(Duration.from_seconds(30)),
     ),
     autoscaler=config_pb2.AutoscalerConfig(
-        evaluation_interval=Duration.from_seconds(10).to_proto(),
-        scale_up_delay=Duration.from_seconds(60).to_proto(),
-        scale_down_delay=Duration.from_seconds(300).to_proto(),
+        evaluation_interval=duration_to_proto(Duration.from_seconds(10)),
+        scale_up_delay=duration_to_proto(Duration.from_seconds(60)),
+        scale_down_delay=duration_to_proto(Duration.from_seconds(300)),
     ),
     worker=config_pb2.WorkerConfig(
         port=10001,
@@ -475,11 +476,11 @@ def make_local_config(
     config.controller.heartbeat_failure_threshold = 3
 
     # Set fast autoscaler timings for local testing
-    config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
-    config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
+    config.defaults.autoscaler.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.5)))
+    config.defaults.autoscaler.scale_up_delay.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
     # Keep scale_down_delay at 5min (same as production)
     if not config.defaults.autoscaler.HasField("scale_down_delay"):
-        config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_seconds(300).to_proto())
+        config.defaults.autoscaler.scale_down_delay.CopyFrom(duration_to_proto(Duration.from_seconds(300)))
 
     return config
 
@@ -947,7 +948,7 @@ def create_autoscaler(
     _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
     _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
 
-    scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
+    scale_up_delay = duration_from_proto(autoscaler_config.scale_up_delay)
 
     scaling_groups: dict[str, ScalingGroup] = {}
     for name, group_config in scale_groups.items():

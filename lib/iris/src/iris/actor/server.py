@@ -25,7 +25,7 @@ from connectrpc.request import RequestContext
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
-from iris.time_utils import Duration, ExponentialBackoff, Timestamp
+from rigging.time_utils import Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 

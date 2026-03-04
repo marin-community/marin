@@ -15,7 +15,7 @@ import warnings
 
 import pytest
 from iris.test_util import SentinelFile
-from iris.time_utils import Deadline, Duration
+from rigging.time_utils import Deadline, Duration
 
 
 def _docker_image_exists(tag: str) -> bool:
