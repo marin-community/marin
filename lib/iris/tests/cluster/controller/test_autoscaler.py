@@ -265,7 +265,6 @@ def autoscaler_with_ready_slices(scale_group_config):
     group = ScalingGroup(
         scale_group_config,
         platform,
-        scale_down_cooldown=Duration.from_ms(0),
         idle_threshold=Duration.from_ms(0),
     )
     group.reconcile()
@@ -445,7 +444,6 @@ class TestAutoscalerScaleDown:
         group = ScalingGroup(
             scale_group_config,
             platform,
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(1000),
         )
         group.reconcile()
@@ -488,7 +486,6 @@ class TestAutoscalerScaleDown:
         group = ScalingGroup(
             config,
             platform,
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(0),
         )
         group.reconcile()
@@ -518,7 +515,6 @@ class TestAutoscalerScaleDown:
         group = ScalingGroup(
             scale_group_config,
             platform,
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(300_000),
         )
         group.reconcile()
@@ -736,7 +732,6 @@ class TestAutoscalerIdleVerification:
         group = ScalingGroup(
             scale_group_config,
             platform,
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(0),
         )
         group.reconcile()
@@ -2380,7 +2375,6 @@ class TestGpuScaleGroupBugs:
             config,
             platform,
             scale_up_cooldown=Duration.from_ms(0),
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(300_000),  # 5 minutes
         )
         group.reconcile()
@@ -2800,7 +2794,6 @@ class TestPackingRouting:
             config,
             make_mock_platform(slices_to_discover=discovered),
             scale_up_cooldown=Duration.from_ms(0),
-            scale_down_cooldown=Duration.from_ms(0),
             idle_threshold=Duration.from_ms(1000),
         )
         group.reconcile()

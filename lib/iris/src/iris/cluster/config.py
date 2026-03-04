@@ -948,7 +948,6 @@ def create_autoscaler(
     _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
 
     scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
-    scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
 
     scaling_groups: dict[str, ScalingGroup] = {}
     for name, group_config in scale_groups.items():
@@ -957,7 +956,6 @@ def create_autoscaler(
             platform=platform,
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
-            scale_down_cooldown=scale_down_delay,
             scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
         )

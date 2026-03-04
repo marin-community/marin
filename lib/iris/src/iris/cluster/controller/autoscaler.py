@@ -1047,6 +1047,7 @@ class Autoscaler:
 
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
+            ready_before = group.ready_slice_count()
             scaled_down_handles = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
             for handle in scaled_down_handles:
                 self._unregister_slice_workers(handle.slice_id)
@@ -1054,7 +1055,7 @@ class Autoscaler:
                     "scale_down",
                     group.name,
                     slice_id=handle.slice_id,
-                    reason=f"idle slice (target={target_capacity}, ready={group.ready_slice_count() + 1})",
+                    reason=f"idle slice (target={target_capacity}, ready={ready_before})",
                 )
 
     def update(

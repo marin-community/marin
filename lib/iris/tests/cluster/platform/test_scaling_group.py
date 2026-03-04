@@ -588,9 +588,7 @@ class TestScalingGroupIdleTracking:
             make_mock_slice_handle("slice-002", all_ready=True),
         ]
         platform = make_mock_platform(slice_handles_to_discover=discovered)
-        group = ScalingGroup(
-            unbounded_config, platform, idle_threshold=Duration.from_ms(1000), scale_down_cooldown=Duration.from_ms(0)
-        )
+        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(1000))
         group.reconcile()
         _mark_discovered_ready(group, discovered)
 
@@ -624,9 +622,7 @@ class TestScalingGroupIdleTracking:
         """scale_down_if_idle does nothing when at or below target capacity."""
         discovered = [make_mock_slice_handle("slice-001", all_ready=True)]
         platform = make_mock_platform(slice_handles_to_discover=discovered)
-        group = ScalingGroup(
-            unbounded_config, platform, idle_threshold=Duration.from_ms(1000), scale_down_cooldown=Duration.from_ms(0)
-        )
+        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(1000))
         group.reconcile()
 
         slice_001 = group.get_slice("slice-001")

@@ -87,7 +87,6 @@ class AvailabilityState:
 DEFAULT_SCALE_UP_RATE_LIMIT = 5  # per minute
 DEFAULT_SCALE_DOWN_RATE_LIMIT = 5  # per minute
 DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
-DEFAULT_SCALE_DOWN_COOLDOWN = Duration.from_minutes(5)
 DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
 DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
 DEFAULT_BACKOFF_FACTOR = 2.0
@@ -213,7 +212,6 @@ class ScalingGroup:
         platform: Platform,
         label_prefix: str = "iris",
         scale_up_cooldown: Duration = DEFAULT_SCALE_UP_COOLDOWN,
-        scale_down_cooldown: Duration = DEFAULT_SCALE_DOWN_COOLDOWN,
         backoff_initial: Duration = DEFAULT_BACKOFF_INITIAL,
         backoff_max: Duration = DEFAULT_BACKOFF_MAX,
         backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
@@ -247,8 +245,6 @@ class ScalingGroup:
         self._last_scale_up: Timestamp = Timestamp.from_ms(0)
         self._last_scale_down: Timestamp = Timestamp.from_ms(0)
         self._scale_up_cooldown = scale_up_cooldown
-        self._scale_down_cooldown = scale_down_cooldown
-
         # Quota state (set by scale_up when QuotaExhaustedError is raised)
         self._quota_exceeded_until: Deadline | None = None
         self._quota_reason: str = ""
