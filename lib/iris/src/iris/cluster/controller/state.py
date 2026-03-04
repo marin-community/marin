@@ -17,6 +17,7 @@ state and return results indicating what the caller should do.
 
 import bisect
 import logging
+import re
 from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -923,19 +924,24 @@ class ControllerLogStore:
 
     Accumulates log entries forwarded from workers via heartbeat and serves
     them for GetTaskLogs requests. Each attempt gets a bounded deque.
+
+    Thread-safe: heartbeat writers (complete_heartbeat) and RPC readers
+    (get_task_logs) may run concurrently.
     """
 
     def __init__(self, max_entries_per_attempt: int = _MAX_LOG_ENTRIES_PER_ATTEMPT):
         self._max_entries = max_entries_per_attempt
+        self._lock = RLock()
         self._logs: dict[tuple[JobName, int], deque[cluster_pb2.LogEntry]] = {}
 
     def append(self, task_id: JobName, attempt_id: int, entries: list) -> None:
-        key = (task_id, attempt_id)
-        buf = self._logs.get(key)
-        if buf is None:
-            buf = deque(maxlen=self._max_entries)
-            self._logs[key] = buf
-        buf.extend(entries)
+        with self._lock:
+            key = (task_id, attempt_id)
+            buf = self._logs.get(key)
+            if buf is None:
+                buf = deque(maxlen=self._max_entries)
+                self._logs[key] = buf
+            buf.extend(entries)
 
     def get_logs(
         self,
@@ -943,20 +949,22 @@ class ControllerLogStore:
         attempt_id: int,
         *,
         since_ms: int = 0,
-        regex_filter: str | None = None,
+        regex_filter: re.Pattern[str] | None = None,
         max_lines: int = 0,
     ) -> list:
-        import re as _re
+        with self._lock:
+            key = (task_id, attempt_id)
+            buf = self._logs.get(key)
+            if not buf:
+                return []
+            # Snapshot under lock to avoid RuntimeError from concurrent mutation
+            snapshot = list(buf)
 
-        key = (task_id, attempt_id)
-        buf = self._logs.get(key)
-        if not buf:
-            return []
         result = []
-        for entry in buf:
+        for entry in snapshot:
             if since_ms > 0 and entry.timestamp.epoch_ms <= since_ms:
                 continue
-            if regex_filter and not _re.search(regex_filter, entry.data):
+            if regex_filter and not regex_filter.search(entry.data):
                 continue
             result.append(entry)
             if max_lines > 0 and len(result) >= max_lines:
@@ -964,12 +972,14 @@ class ControllerLogStore:
         return result
 
     def has_logs(self, task_id: JobName, attempt_id: int) -> bool:
-        key = (task_id, attempt_id)
-        buf = self._logs.get(key)
-        return buf is not None and len(buf) > 0
+        with self._lock:
+            key = (task_id, attempt_id)
+            buf = self._logs.get(key)
+            return buf is not None and len(buf) > 0
 
     def clear_attempt(self, task_id: JobName, attempt_id: int) -> None:
-        self._logs.pop((task_id, attempt_id), None)
+        with self._lock:
+            self._logs.pop((task_id, attempt_id), None)
 
 
 # =============================================================================

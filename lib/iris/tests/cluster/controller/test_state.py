@@ -1400,6 +1400,41 @@ def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata)
     assert [e.data for e in logs] == ["line 0", "line 1", "line 2"]
 
 
+def test_log_store_concurrent_append_and_read():
+    """ControllerLogStore survives concurrent append + get_logs without RuntimeError."""
+    import re
+    import threading
+
+    from iris.cluster.controller.state import ControllerLogStore
+    from iris.rpc import logging_pb2
+
+    store = ControllerLogStore(max_entries_per_attempt=5000)
+    task_id = JobName.from_wire("/job/concurrent/task/0")
+    errors: list[Exception] = []
+
+    def writer():
+        for i in range(500):
+            entry = logging_pb2.LogEntry(source="stdout", data=f"line-{i}")
+            entry.timestamp.epoch_ms = i
+            store.append(task_id, 0, [entry])
+
+    def reader():
+        for _ in range(500):
+            try:
+                store.get_logs(task_id, 0, regex_filter=re.compile("line"))
+            except RuntimeError as e:
+                errors.append(e)
+
+    t1 = threading.Thread(target=writer)
+    t2 = threading.Thread(target=reader)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert errors == [], f"Concurrent access raised: {errors}"
+
+
 # =============================================================================
 # compute_demand_entries Tests
 # =============================================================================

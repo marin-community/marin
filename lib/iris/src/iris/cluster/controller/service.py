@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import re
 import uuid
 from typing import Any, Protocol
 
@@ -885,6 +886,21 @@ class ControllerServiceImpl:
             else:
                 tasks.extend(self._state.get_job_tasks(job_name))
 
+        # Pre-compile regex filter so invalid patterns produce a clear error
+        # rather than an internal failure during iteration.
+        compiled_regex: re.Pattern[str] | None = None
+        if request.regex:
+            try:
+                compiled_regex = re.compile(request.regex)
+            except re.error as e:
+                return cluster_pb2.Controller.GetTaskLogsResponse(
+                    task_logs=[
+                        cluster_pb2.Controller.TaskLogBatch(
+                            error=f"Invalid regex filter: {e}",
+                        )
+                    ],
+                )
+
         task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
         total_lines = 0
         truncated = False
@@ -913,7 +929,7 @@ class ControllerServiceImpl:
                     task.task_id,
                     attempt.attempt_id,
                     since_ms=request.since_ms,
-                    regex_filter=request.regex if request.regex else None,
+                    regex_filter=compiled_regex,
                     max_lines=remaining,
                 )
 
