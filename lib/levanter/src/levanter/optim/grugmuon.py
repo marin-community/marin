@@ -129,8 +129,9 @@ def _grug_scale_with_muon(
             if x.ndim == 3:
                 from jax.sharding import PartitionSpec as P, reshard
 
-                # Replicate then vmap the Newton-Schulz core over the batch/expert dim
-                x = reshard(x, P(None, None, None))
+                # Keep the first dim's existing sharding, replicate only the last 2 dims for Newton-Schulz
+                current_spec = x.sharding.spec
+                x = reshard(x, P(current_spec[0], None, None))
                 updated = jax.vmap(
                     lambda m: _newtonschulz_core(m, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
                 )(x)

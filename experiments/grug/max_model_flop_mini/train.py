@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -478,9 +478,13 @@ def run_grug(config: GrugRunConfig) -> None:
                 last_step_duration = duration
                 levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                 levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                router_metrics = {key: value for key, value in metrics.items() if key.startswith("train/router/")}
-                if router_metrics:
-                    levanter.tracker.log(router_metrics, step=step)
+                aux_metrics = {
+                    key: value
+                    for key, value in metrics.items()
+                    if key.startswith(("train/router/", "train/load_balancing_loss", "train/router_z_loss", "moe/"))
+                }
+                if aux_metrics:
+                    levanter.tracker.log(aux_metrics, step=step)
 
                 if watch_stats is not None:
                     levanter.tracker.log(watch_stats, step=step)

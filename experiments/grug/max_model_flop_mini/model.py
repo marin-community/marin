@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """MoE grug variant model.
@@ -298,12 +298,17 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     routing_counts = router_metrics["routing_counts_per_layer"]
     num_layers = int(routing_entropy.shape[0])
 
+    num_experts = int(routing_counts.shape[1])
     out: dict[str, jax.Array | Histogram] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
     }
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
+        layer_total = jnp.maximum(jnp.sum(routing_counts[i]), 1.0)
+        layer_loads = routing_counts[i] / layer_total
+        for j in range(num_experts):
+            out[f"moe/layer_{i}/expert_{j}/load"] = layer_loads[j]
     return out
 
 
