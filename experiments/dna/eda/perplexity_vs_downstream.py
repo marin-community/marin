@@ -4,10 +4,9 @@
 """
 EDA: Perplexity vs Downstream Task Performance.
 
-Train models of 3 sizes (~6M, ~60M, ~600M) on 3 evolutionary timescales
-(animals, mammals, primates) while tracking both LM loss and TraitGym
-Mendelian VEP AUPRC during training. This produces 9 runs, each logging
-both metrics to W&B, enabling correlation analysis.
+Train models of 2 sizes (~60M, ~600M) on mammals datasets with different
+filtering thresholds while tracking both LM loss and TraitGym Mendelian VEP
+AUPRC during training.
 
 https://github.com/Open-Athena/bolinas-dna/issues/8
 """
@@ -18,44 +17,35 @@ from fray.v2 import ResourceConfig
 from levanter.data.text import DNALmDatasetFormat
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
+from marin.execution.executor import executor_main
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.dna.defaults import dna_effective_seq_len
-from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2
+from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2_255
 from experiments.qwen3 import qwen3_0_6b_hd128
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
 
 # =============================================================================
 # Constants
 # =============================================================================
 
-TOKENIZER = "bolinas-dna/tokenizer-char"
-DNA_SEQ_LEN = 254
-MODEL_SEQ_LEN = dna_effective_seq_len(DNA_SEQ_LEN, TOKENIZER)  # 256 with BOS+EOS
+TOKENIZER = "bolinas-dna/tokenizer-char-bos"
+DNA_SEQ_LEN = 255
+MODEL_SEQ_LEN = dna_effective_seq_len(DNA_SEQ_LEN, TOKENIZER)  # 256 with BOS only
+assert MODEL_SEQ_LEN == 256, f"Expected 256, got {MODEL_SEQ_LEN}"
 
-TIMESCALES = ["humans", "primates", "mammals"]
-DATASETS = {ts: f"bolinas-dna/genomes-v4-genome_set-{ts}-intervals-v16_254_127-id0.3_cov0.3" for ts in TIMESCALES}
+DATASETS = {
+    "mammals-id0.3-cov0.3": "bolinas-dna/genomes-v4-genome_set-mammals-intervals-v1_255_128-id0.3_cov0.3",
+    "mammals-id1-cov1": "bolinas-dna/genomes-v4-genome_set-mammals-intervals-v1_255_128-id1_cov1",
+}
 
 # =============================================================================
 # Model configs
 #
 # Approximate param counts with vocab_size=8 (DNA char tokenizer):
-#   6m:   ~8M   (hidden=256,  inter=896,  layers=8)
 #   60m:  ~61M  (hidden=512,  inter=1792, layers=16)
 #   600m: ~440M (qwen3_0_6b_hd128 architecture)
 # =============================================================================
-
-qwen3_6m = Qwen3Config(
-    max_seq_len=MODEL_SEQ_LEN,
-    hidden_dim=256,
-    intermediate_dim=896,
-    num_heads=4,
-    num_kv_heads=4,
-    num_layers=8,
-    rope=Llama3RotaryEmbeddingsConfig(),
-    tie_word_embeddings=True,
-)
 
 qwen3_60m = Qwen3Config(
     max_seq_len=MODEL_SEQ_LEN,
@@ -72,27 +62,26 @@ qwen3_600m = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=MODEL_SEQ_LEN)
 
 MODEL_CONFIGS = {
     # (model_config, learning_rate, resources)
-    "6m": (qwen3_6m, 1e-3, ResourceConfig.with_tpu("v4-8")),
     "60m": (qwen3_60m, 1e-3, ResourceConfig.with_tpu("v4-8")),
     "600m": (qwen3_600m, 1e-3, ResourceConfig.with_tpu("v4-8")),
 }
 
 # =============================================================================
-# Tokenize each timescale dataset
+# Tokenize each dataset
 # =============================================================================
 
 tokenized_datasets = {
-    ts: default_tokenize(
-        name=f"{dataset.split('/')[-1]}-char",
+    name: default_tokenize(
+        name=f"{dataset.split('/')[-1]}-char-bos",
         dataset=dataset,
         tokenizer=TOKENIZER,
         format=DNALmDatasetFormat(soft_mask_weight=0.01),
     )
-    for ts, dataset in DATASETS.items()
+    for name, dataset in DATASETS.items()
 }
 
 # =============================================================================
-# Train: 10K steps, 2K warmup, cosine decay, TraitGym eval every 2K steps
+# Train: 10K steps, 2K warmup, cosine decay, TraitGym eval every 1K steps
 # =============================================================================
 
 # Batch size doubled from 2048 to 4096 for 256 context length (matching
@@ -112,7 +101,7 @@ BASE_TRAIN_CONFIG = SimpleTrainConfig(
 )
 
 training_steps = []
-for ts in TIMESCALES:
+for dataset_name in DATASETS:
     for model_name, (model_config, lr, resources) in MODEL_CONFIGS.items():
         train_config = dataclasses.replace(
             BASE_TRAIN_CONFIG,
@@ -120,12 +109,12 @@ for ts in TIMESCALES:
             learning_rate=lr,
         )
         train_step = default_train(
-            name=f"eda-ppl-vs-downstream-{ts}-{model_name}",
-            tokenized=tokenized_datasets[ts],
+            name=f"eda-ppl-vs-downstream-{dataset_name}-{model_name}",
+            tokenized=tokenized_datasets[dataset_name],
             model_config=model_config,
             train_config=train_config,
-            tags=["dna", "eda", "perplexity_vs_downstream", ts, model_name],
-            eval_harness_tasks=[TRAITGYM_MENDELIAN_V2],
+            tags=["dna", "eda", "perplexity_vs_downstream", dataset_name, model_name],
+            eval_harness_tasks=[TRAITGYM_MENDELIAN_V2_255],
             eval_harness_max_packed_segments=1,
             use_default_validation=False,
             wandb_group="eda-ppl-vs-downstream",
