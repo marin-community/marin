@@ -135,6 +135,7 @@ def _grug_scale_with_muon(
                 updated = jax.vmap(
                     lambda m: _newtonschulz_core(m, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
                 )(x)
+                updated = reshard(updated, current_spec)
                 # Layout per slice is (fan_in, fan_out)
                 fan_in, fan_out = updated.shape[1], updated.shape[2]
             else:
