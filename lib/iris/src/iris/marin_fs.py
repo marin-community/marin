@@ -59,6 +59,7 @@ REGION_TO_TMP_BUCKET: dict[str, str] = {
 # default `marin-{region}` naming convention.
 _REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
     "europe-west4": "marin-eu-west4",
+    "eu-west4": "marin-eu-west4",
 }
 
 # All known primary marin data buckets, keyed by region.
@@ -78,7 +79,6 @@ REGION_TO_DATA_BUCKET: dict[str, str] = {
 # canonical region names even when the bucket uses abbreviated naming
 # (e.g. "marin-eu-west4" → "europe-west4" instead of "eu-west4").
 _BUCKET_TO_REGION: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
-
 
 # ---------------------------------------------------------------------------
 # Low-level region helpers
