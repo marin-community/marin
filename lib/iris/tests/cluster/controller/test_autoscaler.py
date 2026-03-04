@@ -2473,8 +2473,20 @@ class TestComputeRequiredSlices:
         group = ScalingGroup(config, make_mock_platform())
 
         # 16 entries at 1000m CPU, 1024 bytes mem → all fit in 1 VM (128 cores, 128GiB)
-        entries = make_demand_entries(16, device_type=DeviceType.TPU, device_variant="v5p-8")
+        entries = make_demand_entries(16, device_type=DeviceType.CPU)
         assert compute_required_slices(group, entries) == 1
+
+    def test_accelerator_entries_not_packed(self):
+        """Accelerator entries get 1 VM each — they are not bin-packed."""
+        config = make_scale_group_config(
+            name="tpu-group",
+            max_slices=10,
+            num_vms=1,
+        )
+        group = ScalingGroup(config, make_mock_platform())
+
+        entries = make_demand_entries(4, device_type=DeviceType.TPU, device_variant="v5p-8")
+        assert compute_required_slices(group, entries) == 4
 
     def test_full_vm_entries_need_one_slice_each(self):
         """Entries that fill an entire VM each need 1 slice per entry (num_vms=1)."""

@@ -67,8 +67,8 @@ from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
 
 logger = logging.getLogger(__name__)
 
-# Sentinel for dry-run scheduling with building limits disabled.
-_UNLIMITED_BUILDING = sys.maxsize
+# Sentinel for dry-run scheduling with per-worker limits disabled.
+_UNLIMITED = sys.maxsize
 
 _SLOW_HEARTBEAT_MS = 5000
 _HEALTH_SUMMARY_INTERVAL = 6  # every ~30s at 5s heartbeat interval
@@ -94,6 +94,7 @@ def compute_demand_entries(
     state: ControllerState,
     scheduler: Scheduler | None = None,
     workers: list[WorkerSnapshot] | None = None,
+    reservation_claims: dict[WorkerId, ReservationClaim] | None = None,
 ) -> list[DemandEntry]:
     """Compute demand entries for the autoscaler from controller state.
 
@@ -111,6 +112,13 @@ def compute_demand_entries(
     tasks as demand (pre-existing behavior for tests that don't set up workers).
 
     Reservation entries always generate demand regardless of worker capacity.
+
+    Args:
+        state: Controller state to read pending tasks and jobs from.
+        scheduler: Scheduler for dry-run pass. If None, skips dry-run.
+        workers: Available workers for dry-run. If None, skips dry-run.
+        reservation_claims: Reservation claims to apply taint injection in the
+            dry-run, matching the real scheduling path. If None, no taints applied.
     """
     demand_entries: list[DemandEntry] = []
 
@@ -124,28 +132,42 @@ def compute_demand_entries(
         schedulable_tasks.append(task)
 
     # Build job requirements once, shared between dry-run and demand emission.
+    # Also track which jobs have reservations so we can apply taint injection.
     jobs: dict[JobName, JobRequirements] = {}
+    has_reservation: set[JobName] = set()
     for task in schedulable_tasks:
         if task.job_id not in jobs:
             job = state.get_job(task.job_id)
             if job:
                 jobs[task.job_id] = job_requirements_from_job(job)
+                if job.request.HasField("reservation"):
+                    has_reservation.add(task.job_id)
+                elif _find_reservation_ancestor(state, task.job_id) is not None:
+                    has_reservation.add(task.job_id)
 
-    # Dry-run scheduling with building limits disabled (max_building_tasks=infinity).
+    # Dry-run scheduling with building/assignment limits disabled.
     # This absorbs all tasks that would fit on existing workers if there were no
-    # building-task concurrency limits. Tasks that remain unscheduled after this
-    # pass are truly unschedulable and need new capacity from the autoscaler.
+    # per-worker limits. Tasks that remain unscheduled after this pass are truly
+    # unschedulable and need new capacity from the autoscaler.
+    #
+    # We apply the same reservation taint injection as the real scheduler so that
+    # non-reservation tasks don't appear "absorbed" by claimed workers they can't
+    # actually land on.
     absorbed_task_ids: set[JobName] = set()
     if scheduler is not None and workers is not None and workers:
         building_counts = state.snapshot_building_counts()
         task_ids = [t.task_id for t in schedulable_tasks]
+        claims = reservation_claims or {}
+        dry_run_workers = _inject_reservation_taints(workers, claims)
+        dry_run_jobs = _inject_taint_constraints(jobs, has_reservation)
 
         context = scheduler.create_scheduling_context(
-            workers,
+            dry_run_workers,
             building_counts=building_counts,
             pending_tasks=task_ids,
-            jobs=jobs,
-            max_building_tasks=_UNLIMITED_BUILDING,
+            jobs=dry_run_jobs,
+            max_building_tasks=_UNLIMITED,
+            max_assignments_per_worker=_UNLIMITED,
         )
         result = scheduler.find_assignments(context)
         for task_id, _ in result.assignments:
@@ -497,7 +519,7 @@ def _preference_pass(
 
         job_wire = job_id.to_wire()
         for wid in claimed_by_job.get(job_wire, ()):
-            if wid in context.scheduled_workers:
+            if context.assignment_counts.get(wid, 0) >= context.max_assignments_per_worker:
                 continue
             capacity = context.capacities.get(wid)
             if capacity is None:
@@ -505,7 +527,7 @@ def _preference_pass(
             if capacity.can_fit(req) is not None:
                 continue
             capacity.deduct(req)
-            context.scheduled_workers.add(wid)
+            context.assignment_counts[wid] = context.assignment_counts.get(wid, 0) + 1
             assignments.append((task_id, wid))
             preference_scheduled.add(task_id)
             break
@@ -1243,7 +1265,12 @@ class Controller:
         vm_status_map = self._build_vm_status_map()
         self._autoscaler.refresh(vm_status_map)
         workers = self._state.get_available_workers()
-        demand_entries = compute_demand_entries(self._state, self._scheduler, workers)
+        demand_entries = compute_demand_entries(
+            self._state,
+            self._scheduler,
+            workers,
+            reservation_claims=self._reservation_claims,
+        )
         self._autoscaler.update(demand_entries)
 
     def _build_vm_status_map(self) -> VmWorkerStatusMap:

@@ -192,14 +192,20 @@ def compute_required_slices(group: ScalingGroup, entries: list[DemandEntry]) -> 
         return len(entries)
 
     coscheduled_count = 0
+    accel_vm_count = 0
     noncsc_reqs: list[AdditiveReq] = []
     for entry in entries:
         if entry.coschedule_group_id:
             coscheduled_count += 1
+        elif entry.device_type != DeviceType.CPU:
+            # Accelerator entries are not bin-packable — each task needs
+            # exclusive access to the device, so treat as 1 VM per entry.
+            accel_vm_count += 1
         else:
             noncsc_reqs.append(additive_req(entry))
 
     required_vms = first_fit_decreasing(noncsc_reqs, vm_capacity) if noncsc_reqs else 0
+    required_vms += accel_vm_count
 
     num_vms = group.num_vms
     required_slices_for_noncsc = math.ceil(required_vms / num_vms) if required_vms > 0 else 0

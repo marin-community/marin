@@ -42,6 +42,14 @@ can overwhelm the worker. This limit provides back-pressure by deferring new
 task assignments until existing tasks complete their build phase.
 """
 
+DEFAULT_MAX_ASSIGNMENTS_PER_WORKER = 1
+"""Default limit for task assignments per worker per scheduling cycle.
+
+Set to 1 for normal scheduling (round-robin distribution). The dry-run in
+compute_demand_entries sets this to sys.maxsize so that a big worker with
+spare CPU can absorb multiple tasks, preventing false demand signals.
+"""
+
 
 class WorkerSnapshot(Protocol):
     """What the scheduler needs from a worker to build a capacity snapshot.
@@ -368,8 +376,8 @@ class SchedulingContext:
     but do not update the posting lists. This is safe because posting lists
     are only used for attribute matching, not capacity checks.
 
-    Workers are tracked in scheduled_workers to ensure each worker receives
-    at most one task per cycle, providing round-robin distribution.
+    Workers are tracked via assignment_counts to limit how many tasks each
+    worker receives per cycle (default 1 for round-robin distribution).
     """
 
     all_worker_ids: set[WorkerId]
@@ -385,8 +393,11 @@ class SchedulingContext:
     # Key (device_type, variant) -> exact match; key (device_type, None) -> all workers of that type.
     device_index: dict[tuple[str, str | None], set[WorkerId]] = field(default_factory=dict)
 
-    # Workers that have already been assigned a task this cycle
-    scheduled_workers: set[WorkerId] = field(default_factory=set)
+    # Per-worker assignment count this cycle (replaces scheduled_workers set)
+    assignment_counts: dict[WorkerId, int] = field(default_factory=dict)
+
+    # Maximum assignments per worker per cycle
+    max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
 
     # Task IDs of pending tasks, in scheduling priority order
     pending_tasks: list[JobName] = field(default_factory=list)
@@ -402,6 +413,7 @@ class SchedulingContext:
         max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
         pending_tasks: list[JobName] | None = None,
         jobs: dict[JobName, JobRequirements] | None = None,
+        max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     ) -> "SchedulingContext":
         """Build scheduling context from worker list.
 
@@ -415,6 +427,7 @@ class SchedulingContext:
             max_building_tasks: Maximum building tasks allowed per worker
             pending_tasks: Task IDs in scheduling priority order
             jobs: Job requirements indexed by job ID
+            max_assignments_per_worker: Maximum task assignments per worker per cycle
         """
         building_counts = building_counts or {}
 
@@ -453,6 +466,7 @@ class SchedulingContext:
             device_index=device_index,
             pending_tasks=pending_tasks or [],
             jobs=jobs or {},
+            max_assignments_per_worker=max_assignments_per_worker,
         )
 
     def workers_for_device(self, device_type: str, device_variant: str | None) -> set[WorkerId]:
@@ -682,13 +696,13 @@ class Scheduler:
         # Cheap mode: try all matching workers, no detailed rejection tracking
         if not collect_details:
             for worker_id in candidate_ids:
-                if worker_id in context.scheduled_workers:
+                if context.assignment_counts.get(worker_id, 0) >= context.max_assignments_per_worker:
                     continue
                 capacity = context.capacities[worker_id]
                 rejection = capacity.can_fit(req)
                 if rejection is None:
                     capacity.deduct(req)
-                    context.scheduled_workers.add(worker_id)
+                    context.assignment_counts[worker_id] = context.assignment_counts.get(worker_id, 0) + 1
                     return TaskScheduleResult(task_id=task_id, worker_id=worker_id)
             # No matching worker had capacity
             return TaskScheduleResult(task_id=task_id, failure_reason=None)
@@ -697,13 +711,13 @@ class Scheduler:
         rejection_counts: dict[RejectionKind, int] = defaultdict(int)
         rejection_samples: dict[RejectionKind, RejectionReason] = {}
         for worker_id in candidate_ids:
-            if worker_id in context.scheduled_workers:
+            if context.assignment_counts.get(worker_id, 0) >= context.max_assignments_per_worker:
                 continue
             capacity = context.capacities[worker_id]
             rejection = capacity.can_fit(req)
             if rejection is None:
                 capacity.deduct(req)
-                context.scheduled_workers.add(worker_id)
+                context.assignment_counts[worker_id] = context.assignment_counts.get(worker_id, 0) + 1
                 return TaskScheduleResult(task_id=task_id, worker_id=worker_id)
             rejection_counts[rejection.kind] += 1
             # Keep first sample of each rejection kind for formatting
@@ -721,7 +735,7 @@ class Scheduler:
                 workers_with_capacity = sum(
                     1
                     for check_wid in candidate_ids
-                    if check_wid not in context.scheduled_workers
+                    if context.assignment_counts.get(check_wid, 0) < context.max_assignments_per_worker
                     and context.capacities[check_wid].available_cpu_millicores >= res.cpu_millicores
                     and context.capacities[check_wid].available_memory >= res.memory_bytes
                 )
@@ -907,7 +921,7 @@ class Scheduler:
             assignments: list[tuple[JobName, WorkerId]] = []
             for task_id, worker_id in zip(sorted_task_ids, available[:num_tasks], strict=False):
                 context.capacities[worker_id].deduct(req)
-                context.scheduled_workers.add(worker_id)
+                context.assignment_counts[worker_id] = context.assignment_counts.get(worker_id, 0) + 1
                 assignments.append((task_id, worker_id))
 
             logger.debug(
@@ -932,6 +946,7 @@ class Scheduler:
         pending_tasks: list[JobName] | None = None,
         jobs: dict[JobName, JobRequirements] | None = None,
         max_building_tasks: int | None = None,
+        max_assignments_per_worker: int | None = None,
     ) -> SchedulingContext:
         """Create a scheduling context for the given workers.
 
@@ -945,14 +960,20 @@ class Scheduler:
             jobs: Job requirements indexed by job ID
             max_building_tasks: Override for max building tasks per worker.
                 If None, uses the scheduler's configured default.
+            max_assignments_per_worker: Override for max assignments per worker per cycle.
+                If None, uses DEFAULT_MAX_ASSIGNMENTS_PER_WORKER.
         """
         limit = max_building_tasks if max_building_tasks is not None else self._max_building_tasks_per_worker
+        assignments_limit = (
+            max_assignments_per_worker if max_assignments_per_worker is not None else DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
+        )
         return SchedulingContext.from_workers(
             workers,
             building_counts=building_counts,
             max_building_tasks=limit,
             pending_tasks=pending_tasks,
             jobs=jobs,
+            max_assignments_per_worker=assignments_limit,
         )
 
     def get_job_scheduling_diagnostics(

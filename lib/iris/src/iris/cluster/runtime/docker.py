@@ -54,7 +54,6 @@ logger = logging.getLogger(__name__)
 # create/start/pull.
 _INFRA_ERROR_PATTERNS: list[str] = [
     "error getting credentials",
-    "repository does not exist",
     "denied: denied",
     "unauthorized: authentication required",
     "connection refused",
