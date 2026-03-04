@@ -55,6 +55,12 @@ REGION_TO_TMP_BUCKET: dict[str, str] = {
     "us-east5": "marin-tmp-us-east5",
 }
 
+# Special-case overrides for primary Marin buckets that do not follow the
+# default `marin-{region}` naming convention.
+_REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
+    "europe-west4": "marin-eu-west4",
+}
+
 
 # ---------------------------------------------------------------------------
 # Low-level region helpers
@@ -101,7 +107,8 @@ def marin_prefix() -> str:
         return prefix
     region = region_from_metadata()
     if region:
-        return f"gs://marin-{region}"
+        bucket = _REGION_TO_MARIN_BUCKET_OVERRIDES.get(region, f"marin-{region}")
+        return f"gs://{bucket}"
     return _DEFAULT_LOCAL_PREFIX
 
 
