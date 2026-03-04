@@ -104,7 +104,7 @@ if __name__ == "__main__":
     ])
 ```
 
-Here, we create two [steps](docs/explanation/executor.md#steps), one for tokenizing the dataset and one for training the model.
+Here, we create two [steps](docs/explanations/executor.md#steps), one for tokenizing the dataset and one for training the model.
 The training step depends on the tokenized dataset step, so it will be executed after the tokenization step is completed.
 
 <!--marin-example-end-->

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Core types for the iris cluster layer.
@@ -942,6 +942,49 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
         if config.name == tpu_type:
             return config
     raise ValueError(f"Unknown TPU type: {tpu_type}")
+
+
+def validate_tpu_replicas(device: "cluster_pb2.DeviceConfig | None", replicas: int) -> None:
+    """Validate that replicas match the TPU topology's vm_count.
+
+    Multi-host TPU topologies (e.g. v6e-32 with vm_count=8) require one task
+    per VM. This function checks that ``replicas`` is a positive multiple of
+    the topology's ``vm_count`` so that every VM in every slice has exactly
+    one task. A mismatch (e.g. replicas=1 for a v6e-32) would cause JAX
+    distributed initialization to time out waiting for missing workers.
+
+    Args:
+        device: DeviceConfig from the resource spec. ``None`` or non-TPU
+            devices are silently accepted.
+        replicas: Number of replicas requested for the job.
+
+    Raises:
+        ValueError: If the TPU topology is known and ``replicas`` is not a
+            positive multiple of ``vm_count``.
+    """
+    if device is None or not device.HasField("tpu"):
+        return
+
+    variant = device.tpu.variant
+    if not variant:
+        return
+
+    try:
+        topo = get_tpu_topology(variant)
+    except ValueError:
+        # Unknown topology — nothing to validate.
+        return
+
+    if topo.vm_count <= 1:
+        return
+
+    if replicas % topo.vm_count != 0:
+        raise ValueError(
+            f"TPU type '{variant}' requires {topo.vm_count} VMs per slice, "
+            f"so replicas must be a multiple of {topo.vm_count} (got replicas={replicas}). "
+            f"For a single slice, use replicas={topo.vm_count}. "
+            f"For N slices, use replicas=N*{topo.vm_count}."
+        )
 
 
 class Entrypoint:

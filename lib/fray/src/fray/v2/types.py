@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Type definitions for fray v2.
@@ -377,12 +377,17 @@ class ActorConfig:
     `max_restarts` overrides the backend default for automatic actor restarts.
     Set to 0 for actors that must NOT auto-restart on preemption because they
     require remote initialization beyond __init__.
+
+    `max_task_retries` controls how many times a failed task (or actor
+    initialisation) is retried before being marked as permanently failed.
+    Maps to Ray's ``max_task_retries`` and Iris's ``max_retries_failure``.
     """
 
     max_concurrency: int = 1
     # TODO: max_restarts is conceptually a job-level property, revisit when we
     # drop Ray support.
     max_restarts: int | None = None
+    max_task_retries: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +441,6 @@ def create_environment(
         "HF_TOKEN": os.getenv("HF_TOKEN"),
         "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
         "MARIN_CI_DISABLE_RUNTIME_ENVS": os.getenv("MARIN_CI_DISABLE_RUNTIME_ENVS"),
-        "GCP_SA_KEY": os.getenv("GCP_SA_KEY"),
     }
 
     merged_env_vars = {k: v for k, v in {**default_env_vars, **(env_vars or {})}.items() if v is not None}

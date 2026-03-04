@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Canary ferry regression gate: validate training metrics against thresholds.
@@ -13,7 +13,7 @@ import json
 import operator
 import sys
 
-import fsspec
+from iris.marin_fs import open_url
 
 from marin.execution.executor import Executor
 
@@ -45,7 +45,7 @@ def resolve_canary_output_path() -> str:
 def read_summary(output_path: str) -> dict:
     """Read the summary dict from tracker_metrics.jsonl on GCS."""
     metrics_file = f"{output_path}/tracker_metrics.jsonl"
-    with fsspec.open(metrics_file, "r") as f:
+    with open_url(metrics_file, "r") as f:
         record = json.loads(f.read().strip())
     return record["summary"]
 

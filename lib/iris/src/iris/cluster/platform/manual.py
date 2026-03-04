@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 
+from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.platform._worker_base import RemoteExecWorkerBase
@@ -428,6 +429,11 @@ class ManualPlatform:
     def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
         """Start or discover existing controller on a manual host. Returns address (host:port)."""
         address, _vm = vm_start_controller(self, config)
+        return address
+
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller container in-place on the manual host."""
+        address, _vm = vm_restart_controller(self, config)
         return address
 
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:

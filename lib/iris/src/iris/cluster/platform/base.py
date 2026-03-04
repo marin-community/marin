@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -435,6 +435,15 @@ class Platform(Protocol):
         - Manual: SSHes to configured host, bootstraps container
         - CoreWeave: kubectl apply ConfigMap + NodePool + Deployment + Service
         - Local: starts in-process LocalController
+        """
+        ...
+
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller in-place without destroying underlying compute.
+
+        Re-runs the bootstrap script on the existing VM/pod to pull the latest
+        image and restart the container. Falls back to stop+start semantics on
+        platforms where in-place restart isn't meaningful (e.g. CoreWeave).
         """
         ...
 

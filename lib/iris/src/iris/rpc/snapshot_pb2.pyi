@@ -30,7 +30,7 @@ class ControllerSnapshot(_message.Message):
     def __init__(self, schema_version: _Optional[int] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., jobs: _Optional[_Iterable[_Union[JobSnapshot, _Mapping]]] = ..., endpoints: _Optional[_Iterable[_Union[EndpointSnapshot, _Mapping]]] = ..., workers: _Optional[_Iterable[_Union[WorkerSnapshot, _Mapping]]] = ..., scaling_groups: _Optional[_Iterable[_Union[ScalingGroupSnapshot, _Mapping]]] = ..., tracked_workers: _Optional[_Iterable[_Union[TrackedWorkerSnapshot, _Mapping]]] = ..., reservation_claims: _Optional[_Iterable[_Union[ReservationClaimSnapshot, _Mapping]]] = ...) -> None: ...
 
 class JobSnapshot(_message.Message):
-    __slots__ = ("job_id", "request", "state", "submitted_at", "root_submitted_at", "started_at", "finished_at", "error", "exit_code", "num_tasks", "scheduling_deadline_epoch_ms", "tasks")
+    __slots__ = ("job_id", "request", "state", "submitted_at", "root_submitted_at", "started_at", "finished_at", "error", "exit_code", "num_tasks", "scheduling_deadline_epoch_ms", "tasks", "is_reservation_holder")
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
@@ -43,6 +43,7 @@ class JobSnapshot(_message.Message):
     NUM_TASKS_FIELD_NUMBER: _ClassVar[int]
     SCHEDULING_DEADLINE_EPOCH_MS_FIELD_NUMBER: _ClassVar[int]
     TASKS_FIELD_NUMBER: _ClassVar[int]
+    IS_RESERVATION_HOLDER_FIELD_NUMBER: _ClassVar[int]
     job_id: str
     request: _cluster_pb2.Controller.LaunchJobRequest
     state: int
@@ -55,7 +56,8 @@ class JobSnapshot(_message.Message):
     num_tasks: int
     scheduling_deadline_epoch_ms: int
     tasks: _containers.RepeatedCompositeFieldContainer[TaskSnapshot]
-    def __init__(self, job_id: _Optional[str] = ..., request: _Optional[_Union[_cluster_pb2.Controller.LaunchJobRequest, _Mapping]] = ..., state: _Optional[int] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., root_submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., error: _Optional[str] = ..., exit_code: _Optional[int] = ..., num_tasks: _Optional[int] = ..., scheduling_deadline_epoch_ms: _Optional[int] = ..., tasks: _Optional[_Iterable[_Union[TaskSnapshot, _Mapping]]] = ...) -> None: ...
+    is_reservation_holder: bool
+    def __init__(self, job_id: _Optional[str] = ..., request: _Optional[_Union[_cluster_pb2.Controller.LaunchJobRequest, _Mapping]] = ..., state: _Optional[int] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., root_submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., error: _Optional[str] = ..., exit_code: _Optional[int] = ..., num_tasks: _Optional[int] = ..., scheduling_deadline_epoch_ms: _Optional[int] = ..., tasks: _Optional[_Iterable[_Union[TaskSnapshot, _Mapping]]] = ..., is_reservation_holder: _Optional[bool] = ...) -> None: ...
 
 class TaskSnapshot(_message.Message):
     __slots__ = ("task_id", "job_id", "state", "error", "exit_code", "started_at", "finished_at", "submitted_at", "max_retries_failure", "max_retries_preemption", "failure_count", "preemption_count", "attempts")

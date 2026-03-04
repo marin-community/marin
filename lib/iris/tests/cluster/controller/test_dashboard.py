@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for controller dashboard behavioral logic.
@@ -611,13 +611,13 @@ def test_pending_reason_uses_autoscaler_hint_for_scale_up(
     assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in listed[0].get("pendingReason", "")
 
 
-def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
+def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
     client_with_autoscaler,
     state,
     mock_autoscaler,
     make_worker_metadata,
 ):
-    """GetJobStatus should keep scheduler diagnostics when autoscaler has no active launch."""
+    """GetJobStatus should use autoscaler passive-wait hint even when no active launch."""
     register_worker(state, "w1", "h1:8080", make_worker_metadata())
 
     request = cluster_pb2.Controller.LaunchJobRequest(
@@ -651,17 +651,16 @@ def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
     )
     pending_reason = job_resp.get("job", {}).get("pendingReason", "")
     assert pending_reason
-    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" not in pending_reason
-    assert "constraints" in pending_reason.lower() or "nonexistent-attr" in pending_reason
+    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" in pending_reason
 
 
-def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
+def test_list_jobs_shows_passive_autoscaler_wait_hint(
     client_with_autoscaler,
     state,
     job_request,
     mock_autoscaler,
 ):
-    """ListJobs should not override pending diagnostics with non-active wait hints."""
+    """ListJobs should show passive autoscaler wait hints for pending jobs."""
     submit_job(state, "pending-no-launch", job_request)
     task_id = JobName.root("test-user", "pending-no-launch").task(0).to_wire()
 
@@ -681,7 +680,7 @@ def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
         if j.get("jobId") == JobName.root("test-user", "pending-no-launch").to_wire()
     ]
     assert listed
-    assert listed[0].get("pendingReason", "") == ""
+    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" in listed[0].get("pendingReason", "")
 
 
 # =============================================================================

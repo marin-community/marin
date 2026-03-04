@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """CoreWeave canary ferry: llama-150M on SlimPajama-6B, 1B tokens, 8x H100.
@@ -28,7 +28,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 
 CANARY_DATE = os.environ.get("CANARY_DATE", datetime.date.today().isoformat())
 
-BATCH_SIZE = 4096
+BATCH_SIZE = 512
 SEQ_LEN = 1024
 TARGET_TOKENS = 1_000_000_000
 NUM_STEPS = TARGET_TOKENS // (BATCH_SIZE * SEQ_LEN)
