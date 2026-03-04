@@ -1445,7 +1445,7 @@ def _coreweave_tunnel(
     exits (e.g. konnectivity timeout), it is relaunched automatically.
     """
     if local_port is None:
-        local_port = find_free_port(start=10000)
+        local_port = find_free_port()
 
     deadline = Deadline.from_seconds(timeout)
     backoff = ExponentialBackoff(initial=1.0, maximum=10.0, factor=2.0)

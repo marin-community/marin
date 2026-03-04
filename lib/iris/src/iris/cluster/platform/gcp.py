@@ -1459,7 +1459,7 @@ def _gcp_tunnel(
     Picks a free port automatically if none is specified.
     """
     if local_port is None:
-        local_port = find_free_port(start=10000)
+        local_port = find_free_port()
 
     labels = Labels(label_prefix)
     label_filter = f"labels.{labels.iris_controller}=true AND status=RUNNING"
