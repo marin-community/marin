@@ -260,7 +260,7 @@ class RemoteClusterClient:
 
     def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]:
         request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix)
-        response = self._client.list_endpoints(request)
+        response = self._client.list_endpoints(request, timeout_ms=10_000)
         return list(response.endpoints)
 
     def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]:
