@@ -500,7 +500,7 @@ def format_bug_report(report: BugReport) -> str:
                 lines.append(f"gsutil cat {w.process_log_path} | tail -100\n")
                 break
     lines.append("# Check autoscaler status")
-    lines.append("iris --config cluster.yaml rpc controller GetAutoscalerStatus")
+    lines.append("iris --config cluster.yaml rpc controller get-autoscaler-status")
     lines.append("```\n")
 
     return "\n".join(lines)
