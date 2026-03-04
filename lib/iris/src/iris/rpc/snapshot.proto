@@ -79,9 +79,10 @@ message TaskSnapshot {
 
   repeated TaskAttemptSnapshot attempts = 20;
 
-  // Reservation holder: -1 means this is a normal (non-holder) task.
-  // >= 0 is the index of the reservation entry this holder task represents.
-  int32 reservation_entry_idx = 30;
+  // DEPRECATED: reservation_entry_idx is no longer used. Reservation
+  // holder tasks now live in a separate child job identified by name
+  // convention (``{parent}/reservation``). Field number 30 is reserved.
+  reserved 30;
 }
 
 message TaskAttemptSnapshot {

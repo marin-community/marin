@@ -1674,11 +1674,13 @@ def _a100_device() -> cluster_pb2.DeviceConfig:
 
 
 def _is_synthetic_demand(state: ControllerState, demand_entry: DemandEntry) -> bool:
-    """Check if a demand entry comes from a synthetic holder task."""
+    """Check if a demand entry comes from a holder job task."""
     for tid in demand_entry.task_ids:
         task = state.get_task(JobName.from_string(tid))
-        if task and task.is_reservation_holder:
-            return True
+        if task:
+            job = state.get_job(task.job_id)
+            if job and job.is_reservation_holder:
+                return True
     return False
 
 
@@ -2226,7 +2228,7 @@ def test_demand_excludes_building_limited_tasks():
     # The pending task from j1 should be building-limited, not truly unschedulable.
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 0, "Building-limited task should not generate demand"
 
 
@@ -2254,7 +2256,7 @@ def test_demand_includes_truly_unschedulable_tasks():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Task with no matching device should generate demand"
 
 
@@ -2337,7 +2339,7 @@ def test_demand_absorbs_capacity_before_emitting():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Only 1 of 3 tasks should generate demand (2 absorbed)"
 
 
@@ -2360,7 +2362,7 @@ def test_demand_no_workers_falls_back_to_all_pending():
 
     # No scheduler, no workers -> all tasks become demand
     demand = compute_demand_entries(state)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 3
 
 
@@ -2405,7 +2407,7 @@ def test_demand_building_limited_with_multiple_workers():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 0, "All workers at building limit -> no demand"
 
 
@@ -2461,7 +2463,7 @@ def test_demand_mixed_building_limited_and_unschedulable():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
     assert len(task_demand) == 1
     assert "a100-job" in task_demand[0].task_ids[0], "Only A100 task should emit demand"
