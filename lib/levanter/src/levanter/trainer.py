@@ -29,8 +29,8 @@ from typing import (
 )
 
 import equinox as eqx
-import fsspec
 import haliax as hax
+from iris.marin_fs import open_url
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -611,17 +611,21 @@ class Trainer:
                 every=self.config.steps_per_eval,
             )
 
-    def data_loader(self, dataset: AsyncDataset[X], batch: Optional[hax.Axis] = None) -> DataLoader[X]:
+    def data_loader(self, dataset: AsyncDataset[X], batch: Optional[hax.Axis | int] = None) -> DataLoader[X]:
         """Creates a data loader for the given dataset and batch axis.
 
         Args:
             dataset (AsyncDataset): the dataset to load
-            batch (Optional[hax.Axis]): the batch axis. If None, uses the trainer batch axis (and schedule, if applicable)
+            batch: Optional batch axis or integer batch size. If None, uses the trainer batch axis
+                (and schedule, if applicable).
 
         Returns:
             DataLoader: the data loader
         """
-        if batch is not None:
+        if isinstance(batch, int):
+            batch_name = self.config.batch_axis_name
+            batch_size = batch
+        elif batch is not None:
             batch_name = batch.name
             batch_size = batch.size
         else:
@@ -732,10 +736,10 @@ class Trainer:
         artifact_path = dir / name
 
         if isinstance(artifact, str):
-            with fsspec.open(str(artifact_path), "w", compression="infer") as f:
+            with open_url(str(artifact_path), "w", compression="infer") as f:
                 f.write(artifact)
         else:
-            with fsspec.open(str(artifact_path), "wb", compression="infer") as f:
+            with open_url(str(artifact_path), "wb", compression="infer") as f:
                 f.write(artifact)
 
         self.tracker.log_artifact(artifact_path, name=name, type=type)

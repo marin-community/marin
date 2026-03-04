@@ -64,6 +64,9 @@ class ControllerService(Protocol):
     async def get_cluster_summary(self, request: cluster__pb2.Controller.GetClusterSummaryRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetClusterSummaryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def list_users(self, request: cluster__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListUsersResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -74,6 +77,9 @@ class ControllerService(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def get_worker_status(self, request: cluster__pb2.Controller.GetWorkerStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetWorkerStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def begin_checkpoint(self, request: cluster__pb2.Controller.BeginCheckpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.BeginCheckpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -242,6 +248,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     ),
                     function=svc.get_cluster_summary,
                 ),
+                "/iris.cluster.ControllerService/ListUsers": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListUsers",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.ListUsersRequest,
+                        output=cluster__pb2.Controller.ListUsersResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_users,
+                ),
                 "/iris.cluster.ControllerService/GetTaskLogs": Endpoint.unary(
                     method=MethodInfo(
                         name="GetTaskLogs",
@@ -281,6 +297,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_worker_status,
+                ),
+                "/iris.cluster.ControllerService/BeginCheckpoint": Endpoint.unary(
+                    method=MethodInfo(
+                        name="BeginCheckpoint",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.BeginCheckpointRequest,
+                        output=cluster__pb2.Controller.BeginCheckpointResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.begin_checkpoint,
                 ),
             },
             interceptors=interceptors,
@@ -614,6 +640,26 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def list_users(
+        self,
+        request: cluster__pb2.Controller.ListUsersRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.ListUsersResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListUsers",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.ListUsersRequest,
+                output=cluster__pb2.Controller.ListUsersResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     async def get_task_logs(
         self,
         request: cluster__pb2.Controller.GetTaskLogsRequest,
@@ -688,6 +734,26 @@ class ControllerServiceClient(ConnectClient):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.GetWorkerStatusRequest,
                 output=cluster__pb2.Controller.GetWorkerStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def begin_checkpoint(
+        self,
+        request: cluster__pb2.Controller.BeginCheckpointRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.BeginCheckpointResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="BeginCheckpoint",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.BeginCheckpointRequest,
+                output=cluster__pb2.Controller.BeginCheckpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -980,6 +1046,8 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_cluster_summary(self, request: cluster__pb2.Controller.GetClusterSummaryRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetClusterSummaryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_users(self, request: cluster__pb2.Controller.ListUsersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListUsersResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_process_logs(self, request: cluster__pb2.Controller.GetProcessLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetProcessLogsResponse:
@@ -987,6 +1055,8 @@ class ControllerServiceSync(Protocol):
     def profile_task(self, request: cluster__pb2.ProfileTaskRequest, ctx: RequestContext) -> cluster__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_worker_status(self, request: cluster__pb2.Controller.GetWorkerStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetWorkerStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def begin_checkpoint(self, request: cluster__pb2.Controller.BeginCheckpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.BeginCheckpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1154,6 +1224,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.get_cluster_summary,
                 ),
+                "/iris.cluster.ControllerService/ListUsers": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListUsers",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.ListUsersRequest,
+                        output=cluster__pb2.Controller.ListUsersResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_users,
+                ),
                 "/iris.cluster.ControllerService/GetTaskLogs": EndpointSync.unary(
                     method=MethodInfo(
                         name="GetTaskLogs",
@@ -1193,6 +1273,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_worker_status,
+                ),
+                "/iris.cluster.ControllerService/BeginCheckpoint": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="BeginCheckpoint",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.BeginCheckpointRequest,
+                        output=cluster__pb2.Controller.BeginCheckpointResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.begin_checkpoint,
                 ),
             },
             interceptors=interceptors,
@@ -1526,6 +1616,26 @@ class ControllerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
+    def list_users(
+        self,
+        request: cluster__pb2.Controller.ListUsersRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.ListUsersResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListUsers",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.ListUsersRequest,
+                output=cluster__pb2.Controller.ListUsersResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     def get_task_logs(
         self,
         request: cluster__pb2.Controller.GetTaskLogsRequest,
@@ -1600,6 +1710,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.GetWorkerStatusRequest,
                 output=cluster__pb2.Controller.GetWorkerStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def begin_checkpoint(
+        self,
+        request: cluster__pb2.Controller.BeginCheckpointRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.BeginCheckpointResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="BeginCheckpoint",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.BeginCheckpointRequest,
+                output=cluster__pb2.Controller.BeginCheckpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

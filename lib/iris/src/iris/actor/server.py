@@ -84,6 +84,8 @@ class ActorServer:
         Returns:
             Unique actor ID
         """
+        if name in self._actors:
+            raise ValueError(f"Actor '{name}' is already registered")
         actor_id = ActorId(f"{name}-{uuid.uuid4().hex[:8]}")
         methods = {m: getattr(actor, m) for m in dir(actor) if not m.startswith("_") and callable(getattr(actor, m))}
         self._actors[name] = RegisteredActor(

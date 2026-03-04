@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _KNOWN_VOCAB_SIZES: dict[str, int] = {
     "EleutherAI/gpt-neox-20b": 50_257,
     "meta-llama/Meta-Llama-3.1-8B": 128_256,
+    "meta-llama/Meta-Llama-3.1-8B-Instruct": 128_256,
     "stanford-crfm/marin-tokenizer": 128_256,
     "marin-community/marin-tokenizer": 128_256,
     "meta-llama/Llama-2-7b": 32_000,
@@ -341,6 +342,11 @@ def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
     if resolved_name in _KNOWN_VOCAB_SIZES:
         return _KNOWN_VOCAB_SIZES[resolved_name]
 
+    logger.warning(
+        "Tokenizer %r not found in _KNOWN_VOCAB_SIZES; loading from HuggingFace. "
+        "Consider adding it to _KNOWN_VOCAB_SIZES in data_configs.py to avoid network calls during dry-runs.",
+        resolved_name,
+    )
     tokenizer = _load_tokenizer(resolved_name)
     return len(tokenizer)
 

@@ -195,6 +195,14 @@ message ScaleGroupConfig {
 
   reserved 40;  // was: manual (now in slice_template.manual)
 
+  // Maximum scale-up requests per minute for this group (token bucket).
+  // 0 = use default (5/min). Prevents hitting cloud API rate limits.
+  int32 scale_up_rate_limit = 70 [features.field_presence = EXPLICIT];
+
+  // Maximum scale-down terminations per minute for this group (token bucket).
+  // 0 = use default (5/min). Controls how fast idle slices are released.
+  int32 scale_down_rate_limit = 71 [features.field_presence = EXPLICIT];
+
   // What to create when scaling up — the slice template
   SliceConfig slice_template = 50;
   WorkerSettings worker = 60;

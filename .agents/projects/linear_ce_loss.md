@@ -684,3 +684,40 @@ Notes:
 - In the only shared working dtype (`float32`), our `xla` custom-vjp path is clearly fastest on combined throughput on both `v5e-8` and `v6e-8`.
 - `pallas_tpu` remains competitive on forward but trails on backward, so combined is below `xla`.
 - Tokamax `mosaic_tpu` is not competitive in this setup and cannot currently run bf16 on these TPUs due the matmul-accumulator verification failure.
+
+### 2026-03-01: Restore explicit TPU v6 tuned table entries
+- Added an explicit `TPU v6` section in `tuned_block_sizes.py` (no `v5e` copy/fallback indirection).
+- `TPU v6` entries now include:
+  - `small-vocab`: `b=1024,h=256,v=512` (bf16/f32)
+  - `llama3-ish`: `b=1024,h=512,v=1024` (bf16/f32)
+  - `mid-h-large-vocab`: `b=1024,h=1024,v=1024` (bf16/f32)
+  - `large-batch-small-h`: `b=1024,h=512,v=2048` (bf16/f32)
+
+### 2026-03-01: Uniform TPU label-layout rule
+- Simplified fused-CE TPU block-size validation and inference policy:
+  - For all TPU device kinds, when `B >= 1024`, require `b_block_size % 1024 == 0`.
+  - Removed per-generation label-layout gating in `tuned_block_sizes.py`.
+  - Updated runtime validation in `pallas_tpu.py` to enforce the same uniform TPU rule.
+
+### 2026-03-01: Diagnostics hook validation on dev TPU (v6e-8, europe-west4-a)
+- Validated new bench/tune diagnostics flags end-to-end on a fresh dev TPU allocation:
+  - TPU: `v6e-8`
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304`
+  - flags under test:
+    - `--xla-dump-dir`
+    - `--compiler-log-path`
+- Bench run (`bench_fused_cross_entropy_loss_pallas.py`, forward-only, pallas):
+  - shape: `B_tokens=1024, H=1024, V=32768`
+  - output included `xla_dump_dir`, `compiler_log_path`, `xla_flags`, `libtpu_init_args` in `result_json`.
+  - artifacts on TPU:
+    - `/tmp/ce_diag/bench_hlo` with `148` dumped files
+    - `/tmp/ce_diag/bench_compile.log` containing benchmark output and `result_json`.
+- Tune run (`tune_fused_cross_entropy_loss_block_sizes.py`, forward-only, one explicit config):
+  - shape: `global_batch=4, seq_len=256, data_shards=1` (kernel batch `1024`), `H=1024`, `V=32768`
+  - config: `b1024_h512_v1024`
+  - output included the same diagnostics metadata keys in `result_json`.
+  - artifacts on TPU:
+    - `/tmp/ce_diag/tune_hlo` with `148` dumped files
+    - `/tmp/ce_diag/tune_compile.log` containing run output and `result_json`.
+- Conclusion:
+  - diagnostics hooks are functioning as intended on dev TPU runs and capture reproducible compile/HLO context.

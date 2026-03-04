@@ -473,6 +473,46 @@ button:not(.tab-btn):disabled { color: #8c959f; cursor: default; background: #f6
 /* Dimmed rows for idle groups with no slices */
 .row-inactive td { opacity: 0.45; }
 
+/* Demand disclosure toggle */
+.demand-toggle {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+  color: var(--color-accent);
+  white-space: nowrap;
+}
+.demand-toggle:hover { text-decoration: underline; }
+
+/* Expandable demand detail sub-row */
+.demand-detail-row td {
+  padding: 0 12px 8px 12px;
+  background: #f6f8fa;
+  border-bottom: 1px solid var(--color-border);
+}
+.demand-detail-row:hover { background: #f6f8fa; }
+.demand-detail-content { padding: 6px 0 2px 24px; }
+
+.demand-detail-job {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+.demand-detail-job-name {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--color-text);
+}
+.demand-detail-job-counts {
+  color: var(--color-text-secondary);
+}
+.demand-detail-overflow {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  padding: 2px 0;
+}
+
 .future-feature {
   color: #57606a;
   font-style: italic;
@@ -1041,6 +1081,7 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
   background: #eaeef2;
   border-radius: 2px;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .inline-gauge__fill {
@@ -1052,5 +1093,22 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--color-text-secondary);
-  min-width: 28px;
+  white-space: nowrap;
+}
+
+/* === Sparkline (inline trend chart) === */
+.sparkline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Sparkline paired with an inline gauge in a table cell */
+.resource-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.resource-cell .sparkline {
+  flex-shrink: 0;
 }

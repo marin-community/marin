@@ -8,7 +8,7 @@ on:
 jobs:
   canary-ferry:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     concurrency:
       group: canary-ferry
       cancel-in-progress: true

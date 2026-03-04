@@ -44,6 +44,8 @@ class TraceOverview:
     profile_start_ts: float | None
     profile_end_ts: float | None
     duration_basis: str
+    suspected_truncation: bool = False
+    quality_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,8 @@ class GapBeforeOp:
     total_gap_duration: float
     max_gap_duration: float
     avg_gap_duration: float
+    payload_op: str | None = None
+    marker_op: str | None = None
 
 
 @dataclass(frozen=True)
@@ -366,6 +370,8 @@ def _parse_trace_overview(data: Mapping[str, Any]) -> TraceOverview:
         profile_start_ts=cast(float | None, data.get("profile_start_ts")),
         profile_end_ts=cast(float | None, data.get("profile_end_ts")),
         duration_basis=cast(str, data["duration_basis"]),
+        suspected_truncation=cast(bool, data.get("suspected_truncation", False)),
+        quality_warnings=list(cast(list[str], data.get("quality_warnings", []))),
     )
 
 
@@ -480,12 +486,15 @@ def _parse_communication_op(data: Mapping[str, Any]) -> CommunicationOp:
 
 
 def _parse_gap_before_op(data: Mapping[str, Any]) -> GapBeforeOp:
+    name = cast(str, data["name"])
     return GapBeforeOp(
-        name=cast(str, data["name"]),
+        name=name,
         count=cast(int, data["count"]),
         total_gap_duration=cast(float, data["total_gap_duration"]),
         max_gap_duration=cast(float, data["max_gap_duration"]),
         avg_gap_duration=cast(float, data["avg_gap_duration"]),
+        payload_op=cast(str | None, data.get("payload_op")) or name,
+        marker_op=cast(str | None, data.get("marker_op")) or name,
     )
 
 

@@ -14,8 +14,8 @@ import time
 from dataclasses import dataclass, field
 
 import draccus
-import fsspec
 from huggingface_hub import HfFileSystem
+from iris.marin_fs import open_url, url_to_fs
 from huggingface_hub.errors import HfHubHTTPError
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
@@ -54,13 +54,13 @@ class DownloadConfig:
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
-    zephyr_max_parallelism: int = 32
+    zephyr_max_parallelism: int = 8
     """Maximum parallelism of the Zephyr download job"""
 
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
-    fs, _ = fsspec.core.url_to_fs(output_path)
+    fs, _ = url_to_fs(output_path)
     try:
         fs.mkdirs(output_path, exist_ok=True)
         test_path = os.path.join(output_path, "test_write_access")
@@ -85,7 +85,7 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
             the download will fail if the downloaded size doesn't match.
     """
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
-    target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
+    target_fs, _ = url_to_fs(gcs_output_path)
     # Use 256 MB chunk size for large files
     chunk_size = 256 * 1024 * 1024
     max_retries = 20
@@ -101,7 +101,7 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
             target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
             bytes_written = 0
             with atomic_rename(fsspec_file_path) as temp_path:
-                with hf_fs.open(file_path, "rb") as src_file, fsspec.open(temp_path, "wb") as dest_file:
+                with hf_fs.open(file_path, "rb") as src_file, open_url(temp_path, "wb") as dest_file:
                     while chunk := src_file.read(chunk_size):
                         dest_file.write(chunk)
                         bytes_written += len(chunk)
@@ -201,7 +201,14 @@ def download_hf(cfg: DownloadConfig) -> None:
             fsspec_file_path = os.path.join(output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
             expected_size = file_sizes.get(file)
-            download_tasks.append((output_path, file, fsspec_file_path, expected_size))
+            download_tasks.append(
+                (
+                    output_path,
+                    file,
+                    fsspec_file_path,
+                    expected_size,
+                )
+            )
         except Exception as e:
             logging.exception(f"Error preparing task for {file}: {e}")
 
@@ -216,7 +223,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    ctx = ZephyrContext(name="download-hf")
+    ctx = ZephyrContext(name="download-hf", max_workers=cfg.zephyr_max_parallelism)
     ctx.execute(pipeline)
 
     # Write Provenance JSON

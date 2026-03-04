@@ -26,6 +26,13 @@ from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
 
 
+class ContainerInfraError(RuntimeError):
+    """Container operation failed due to infrastructure issues (expired credentials,
+    unreachable registry, docker daemon problems). Uses preemption retry budget."""
+
+    pass
+
+
 class ContainerErrorKind(StrEnum):
     """Structured category for container/runtime errors."""
 
@@ -254,6 +261,10 @@ class ContainerRuntime(Protocol):
 
     def list_containers(self) -> list[ContainerHandle]:
         """List all managed containers."""
+        ...
+
+    def list_iris_containers(self, all_states: bool = True) -> list[str]:
+        """List IDs of all iris-managed containers/sandboxes."""
         ...
 
     def remove_all_iris_containers(self) -> int:

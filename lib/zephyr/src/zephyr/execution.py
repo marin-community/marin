@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import cloudpickle
-import fsspec
+from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import ExponentialBackoff
@@ -83,13 +83,13 @@ class DiskChunk:
         count = len(data)
 
         unique_path = unique_temp_path(path)
-        with fsspec.open(unique_path, "wb") as f:
+        with open_url(unique_path, "wb") as f:
             pickle.dump(data, f)
         return cls(path=unique_path, count=count)
 
     def read(self) -> list:
         """Load chunk data from disk."""
-        with fsspec.open(self.path, "rb") as f:
+        with open_url(self.path, "rb") as f:
             return pickle.load(f)
 
 
@@ -163,7 +163,7 @@ def _chunk_path(
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
     """Remove all chunk files for an execution."""
     exec_dir = f"{prefix}/{execution_id}"
-    fs = fsspec.core.url_to_fs(exec_dir)[0]
+    fs = url_to_fs(exec_dir)[0]
 
     if fs.exists(exec_dir):
         try:
@@ -764,7 +764,7 @@ class ZephyrWorker:
             path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
             logger.info("[%s] Loading shared data '%s' from %s", self._worker_id, name, path)
             t0 = time.monotonic()
-            with fsspec.open(path, "rb") as f:
+            with open_url(path, "rb") as f:
                 data = f.read()
             elapsed = time.monotonic() - t0
             self._shared_data_cache[name] = cloudpickle.loads(data)
@@ -1083,7 +1083,7 @@ class ZephyrContext:
             t0 = time.monotonic()
             data = cloudpickle.dumps(obj)
             elapsed = time.monotonic() - t0
-            with fsspec.open(path, "wb") as f:
+            with open_url(path, "wb") as f:
                 f.write(data)
             logger.info(
                 "Shared data '%s' written to %s (serialized %d bytes in %.2fs)",
@@ -1208,6 +1208,7 @@ class ZephyrContext:
             name=f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}-workers",
             count=actual_workers,
             resources=self.resources,
+            actor_config=ActorConfig(max_task_retries=10),
         )
 
         self._worker_count = actual_workers

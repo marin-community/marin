@@ -27,6 +27,13 @@ Levanter is incorporated into `lib/levanter`. Start with the shared instructions
 * Always protect PyTorch-dependent tests with `@skip_if_no_torch` so they skip cleanly when PyTorch is unavailable.
 * **CI tip:** use `astral-sh/setup-uv` to install `uv`, run `uv python install`, and then run `uv sync`/`uv pip` to guarantee the expected Python version in workflows.
 
+### TPU VMEM flags for kernel tuning
+
+* For TPU Pallas benchmark/tuning runs, set `LIBTPU_INIT_ARGS` by TPU generation:
+  * `v5p`/`v5e`: `--xla_tpu_scoped_vmem_limit_kib=50000`
+  * `v6e`: `--xla_tpu_scoped_vmem_limit_kib=98304`
+* Do not set a special scoped VMEM limit flag on `v4` unless a user explicitly asks for it.
+
 ## Design Preferences
 
 * **Named tensors:** Levanter relies heavily on [Haliax](https://github.com/stanford-crfm/haliax). Represent arrays with `NamedArray` and explicit `Axis` objects, and operate over named axes whenever possible.
