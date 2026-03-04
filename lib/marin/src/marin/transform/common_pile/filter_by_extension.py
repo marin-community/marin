@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Utilities for filtering Common Pile datasets by metadata extensions.
@@ -121,5 +121,5 @@ def filter_dataset_by_metadata_extension(config: FilterByMetadataExtensionConfig
         .filter(lambda record: record is not None)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext(name="filter-by-extension") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="filter-by-extension")
+    ctx.execute(pipeline)

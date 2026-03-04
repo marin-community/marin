@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging as pylogging
@@ -96,5 +96,3 @@ def silence_transformer_nag():
     # Often we won't call this early enough, but it helps with multiprocessing stuff
     if os.getenv("TRANSFORMERS_VERBOSITY") is None:
         os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-
-    import transformers  # noqa: F401

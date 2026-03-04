@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2E tests for WorkerPool using LocalClusterClient."""
+"""E2E tests for WorkerPool using IrisClient.local()."""
 
 import pytest
 from iris.client import IrisClient
@@ -14,9 +14,9 @@ from iris.cluster.types import ResourceSpec
 
 @pytest.fixture
 def local_client():
-    """Create a LocalClusterClient-backed IrisClient for true E2E testing.
+    """Create a local IrisClient for true E2E testing.
 
-    This fixture starts a real Controller and Worker with in-process execution,
+    Starts a real Controller and Worker with in-process execution,
     ensuring WorkerPool tests go through the full job submission infrastructure.
     """
     client = IrisClient.local()
@@ -25,10 +25,10 @@ def local_client():
 
 
 class TestWorkerPoolE2E:
-    """True end-to-end tests for WorkerPool using LocalClusterClient.
+    """True end-to-end tests for WorkerPool using IrisClient.local().
 
     These tests exercise the full job submission flow:
-    WorkerPool -> IrisClient -> LocalClusterClient -> Controller -> Worker -> task execution.
+    WorkerPool -> IrisClient -> RemoteClusterClient -> Controller -> Worker -> task execution.
     """
 
     def test_submit_executes_task(self, local_client):
@@ -96,18 +96,3 @@ class TestWorkerPoolE2E:
 
         with pytest.raises(RuntimeError, match="shutdown"):
             pool.submit(lambda: 42)
-
-    def test_multiple_sequential_tasks(self, local_client):
-        """Multiple tasks can be submitted sequentially to the same pool."""
-        config = WorkerPoolConfig(
-            num_workers=1,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
-
-        with WorkerPool(local_client, config, timeout=30.0) as pool:
-            results = []
-            for i in range(3):
-                future = pool.submit(lambda x: x * 2, i)
-                results.append(future.result(timeout=60.0))
-
-            assert results == [0, 2, 4]

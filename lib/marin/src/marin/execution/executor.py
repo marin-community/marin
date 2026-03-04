@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -95,13 +95,14 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
-import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.v2 import client as fray_client
+from iris.marin_fs import open_url
 from fray.v2.types import ResourceConfig
+from iris.marin_fs import marin_prefix
 
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, worker_id
+from marin.execution.remote import RemoteCallable
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
@@ -189,6 +190,8 @@ def resolve_executor_step(
     import ray
 
     step_fn = step.fn
+    if isinstance(step_fn, RemoteCallable):
+        step_fn = step_fn.fn
     if isinstance(step_fn, ray.remote_function.RemoteFunction):
         remote_fn = step_fn
 
@@ -206,14 +209,24 @@ def resolve_executor_step(
     def resolved_fn(output_path):
         return captured_fn(captured_config)
 
+    # Determine Fray config: explicit ExecutorStep.resources wins,
+    # then @remote on the original fn, then None (run locally).
+    final_fn: Callable = resolved_fn
+    if step.resources is not None:
+        final_fn = RemoteCallable(
+            fn=resolved_fn,
+            resources=step.resources,
+            env_vars=step.env_vars or {},
+            pip_dependency_groups=step.pip_dependency_groups or [],
+        )
+    elif isinstance(step.fn, RemoteCallable):
+        final_fn = dataclasses.replace(step.fn, fn=resolved_fn)
+
     return StepSpec(
         name=step.name,
         deps=deps or [],
         override_output_path=output_path,
-        fn=resolved_fn,
-        resources=step.resources if step.resources is not None else ResourceConfig.with_cpu(),
-        env_vars=step.env_vars or {},
-        pip_dependency_groups=step.pip_dependency_groups or [],
+        fn=final_fn,
     )
 
 
@@ -631,7 +644,6 @@ class Executor:
         executor_info_base_path: str,
         description: str | None = None,
     ):
-        self.client = fray_client.current_client()
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
@@ -699,7 +711,7 @@ class Executor:
             logger.info(f"### Max concurrent steps: {max_concurrent} ###")
 
         resolved_steps = self._resolve_steps(steps_to_run)
-        StepRunner(self.client).run(
+        StepRunner().run(
             resolved_steps,
             dry_run=dry_run,
             force_run_failed=force_run_failed,
@@ -932,12 +944,12 @@ class Executor:
         for step, info in zip(self.steps, executor_info_dict["steps"], strict=True):
             info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
-            with fsspec.open(info_path, "w") as f:
+            with open_url(info_path, "w") as f:
                 print(json.dumps(info, indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
         fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
-        with fsspec.open(self.executor_info_path, "w") as f:
+        with open_url(self.executor_info_path, "w") as f:
             print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
 
 
@@ -1000,19 +1012,7 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     time_in = time.time()
 
-    prefix = config.prefix
-    if prefix is None:
-        # infer from the environment
-        if "MARIN_PREFIX" in os.environ:
-            prefix = os.environ["MARIN_PREFIX"]
-        else:
-            raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
-    elif "MARIN_PREFIX" in os.environ:
-        if prefix != os.environ["MARIN_PREFIX"]:
-            logger.warning(
-                f"MARIN_PREFIX environment variable ({os.environ['MARIN_PREFIX']}) is different from the "
-                f"specified prefix ({prefix})"
-            )
+    prefix = config.prefix or marin_prefix()
 
     executor_info_base_path = config.executor_info_base_path
     if executor_info_base_path is None:

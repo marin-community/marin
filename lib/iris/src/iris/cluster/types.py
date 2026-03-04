@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Core types for the iris cluster layer.
@@ -30,21 +30,22 @@ from iris.rpc import cluster_pb2
 class JobName:
     """Structured hierarchical job name.
 
-    Canonical form: /namespace/parent/child
-    Tasks are job names with numeric suffix: /namespace/parent/child/0
+    Canonical form: /user/root-job/child
+    Tasks are job names with numeric suffix: /user/root-job/child/0
 
-    Job names form a tree rooted at the namespace:
-        /root-job
-        /root-job/child-1
-        /root-job/child-1/grandchild
-        /root-job/0
+    The first path component identifies the submitting user. Job hierarchy starts
+    at the second component:
+        /alice/root-job
+        /alice/root-job/child-1
+        /alice/root-job/child-1/grandchild
+        /alice/root-job/0
     """
 
     _parts: tuple[str, ...]
 
     def __post_init__(self):
-        if not self._parts:
-            raise ValueError("JobName cannot be empty")
+        if len(self._parts) < 2:
+            raise ValueError("JobName must use canonical '/<user>/<job>[...]' format")
         for part in self._parts:
             if "/" in part:
                 raise ValueError(f"JobName component cannot contain '/': {part}")
@@ -53,26 +54,28 @@ class JobName:
 
     @classmethod
     def from_string(cls, s: str) -> "JobName":
-        """Parse a job name string like '/root/child/grandchild'.
+        """Parse a job name string like '/user/root/child/grandchild'.
 
         Examples:
-            JobName.from_string("/my-job") -> JobName(("my-job",))
-            JobName.from_string("/parent/child") -> JobName(("parent", "child"))
-            JobName.from_string("/job/0") -> JobName(("job", "0"))
+            JobName.from_string("/alice/my-job") -> JobName(("alice", "my-job"))
+            JobName.from_string("/alice/parent/child") -> JobName(("alice", "parent", "child"))
+            JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
         if not s:
-            raise ValueError("Job name cannot be empty")
+            raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
         if not s.startswith("/"):
-            raise ValueError(f"Job name must start with '/': {s}")
+            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
         parts = tuple(s[1:].split("/"))
+        if len(parts) < 2:
+            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
         if any(not part or not part.strip() for part in parts):
             raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
         return cls(parts)
 
     @classmethod
-    def root(cls, name: str) -> "JobName":
+    def root(cls, user: str, name: str) -> "JobName":
         """Create a root job name (no parent)."""
-        return cls((name,))
+        return cls((user, name))
 
     def child(self, name: str) -> "JobName":
         """Create a child job name."""
@@ -84,21 +87,31 @@ class JobName:
         Tasks are job names with a numeric suffix.
 
         Example:
-            JobName.from_string("/my-job").task(0) -> JobName(("my-job", "0"))
+            JobName.from_string("/alice/my-job").task(0) -> JobName(("alice", "my-job", "0"))
         """
         return JobName((*self._parts, str(index)))
 
     @property
     def parent(self) -> "JobName | None":
         """Get parent job name, or None if this is a root job."""
-        if len(self._parts) == 1:
+        if self.is_root:
             return None
         return JobName(self._parts[:-1])
 
     @property
-    def namespace(self) -> str:
-        """Get the namespace (root component) for actor isolation."""
+    def user(self) -> str:
+        """Get the submitting user."""
         return self._parts[0]
+
+    @property
+    def root_job(self) -> "JobName":
+        """Get the root job for this hierarchy."""
+        return JobName(self._parts[:2])
+
+    @property
+    def namespace(self) -> str:
+        """Get the actor namespace (user/root job) for actor isolation."""
+        return "/".join(self.root_job._parts)
 
     @property
     def name(self) -> str:
@@ -108,11 +121,13 @@ class JobName:
     @property
     def is_root(self) -> bool:
         """True if this is a root job (no parent)."""
-        return len(self._parts) == 1
+        return len(self._parts) == 2
 
     @property
     def task_index(self) -> int | None:
         """If this is a task (last component is numeric), return the index."""
+        if len(self._parts) < 3:
+            return None
         try:
             return int(self._parts[-1])
         except ValueError:
@@ -131,15 +146,15 @@ class JobName:
         is not counted as a depth level).
 
         Examples:
-            /root -> 1
-            /root/child -> 2
-            /root/child/grandchild -> 3
-            /root/0 (task) -> 1
-            /root/child/0 (task) -> 2
+            /alice/root -> 1
+            /alice/root/child -> 2
+            /alice/root/child/grandchild -> 3
+            /alice/root/0 (task) -> 1
+            /alice/root/child/0 (task) -> 2
         """
         if self.is_task:
-            return len(self._parts) - 1
-        return len(self._parts)
+            return len(self._parts) - 2
+        return len(self._parts) - 1
 
     def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
         """True if this job name is an ancestor of another job name."""
@@ -167,7 +182,7 @@ class JobName:
         return (self.parent, task_index)
 
     def __str__(self) -> str:
-        """Canonical wire format: '/root/child/grandchild'."""
+        """Canonical wire format: '/user/root/child/grandchild'."""
         return "/" + "/".join(self._parts)
 
     def __repr__(self) -> str:
@@ -316,6 +331,7 @@ class ConstraintOp(IntEnum):
     GE = 5
     LT = 6
     LE = 7
+    IN = 8
 
     def to_proto(self) -> cluster_pb2.ConstraintOp:
         """Convert to protobuf ConstraintOp enum value."""
@@ -328,6 +344,7 @@ class ConstraintOp(IntEnum):
             ConstraintOp.GE: cluster_pb2.CONSTRAINT_OP_GE,
             ConstraintOp.LT: cluster_pb2.CONSTRAINT_OP_LT,
             ConstraintOp.LE: cluster_pb2.CONSTRAINT_OP_LE,
+            ConstraintOp.IN: cluster_pb2.CONSTRAINT_OP_IN,
         }
         return mapping[self]
 
@@ -348,17 +365,23 @@ class Constraint:
         >>> Constraint(key="memory_gb", op=ConstraintOp.GE, value=64)
         >>> # Require workers that have a GPU
         >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+        >>> # Require workers in one of several regions
+        >>> Constraint(key="region", op=ConstraintOp.IN, values=("us-central1", "us-central2"))
     """
 
     key: str
     op: ConstraintOp
     value: str | int | float | None = None
+    values: tuple[str | int | float, ...] | None = None
 
     def to_proto(self) -> cluster_pb2.Constraint:
         """Convert to protobuf representation."""
         proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
         if self.value is not None:
             proto.value.CopyFrom(AttributeValue(self.value).to_proto())
+        if self.values is not None:
+            for v in self.values:
+                proto.values.append(AttributeValue(v).to_proto())
         return proto
 
     @staticmethod
@@ -368,7 +391,10 @@ class Constraint:
         value: str | int | float | None = None
         if proto.HasField("value"):
             value = AttributeValue.from_proto(proto.value).value
-        return Constraint(key=proto.key, op=op, value=value)
+        values: tuple[str | int | float, ...] | None = None
+        if proto.values:
+            values = tuple(AttributeValue.from_proto(v).value for v in proto.values)
+        return Constraint(key=proto.key, op=op, value=value, values=values)
 
 
 @dataclass(frozen=True)
@@ -389,6 +415,30 @@ class CoschedulingConfig:
     def to_proto(self) -> cluster_pb2.CoschedulingConfig:
         """Convert to protobuf representation."""
         return cluster_pb2.CoschedulingConfig(group_by=self.group_by)
+
+
+@dataclass(frozen=True)
+class ReservationEntry:
+    """A single reservation entry describing one worker's worth of resources.
+
+    Used in the high-level client API. Each entry becomes a demand anchor
+    that the autoscaler provisions before the reserving job schedules.
+
+    Example:
+        >>> ReservationEntry(resources=ResourceSpec(cpu=2, memory="8g"))
+        >>> ReservationEntry(resources=ResourceSpec(cpu=2), constraints=[Constraint("region", value="us-central1")])
+    """
+
+    resources: "ResourceSpec"
+    constraints: list[Constraint] | None = None
+
+    def to_proto(self) -> cluster_pb2.ReservationEntry:
+        """Convert to protobuf representation."""
+        constraints_proto = [c.to_proto() for c in self.constraints or []]
+        return cluster_pb2.ReservationEntry(
+            resources=self.resources.to_proto(),
+            constraints=constraints_proto,
+        )
 
 
 def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConfig:
@@ -419,6 +469,24 @@ def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConf
         tpu=cluster_pb2.TpuDevice(
             variant=variant,
             count=chip_count,
+        )
+    )
+
+
+def gpu_device(variant: str, count: int = 1) -> cluster_pb2.DeviceConfig:
+    """Create a DeviceConfig for a GPU device.
+
+    Args:
+        variant: GPU variant string (e.g., "H100", "A100").
+        count: Number of GPUs per node.
+
+    Returns:
+        DeviceConfig with the gpu field set.
+    """
+    return cluster_pb2.DeviceConfig(
+        gpu=cluster_pb2.GpuDevice(
+            variant=variant,
+            count=count,
         )
     )
 
@@ -461,7 +529,7 @@ class ResourceSpec:
     Accepts human-readable memory/disk values (e.g., "8g", "512m").
     """
 
-    cpu: int = 0
+    cpu: float = 0.0
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
@@ -471,16 +539,13 @@ class ResourceSpec:
         memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
         disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
         spec = cluster_pb2.ResourceSpecProto(
-            cpu=self.cpu,
+            cpu_millicores=int(self.cpu * 1000),
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
         )
         if self.device is not None:
             spec.device.CopyFrom(self.device)
         return spec
-
-
-DEFAULT_BASE_IMAGE = "iris-task:latest"
 
 
 CALLABLE_RUNNER = """\
@@ -502,9 +567,7 @@ workdir = os.environ["IRIS_WORKDIR"]
 try:
     with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
         fn, args, kwargs = cloudpickle.loads(f.read())
-    result = fn(*args, **kwargs)
-    with open(os.path.join(workdir, "_result.pkl"), "wb") as f:
-        f.write(cloudpickle.dumps(result))
+    fn(*args, **kwargs)
 except Exception:
     traceback.print_exc()
     sys.exit(1)
@@ -555,9 +618,9 @@ class Namespace(str):
     Namespaces provide isolation between different jobs/environments.
     Actors in one namespace cannot discover actors in another namespace.
 
-    The namespace is derived from the root job ID: all jobs in a hierarchy
-    share the same namespace. This ensures automatic isolation without
-    explicit configuration.
+    The namespace is derived from the user/root job pair: all jobs in a hierarchy
+    share the same namespace. This preserves actor isolation between unrelated
+    jobs from the same user.
     """
 
     def __repr__(self) -> str:
@@ -569,7 +632,7 @@ class Namespace(str):
 
         The namespace is the first component of the job ID hierarchy.
         For example:
-            JobName.from_string("/abc123/worker-0") -> Namespace("abc123")
+            JobName.from_string("/alice/abc123/worker-0") -> Namespace("alice/abc123")
 
         Args:
             job_id: Hierarchical job ID
@@ -585,6 +648,7 @@ class Namespace(str):
 
 PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
 REGION_ATTRIBUTE_KEY = "region"
+ZONE_ATTRIBUTE_KEY = "zone"
 
 
 def preemptible_constraint(preemptible: bool = True) -> Constraint:
@@ -592,11 +656,36 @@ def preemptible_constraint(preemptible: bool = True) -> Constraint:
     return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
 
 
-def region_constraint(region: str) -> Constraint:
-    """Constraint requiring workers to be in a given region."""
-    if not region:
-        raise ValueError("region must be non-empty")
-    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=region)
+def zone_constraint(zone: str) -> Constraint:
+    """Constraint requiring workers to be in a given zone."""
+    if not zone:
+        raise ValueError("zone must be non-empty")
+    return Constraint(key=ZONE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=zone)
+
+
+def region_constraint(regions: list[str]) -> Constraint:
+    """Constraint requiring workers to be in one of the given regions.
+
+    Emits an EQ constraint for a single region or an IN constraint for multiple
+    regions.
+
+    Args:
+        regions: Non-empty list of region strings. Must be a list, not a bare string.
+
+    Raises:
+        TypeError: If regions is a string (common mistake — pass [region] instead).
+        ValueError: If regions is empty or contains empty strings.
+    """
+    if isinstance(regions, str):
+        raise TypeError("region_constraint() requires a list of strings, not a bare string. Use [region] instead.")
+    if not regions:
+        raise ValueError("regions must be non-empty")
+    for r in regions:
+        if not r:
+            raise ValueError("region must be non-empty")
+    if len(regions) == 1:
+        return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=regions[0])
+    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.IN, values=tuple(regions))
 
 
 @dataclass(frozen=True)
@@ -605,6 +694,7 @@ class NormalizedConstraints:
 
     preemptible: bool | None
     required_regions: frozenset[str] | None
+    required_zones: frozenset[str] | None
 
 
 def preemptible_preference_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
@@ -650,21 +740,75 @@ def required_regions_from_constraints(constraints: Sequence[cluster_pb2.Constrai
             conflicting EQ values.
     """
     regions: set[str] = set()
+    has_in = False
     for constraint in constraints:
         if constraint.key != REGION_ATTRIBUTE_KEY:
             continue
-        if constraint.op != cluster_pb2.CONSTRAINT_OP_EQ:
-            raise ValueError("region constraint must use EQ")
-        if not constraint.value.HasField("string_value"):
-            raise ValueError("region constraint requires string value")
-        region = constraint.value.string_value.strip()
-        if not region:
-            raise ValueError("region constraint must be non-empty")
-        regions.add(region)
+        if constraint.op == cluster_pb2.CONSTRAINT_OP_IN:
+            if not constraint.values:
+                raise ValueError("IN region constraint requires at least one value")
+            for av in constraint.values:
+                if not av.HasField("string_value"):
+                    raise ValueError("region constraint requires string value")
+                region = av.string_value.strip()
+                if not region:
+                    raise ValueError("region constraint must be non-empty")
+                regions.add(region)
+            has_in = True
+        elif constraint.op == cluster_pb2.CONSTRAINT_OP_EQ:
+            if not constraint.value.HasField("string_value"):
+                raise ValueError("region constraint requires string value")
+            region = constraint.value.string_value.strip()
+            if not region:
+                raise ValueError("region constraint must be non-empty")
+            regions.add(region)
+        else:
+            raise ValueError(f"region constraint must use EQ or IN, got {constraint.op}")
 
-    if len(regions) > 1:
+    if not has_in and len(regions) > 1:
         raise ValueError("conflicting region constraints")
     return frozenset(regions) if regions else None
+
+
+def required_zones_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> frozenset[str] | None:
+    """Extract required zones from constraints.
+
+    Returns:
+        Set of required zones when specified, otherwise None.
+
+    Raises:
+        ValueError: If zone constraints use invalid operators/values or contain
+            conflicting EQ values.
+    """
+    zones: set[str] = set()
+    has_in = False
+    for constraint in constraints:
+        if constraint.key != ZONE_ATTRIBUTE_KEY:
+            continue
+        if constraint.op == cluster_pb2.CONSTRAINT_OP_IN:
+            if not constraint.values:
+                raise ValueError("IN zone constraint requires at least one value")
+            for av in constraint.values:
+                if not av.HasField("string_value"):
+                    raise ValueError("zone constraint requires string value")
+                zone = av.string_value.strip()
+                if not zone:
+                    raise ValueError("zone constraint must be non-empty")
+                zones.add(zone)
+            has_in = True
+        elif constraint.op == cluster_pb2.CONSTRAINT_OP_EQ:
+            if not constraint.value.HasField("string_value"):
+                raise ValueError("zone constraint requires string value")
+            zone = constraint.value.string_value.strip()
+            if not zone:
+                raise ValueError("zone constraint must be non-empty")
+            zones.add(zone)
+        else:
+            raise ValueError(f"zone constraint must use EQ or IN, got {constraint.op}")
+
+    if not has_in and len(zones) > 1:
+        raise ValueError("conflicting zone constraints")
+    return frozenset(zones) if zones else None
 
 
 def normalize_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> NormalizedConstraints:
@@ -672,6 +816,7 @@ def normalize_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> Norm
     return NormalizedConstraints(
         preemptible=preemptible_preference_from_constraints(constraints),
         required_regions=required_regions_from_constraints(constraints),
+        required_zones=required_zones_from_constraints(constraints),
     )
 
 
@@ -797,6 +942,49 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
         if config.name == tpu_type:
             return config
     raise ValueError(f"Unknown TPU type: {tpu_type}")
+
+
+def validate_tpu_replicas(device: "cluster_pb2.DeviceConfig | None", replicas: int) -> None:
+    """Validate that replicas match the TPU topology's vm_count.
+
+    Multi-host TPU topologies (e.g. v6e-32 with vm_count=8) require one task
+    per VM. This function checks that ``replicas`` is a positive multiple of
+    the topology's ``vm_count`` so that every VM in every slice has exactly
+    one task. A mismatch (e.g. replicas=1 for a v6e-32) would cause JAX
+    distributed initialization to time out waiting for missing workers.
+
+    Args:
+        device: DeviceConfig from the resource spec. ``None`` or non-TPU
+            devices are silently accepted.
+        replicas: Number of replicas requested for the job.
+
+    Raises:
+        ValueError: If the TPU topology is known and ``replicas`` is not a
+            positive multiple of ``vm_count``.
+    """
+    if device is None or not device.HasField("tpu"):
+        return
+
+    variant = device.tpu.variant
+    if not variant:
+        return
+
+    try:
+        topo = get_tpu_topology(variant)
+    except ValueError:
+        # Unknown topology — nothing to validate.
+        return
+
+    if topo.vm_count <= 1:
+        return
+
+    if replicas % topo.vm_count != 0:
+        raise ValueError(
+            f"TPU type '{variant}' requires {topo.vm_count} VMs per slice, "
+            f"so replicas must be a multiple of {topo.vm_count} (got replicas={replicas}). "
+            f"For a single slice, use replicas={topo.vm_count}. "
+            f"For N slices, use replicas=N*{topo.vm_count}."
+        )
 
 
 class Entrypoint:

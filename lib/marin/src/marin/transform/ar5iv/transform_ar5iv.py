@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -175,5 +175,5 @@ def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
         )
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext(name="transform-ar5iv-v2") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="transform-ar5iv-v2")
+    ctx.execute(pipeline)

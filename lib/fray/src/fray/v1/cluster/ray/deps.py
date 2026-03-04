@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Compute Python package dependencies for Ray jobs."""
@@ -123,6 +123,7 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
     # Workspace member src directories + experiments directory
     paths = [
         "experiments",
+        "lib/harbor/src",
         "lib/fray/src",
         "lib/haliax/src",
         "lib/iris/src",

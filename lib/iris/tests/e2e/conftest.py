@@ -1,10 +1,10 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Core fixtures for Iris E2E tests.
 
 Boots a local cluster via connect_cluster() + make_local_config() and provides
-a TestCluster dataclass that wraps the IrisClient and ControllerServiceClientSync
+a IrisTestCluster dataclass that wraps the IrisClient and ControllerServiceClientSync
 with convenience methods for job submission, waiting, and status queries.
 
 The cluster fixture is function-scoped so each test gets a fresh cluster with no
@@ -13,7 +13,10 @@ autouse fixture.
 """
 
 import os
+import shutil
+import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,11 +25,13 @@ from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
+from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.types import (
-    CoschedulingConfig,
     Constraint,
+    CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
+    ReservationEntry,
     ResourceSpec,
     is_job_finished,
 )
@@ -41,7 +46,7 @@ DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
 
 
 @dataclass
-class TestCluster:
+class IrisTestCluster:
     """Wraps a booted local cluster with convenience methods for E2E tests.
 
     Combines the chaos conftest's connect_cluster() bootstrap with E2ECluster-style
@@ -57,7 +62,7 @@ class TestCluster:
         fn,
         name: str,
         *args,
-        cpu: int = 1,
+        cpu: float = 1,
         memory: str = "1g",
         ports: list[str] | None = None,
         scheduling_timeout: Duration | None = None,
@@ -67,6 +72,7 @@ class TestCluster:
         timeout: Duration | None = None,
         coscheduling: CoschedulingConfig | None = None,
         constraints: list[Constraint] | None = None,
+        reservation: list[ReservationEntry] | None = None,
     ) -> Job:
         """Submit a callable as a job. Returns a Job handle."""
         return self.client.submit(
@@ -82,6 +88,7 @@ class TestCluster:
             timeout=timeout,
             coscheduling=coscheduling,
             constraints=constraints,
+            reservation=reservation,
         )
 
     def status(self, job: Job) -> cluster_pb2.JobStatus:
@@ -187,7 +194,7 @@ def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
     sg.num_vms = 2
     sg.min_slices = 1
     sg.max_slices = 2
-    sg.resources.cpu = 128
+    sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024 * 1024 * 1024
     sg.resources.disk_bytes = 1024 * 1024 * 1024 * 1024
     sg.slice_template.preemptible = True
@@ -199,14 +206,14 @@ def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
 
 @pytest.fixture
 def cluster():
-    """Boots a local cluster. Yields a TestCluster with IrisClient and RPC access."""
+    """Boots a local cluster. Yields a IrisTestCluster with IrisClient and RPC access."""
     config = load_config(DEFAULT_CONFIG)
     _add_coscheduling_group(config)
     config = make_local_config(config)
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        yield TestCluster(url=url, client=client, controller_client=controller_client)
+        yield IrisTestCluster(url=url, client=client, controller_client=controller_client)
         controller_client.close()
 
 
@@ -220,7 +227,7 @@ def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     sg.num_vms = 1
     sg.min_slices = num_workers
     sg.max_slices = num_workers
-    sg.resources.cpu = 8
+    sg.resources.cpu_millicores = 8000
     sg.resources.memory_bytes = 16 * 1024**3
     sg.resources.disk_bytes = 50 * 1024**3
     sg.slice_template.local.SetInParent()
@@ -239,7 +246,7 @@ def multi_worker_cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = TestCluster(url=url, client=client, controller_client=controller_client)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(num_workers, timeout=30)
         yield tc
         controller_client.close()
@@ -420,3 +427,83 @@ def screenshot(page, request, tmp_path):
         return path
 
     return capture
+
+
+# ---------------------------------------------------------------------------
+# Kubernetes fixtures (for tests against real K8s: kind, k3d, minikube, etc.)
+# ---------------------------------------------------------------------------
+
+KIND_CLUSTER_NAME = "iris-test"
+
+
+def _cluster_reachable() -> bool:
+    try:
+        result = subprocess.run(["kubectl", "cluster-info"], capture_output=True, timeout=10)
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+@pytest.fixture(scope="session")
+def k8s_cluster():
+    """Ensure a K8s cluster is available for the test session.
+
+    If a cluster is already reachable, uses it as-is. Otherwise, creates a
+    kind cluster and tears it down at the end of the session.
+    """
+    if shutil.which("kubectl") is None:
+        pytest.skip("kubectl not in PATH (install: brew install kubectl)")
+
+    if _cluster_reachable():
+        yield
+        return
+
+    if shutil.which("kind") is None:
+        pytest.skip("no reachable K8s cluster and kind not in PATH (install: brew install kind)")
+
+    subprocess.run(
+        ["kind", "create", "cluster", "--name", KIND_CLUSTER_NAME],
+        check=True,
+        timeout=120,
+    )
+    try:
+        yield
+    finally:
+        subprocess.run(
+            ["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME],
+            capture_output=True,
+            timeout=60,
+        )
+
+
+@pytest.fixture
+def k8s_runtime(k8s_cluster):
+    """KubernetesRuntime with an ephemeral namespace, torn down after each test."""
+    namespace = f"iris-test-{uuid.uuid4().hex[:8]}"
+    subprocess.run(
+        ["kubectl", "create", "namespace", namespace],
+        check=True,
+        capture_output=True,
+    )
+    # Wait for K8s to provision the default ServiceAccount in the new namespace.
+    # Without this, pod creation fails with "serviceaccount default not found".
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            ["kubectl", "-n", namespace, "get", "serviceaccount", "default"],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            break
+        time.sleep(0.5)
+    else:
+        pytest.skip(f"default ServiceAccount not ready in namespace {namespace} after 30s")
+    runtime = KubernetesRuntime(namespace=namespace)
+    try:
+        yield runtime
+    finally:
+        runtime.cleanup()
+        subprocess.run(
+            ["kubectl", "delete", "namespace", namespace, "--ignore-not-found"],
+            capture_output=True,
+        )

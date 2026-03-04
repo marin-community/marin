@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Bundle cache for workspace bundles from GCS."""
@@ -13,7 +13,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Protocol
 
-import fsspec
+from iris.marin_fs import open_url
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class BundleCache:
             return extract_path
 
     def _download(self, gcs_path: str, local_path: Path) -> None:
-        with fsspec.open(gcs_path, "rb") as src:
+        with open_url(gcs_path, "rb") as src:
             with open(local_path, "wb") as dst:
                 dst.write(src.read())
 

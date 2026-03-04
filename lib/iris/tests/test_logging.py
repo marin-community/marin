@@ -1,11 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
 
 import pytest
 
-from iris.logging import BufferedLogRecord, LogRingBuffer, RingBufferHandler
+from iris.logging import BufferedLogRecord, LogRingBuffer, RingBufferHandler, slow_log
 
 
 @pytest.fixture
@@ -16,7 +16,9 @@ def ring_buffer():
 def test_ring_buffer_fifo_eviction(ring_buffer):
     """Oldest records are evicted when buffer is full."""
     for i in range(15):
-        ring_buffer.append(BufferedLogRecord(timestamp=float(i), level="INFO", logger_name="test", message=f"msg-{i}"))
+        ring_buffer.append(
+            BufferedLogRecord(seq=i, timestamp=float(i), level="INFO", logger_name="test", message=f"msg-{i}")
+        )
     results = ring_buffer.query()
     assert len(results) == 10
     assert results[0].message == "msg-5"
@@ -25,9 +27,11 @@ def test_ring_buffer_fifo_eviction(ring_buffer):
 
 def test_ring_buffer_query_prefix(ring_buffer):
     """Query filters records by logger name prefix."""
-    ring_buffer.append(BufferedLogRecord(0.0, "INFO", "iris.controller", "a"))
-    ring_buffer.append(BufferedLogRecord(1.0, "INFO", "iris.worker", "b"))
-    ring_buffer.append(BufferedLogRecord(2.0, "INFO", "iris.controller.scheduler", "c"))
+    ring_buffer.append(BufferedLogRecord(seq=1, timestamp=0.0, level="INFO", logger_name="iris.controller", message="a"))
+    ring_buffer.append(BufferedLogRecord(seq=2, timestamp=1.0, level="INFO", logger_name="iris.worker", message="b"))
+    ring_buffer.append(
+        BufferedLogRecord(seq=3, timestamp=2.0, level="INFO", logger_name="iris.controller.scheduler", message="c")
+    )
 
     results = ring_buffer.query(prefix="iris.controller")
     assert len(results) == 2
@@ -38,7 +42,9 @@ def test_ring_buffer_query_prefix(ring_buffer):
 def test_ring_buffer_query_limit(ring_buffer):
     """Query respects limit parameter, returning most recent records."""
     for i in range(10):
-        ring_buffer.append(BufferedLogRecord(float(i), "INFO", "test", f"msg-{i}"))
+        ring_buffer.append(
+            BufferedLogRecord(seq=i, timestamp=float(i), level="INFO", logger_name="test", message=f"msg-{i}")
+        )
     results = ring_buffer.query(limit=3)
     assert len(results) == 3
     assert results[0].message == "msg-7"
@@ -62,6 +68,24 @@ def test_handler_captures_log_records():
         assert results[0].logger_name == "iris.test.handler_test"
     finally:
         logger.removeHandler(handler)
+
+
+def test_slow_log_emits_warning_when_slow(caplog):
+    """slow_log emits a WARNING when the block exceeds the threshold."""
+    log = logging.getLogger("iris.test.slow_log")
+    with caplog.at_level(logging.WARNING, logger="iris.test.slow_log"):
+        with slow_log(log, "test-op", threshold_ms=0):
+            pass
+    assert any("Slow test-op" in r.message for r in caplog.records)
+
+
+def test_slow_log_silent_when_fast(caplog):
+    """slow_log emits nothing when the block completes within budget."""
+    log = logging.getLogger("iris.test.slow_log")
+    with caplog.at_level(logging.DEBUG, logger="iris.test.slow_log"):
+        with slow_log(log, "fast-op", threshold_ms=60_000):
+            pass
+    assert not any("Slow" in r.message for r in caplog.records)
 
 
 def test_configure_logging_captures_records():

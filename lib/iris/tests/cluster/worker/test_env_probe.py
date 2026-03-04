@@ -1,35 +1,19 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for worker environment probing."""
 
-import pytest
+import time
 
 import iris.cluster.worker.env_probe as env_probe
-from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, _get_extra_attributes
-
-
-@pytest.mark.parametrize(
-    "env_value,expected",
-    [
-        ("", {}),
-        ('{"key1":"value1"}', {"key1": "value1"}),
-        ('{"key1":"value1","key2":"value2"}', {"key1": "value1", "key2": "value2"}),
-        ('{"taint:maintenance":"true","pool":"large-jobs"}', {"taint:maintenance": "true", "pool": "large-jobs"}),
-        ('{"key":""}', {"key": ""}),
-    ],
+from iris.cluster.worker.env_probe import (
+    DefaultEnvironmentProvider,
+    HardwareProbe,
+    HostMetricsCollector,
+    _read_net_dev_bytes,
+    build_worker_metadata,
 )
-def test_get_extra_attributes_parsing(monkeypatch, env_value, expected):
-    """Test parsing of IRIS_WORKER_ATTRIBUTES environment variable."""
-    monkeypatch.setenv("IRIS_WORKER_ATTRIBUTES", env_value)
-    result = _get_extra_attributes()
-    assert result == expected
-
-
-def test_get_extra_attributes_raises_for_non_json(monkeypatch):
-    monkeypatch.setenv("IRIS_WORKER_ATTRIBUTES", "key1=value1")
-    with pytest.raises(ValueError):
-        _get_extra_attributes()
+from iris.rpc import config_pb2
 
 
 def test_environment_provider_basic_probe(monkeypatch):
@@ -108,29 +92,26 @@ def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch)
     assert metadata.device.HasField("cpu")
 
 
-def test_infer_worker_log_prefix_uses_region_bucket_mapping(monkeypatch):
+def test_log_prefix_uses_region_bucket_mapping(monkeypatch):
     """europe-west4 must map to marin-tmp-eu-west4 bucket naming."""
-    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: True)
-    monkeypatch.setattr(
-        env_probe,
-        "_get_gcp_metadata",
-        lambda key: "projects/hai-gcp-models/zones/europe-west4-b" if key == "zone" else None,
-    )
+    import iris.marin_fs as marin_fs_mod
 
-    prefix = env_probe._infer_worker_log_prefix()
-    assert prefix == "gs://marin-tmp-eu-west4/ttl=30d/iris-logs"
+    monkeypatch.setattr(marin_fs_mod, "region_from_metadata", lambda: "europe-west4")
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    monkeypatch.delenv("IRIS_LOG_PREFIX", raising=False)
+
+    assert DefaultEnvironmentProvider().log_prefix() == "gs://marin-tmp-eu-west4/ttl=30d/iris-logs"
 
 
-def test_infer_worker_log_prefix_unknown_region_returns_none(monkeypatch):
-    """Unknown regions should fail closed (no guessed bucket)."""
-    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: True)
-    monkeypatch.setattr(
-        env_probe,
-        "_get_gcp_metadata",
-        lambda key: "projects/hai-gcp-models/zones/antarctica-south1-a" if key == "zone" else None,
-    )
+def test_log_prefix_unknown_region_falls_back(monkeypatch):
+    """Unknown regions fall back to the marin prefix tmp path."""
+    import iris.marin_fs as marin_fs_mod
 
-    assert env_probe._infer_worker_log_prefix() is None
+    monkeypatch.setattr(marin_fs_mod, "region_from_metadata", lambda: None)
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-antarctica-south1/scratch")
+    monkeypatch.delenv("IRIS_LOG_PREFIX", raising=False)
+
+    assert DefaultEnvironmentProvider().log_prefix() == "gs://marin-antarctica-south1/scratch/tmp/iris-logs"
 
 
 def test_log_prefix_prefers_env_override(monkeypatch):
@@ -144,3 +125,125 @@ def test_log_prefix_prefers_env_override(monkeypatch):
     )
 
     assert DefaultEnvironmentProvider().log_prefix() == "gs://custom/ttl=30d/iris-logs"
+
+
+def test_build_worker_metadata_gpu_override():
+    """build_worker_metadata should use accelerator_type/variant from config over hardware probe."""
+    hardware = HardwareProbe(
+        hostname="test-host",
+        ip_address="10.0.0.1",
+        cpu_count=4,
+        memory_bytes=16 * 1024**3,
+        disk_bytes=100 * 1024**3,
+        gpu_count=0,
+        gpu_name="",
+        gpu_memory_mb=0,
+        tpu_name="",
+        tpu_type="",
+        tpu_worker_hostnames="",
+        tpu_worker_id="",
+        tpu_chips_per_host_bounds="",
+    )
+
+    metadata = build_worker_metadata(
+        hardware=hardware,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+        accelerator_variant="H100",
+        gpu_count_override=8,
+    )
+
+    assert metadata.device.HasField("gpu")
+    assert metadata.device.gpu.variant == "H100"
+    assert metadata.device.gpu.count == 8
+    assert metadata.gpu_count == 8
+    assert metadata.gpu_name == "H100"
+
+
+def test_build_worker_metadata_cpu_fallback():
+    """build_worker_metadata should fall back to CPU when no accelerator is specified."""
+    hardware = HardwareProbe(
+        hostname="test-host",
+        ip_address="10.0.0.1",
+        cpu_count=4,
+        memory_bytes=16 * 1024**3,
+        disk_bytes=100 * 1024**3,
+        gpu_count=0,
+        gpu_name="",
+        gpu_memory_mb=0,
+        tpu_name="",
+        tpu_type="",
+        tpu_worker_hostnames="",
+        tpu_worker_id="",
+        tpu_chips_per_host_bounds="",
+    )
+
+    metadata = build_worker_metadata(hardware=hardware)
+
+    assert metadata.device.HasField("cpu")
+    assert metadata.hostname == "test-host"
+    assert metadata.ip_address == "10.0.0.1"
+
+
+def test_read_net_dev_bytes_returns_nonzero_on_linux():
+    """On Linux, /proc/net/dev should be readable and return non-negative values."""
+    try:
+        recv, sent = _read_net_dev_bytes()
+        assert recv >= 0
+        assert sent >= 0
+    except OSError:
+        # Non-Linux systems won't have /proc/net/dev
+        pass
+
+
+def test_host_metrics_collector_network_first_call_returns_zero():
+    """First network collection establishes baseline and reports 0 B/s."""
+    collector = HostMetricsCollector()
+    snapshot = collector.collect()
+    # First call should report 0 since there's no previous measurement to delta against
+    assert snapshot.net_recv_bps == 0
+    assert snapshot.net_sent_bps == 0
+
+
+def test_host_metrics_collector_network_delta(monkeypatch):
+    """Second network collection computes bytes/sec from the delta."""
+    fake_time = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: fake_time[0])
+
+    # Simulate /proc/net/dev with known values
+    call_count = [0]
+    net_values = [
+        (1000, 2000),  # First call: baseline
+        (6000, 12000),  # Second call: 5000 recv, 10000 sent over 5s
+    ]
+
+    def fake_read_net():
+        idx = min(call_count[0], len(net_values) - 1)
+        call_count[0] += 1
+        return net_values[idx]
+
+    monkeypatch.setattr(env_probe, "_read_net_dev_bytes", fake_read_net)
+
+    collector = HostMetricsCollector()
+
+    # First collect: establishes baseline
+    snapshot1 = collector.collect()
+    assert snapshot1.net_recv_bps == 0
+    assert snapshot1.net_sent_bps == 0
+
+    # Advance time by 5 seconds
+    fake_time[0] = 105.0
+
+    # Second collect: should compute rates
+    snapshot2 = collector.collect()
+    assert snapshot2.net_recv_bps == 1000  # (6000-1000) / 5 = 1000 B/s
+    assert snapshot2.net_sent_bps == 2000  # (12000-2000) / 5 = 2000 B/s
+
+
+def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
+    """Network collection silently returns 0 on systems without /proc/net/dev."""
+    monkeypatch.setattr(env_probe, "_read_net_dev_bytes", lambda: (_ for _ in ()).throw(OSError("no /proc/net/dev")))
+
+    collector = HostMetricsCollector()
+    snapshot = collector.collect()
+    assert snapshot.net_recv_bps == 0
+    assert snapshot.net_sent_bps == 0

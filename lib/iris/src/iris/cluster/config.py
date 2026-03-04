@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Iris cluster configuration loading and utilities.
@@ -13,6 +13,7 @@ Supports YAML config files for cluster management. This module provides:
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ from pathlib import Path
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
-from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, parse_memory_string
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, ZONE_ATTRIBUTE_KEY, parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_utils import Duration
@@ -35,24 +36,20 @@ IrisClusterConfig = config_pb2.IrisClusterConfig
 
 # Single source of truth for all default values
 DEFAULT_CONFIG = config_pb2.DefaultsConfig(
-    timeouts=config_pb2.TimeoutConfig(
-        boot_timeout=Duration.from_seconds(300).to_proto(),
-        init_timeout=Duration.from_seconds(600).to_proto(),
-        ssh_poll_interval=Duration.from_seconds(5).to_proto(),
-    ),
     ssh=config_pb2.SshConfig(
         user="root",
         connect_timeout=Duration.from_seconds(30).to_proto(),
     ),
     autoscaler=config_pb2.AutoscalerConfig(
         evaluation_interval=Duration.from_seconds(10).to_proto(),
-        requesting_timeout=Duration.from_seconds(120).to_proto(),
         scale_up_delay=Duration.from_seconds(60).to_proto(),
         scale_down_delay=Duration.from_seconds(300).to_proto(),
     ),
-    bootstrap=config_pb2.BootstrapConfig(
-        worker_port=10001,
+    worker=config_pb2.WorkerConfig(
+        port=10001,
         cache_dir="/var/cache/iris",
+        host="0.0.0.0",
+        port_range="30000-40000",
     ),
 )
 
@@ -110,8 +107,8 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             raise ValueError(f"Scale group '{name}' has invalid num_vms={sg_config.num_vms}.")
 
         resources = sg_config.resources
-        if resources.cpu < 0:
-            raise ValueError(f"Scale group '{name}' has invalid cpu={resources.cpu}.")
+        if resources.cpu_millicores < 0:
+            raise ValueError(f"Scale group '{name}' has invalid cpu_millicores={resources.cpu_millicores}.")
         if resources.memory_bytes < 0:
             raise ValueError(f"Scale group '{name}' has invalid memory_bytes={resources.memory_bytes}.")
         if resources.disk_bytes < 0:
@@ -142,8 +139,34 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
         if platform == "gcp":
             if not template.gcp.zone:
                 raise ValueError(f"Scale group '{name}': slice_template.gcp.zone must be non-empty.")
-            if not template.gcp.runtime_version:
-                raise ValueError(f"Scale group '{name}': slice_template.gcp.runtime_version must be non-empty.")
+            gcp_mode = template.gcp.mode
+            if gcp_mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
+                if template.preemptible:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices do not support preemptible instances.")
+                if sg_config.num_vms != 1:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices require num_vms=1.")
+                if sg_config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+                    raise ValueError(
+                        f"Scale group '{name}': VM-backed GCP slices currently require accelerator_type=cpu."
+                    )
+                if template.accelerator_type not in (
+                    config_pb2.ACCELERATOR_TYPE_UNSPECIFIED,
+                    config_pb2.ACCELERATOR_TYPE_CPU,
+                ):
+                    raise ValueError(
+                        f"Scale group '{name}': VM-backed GCP slices require slice_template.accelerator_type=cpu."
+                    )
+                if template.accelerator_variant:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices do not support accelerator_variant.")
+                if not template.gcp.machine_type:
+                    raise ValueError(
+                        f"Scale group '{name}': slice_template.gcp.machine_type must be non-empty for VM mode."
+                    )
+                if sg_config.resources.tpu_count > 0 or sg_config.resources.gpu_count > 0:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices currently support CPU-only resources.")
+            else:
+                if not template.gcp.runtime_version:
+                    raise ValueError(f"Scale group '{name}': slice_template.gcp.runtime_version must be non-empty.")
         elif platform == "manual":
             if not template.manual.hosts:
                 raise ValueError(f"Scale group '{name}': slice_template.manual.hosts must be non-empty.")
@@ -191,6 +214,16 @@ def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
                     f"must match slice_template.preemptible={sg_config.slice_template.preemptible!r}."
                 )
 
+        zone_attr = attributes.get(ZONE_ATTRIBUTE_KEY, "").strip()
+        if ZONE_ATTRIBUTE_KEY in attributes and not zone_attr:
+            raise ValueError(f"Scale group '{name}': worker.attributes.zone must be non-empty.")
+        if zone_attr and sg_config.slice_template.HasField("gcp") and sg_config.slice_template.gcp.zone:
+            if zone_attr != sg_config.slice_template.gcp.zone:
+                raise ValueError(
+                    f"Scale group '{name}': worker.attributes.zone={zone_attr!r} must match "
+                    f"slice_template.gcp.zone={sg_config.slice_template.gcp.zone!r}."
+                )
+
         template = sg_config.slice_template
         if region and template.HasField("gcp") and template.gcp.zone:
             zone_region = template.gcp.zone.rsplit("-", 1)[0]
@@ -217,6 +250,31 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     _validate_scale_group_resources(config)
     _validate_slice_templates(config)
     _validate_worker_settings(config)
+    _validate_worker_defaults(config)
+
+
+def _validate_worker_defaults(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate worker defaults required for worker-based platforms.
+
+    Local platform runs workers in-process and does not require a docker image/runtime.
+    GCP/manual/CoreWeave create remote worker processes and must provide a worker image.
+    """
+    # Some unit tests validate partial proto configs directly (without load_config/apply_defaults).
+    # Only enforce worker image checks once defaults/platform are explicitly present.
+    if not config.HasField("defaults"):
+        return
+
+    platform_kind = config.platform.WhichOneof("platform")
+    if platform_kind in (None, "local"):
+        return
+
+    docker_image = config.defaults.worker.docker_image.strip()
+    if not docker_image:
+        raise ValueError("defaults.worker.docker_image is required for non-local platforms (gcp/manual/coreweave).")
+
+    runtime = config.defaults.worker.runtime.strip()
+    if runtime and runtime not in {"docker", "kubernetes"}:
+        raise ValueError(f"defaults.worker.runtime must be one of docker/kubernetes, got {runtime!r}.")
 
 
 def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
@@ -256,11 +314,9 @@ def _merge_proto_fields(target, source) -> None:
 
         value = getattr(source, field_name)
 
-        # For message types (Duration, nested messages), use CopyFrom
-        if hasattr(value, "CopyFrom"):
+        if field_desc.message_type is not None:
             target_field = getattr(target, field_name)
             target_field.CopyFrom(value)
-        # For scalar types (int, string, bool, enum), use direct assignment
         else:
             setattr(target, field_name, value)
 
@@ -268,22 +324,35 @@ def _merge_proto_fields(target, source) -> None:
 def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.DefaultsConfig) -> None:
     """Deep merge source defaults into target, field by field.
 
+    Sub-messages (timeouts, ssh, autoscaler, worker) are merged field-by-field
+    so that partially-specified user configs overlay hardcoded defaults without
+    wiping unset siblings. Top-level scalar fields are merged via
+    _merge_proto_fields which copies any explicitly-set value.
+
     Args:
         target: DefaultsConfig to merge into (modified in place)
         source: DefaultsConfig to merge from
     """
-    if source.HasField("timeouts"):
-        _merge_proto_fields(target.timeouts, source.timeouts)
+    # Merge top-level scalar fields.
+    # We skip message fields here since sub-messages need deep merging below.
+    for field_desc in source.DESCRIPTOR.fields:
+        if field_desc.message_type is not None:
+            continue
+        if source.HasField(field_desc.name):
+            setattr(target, field_desc.name, getattr(source, field_desc.name))
+
+    # Deep-merge sub-messages so partial overrides work
     if source.HasField("ssh"):
         _merge_proto_fields(target.ssh, source.ssh)
     if source.HasField("autoscaler"):
         _merge_proto_fields(target.autoscaler, source.autoscaler)
-    if source.HasField("bootstrap"):
-        # Use standard merge for bootstrap fields, trusting HasField
-        _merge_proto_fields(target.bootstrap, source.bootstrap)
-        # Merge env_vars map separately (map fields don't use HasField)
-        for key, value in source.bootstrap.env_vars.items():
-            target.bootstrap.env_vars[key] = value
+    if source.HasField("worker"):
+        _merge_proto_fields(target.worker, source.worker)
+        # Merge map fields separately (map fields don't support HasField)
+        for key, value in source.worker.default_task_env.items():
+            target.worker.default_task_env[key] = value
+        for key, value in source.worker.worker_attributes.items():
+            target.worker.worker_attributes[key] = value
 
 
 def _validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: str = "autoscaler") -> None:
@@ -305,13 +374,6 @@ def _validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: st
         raise ValueError(
             f"{context}: evaluation_interval must be positive, got {interval_ms}ms. "
             f"This controls how often the autoscaler evaluates scaling decisions."
-        )
-
-    timeout_ms = config.requesting_timeout.milliseconds
-    if timeout_ms <= 0:
-        raise ValueError(
-            f"{context}: requesting_timeout must be positive, got {timeout_ms}ms. "
-            f"This controls how long to wait for VMs to provision before timing out."
         )
 
     # scale_up_delay and scale_down_delay can be zero (no cooldown) but not negative
@@ -399,7 +461,7 @@ def make_local_config(
     # Transform controller to local
     config.controller.ClearField("controller")
     config.controller.local.port = 0  # auto-assign
-    config.controller.bundle_prefix = ""  # LocalController will set temp path
+    config.storage.bundle_prefix = ""  # LocalController will set temp path
 
     # Apply local defaults (fast timings for testing)
     # Unconditionally use fast timings for local mode - this overrides any production timings
@@ -422,6 +484,128 @@ def make_local_config(
     return config
 
 
+def _expand_multi_zone_groups(data: dict) -> None:
+    """Expand scale groups with `zones` into one group per zone.
+
+    Consumes the YAML-only `zones` key on each scale group. For each zone,
+    creates a copy of the scale group with:
+    - name suffixed with -{zone} (e.g. tpu_v5e_16-europe-west4-b)
+    - slice_template.gcp.zone set to the zone
+    - worker.attributes.zone and worker.attributes.region set automatically
+    - min_slices defaulted to 0 if not explicitly set
+
+    Also merges all expanded zones into platform.gcp.zones.
+
+    Raises:
+        ValueError: If zones is not a non-empty list of unique non-empty strings,
+            if an expanded name collides with an existing scale group, or if
+            user-provided zone/region fields conflict with the expansion.
+    """
+    scale_groups = data.get("scale_groups")
+    if not isinstance(scale_groups, dict):
+        return
+
+    all_expanded_zones: set[str] = set()
+    expanded: dict[str, dict] = {}
+    to_remove: list[str] = []
+
+    for name, sg in list(scale_groups.items()):
+        if not isinstance(sg, dict) or "zones" not in sg:
+            continue
+
+        zones = sg.pop("zones")
+        if not isinstance(zones, list) or not zones:
+            raise ValueError(f"Scale group '{name}': zones must be a non-empty list")
+
+        for zone in zones:
+            if not isinstance(zone, str) or not zone.strip():
+                raise ValueError(f"Scale group '{name}': each zone must be a non-empty string, got {zone!r}")
+
+        if len(zones) != len(set(zones)):
+            raise ValueError(f"Scale group '{name}': zones list contains duplicates: {zones}")
+
+        to_remove.append(name)
+
+        # Zone expansion only makes sense for GCP slice templates.
+        # If the template already specifies a non-GCP platform, reject it.
+        st = sg.get("slice_template") or {}
+        non_gcp_platforms = {"manual", "local", "coreweave"}
+        specified_platforms = non_gcp_platforms & st.keys()
+        if specified_platforms:
+            raise ValueError(
+                f"Scale group '{name}': 'zones' expansion is only supported for GCP slice templates, "
+                f"but slice_template specifies {', '.join(sorted(specified_platforms))}."
+            )
+
+        # Detect conflicts with user-provided fields that expansion will set
+        existing_gcp_zone = (sg.get("slice_template") or {}).get("gcp", {}).get("zone")
+        existing_worker_attrs = (sg.get("worker") or {}).get("attributes", {})
+        existing_zone_attr = existing_worker_attrs.get("zone")
+        existing_region_attr = existing_worker_attrs.get("region")
+
+        if existing_gcp_zone:
+            raise ValueError(
+                f"Scale group '{name}': cannot set both 'zones' and 'slice_template.gcp.zone'. "
+                f"Remove slice_template.gcp.zone — it is set automatically by zone expansion."
+            )
+        if existing_zone_attr:
+            raise ValueError(
+                f"Scale group '{name}': cannot set both 'zones' and 'worker.attributes.zone'. "
+                f"Remove worker.attributes.zone — it is set automatically by zone expansion."
+            )
+        if existing_region_attr:
+            raise ValueError(
+                f"Scale group '{name}': cannot set both 'zones' and 'worker.attributes.region'. "
+                f"Remove worker.attributes.region — it is set automatically by zone expansion."
+            )
+
+        for zone in zones:
+            region = zone.rsplit("-", 1)[0]
+            expanded_name = f"{name}-{zone}"
+
+            if expanded_name in scale_groups:
+                raise ValueError(
+                    f"Scale group '{name}': expanded name '{expanded_name}' collides with " f"an existing scale group."
+                )
+            if expanded_name in expanded:
+                raise ValueError(
+                    f"Scale group '{name}': expanded name '{expanded_name}' collides with " f"another expanded group."
+                )
+
+            expanded_sg = copy.deepcopy(sg)
+            expanded_sg["name"] = expanded_name
+
+            # Set zone in slice_template.gcp
+            st = expanded_sg.setdefault("slice_template", {})
+            gcp = st.setdefault("gcp", {})
+            gcp["zone"] = zone
+
+            # Set worker.attributes.zone and .region
+            worker = expanded_sg.setdefault("worker", {})
+            attrs = worker.setdefault("attributes", {})
+            attrs[ZONE_ATTRIBUTE_KEY] = zone
+            attrs[REGION_ATTRIBUTE_KEY] = region
+
+            if "min_slices" not in expanded_sg:
+                expanded_sg["min_slices"] = 0
+
+            expanded[expanded_name] = expanded_sg
+            all_expanded_zones.add(zone)
+
+    for name in to_remove:
+        del scale_groups[name]
+    scale_groups.update(expanded)
+
+    # Merge expanded zones into platform.gcp.zones
+    if all_expanded_zones:
+        platform = data.setdefault("platform", {})
+        platform_gcp = platform.get("gcp")
+        if isinstance(platform_gcp, dict):
+            existing = set(platform_gcp.get("zones", []))
+            existing.update(all_expanded_zones)
+            platform_gcp["zones"] = sorted(existing)
+
+
 def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     """Load cluster config from YAML file."""
     config_path = Path(config_path)
@@ -435,14 +619,13 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     # Expand environment variables in controller_address only.
     # Other fields (e.g., docker_image, ssh.key_file) are used as-is.
     # This is intentional - controller_address often needs $IRIS_CONTROLLER_ADDRESS for dynamic discovery.
-    if "bootstrap" in data and "controller_address" in data["bootstrap"]:
-        data["bootstrap"]["controller_address"] = os.path.expandvars(data["bootstrap"]["controller_address"])
-    if "defaults" in data and "bootstrap" in data["defaults"]:
-        defaults_bootstrap = data["defaults"]["bootstrap"]
-        if "controller_address" in defaults_bootstrap:
-            defaults_bootstrap["controller_address"] = os.path.expandvars(defaults_bootstrap["controller_address"])
+    if "defaults" in data and "worker" in data["defaults"]:
+        defaults_worker = data["defaults"]["worker"]
+        if "controller_address" in defaults_worker:
+            defaults_worker["controller_address"] = os.path.expandvars(defaults_worker["controller_address"])
 
     _normalize_scale_group_resources(data)
+    _expand_multi_zone_groups(data)
 
     # Ensure scale_groups have their name field set (proto uses map key, but config field needs it)
     if "scale_groups" in data:
@@ -487,7 +670,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     validate_config(config)
 
     platform_kind = config.platform.WhichOneof("platform") if config.HasField("platform") else "unspecified"
-    logger.info(
+    logger.debug(
         "Config loaded: platform=%s, scale_groups=%s",
         platform_kind,
         list(config.scale_groups.keys()) if config.scale_groups else "(none)",
@@ -497,7 +680,12 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
 
 
 def _normalize_scale_group_resources(data: dict) -> None:
-    """Normalize scale_group resources from YAML into proto-friendly fields."""
+    """Normalize scale_group resources from YAML into proto-friendly fields.
+
+    Accepts both YAML-friendly names (ram, disk) and proto field names
+    (memory_bytes, disk_bytes) so configs serialized from protos (e.g.
+    the controller ConfigMap JSON) can be loaded via load_config().
+    """
     scale_groups = data.get("scale_groups")
     if not isinstance(scale_groups, dict):
         return
@@ -512,7 +700,7 @@ def _normalize_scale_group_resources(data: dict) -> None:
         if not isinstance(resources, dict):
             raise ValueError(f"scale_groups.{name}.resources must be a mapping")
 
-        allowed_keys = {"cpu", "ram", "disk", "gpu_count", "tpu_count"}
+        allowed_keys = {"cpu", "ram", "disk", "gpu_count", "tpu_count", "memory_bytes", "disk_bytes"}
         unknown_keys = set(resources.keys()) - allowed_keys
         if unknown_keys:
             unknown = ", ".join(sorted(unknown_keys))
@@ -522,15 +710,19 @@ def _normalize_scale_group_resources(data: dict) -> None:
 
         cpu = resources.get("cpu")
         if cpu is not None:
-            normalized["cpu"] = int(cpu)
+            normalized["cpu_millicores"] = int(float(cpu) * 1000)
 
         memory = resources.get("ram")
         if memory is not None:
             normalized["memory_bytes"] = _parse_memory_value(memory, f"scale_groups.{name}.resources.ram")
+        elif "memory_bytes" in resources:
+            normalized["memory_bytes"] = int(resources["memory_bytes"])
 
         disk = resources.get("disk")
         if disk is not None:
             normalized["disk_bytes"] = _parse_memory_value(disk, f"scale_groups.{name}.resources.disk")
+        elif "disk_bytes" in resources:
+            normalized["disk_bytes"] = int(resources["disk_bytes"])
 
         gpu = resources.get("gpu_count")
         if gpu is not None:
@@ -563,8 +755,8 @@ def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
             if not isinstance(resources, dict):
                 continue
             normalized: dict[str, object] = {}
-            if "cpu" in resources:
-                normalized["cpu"] = resources["cpu"]
+            if "cpu_millicores" in resources:
+                normalized["cpu"] = resources["cpu_millicores"] / 1000
             if "memory_bytes" in resources:
                 normalized["ram"] = resources["memory_bytes"]
             if "disk_bytes" in resources:
@@ -687,6 +879,7 @@ class IrisConfig:
         Returns:
             Platform implementation (GCP, Manual, or Local)
         """
+        # Local import: platform.factory imports config.py, creating a circular dependency.
         from iris.cluster.platform.factory import create_platform
 
         return create_platform(
@@ -704,15 +897,15 @@ class IrisConfig:
         return IrisConfig(local_proto)
 
     def controller_address(self) -> str:
-        """Get controller address from bootstrap config, if set.
+        """Get controller address from worker config, if set.
 
         Returns:
             Controller address string, or empty string if not configured
         """
         # TODO: Derive controller address from controller.manual/local when unset.
-        bootstrap = self._proto.defaults.bootstrap
-        if bootstrap.HasField("controller_address"):
-            return bootstrap.controller_address
+        worker = self._proto.defaults.worker
+        if worker.HasField("controller_address"):
+            return worker.controller_address
         return ""
 
 
@@ -721,7 +914,7 @@ def create_autoscaler(
     autoscaler_config: config_pb2.AutoscalerConfig,
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     label_prefix: str,
-    bootstrap_config: config_pb2.BootstrapConfig | None = None,
+    base_worker_config: config_pb2.WorkerConfig | None = None,
     threads: ThreadContainer | None = None,
 ):
     """Create autoscaler from Platform and explicit config.
@@ -731,7 +924,7 @@ def create_autoscaler(
         autoscaler_config: Autoscaler settings (already resolved with defaults)
         scale_groups: Map of scale group name to config
         label_prefix: Prefix for labels on managed resources
-        bootstrap_config: Worker bootstrap settings passed through to platform.create_slice().
+        base_worker_config: Base worker configuration passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
         threads: Thread container for background threads. Uses global default if not provided.
 
@@ -741,8 +934,13 @@ def create_autoscaler(
     Raises:
         ValueError: If autoscaler_config has invalid timing values
     """
+    # Local import: controller modules import config.py, creating a circular dependency.
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.scaling_group import ScalingGroup
+    from iris.cluster.controller.scaling_group import (
+        DEFAULT_SCALE_DOWN_RATE_LIMIT,
+        DEFAULT_SCALE_UP_RATE_LIMIT,
+        ScalingGroup,
+    )
 
     threads = threads or get_thread_container()
 
@@ -750,7 +948,6 @@ def create_autoscaler(
     _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
 
     scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
-    scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
 
     scaling_groups: dict[str, ScalingGroup] = {}
     for name, group_config in scale_groups.items():
@@ -759,13 +956,28 @@ def create_autoscaler(
             platform=platform,
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
-            scale_down_cooldown=scale_down_delay,
+            scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
+            scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
         )
-        logger.info("Created scale group %s", name)
+        resources = group_config.resources
+        worker_attrs = dict(group_config.worker.attributes) if group_config.HasField("worker") else {}
+        slice_template = group_config.slice_template
+        cw_instance = slice_template.coreweave.instance_type if slice_template.HasField("coreweave") else ""
+        logger.info(
+            "Scale group %s: accel=%s:%s gpu_count=%d min=%d max=%d instance=%s worker_attrs=%s",
+            name,
+            group_config.accelerator_type,
+            group_config.accelerator_variant,
+            resources.gpu_count,
+            group_config.min_slices,
+            group_config.max_slices,
+            cw_instance or "n/a",
+            worker_attrs or "none",
+        )
 
     return Autoscaler.from_config(
         scale_groups=scaling_groups,
         config=autoscaler_config,
         platform=platform,
-        bootstrap_config=bootstrap_config,
+        base_worker_config=base_worker_config,
     )

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -152,5 +152,5 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
         .filter(lambda record: record is not None)
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
-    with ZephyrContext(name="transform-stackexchange") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="transform-stackexchange")
+    ctx.execute(pipeline)

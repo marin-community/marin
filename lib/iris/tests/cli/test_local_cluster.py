@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """E2E test for local cluster mode via the CLI.
@@ -35,9 +35,9 @@ def cluster_config_file(tmp_path: Path) -> Path:
                     }
                 },
                 "defaults": {
-                    "bootstrap": {
+                    "worker": {
                         "docker_image": "test-image:latest",
-                        "worker_port": 10001,
+                        "port": 10001,
                         "controller_address": "127.0.0.1:10000",
                     },
                 },

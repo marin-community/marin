@@ -11,11 +11,10 @@ requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
     "cryptography>=45",
-    "datasets",
+    "datasets<4.0.0",
     "ddsketch",
     "deepdiff",
     "draccus>=0.11.5",
-    "dupekit",
     "fasteners>=0.19",
     "flask",
     "floret",
@@ -44,8 +43,6 @@ dependencies = [
     "resiliparse>=0.17.2",
     "s3fs>=2024",
     "toml",
-    "torch>=2.7.0",
-    "torchvision==0.24.0",
     "tqdm",
     "tqdm-loggable",
     "wandb",
@@ -163,11 +160,21 @@ evalchemy = [
     "antlr4-python3-runtime==4.11",
     "bespokelabs-curator",  # Required by evalchemy's curator_lm module
     "sqlalchemy",  # Required by evalchemy's database models
+    # For code evals
+    "fire",
 ]
 
 vllm =[
     "vllm-tpu==0.13.2.post6",
     "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+]
+
+harbor = [
+    "harbor>=0.1.42",
+]
+
+dedup = [
+    "dupekit",
 ]
 
 math = ["pylatexenc", "sympy"]

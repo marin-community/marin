@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -39,7 +39,7 @@ import os
 from dataclasses import dataclass
 
 import draccus
-import fsspec
+from iris.marin_fs import open_url, url_to_fs
 from marin.download.dclm_hq.download_dclm_hq_html import find_html_in_cc
 from marin.download.huggingface.stream_remove_columns import hf_fs
 from marin.schemas.web.convert import ExtractionConfig
@@ -75,8 +75,8 @@ def process_file(
 
     with atomic_rename(output_file_path) as temp_path:
         with (
-            fsspec.open(input_file_path, "rt", compression="zstd") as source,
-            fsspec.open(temp_path, "wt", compression="gzip") as output,
+            open_url(input_file_path, "rt", compression="zstd") as source,
+            open_url(temp_path, "wt", compression="gzip") as output,
         ):
             for line in tqdm(source, desc="Processing lines"):
                 row = json.loads(line)
@@ -140,7 +140,7 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
 
     pipeline = (
         Dataset.from_list(all_files)
-        .filter(lambda f: not fsspec.url_to_fs(f["output"])[0].exists(f["output"]))
+        .filter(lambda f: not url_to_fs(f["output"])[0].exists(f["output"]))
         .map(
             lambda f: process_file(
                 input_file_path=f["input"],
@@ -151,5 +151,5 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
         )
     )
 
-    with ZephyrContext(name="transform-dclm-hq") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="transform-dclm-hq")
+    ctx.execute(pipeline)

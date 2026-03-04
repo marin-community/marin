@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Download and normalize the latest Uncheatable Eval data dumps."""
@@ -14,8 +14,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-import fsspec
 import requests
+from iris.marin_fs import open_url
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensure_versioned, this_output_path
 from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
@@ -257,7 +257,7 @@ def _download_and_convert_single(
 
     record_count = 0
     with atomic_rename(task.output_file_path) as temp_path:
-        with fsspec.open(temp_path, "wt", encoding="utf-8", compression="gzip") as outfile:
+        with open_url(temp_path, "wt", encoding="utf-8", compression="gzip") as outfile:
             for index, raw in enumerate(payload):
                 normalized = _normalize_record(raw, task.dataset, index)
                 json.dump(normalized, outfile, ensure_ascii=False)
@@ -293,7 +293,7 @@ def _write_metadata(cfg: UncheatableEvalDownloadConfig, records: list[dict[str, 
     if not records:
         return
     metadata_path = posixpath.join(str(cfg.output_path), cfg.metadata_filename)
-    with fsspec.open(metadata_path, "w", encoding="utf-8") as meta_file:
+    with open_url(metadata_path, "w", encoding="utf-8") as meta_file:
         json.dump(records, meta_file, indent=2, ensure_ascii=False)
     logger.info("Wrote metadata to %s", metadata_path)
 
@@ -325,11 +325,11 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
         .map(lambda task: _download_and_convert_single(task))
         .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
-    with ZephyrContext(name="download-uncheatable-eval") as ctx:
-        output_paths = ctx.execute(pipeline)
+    ctx = ZephyrContext(name="download-uncheatable-eval")
+    output_paths = ctx.execute(pipeline)
 
     for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
-        with fsspec.open(metadata_file, "r", encoding="utf-8") as meta_file:
+        with open_url(metadata_file, "r", encoding="utf-8") as meta_file:
             result = json.load(meta_file)
 
         try:

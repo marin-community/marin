@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Core Dataset API with lazy evaluation."""
@@ -13,6 +13,7 @@ from typing import Any, Generic, Literal, TypeVar, cast
 
 import fsspec
 from braceexpand import braceexpand
+from iris.marin_fs import url_to_fs
 
 from zephyr.expr import Expr
 
@@ -148,9 +149,7 @@ class WriteOp:
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
-    batch_size: int = 1000  # For parquet
-    tokenizer_name: str | None = None  # For levanter_cache
-    format: object | None = None  # For levanter_cache (LmDatasetFormatBase)
+    batch_size: int = 1000  # For parquet and levanter_cache
     skip_existing: bool = False  # Skip writing if output file already exists
 
     def __repr__(self):
@@ -346,7 +345,7 @@ class Dataset(Generic[T]):
         # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
         pattern = re.sub(r"(?<!:)//+", "/", pattern)
 
-        fs, _ = fsspec.core.url_to_fs(pattern)
+        fs, _ = url_to_fs(pattern)
         protocol = fsspec.core.split_protocol(pattern)[0]
 
         files = []
@@ -705,6 +704,7 @@ class Dataset(Generic[T]):
         output_pattern: str | Callable[[int, int], str],
         metadata: dict[str, Any],
         skip_existing: bool = False,
+        batch_size: int = 1024,
     ) -> Dataset[str]:
         """Write tokenized records to Levanter cache format.
 
@@ -722,6 +722,7 @@ class Dataset(Generic[T]):
                     writer_type="levanter_cache",
                     levanter_metadata=metadata,
                     skip_existing=skip_existing,
+                    batch_size=batch_size,
                 ),
             ],
         )

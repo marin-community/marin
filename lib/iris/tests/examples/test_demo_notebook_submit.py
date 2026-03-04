@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -19,7 +19,7 @@ def _make_demo_config() -> config_pb2.IrisClusterConfig:
     cpu_sg.min_slices = 0
     cpu_sg.max_slices = 1
     cpu_sg.num_vms = 1
-    cpu_sg.resources.cpu = 1
+    cpu_sg.resources.cpu_millicores = 1000
     cpu_sg.resources.memory_bytes = 1024**3
     cpu_sg.resources.disk_bytes = 0
     cpu_sg.resources.gpu_count = 0
@@ -70,7 +70,7 @@ def test_demo_notebook_name_normalizes_to_absolute_job_id(demo_client: IrisClien
     # to absolute job IDs before reaching the controller.
     status = job.wait(timeout=30.0, raise_on_failure=False)
     assert status is not None
-    assert job.job_id.to_wire() == "/notebook-hello"
+    assert job.job_id.to_wire().endswith("/notebook-hello")
 
 
 def test_demo_notebook_job_tasks_returns_tasks(demo_client: IrisClient) -> None:

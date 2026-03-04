@@ -1,9 +1,10 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Click-based CLI for the Iris controller daemon."""
 
 import logging
+import os
 import signal
 import threading
 from pathlib import Path
@@ -11,11 +12,23 @@ from pathlib import Path
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.controller.snapshot import read_snapshot_from_path
 from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
-from iris.logging import configure_logging
+from iris.cluster.task_logging import ProcessLogSink
+from iris.logging import configure_logging, get_global_buffer
+from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
+
+
+def default_bundle_prefix() -> str:
+    """Return a region-local temp bucket path for bundle storage.
+
+    Uses the same marin_temp_bucket API that log_prefix uses, with a 7-day TTL
+    since bundles are ephemeral and regenerated on each job submission.
+    """
+    return marin_temp_bucket(ttl_days=7, prefix="iris/bundles")
 
 
 @click.group()
@@ -33,6 +46,17 @@ def cli():
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
+@click.option(
+    "--snapshot-path",
+    default=None,
+    help="Restore from this specific snapshot file instead of the default latest.json",
+)
+@click.option(
+    "--checkpoint-interval",
+    default=None,
+    type=float,
+    help="Periodic checkpoint interval in seconds (default: no periodic checkpointing)",
+)
 def serve(
     host: str,
     port: int,
@@ -40,6 +64,8 @@ def serve(
     scheduler_interval: float,
     config_file: str | None,
     log_level: str,
+    snapshot_path: str | None,
+    checkpoint_interval: float | None,
 ):
     """Start the Iris controller service.
 
@@ -53,7 +79,7 @@ def serve(
 
     configure_logging(level=getattr(logging, log_level))
 
-    logger.info("Initializing Iris controller")
+    logger.info("Initializing Iris controller (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
 
     # Load cluster config first to extract bundle_prefix if not provided via CLI
     autoscaler: Autoscaler | None = None
@@ -68,8 +94,8 @@ def serve(
             raise click.ClickException(f"Failed to load cluster config: {e}") from e
 
         # Extract bundle_prefix from config if not provided via CLI
-        if bundle_prefix is None and cluster_config.controller.bundle_prefix:
-            bundle_prefix = cluster_config.controller.bundle_prefix
+        if bundle_prefix is None and cluster_config.storage.bundle_prefix:
+            bundle_prefix = cluster_config.storage.bundle_prefix
             logger.info("Using bundle_prefix from config: %s", bundle_prefix)
 
         try:
@@ -79,20 +105,22 @@ def serve(
             )
             logger.info("Platform created")
 
-            # Pass only BootstrapConfig through to platform.create_slice().
-            bootstrap_config = None
-            if cluster_config.defaults.bootstrap.docker_image:
-                bootstrap_config = config_pb2.BootstrapConfig()
-                bootstrap_config.CopyFrom(cluster_config.defaults.bootstrap)
-                if not bootstrap_config.controller_address:
-                    bootstrap_config.controller_address = platform.discover_controller(cluster_config.controller)
+            base_worker_config = None
+            if cluster_config.defaults.worker.docker_image:
+                base_worker_config = config_pb2.WorkerConfig()
+                base_worker_config.CopyFrom(cluster_config.defaults.worker)
+                if not base_worker_config.controller_address:
+                    base_worker_config.controller_address = platform.discover_controller(cluster_config.controller)
+                if cluster_config.storage.log_prefix:
+                    base_worker_config.log_prefix = cluster_config.storage.log_prefix
+                base_worker_config.platform.CopyFrom(cluster_config.platform)
 
             autoscaler = create_autoscaler(
                 platform=platform,
                 autoscaler_config=cluster_config.defaults.autoscaler,
                 scale_groups=cluster_config.scale_groups,
                 label_prefix=cluster_config.platform.label_prefix or "iris",
-                bootstrap_config=bootstrap_config,
+                base_worker_config=base_worker_config,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
@@ -105,6 +133,10 @@ def serve(
         cluster_config.controller.heartbeat_failure_threshold if cluster_config else HEARTBEAT_FAILURE_THRESHOLD
     )
 
+    if bundle_prefix is None:
+        bundle_prefix = default_bundle_prefix()
+        logger.info("Using auto-detected bundle_prefix: %s", bundle_prefix)
+
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
 
@@ -114,6 +146,7 @@ def serve(
         bundle_prefix=bundle_prefix,
         scheduler_interval=Duration.from_seconds(scheduler_interval),
         heartbeat_failure_threshold=heartbeat_failure_threshold,
+        checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
     )
 
     try:
@@ -127,6 +160,21 @@ def serve(
         logger.exception("Failed to create controller")
         raise click.ClickException(f"Failed to create controller: {e}") from e
 
+    # Restore from a specific snapshot file if requested; otherwise fall back to latest.json.
+    if snapshot_path:
+        logger.info("Restoring from explicit snapshot: %s", snapshot_path)
+        try:
+            proto = read_snapshot_from_path(snapshot_path)
+            if proto is None:
+                raise click.ClickException(f"Snapshot not found: {snapshot_path}")
+            controller.restore_from_snapshot(proto)
+            logger.info("Snapshot restored from %s", snapshot_path)
+        except Exception as e:
+            logger.exception("Failed to restore snapshot from %s", snapshot_path)
+            raise click.ClickException(f"Failed to restore snapshot: {e}") from e
+    else:
+        controller.restore_from_snapshot()
+
     try:
         controller.start()
         logger.info("Controller started successfully on %s:%d", host, port)
@@ -136,10 +184,21 @@ def serve(
 
     logger.info("Controller is ready to accept connections")
 
+    log_prefix = (cluster_config.storage.log_prefix if cluster_config else None) or marin_temp_bucket(
+        ttl_days=30, prefix="iris-logs"
+    )
+    process_log_sink = ProcessLogSink(
+        prefix=log_prefix,
+        process_name="controller",
+        log_buffer=get_global_buffer(),
+    )
+    logger.info("Controller process log sink enabled: %s", process_log_sink.log_path)
+
     stop_event = threading.Event()
 
     def handle_shutdown(_signum, _frame):
         logger.info("Shutdown signal received, stopping controller...")
+        process_log_sink.close()
         controller.stop()
         logger.info("Controller stopped")
         stop_event.set()

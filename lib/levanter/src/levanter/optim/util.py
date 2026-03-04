@@ -1,8 +1,8 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from typing import Callable, Literal, TypeVar
+from typing import Any, Callable, Literal, TypeVar
 
 import chex
 import equinox as eqx
@@ -17,11 +17,30 @@ from optax._src.base import init_empty_state
 import haliax as hax
 from haliax.tree_util import scan_aware_tree_map
 
+from levanter.models.linear import has_linear_like_marker
 import levanter.tracker
 from levanter.utils.jax_utils import is_inexact_arrayish
 
 
 T = TypeVar("T")
+
+
+def is_linear_like_module(node: Any) -> bool:
+    """Return True for linear-like modules used by optimizer mask routing."""
+    return isinstance(node, (hax.nn.Linear, eqx.nn.Linear)) or has_linear_like_marker(node)
+
+
+def label_linear_like_module(module: Any, *, weight_label: str, bias_label: str) -> Any:
+    """Label a linear-like module leaf for optax multi_transform masks."""
+    if not hasattr(module, "weight"):
+        raise TypeError(f"Expected a linear-like module with a weight field, got {type(module)}")
+    bias = getattr(module, "bias", None)
+    masked_bias = bias_label if bias is not None else None
+    if isinstance(module, eqx.nn.Linear):
+        return eqx.tree_at(lambda m: (m.weight, m.bias), module, (weight_label, masked_bias))
+    if not dataclasses.is_dataclass(module):
+        raise TypeError(f"Expected a dataclass module for mask labeling, got {type(module)}")
+    return dataclasses.replace(module, weight=weight_label, bias=masked_bias)
 
 
 def hvp(f, x, v):

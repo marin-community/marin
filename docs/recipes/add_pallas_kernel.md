@@ -167,6 +167,48 @@ Some Mosaic TPU matmul paths require 32-bit accumulation. If you see
 `lax.dot_general` or set `jax.config.update("jax_default_matmul_precision", "highest")`
 in your benchmark script. Prefer the explicit `preferred_element_type` in kernels.
 
+**Pallas cost estimates (required for new kernels):**
+- Add a `cost_estimate=` argument on each `pl.pallas_call` so profiler and scheduler metadata have usable FLOP/byte
+  estimates.
+- Use `pl.estimate_cost` on a **reference/body-equivalent JAX function**. Do not call it on a kernel body that uses
+  `pl.program_id`, because that tracing path is outside a Pallas grid context.
+- Compute `bytes_accessed` from kernel inputs + outputs passed to the call.
+
+```python
+from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
+
+
+def _cost_estimate(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    *,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate | None:
+    body_cost = pl.estimate_cost(reference_impl, q, k, v)
+    return with_io_bytes_accessed(
+        body_cost,
+        kernel_inputs_specs=kernel_inputs_specs,
+        kernel_outputs_specs=kernel_outputs_specs,
+    )
+
+
+out_shape = jax.ShapeDtypeStruct(...)
+out = pl.pallas_call(
+    kernel,
+    ...,
+    out_shape=out_shape,
+    cost_estimate=_cost_estimate(
+        q,
+        k,
+        v,
+        kernel_inputs_specs=(q, k, v),
+        kernel_outputs_specs=out_shape,
+    ),
+)(q, k, v)
+```
+
 ### 5) Add a speed microbench + profiling hook
 
 Minimum:
@@ -195,6 +237,24 @@ Replace:
 
 The cluster you use will vary depending on TPU generation/availability; most kernel work should start with a single
 node (e.g. `*-8`) unless you’re explicitly targeting multi-slice behavior.
+
+##### Scoped VMEM flag policy (kernel benchmarking/tuning)
+
+When running TPU Pallas microbenches/tuning, set `LIBTPU_INIT_ARGS` explicitly by TPU generation:
+
+- `v5p`/`v5e`: `LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000"`
+- `v6e`: `LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=98304"`
+- `v4`: do **not** set a special scoped VMEM limit flag (use default platform behavior).
+
+Examples:
+
+```sh
+# v5p / v5e
+-e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000"
+
+# v6e
+-e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=98304"
+```
 
 ##### Listing available TPU clusters
 
@@ -248,10 +308,10 @@ Levanter trackers (e.g. Weights & Biases):
 - See `lib/levanter/docs/Performance-Guide.md` for details.
 - Levanter uses JAX profiling and uploads a `jax_profile` artifact to W&B when profiling is enabled.
 - If your benchmark is implemented as (or inside) a Levanter training loop, prefer flags like:
-  - `--trainer.profiler true`
-  - `--trainer.profiler_start_step 5`
-  - `--trainer.profiler_num_steps 50`
-  - `--trainer.profiler_perfetto_link false` (enable if you want a Perfetto URL; see the guide)
+  - `--trainer.profiler.enabled true`
+  - `--trainer.profiler.start_step 5`
+  - `--trainer.profiler.num_steps 50`
+  - `--trainer.profiler.perfetto_link false` (enable if you want a Perfetto URL; see the guide)
 
 If you’re writing a standalone microbench script, prefer invoking the profiler directly with
 `levanter.callbacks.profile_ctx` (rather than trying to plumb trainer flags through a non-trainer script). See
@@ -265,6 +325,45 @@ You will need to set up wandb logging by initializing a Levanter [levanter.track
 Always report at least:
 - time-to-first-step (includes compilation) vs steady-state step time (after warmup)
 - the exact TPU type and shape/dtype grid tested
+
+##### Capturing compiler diagnostics early (recommended)
+
+For Pallas TPU work, capture compiler diagnostics on every serious benchmark/tuning run:
+
+1. Enable HLO text dumps with `--xla-dump-dir`.
+2. Tee stdout/stderr to a file with `--compiler-log-path`.
+3. Record the exact `XLA_FLAGS` and `LIBTPU_INIT_ARGS` used (the benchmark/tuning scripts print these now).
+
+These hooks are available in:
+- `lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py`
+- `lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py`
+
+Example (bench):
+
+```sh
+uv run --package levanter --extra tpu \
+  python lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py \
+  --implementation pallas_tpu \
+  --batch 64 --pos 1024 --embed 1024 --vocab 128256 \
+  --xla-dump-dir /tmp/ce_hlo_dumps \
+  --compiler-log-path /tmp/ce_compile.log
+```
+
+Example (tune):
+
+```sh
+uv run --package levanter --extra tpu \
+  python lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py \
+  --implementation pallas_tpu \
+  --batch 64 --seq-len 1024 --embed 1024 --vocab 128256 \
+  --xla-dump-dir /tmp/ce_tune_hlo_dumps \
+  --compiler-log-path /tmp/ce_tune_compile.log
+```
+
+When a kernel unexpectedly underperforms, this is the first triage loop:
+- compare Pallas vs XLA HLO dumps on the same shape,
+- scan compiler logs for VMEM pressure / verifier errors / lowering warnings,
+- then run the microbench ladder (`matmul-only`, `streaming-lse-only`, `fused matmul+lse`) before retuning blocks.
 
 ##### Tokamax comparison (optional)
 

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -7,10 +7,12 @@ from pathlib import Path
 
 from dataclasses import dataclass
 
+from fray.v2.types import ResourceConfig
+
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import ExecutorStep
+from marin.execution.executor import ExecutorStep, resolve_executor_step
+from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_spec import StepSpec
-from marin.execution.executor import resolve_executor_step
 from marin.execution.step_runner import StepRunner
 
 # ---------------------------------------------------------------------------
@@ -28,6 +30,12 @@ class TokenizeMetadata:
 class TrainMetadata:
     tokens_seen: int
     checkpoint_path: str
+
+
+@dataclass
+class NestedMetadata:
+    path: str
+    resources: ResourceConfig
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +120,17 @@ def test_artifact_save_and_load_untyped(tmp_path: Path):
     assert isinstance(loaded, dict)
     assert loaded["path"] == "/tokenized"
     assert loaded["num_tokens"] == 42
+
+
+def test_artifact_save_nested_dataclass(tmp_path: Path):
+    artifact = NestedMetadata(path="/nested", resources=ResourceConfig(cpu=2, ram="4g"))
+    Artifact.save(artifact, tmp_path.as_posix())
+
+    loaded = Artifact.load(tmp_path.as_posix())
+    assert isinstance(loaded, dict)
+    assert loaded["path"] == "/nested"
+    assert loaded["resources"]["cpu"] == 2
+    assert loaded["resources"]["ram"] == "4g"
 
 
 def test_artifact_roundtrip_through_pipeline(tmp_path: Path):
@@ -311,3 +330,99 @@ def test_runner_max_concurrent(tmp_path: Path):
 
     train_artifact = Artifact.load(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
+
+
+# ---------------------------------------------------------------------------
+# Local vs Fray execution tests
+# ---------------------------------------------------------------------------
+
+
+def test_step_with_remote_fn_uses_fray(tmp_path: Path):
+    """A RemoteCallable fn should go through RemoteCallable.submit."""
+
+    @remote
+    def my_step(output_path):
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="fray_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    runner = StepRunner()
+    runner.run([step])
+
+    loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
+    assert loaded.path == tmp_path.as_posix()
+
+
+# ---------------------------------------------------------------------------
+# @remote decorator tests
+# ---------------------------------------------------------------------------
+
+
+def test_remote_decorator_returns_remote_callable():
+    """@remote should return a RemoteCallable with default CPU resources."""
+
+    def original_fn(config):
+        pass
+
+    wrapped = remote(original_fn)
+
+    assert isinstance(wrapped, RemoteCallable)
+    assert wrapped.resources == ResourceConfig.with_cpu()
+    assert not isinstance(original_fn, RemoteCallable)
+
+
+def test_remote_decorator_with_custom_resources():
+    """@remote(resources=...) should use the specified resources."""
+    custom = ResourceConfig.with_cpu(cpu=4, ram="16g")
+
+    @remote(resources=custom)
+    def my_fn(config):
+        pass
+
+    assert isinstance(my_fn, RemoteCallable)
+    assert my_fn.resources == custom
+
+
+def test_resolve_executor_step_picks_up_remote_decorator():
+    """resolve_executor_step should propagate @remote resources to the resolved fn."""
+
+    @remote
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources == ResourceConfig.with_cpu()
+
+
+def test_explicit_resources_override_remote_decorator():
+    """ExecutorStep.resources should take precedence over @remote decorator resources."""
+    explicit = ResourceConfig.with_cpu(cpu=8, ram="32g")
+
+    @remote(resources=ResourceConfig.with_cpu(cpu=2))
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=explicit)
+    resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources == explicit
+
+
+def test_step_without_remote_or_resources_is_plain_fn():
+    """A plain function with no @remote and no ExecutorStep.resources should not be RemoteCallable."""
+
+    def my_fn(config):
+        pass
+
+    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
+
+    assert not isinstance(resolved.fn, RemoteCallable)

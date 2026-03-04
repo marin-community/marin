@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,8 +17,8 @@ import os
 import time
 from dataclasses import asdict, dataclass
 
-import fsspec
 from google.cloud import storage
+from iris.marin_fs import url_to_fs
 
 logger = logging.getLogger("ray")
 
@@ -64,7 +64,7 @@ class StatusFile:
         self.path = get_status_path(output_path)
         self.worker_id = worker_id
         self._lock_path = self.path + ".lock"
-        self.fs = fsspec.core.url_to_fs(self.path, use_listings_cache=False)[0]
+        self.fs = url_to_fs(self.path, use_listings_cache=False)[0]
 
     @property
     def _is_gcs(self) -> bool:

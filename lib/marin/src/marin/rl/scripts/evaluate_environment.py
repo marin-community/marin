@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Utility functions for evaluating RL environments."""
@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import fsspec
 import haliax as hax
+from iris.marin_fs import open_url
 import jax
 import jax.random as jrandom
 import jmp
@@ -227,13 +227,13 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
 
             # Save rollout groups as JSON
             rollout_file = f"{config.output_path}/rollout_groups.json"
-            with fsspec.open(rollout_file, "w") as f:
+            with open_url(rollout_file, "w") as f:
                 json.dump([rollout_group_to_dict(g) for g in rollout_groups], f, indent=2)
             logger.info(f"Saved rollout groups to {rollout_file}")
 
             # Save metrics as JSON
             metrics_file = f"{config.output_path}/metrics.json"
-            with fsspec.open(metrics_file, "w") as f:
+            with open_url(metrics_file, "w") as f:
                 json.dump(metrics, f, indent=2)
             logger.info(f"Saved metrics to {metrics_file}")
 

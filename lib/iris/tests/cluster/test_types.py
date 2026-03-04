@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for iris.cluster.types — Entrypoint, EnvironmentSpec, and constraint helpers."""
@@ -16,6 +16,7 @@ from iris.cluster.types import (
     preemptible_preference_from_constraints,
     region_constraint,
     required_regions_from_constraints,
+    required_zones_from_constraints,
 )
 from iris.rpc import cluster_pb2
 
@@ -57,29 +58,31 @@ def test_entrypoint_callable_has_workdir_files():
 
 
 def test_job_name_roundtrip_and_hierarchy():
-    job = JobName.root("root")
+    job = JobName.root("test-user", "root")
     child = job.child("child")
     task = child.task(0)
 
-    assert str(job) == "/root"
-    assert str(child) == "/root/child"
-    assert str(task) == "/root/child/0"
+    assert str(job) == "/test-user/root"
+    assert str(child) == "/test-user/root/child"
+    assert str(task) == "/test-user/root/child/0"
+    assert job.user == "test-user"
+    assert child.root_job == job
     assert task.parent == child
     assert child.parent == job
     assert job.parent is None
 
-    parsed = JobName.from_string("/root/child/0")
+    parsed = JobName.from_string("/test-user/root/child/0")
     assert parsed == task
-    assert parsed.namespace == "root"
+    assert parsed.namespace == "test-user/root"
     assert parsed.is_task
     assert parsed.task_index == 0
-    assert JobName.root("root").is_ancestor_of(parsed)
-    assert not parsed.is_ancestor_of(JobName.root("root"), include_self=False)
+    assert JobName.root("test-user", "root").is_ancestor_of(parsed)
+    assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
 
 
 @pytest.mark.parametrize(
     "value",
-    ["", "root", "/root//child", "/root/ ", "/root/child/", "/root/child//0"],
+    ["", "root", "/root", "/test-user//child", "/test-user/root/ ", "/test-user/root/", "/test-user/root//0"],
 )
 def test_job_name_rejects_invalid_inputs(value: str):
     with pytest.raises(ValueError):
@@ -88,23 +91,23 @@ def test_job_name_rejects_invalid_inputs(value: str):
 
 def test_job_name_require_task_errors_on_non_task():
     with pytest.raises(ValueError):
-        JobName.from_string("/root/child").require_task()
+        JobName.from_string("/test-user/root/child").require_task()
 
 
 def test_job_name_to_safe_token_and_deep_nesting():
-    job = JobName.from_string("/a/b/c/d/e/0")
-    assert job.to_safe_token() == "job__a__b__c__d__e__0"
+    job = JobName.from_string("/test-user/a/b/c/d/e/0")
+    assert job.to_safe_token() == "job__test-user__a__b__c__d__e__0"
     assert job.require_task()[1] == 0
 
 
 def test_job_name_depth():
     """Job depth increases with hierarchy; tasks inherit parent depth."""
-    assert JobName.root("train").depth == 1
-    assert JobName.from_string("/train/eval").depth == 2
-    assert JobName.from_string("/train/eval/score").depth == 3
+    assert JobName.root("test-user", "train").depth == 1
+    assert JobName.from_string("/test-user/train/eval").depth == 2
+    assert JobName.from_string("/test-user/train/eval/score").depth == 3
     # Task depth equals parent job depth
-    assert JobName.from_string("/train/0").depth == 1
-    assert JobName.from_string("/train/eval/0").depth == 2
+    assert JobName.from_string("/test-user/train/0").depth == 1
+    assert JobName.from_string("/test-user/train/eval/0").depth == 2
 
 
 # ---------------------------------------------------------------------------
@@ -126,16 +129,29 @@ def _proto_constraint(key: str, string_value: str, op: int = cluster_pb2.CONSTRA
 # ---------------------------------------------------------------------------
 
 
-def test_region_constraint_happy_path():
-    c = region_constraint("us-west4")
+def test_region_constraint_single_region_produces_eq():
+    c = region_constraint(["us-west4"])
     assert c.key == "region"
     assert c.op == ConstraintOp.EQ
     assert c.value == "us-west4"
 
 
+def test_region_constraint_multiple_regions_produces_in():
+    c = region_constraint(["us-central1", "us-central2"])
+    assert c.key == "region"
+    assert c.op == ConstraintOp.IN
+    assert c.values == ("us-central1", "us-central2")
+    assert c.value is None
+
+
+def test_region_constraint_empty_list_raises():
+    with pytest.raises(ValueError, match="non-empty"):
+        region_constraint([])
+
+
 def test_region_constraint_empty_string_raises():
     with pytest.raises(ValueError, match="non-empty"):
-        region_constraint("")
+        region_constraint([""])
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +222,36 @@ def test_required_regions_empty_string_raises():
 
 
 # ---------------------------------------------------------------------------
+# required_zones_from_constraints (proto inputs)
+# ---------------------------------------------------------------------------
+
+
+def test_required_zones_single():
+    constraints = [_proto_constraint("zone", "us-central2-b")]
+    assert required_zones_from_constraints(constraints) == frozenset({"us-central2-b"})
+
+
+def test_required_zones_none_when_absent():
+    constraints = [_proto_constraint("preemptible", "true")]
+    assert required_zones_from_constraints(constraints) is None
+
+
+def test_required_zones_conflicting_raises():
+    constraints = [
+        _proto_constraint("zone", "us-central2-a"),
+        _proto_constraint("zone", "us-central2-b"),
+    ]
+    with pytest.raises(ValueError, match="conflicting"):
+        required_zones_from_constraints(constraints)
+
+
+def test_required_zones_empty_string_raises():
+    constraints = [_proto_constraint("zone", "")]
+    with pytest.raises(ValueError, match="non-empty"):
+        required_zones_from_constraints(constraints)
+
+
+# ---------------------------------------------------------------------------
 # normalize_constraints (proto inputs, combines both extractors)
 # ---------------------------------------------------------------------------
 
@@ -214,10 +260,12 @@ def test_normalize_constraints_combines_fields():
     constraints = [
         _proto_constraint("preemptible", "true"),
         _proto_constraint("region", "us-central1"),
+        _proto_constraint("zone", "us-central1-a"),
     ]
     nc = normalize_constraints(constraints)
     assert nc.preemptible is True
     assert nc.required_regions == frozenset({"us-central1"})
+    assert nc.required_zones == frozenset({"us-central1-a"})
 
 
 # ---------------------------------------------------------------------------
@@ -227,14 +275,14 @@ def test_normalize_constraints_combines_fields():
 
 def test_merge_parent_only():
     """Child has no constraints -- parent constraints pass through."""
-    parent = [region_constraint("us-west4"), preemptible_constraint(True)]
+    parent = [region_constraint(["us-west4"]), preemptible_constraint(True)]
     result = merge_constraints(parent, [])
     assert set(result) == set(parent)
 
 
 def test_merge_child_overrides_region():
-    parent = [region_constraint("us-west4")]
-    child = [region_constraint("eu-west4")]
+    parent = [region_constraint(["us-west4"])]
+    child = [region_constraint(["eu-west4"])]
     result = merge_constraints(parent, child)
     regions = [c for c in result if c.key == "region"]
     assert len(regions) == 1
@@ -270,8 +318,8 @@ def test_merge_non_canonical_key_dedup():
 
 def test_merge_multiple_canonical_keys_partial_override():
     """Child overrides region but inherits preemptible from parent."""
-    parent = [region_constraint("us-west4"), preemptible_constraint(True)]
-    child = [region_constraint("eu-west4")]
+    parent = [region_constraint(["us-west4"]), preemptible_constraint(True)]
+    child = [region_constraint(["eu-west4"])]
     result = merge_constraints(parent, child)
 
     regions = [c for c in result if c.key == "region"]
@@ -281,3 +329,68 @@ def test_merge_multiple_canonical_keys_partial_override():
     preemptibles = [c for c in result if c.key == "preemptible"]
     assert len(preemptibles) == 1
     assert preemptibles[0].value == "true"
+
+
+def test_region_constraint_empty_string_in_multi_raises():
+    with pytest.raises(ValueError, match="non-empty"):
+        region_constraint(["us-central1", ""])
+
+
+# ---------------------------------------------------------------------------
+# Constraint.to_proto / from_proto round-trip for IN operator
+# ---------------------------------------------------------------------------
+
+
+def test_constraint_in_proto_roundtrip():
+    """IN constraint survives a proto round-trip."""
+    original = Constraint(key="region", op=ConstraintOp.IN, values=("us-central1", "eu-west4"))
+    proto = original.to_proto()
+    assert proto.op == cluster_pb2.CONSTRAINT_OP_IN
+    assert len(proto.values) == 2
+    restored = Constraint.from_proto(proto)
+    assert restored == original
+
+
+# ---------------------------------------------------------------------------
+# required_regions_from_constraints with IN operator (proto inputs)
+# ---------------------------------------------------------------------------
+
+
+def _proto_in_constraint(key: str, string_values: list[str]) -> cluster_pb2.Constraint:
+    """Build a proto Constraint with IN op and multiple string values."""
+    c = cluster_pb2.Constraint(key=key, op=cluster_pb2.CONSTRAINT_OP_IN)
+    for sv in string_values:
+        c.values.append(cluster_pb2.AttributeValue(string_value=sv))
+    return c
+
+
+def test_required_regions_in_multiple():
+    constraints = [_proto_in_constraint("region", ["us-central1", "us-central2"])]
+    result = required_regions_from_constraints(constraints)
+    assert result == frozenset({"us-central1", "us-central2"})
+
+
+def test_required_regions_in_single():
+    constraints = [_proto_in_constraint("region", ["eu-west4"])]
+    result = required_regions_from_constraints(constraints)
+    assert result == frozenset({"eu-west4"})
+
+
+def test_required_regions_in_empty_values_raises():
+    """IN constraint with no values is invalid."""
+    c = cluster_pb2.Constraint(key="region", op=cluster_pb2.CONSTRAINT_OP_IN)
+    with pytest.raises(ValueError, match="at least one value"):
+        required_regions_from_constraints([c])
+
+
+def test_normalize_constraints_with_in_region():
+    """normalize_constraints works with IN region constraints."""
+    constraints = [
+        _proto_constraint("preemptible", "false"),
+        _proto_in_constraint("region", ["us-central1", "us-central2"]),
+        _proto_constraint("zone", "us-central2-b"),
+    ]
+    nc = normalize_constraints(constraints)
+    assert nc.preemptible is False
+    assert nc.required_regions == frozenset({"us-central1", "us-central2"})
+    assert nc.required_zones == frozenset({"us-central2-b"})

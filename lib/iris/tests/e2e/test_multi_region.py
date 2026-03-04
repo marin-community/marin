@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """E2E tests for multi-region constraint-based routing.
@@ -15,6 +15,7 @@ against worker attributes to route jobs to the correct region.
 
 
 import pytest
+from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
 from iris.cluster.types import (
@@ -23,11 +24,10 @@ from iris.cluster.types import (
     ResourceSpec,
     region_constraint,
 )
-from iris.client.client import IrisClient
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
-from .conftest import IRIS_ROOT, DEFAULT_CONFIG, TestCluster
+from .conftest import DEFAULT_CONFIG, IRIS_ROOT, IrisTestCluster
 
 pytestmark = pytest.mark.e2e
 
@@ -47,7 +47,7 @@ def _make_multi_region_config() -> config_pb2.IrisClusterConfig:
         sg.num_vms = 1
         sg.min_slices = 1
         sg.max_slices = 2
-        sg.resources.cpu = 8
+        sg.resources.cpu_millicores = 8000
         sg.resources.memory_bytes = 16 * 1024**3
         sg.resources.disk_bytes = 50 * 1024**3
         sg.slice_template.local.SetInParent()
@@ -66,13 +66,13 @@ def multi_region_cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = TestCluster(url=url, client=client, controller_client=controller_client)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(2, timeout=30)
         yield tc
         controller_client.close()
 
 
-def _get_worker_region(cluster: TestCluster, worker_id: str) -> str | None:
+def _get_worker_region(cluster: IrisTestCluster, worker_id: str) -> str | None:
     """Look up the region attribute for a worker by its ID."""
     request = cluster_pb2.Controller.ListWorkersRequest()
     response = cluster.controller_client.list_workers(request)
@@ -95,7 +95,7 @@ def test_region_constrained_job_routes_correctly(multi_region_cluster):
     job = cluster.submit(
         _noop,
         "region-a-job",
-        constraints=[region_constraint(REGION_A)],
+        constraints=[region_constraint([REGION_A])],
     )
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
@@ -132,7 +132,7 @@ def test_child_inherits_parent_region_constraint(multi_region_cluster):
     parent_job = cluster.submit(
         _submit_child_no_constraints,
         "parent-with-region",
-        constraints=[region_constraint(REGION_A)],
+        constraints=[region_constraint([REGION_A])],
     )
     parent_status = cluster.wait(parent_job, timeout=60)
     assert parent_status.state == cluster_pb2.JOB_STATE_SUCCEEDED
@@ -176,7 +176,7 @@ def _submit_child_with_region_override():
         name="overridden-child",
         resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),
-        constraints=[region_constraint("europe-west4")],
+        constraints=[region_constraint(["europe-west4"])],
     )
     child.wait(timeout=60, raise_on_failure=True)
 
@@ -188,7 +188,7 @@ def test_child_overrides_parent_region_constraint(multi_region_cluster):
     parent_job = cluster.submit(
         _submit_child_with_region_override,
         "parent-region-a-child-overrides",
-        constraints=[region_constraint(REGION_A)],
+        constraints=[region_constraint([REGION_A])],
     )
     parent_status = cluster.wait(parent_job, timeout=60)
     assert parent_status.state == cluster_pb2.JOB_STATE_SUCCEEDED

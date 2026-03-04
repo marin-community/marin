@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Internal worker types for task tracking."""
@@ -61,11 +61,6 @@ class TaskInfo(Protocol):
     @property
     def status(self) -> TaskState:
         """Current task state (PENDING, RUNNING, SUCCEEDED, etc.)."""
-        ...
-
-    @property
-    def result(self) -> bytes | None:
-        """Serialized task result (cloudpickle), if available."""
         ...
 
     def to_proto(self) -> cluster_pb2.TaskStatus:
