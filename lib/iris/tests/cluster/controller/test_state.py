@@ -13,6 +13,7 @@ They focus on:
 import threading
 
 import pytest
+from iris.cluster.controller.autoscaler import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.events import (
     JobCancelledEvent,
@@ -1672,8 +1673,24 @@ def _a100_device() -> cluster_pb2.DeviceConfig:
     return cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=8))
 
 
-def test_demand_dedup_reservation_absorbs_matching_tasks():
-    """2 H100 reservation + 2 H100 tasks = 2 total (reservation only, no task demand)."""
+def _is_synthetic_demand(state: ControllerState, demand_entry: DemandEntry) -> bool:
+    """Check if a demand entry comes from a holder job task."""
+    for tid in demand_entry.task_ids:
+        task = state.get_task(JobName.from_string(tid))
+        if task:
+            job = state.get_job(task.job_id)
+            if job and job.is_reservation_holder:
+                return True
+    return False
+
+
+def test_demand_reservation_all_tasks_generate_demand():
+    """2 H100 reservation + 2 H100 tasks = 4 total demand (no budget dedup).
+
+    All tasks generate demand through a unified path. Holder tasks and real
+    tasks are independent demand sources — preemption during scheduling
+    (not demand) handles the dedup.
+    """
     state = ControllerState()
     req = _make_reservation_job_request(
         task_device=_h100_device(),
@@ -1683,15 +1700,15 @@ def test_demand_dedup_reservation_absorbs_matching_tasks():
     submit_job(state, "j1", req)
 
     demand = compute_demand_entries(state)
-    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
+    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
-    assert len(reservation_demand) == 2
-    assert len(task_demand) == 0
+    assert len(synthetic_demand) == 2
+    assert len(real_demand) == 2
 
 
-def test_demand_dedup_excess_tasks_pass_through():
-    """2 H100 reservation + 5 H100 tasks = 2 reservation + 3 task demand."""
+def test_demand_reservation_excess_tasks():
+    """2 H100 reservation + 5 H100 tasks = 2 synthetic + 5 real task demand."""
     state = ControllerState()
     req = _make_reservation_job_request(
         task_device=_h100_device(),
@@ -1701,17 +1718,23 @@ def test_demand_dedup_excess_tasks_pass_through():
     submit_job(state, "j1", req)
 
     demand = compute_demand_entries(state)
-    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
+    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
-    assert len(reservation_demand) == 2
-    assert len(task_demand) == 3
+    assert len(synthetic_demand) == 2
+    assert len(real_demand) == 5
 
 
-def test_demand_dedup_different_device_types_not_absorbed():
-    """2 H100 reservation + 2 A100 tasks = 4 total (no dedup across device types)."""
+def test_demand_reservation_holder_uses_entry_resources():
+    """Holder tasks use the reservation entry's resource spec, not the parent's.
+
+    Each reservation entry carries its own resources and constraints. The
+    holder job uses the entry's resources so the autoscaler provisions the
+    correct device type even when the parent job differs.
+    """
     state = ControllerState()
-    # Job tasks request A100, but reservation is for H100
+    # Job tasks request A100, but reservation entries specify H100.
+    # Holder job should use the entry's H100 resource spec.
     req = _make_reservation_job_request(
         task_device=_a100_device(),
         reservation_devices=[_h100_device(), _h100_device()],
@@ -1720,21 +1743,24 @@ def test_demand_dedup_different_device_types_not_absorbed():
     submit_job(state, "j1", req)
 
     demand = compute_demand_entries(state)
-    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
+    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
-    assert len(reservation_demand) == 2
-    assert len(task_demand) == 2
+    assert len(synthetic_demand) == 2
+    assert len(real_demand) == 2
+    # Holder demand uses entry's H100 device, not parent's A100
+    for d in synthetic_demand:
+        assert d.device_variant == "H100"
 
 
-def test_demand_dedup_mixed_reservation_entries():
-    """2 H100 + 1 A100 reservation + 3 H100 + 2 A100 tasks = 5 total."""
+def test_demand_reservation_mixed_jobs():
+    """Reservation job + regular job: demand is independent per job."""
     state = ControllerState()
 
-    # Two jobs: one with H100 tasks, one with A100 tasks
+    # h100-job: 3 H100 tasks + 3 reservation entries
     h100_req = _make_reservation_job_request(
         task_device=_h100_device(),
-        reservation_devices=[_h100_device(), _h100_device(), _a100_device()],
+        reservation_devices=[_h100_device(), _h100_device(), _h100_device()],
         replicas=3,
     )
     submit_job(state, "h100-job", h100_req)
@@ -1753,24 +1779,20 @@ def test_demand_dedup_mixed_reservation_entries():
     submit_job(state, "a100-job", a100_req)
 
     demand = compute_demand_entries(state)
-    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
+    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
-    # 3 reservation entries always emitted
-    assert len(reservation_demand) == 3
+    # 3 synthetic holder tasks from h100-job's reservation
+    assert len(synthetic_demand) == 3
 
-    # h100-job: 3 H100 tasks, budget has 2 H100 -> 1 H100 task demand passes through
-    # a100-job: 2 A100 tasks, no reservation -> 2 A100 task demand passes through
-    # Total task demand: 1 + 2 = 3
-    assert len(task_demand) == 3
-    h100_task_demand = [d for d in task_demand if d.device_variant == "H100"]
-    a100_task_demand = [d for d in task_demand if d.device_variant == "A100"]
-    assert len(h100_task_demand) == 1
-    assert len(a100_task_demand) == 2
+    # h100-job: 3 real tasks + a100-job: 2 tasks = 5 real demand
+    assert len(real_demand) == 5
+    a100_demand = [d for d in real_demand if d.device_variant == "A100"]
+    assert len(a100_demand) == 2
 
 
-def test_demand_dedup_no_reservation_passes_all_tasks():
-    """Job without reservation emits all task demand entries (no dedup)."""
+def test_demand_no_reservation_passes_all_tasks():
+    """Job without reservation emits all task demand entries (no synthetic tasks)."""
     state = ControllerState()
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="regular-job",
@@ -1788,14 +1810,14 @@ def test_demand_dedup_no_reservation_passes_all_tasks():
     demand = compute_demand_entries(state)
     assert len(demand) == 3
     for d in demand:
-        assert ":reservation:" not in d.task_ids[0]
+        assert not _is_synthetic_demand(state, d)
 
 
-def test_demand_dedup_only_deduplicates_own_jobs_tasks():
-    """Dedup is per-job: job A's reservation doesn't absorb job B's tasks."""
+def test_demand_reservation_independent_per_job():
+    """Each job's demand is independent — no cross-job interference."""
     state = ControllerState()
 
-    # Job A: 2 H100 reservation, 2 H100 tasks (fully absorbed by its own reservation)
+    # Job A: 2 H100 reservation, 2 H100 tasks
     job_a_req = _make_reservation_job_request(
         task_device=_h100_device(),
         reservation_devices=[_h100_device(), _h100_device()],
@@ -1818,16 +1840,13 @@ def test_demand_dedup_only_deduplicates_own_jobs_tasks():
     submit_job(state, "job-b", job_b_req)
 
     demand = compute_demand_entries(state)
-    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
+    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
-    # Job A's 2 reservation entries
-    assert len(reservation_demand) == 2
-    # Job A's 2 tasks absorbed, Job B's 2 tasks pass through
-    assert len(task_demand) == 2
-    # All task demand should be from job B
-    for d in task_demand:
-        assert "/job-b/" in d.task_ids[0]
+    # Job A's 2 synthetic holder tasks
+    assert len(synthetic_demand) == 2
+    # Job A's 2 real tasks + Job B's 2 tasks = 4 real demand
+    assert len(real_demand) == 4
 
 
 # =============================================================================
@@ -2213,7 +2232,7 @@ def test_demand_excludes_building_limited_tasks():
     # The pending task from j1 should be building-limited, not truly unschedulable.
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 0, "Building-limited task should not generate demand"
 
 
@@ -2241,7 +2260,7 @@ def test_demand_includes_truly_unschedulable_tasks():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Task with no matching device should generate demand"
 
 
@@ -2269,19 +2288,25 @@ def test_demand_includes_resource_exhausted_tasks():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Task exceeding worker CPU should generate demand"
 
 
-def test_demand_still_includes_reservations():
-    """Reservation entries always generate demand regardless of worker capacity."""
+def test_demand_holders_absorbed_by_dry_run():
+    """Holder tasks participate in the dry-run and are absorbed when workers exist.
+
+    Unlike the old design where holders always generated demand, they now
+    participate in the dry-run like normal tasks and are absorbed when matching
+    workers have available capacity.
+    """
     state = ControllerState()
     scheduler = Scheduler()
 
-    # Register a large GPU worker
-    register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    # Register a large GPU worker with capacity for 1 task
+    register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata(cpu=2, memory_gb=4))
 
-    # Submit a job with reservation
+    # Submit a job with reservation (2 entries) and 2 tasks.
+    # Worker can fit 1 task — so 1 task absorbed, 3 remain as demand.
     req = _make_reservation_job_request(
         task_device=_h100_device(),
         reservation_devices=[_h100_device(), _h100_device()],
@@ -2291,8 +2316,8 @@ def test_demand_still_includes_reservations():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    reservation_demand = [d for d in demand if ":reservation:" in d.task_ids[0]]
-    assert len(reservation_demand) == 2, "Reservation demand should always be emitted"
+    # Worker fits 1 task (holder or real). 3 remaining generate demand.
+    assert len(demand) == 3
 
 
 def test_demand_absorbs_capacity_before_emitting():
@@ -2320,7 +2345,7 @@ def test_demand_absorbs_capacity_before_emitting():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Only 1 of 3 tasks should generate demand (2 absorbed)"
 
 
@@ -2343,7 +2368,7 @@ def test_demand_no_workers_falls_back_to_all_pending():
 
     # No scheduler, no workers -> all tasks become demand
     demand = compute_demand_entries(state)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 3
 
 
@@ -2388,7 +2413,7 @@ def test_demand_building_limited_with_multiple_workers():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 0, "All workers at building limit -> no demand"
 
 
@@ -2444,7 +2469,137 @@ def test_demand_mixed_building_limited_and_unschedulable():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    task_demand = [d for d in demand if ":reservation:" not in d.task_ids[0]]
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
     assert len(task_demand) == 1
     assert "a100-job" in task_demand[0].task_ids[0], "Only A100 task should emit demand"
+
+
+# =============================================================================
+# Holder Task Zero-Resource Tests
+# =============================================================================
+
+
+def test_holder_tasks_consume_zero_resources():
+    """Holder tasks consume zero resources when assigned to workers."""
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 1
+
+    worker_before = state.get_worker(wid)
+    gpus_before = worker_before.available_gpus
+
+    # Assign holder task
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+
+    # Worker's available GPUs should NOT decrease (zero resources)
+    worker_after = state.get_worker(wid)
+    assert worker_after.available_gpus == gpus_before
+
+    # But the task should be tracked in running_tasks
+    assert holder_tasks[0].task_id in worker_after.running_tasks
+
+
+def test_holder_task_cleanup_releases_no_resources():
+    """When a holder task finishes, it doesn't release resources it never committed."""
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+
+    # Assign holder task
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+
+    worker_before = state.get_worker(wid)
+    gpus_before = worker_before.available_gpus
+
+    # Kill the holder task via parent job cancellation
+    parent_job_id = JobName.root("test-user", "j1")
+    state.handle_event(JobCancelledEvent(job_id=parent_job_id, reason="test"))
+
+    # Worker GPUs should be unchanged (nothing to release)
+    worker_after = state.get_worker(wid)
+    assert worker_after.available_gpus == gpus_before
+    assert holder_tasks[0].task_id not in worker_after.running_tasks
+
+
+def test_holder_tasks_excluded_from_building_counts():
+    """Holder tasks in ASSIGNED state should not consume building slots.
+
+    Without this exclusion, a worker holding only a reservation task would be
+    permanently "at building limit" and the real reserved task could never be
+    assigned to that otherwise idle worker.
+    """
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 1
+
+    # Assign holder task — it goes to ASSIGNED state
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+    assert holder_tasks[0].state == cluster_pb2.TASK_STATE_ASSIGNED
+
+    # Building counts should NOT include the holder task
+    building_counts = state.snapshot_building_counts()
+    assert building_counts.get(wid, 0) == 0
+
+
+def test_snapshot_round_trip_preserves_reservation_holder():
+    """Snapshot save/restore round-trip preserves is_reservation_holder flag."""
+    from iris.cluster.controller.snapshot import create_snapshot, restore_snapshot
+
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_job = state.get_job(holder_job_id)
+    assert holder_job is not None
+    assert holder_job.is_reservation_holder is True
+
+    # Save and restore
+    snap_result = create_snapshot(state, reservation_claims={})
+    restored_state = ControllerState()
+    restore_snapshot(snap_result.proto, restored_state)
+
+    restored_holder = restored_state.get_job(holder_job_id)
+    assert restored_holder is not None
+    assert restored_holder.is_reservation_holder is True
+
+    # Parent should not be a holder
+    parent_job_id = JobName.root("test-user", "j1")
+    restored_parent = restored_state.get_job(parent_job_id)
+    assert restored_parent is not None
+    assert restored_parent.is_reservation_holder is False
