@@ -8,6 +8,8 @@ exercises a specific dashboard view and validates both DOM state and visual
 rendering via screenshots.
 """
 
+import time
+
 import pytest
 from iris.rpc import cluster_pb2
 
@@ -142,15 +144,67 @@ def test_worker_detail_shows_network_and_disk_sparklines(cluster, page, screensh
 
     if not _is_noop_page(page):
         page.wait_for_function(
-            "() => document.querySelector('.resource-section') !== null",
+            "() => document.querySelector('.utilization-panel') !== null",
             timeout=10000,
         )
-    # Live Utilization section should show CPU, Memory, Disk (all with sparklines) and Net
+    # Live Utilization panel should show CPU, Memory, Disk, and Network
     assert_visible(page, "text=Live Utilization")
     assert_visible(page, "text=CPU")
     assert_visible(page, "text=Disk")
-    assert_visible(page, "text=Net")
+    assert_visible(page, "text=Network")
     screenshot("worker-detail-net-disk-sparklines")
+
+
+def _hold_for_heartbeats():
+    """Sleep long enough for multiple heartbeat cycles to accumulate resource history."""
+    import time
+
+    time.sleep(6)
+    return 1
+
+
+def test_worker_detail_sparklines_with_history(cluster, page, screenshot):
+    """Worker detail sparklines render once resource history has accumulated.
+
+    Submits a task that holds long enough for multiple heartbeat cycles (local
+    heartbeat_interval=0.5s) so the resource_history deque has enough entries
+    for the Sparkline SVGs to render.
+    """
+    job = cluster.submit(_hold_for_heartbeats, "worker-sparkline-history")
+    cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
+
+    task_status = cluster.task_status(job)
+    worker_id = task_status.worker_id
+    assert worker_id
+
+    # Wait for heartbeats to accumulate (local interval is 0.5s, need >=2 entries)
+    time.sleep(3)
+
+    dashboard_goto(page, f"{cluster.url}/worker/{worker_id}")
+
+    if not _is_noop_page(page):
+        # Wait for the utilization panel with SVG sparklines to render
+        page.wait_for_function(
+            "() => document.querySelector('.utilization-panel') !== null"
+            " && document.querySelectorAll('.utilization-panel svg.sparkline').length >= 3",
+            timeout=15000,
+        )
+
+    # Verify all four utilization metric sections are present
+    assert_visible(page, "text=Live Utilization")
+    assert_visible(page, "text=CPU")
+    assert_visible(page, "text=Memory")
+    assert_visible(page, "text=Disk")
+    assert_visible(page, "text=Network")
+
+    # Verify SVG sparklines rendered (not hidden due to empty data)
+    if not _is_noop_page(page):
+        sparkline_count = page.locator(".utilization-panel svg.sparkline").count()
+        assert sparkline_count >= 3, f"Expected at least 3 sparkline SVGs in utilization panel, got {sparkline_count}"
+
+    screenshot("worker-detail-sparklines-with-history")
+
+    cluster.wait(job, timeout=30)
 
 
 def _allocate_memory_and_wait():
@@ -192,8 +246,6 @@ def test_job_detail_task_table_shows_resource_values(cluster, page, screenshot):
     cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
 
     # Wait for stats collection (poll interval is 5s)
-    import time
-
     time.sleep(7)
 
     dashboard_goto(page, f"{cluster.url}/job/{job.job_id.to_wire()}")
