@@ -90,28 +90,6 @@ def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
     )
 
 
-def _get_reservation_entry(
-    task: ControllerTask,
-    job: ControllerJob,
-    state: ControllerState,
-) -> "cluster_pb2.ReservationEntry | None":
-    """Look up the reservation entry backing a holder job task.
-
-    Holder job tasks map by index to reservation entries on the parent job.
-    Returns None for non-holder jobs or when the reservation config is absent.
-    """
-    if not job.is_reservation_holder:
-        return None
-    parent = state.get_job(job.job_id.parent)
-    if parent is None or not parent.request.HasField("reservation"):
-        return None
-    entries = parent.request.reservation.entries
-    idx = task.task_id.task_index
-    if idx is not None and 0 <= idx < len(entries):
-        return entries[idx]
-    return None
-
-
 def compute_demand_entries(
     state: ControllerState,
     scheduler: Scheduler | None = None,
@@ -120,16 +98,14 @@ def compute_demand_entries(
 ) -> list[DemandEntry]:
     """Compute demand entries for the autoscaler from controller state.
 
-    Demand flows through a single path: pending tasks (both real and synthetic
-    reservation holders). Synthetic holder tasks always generate demand when
-    pending, keeping reserved capacity alive. They are excluded from the dry-run
-    because they must always generate demand regardless of worker availability.
+    All pending tasks — both real and reservation holder — flow through a
+    single unified path. Every task participates in the dry-run and generates
+    demand through the same logic using its job's resource spec.
 
-    Real tasks go through the normal dry-run scheduling pass: those that fit on
-    existing workers are absorbed and do not generate demand. Because synthetic
-    tasks commit zero resources on workers, claimed workers appear to have full
-    capacity in the dry-run, so real tasks are correctly absorbed when their
-    reserved workers exist.
+    Holder tasks commit real resources, so the dry-run accurately reflects
+    capacity usage. Peer tasks preempt holders during scheduling (not here),
+    so holder demand correctly represents reserved capacity that hasn't yet
+    been taken over by real tasks.
 
     Args:
         state: Controller state to read pending tasks and jobs from.
@@ -140,30 +116,23 @@ def compute_demand_entries(
     """
     demand_entries: list[DemandEntry] = []
 
-    # Partition pending tasks into real and synthetic. Holder job tasks
-    # always generate demand (excluded from the dry-run); real tasks go through
-    # the dry-run to be absorbed by existing capacity.
-    real_tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
-    synthetic_tasks: list[ControllerTask] = []
-    schedulable_real_tasks: list[ControllerTask] = []
+    # Collect all schedulable pending tasks, grouped by job.
+    tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
+    all_schedulable: list[ControllerTask] = []
     for task in state.peek_pending_tasks():
         if not task.can_be_scheduled():
             continue
         job = state.get_job(task.job_id)
         if not job:
             continue
-        if job.is_reservation_holder:
-            synthetic_tasks.append(task)
-        else:
-            real_tasks_by_job[task.job_id].append(task)
-            schedulable_real_tasks.append(task)
+        tasks_by_job[task.job_id].append(task)
+        all_schedulable.append(task)
 
     # Build job requirements once, shared between dry-run and demand emission.
     # Also track which jobs have reservations so we can apply taint injection.
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
-    all_tasks = schedulable_real_tasks + synthetic_tasks
-    for task in all_tasks:
+    for task in all_schedulable:
         if task.job_id not in jobs:
             job = state.get_job(task.job_id)
             if job:
@@ -174,12 +143,11 @@ def compute_demand_entries(
                     has_reservation.add(task.job_id)
 
     # Dry-run scheduling with building/assignment limits disabled.
-    # Only real tasks participate; synthetic tasks are excluded because they
-    # must always generate demand to keep reserved capacity alive.
+    # All tasks participate — holders and real tasks alike.
     absorbed_task_ids: set[JobName] = set()
     if scheduler is not None and workers is not None and workers:
         building_counts = state.snapshot_building_counts()
-        task_ids = [t.task_id for t in schedulable_real_tasks]
+        task_ids = [t.task_id for t in all_schedulable]
         claims = reservation_claims or {}
         dry_run_workers = _inject_reservation_taints(workers, claims)
         dry_run_jobs = _inject_taint_constraints(jobs, has_reservation)
@@ -196,17 +164,8 @@ def compute_demand_entries(
         for task_id, _ in result.assignments:
             absorbed_task_ids.add(task_id)
 
-    # Count pending synthetic holder tasks per parent job. Holder tasks
-    # live in a child job (``{parent}/reservation``), so we key by the
-    # parent's job ID to suppress the parent's real task demand.
-    synthetic_pending_count: dict[JobName, int] = {}
-    for task in synthetic_tasks:
-        parent_id = task.job_id.parent
-        if parent_id:
-            synthetic_pending_count[parent_id] = synthetic_pending_count.get(parent_id, 0) + 1
-
-    # Emit demand for real tasks not absorbed by the dry-run.
-    for job_id, tasks in real_tasks_by_job.items():
+    # Emit demand for all unabsorbed tasks through a single path.
+    for job_id, tasks in tasks_by_job.items():
         job = state.get_job(job_id)
         if not job:
             continue
@@ -228,17 +187,12 @@ def compute_demand_entries(
         except ValueError as e:
             invalid_reason = f"invalid_constraints: {e}"
 
-        budget = synthetic_pending_count.get(job_id, 0)
-
         if job.is_coscheduled:
             remaining_ids = []
             for t in tasks:
                 if t.task_id in absorbed_task_ids:
                     continue
-                if budget > 0:
-                    budget -= 1
-                else:
-                    remaining_ids.append(t.task_id.to_wire())
+                remaining_ids.append(t.task_id.to_wire())
             if remaining_ids:
                 demand_entries.append(
                     DemandEntry(
@@ -259,9 +213,6 @@ def compute_demand_entries(
         for task in tasks:
             if task.task_id in absorbed_task_ids:
                 continue
-            if budget > 0:
-                budget -= 1
-                continue
             demand_entries.append(
                 DemandEntry(
                     task_ids=[task.task_id.to_wire()],
@@ -276,47 +227,6 @@ def compute_demand_entries(
                     invalid_reason=invalid_reason,
                 )
             )
-
-    # Emit demand for holder job tasks. Each maps 1:1 to a reservation
-    # entry on the parent job and uses that entry's resources and constraints,
-    # which may differ from the parent job's own resource spec.
-    for task in synthetic_tasks:
-        job = state.get_job(task.job_id)
-        if not job or job.is_finished():
-            continue
-        res_entry = _get_reservation_entry(task, job, state)
-        if res_entry is None:
-            continue
-
-        device = res_entry.resources.device
-        device_type = get_device_type_enum(device)
-        device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
-        preemptible_pref: bool | None = None
-        required_regions: frozenset[str] | None = None
-        required_zones: frozenset[str] | None = None
-        invalid_reason: str | None = None
-        try:
-            normalized = normalize_constraints(res_entry.constraints)
-            preemptible_pref = normalized.preemptible
-            required_regions = normalized.required_regions
-            required_zones = normalized.required_zones
-        except ValueError as e:
-            invalid_reason = f"invalid_constraints: {e}"
-
-        demand_entries.append(
-            DemandEntry(
-                task_ids=[task.task_id.to_wire()],
-                coschedule_group_id=None,
-                device_type=device_type,
-                device_variant=device_variant,
-                constraints=list(res_entry.constraints),
-                resources=res_entry.resources,
-                preemptible=preemptible_pref,
-                required_regions=required_regions,
-                required_zones=required_zones,
-                invalid_reason=invalid_reason,
-            )
-        )
 
     return demand_entries
 
@@ -890,13 +800,15 @@ class Controller:
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle.
 
-        Two-pass scheduling:
-        1. Preference pass: for reservation jobs, try claimed workers first.
+        Three-phase scheduling:
+        1. Preemption: kill running holder tasks on claimed workers when peer
+           tasks are pending, freeing resources for real work.
+        2. Preference pass: for reservation jobs, try claimed workers first.
            The claims set is small (≤ reservation entry count), so this is cheap.
-        2. Normal pass: remaining tasks go through the standard scheduler.
+        3. Normal pass: remaining tasks go through the standard scheduler.
 
-        Both passes share a single SchedulingContext so capacity deductions
-        from the preference pass are visible to the normal scheduler.
+        All passes share a single SchedulingContext so capacity deductions
+        are visible across passes.
 
         No lock is needed since only one scheduling thread exists. All state
         reads and writes go through ControllerState which has its own lock.
@@ -914,24 +826,23 @@ class Controller:
             return
 
         # Handle timeouts and reservation gates before scheduling.
-        # Holder job tasks are excluded — they generate demand only, never
-        # get scheduled or dispatched.
+        # Holder tasks participate in scheduling like normal tasks.
         schedulable_task_ids: list[JobName] = []
         jobs: dict[JobName, JobRequirements] = {}
         has_reservation: set[JobName] = set()
+        pending_real_by_reservation: dict[JobName, int] = {}
         for task in pending_tasks:
             if not task.can_be_scheduled():
                 continue
             job = self._state.get_job(task.job_id)
             if not job:
                 continue
-            if job.is_reservation_holder:
-                continue
             if job.scheduling_deadline is not None and job.scheduling_deadline.expired():
                 self._mark_task_unschedulable(task)
                 continue
-            # Gate: skip tasks whose job has an unsatisfied reservation
-            if not self._is_reservation_satisfied(job):
+            # Gate: skip real tasks whose job has an unsatisfied reservation.
+            # Holder tasks are always schedulable (they ARE the reservation).
+            if not job.is_reservation_holder and not self._is_reservation_satisfied(job):
                 continue
             schedulable_task_ids.append(task.task_id)
             if task.job_id not in jobs:
@@ -940,6 +851,29 @@ class Controller:
                     has_reservation.add(task.job_id)
                 elif _find_reservation_ancestor(self._state, task.job_id) is not None:
                     has_reservation.add(task.job_id)
+            # Track pending real tasks per reservation job for preemption.
+            if not job.is_reservation_holder and job.request.HasField("reservation"):
+                pending_real_by_reservation[task.job_id] = pending_real_by_reservation.get(task.job_id, 0) + 1
+
+        if not schedulable_task_ids:
+            return
+
+        # Phase 1: Preempt holder tasks to free claimed workers for real tasks.
+        # When peer tasks are pending, kill running holders so the scheduler
+        # can assign real tasks to those freed workers.
+        if pending_real_by_reservation:
+            preempted_any = False
+            for res_job_id, pending_count in pending_real_by_reservation.items():
+                holder_job_id = res_job_id.child("reservation")
+                preempted = self._state.preempt_holder_tasks(holder_job_id, pending_count)
+                if preempted:
+                    preempted_any = True
+                    # Remove preempted holder tasks from schedulable list
+                    # (they're now terminal, not schedulable).
+                    schedulable_task_ids = [t for t in schedulable_task_ids if t not in preempted]
+            if preempted_any:
+                # Re-fetch workers to see freed resources.
+                workers = self._state.get_available_workers()
 
         if not schedulable_task_ids:
             return
@@ -958,11 +892,11 @@ class Controller:
             jobs=jobs,
         )
 
-        # Pass 1: soft preference — steer reservation tasks toward claimed workers.
+        # Phase 2: soft preference — steer reservation tasks toward claimed workers.
         # Skips coscheduled jobs (they need atomic all-or-nothing via find_assignments).
         preference_assignments = _preference_pass(context, has_reservation, self._reservation_claims)
 
-        # Pass 2: normal scheduler for all remaining tasks.
+        # Phase 3: normal scheduler for all remaining tasks.
         result = self._scheduler.find_assignments(context)
 
         all_assignments = preference_assignments + result.assignments
@@ -1013,9 +947,9 @@ class Controller:
                     )
                 )
 
-                # Holder job tasks are never dispatched — there is no
-                # entrypoint to run. (Safety net; they should not reach here
-                # since _run_scheduling excludes them.)
+                # Holder job tasks are scheduled and assigned to workers
+                # (committing resources to hold capacity), but never
+                # dispatched — there is no entrypoint to run.
                 if job.is_reservation_holder:
                     continue
 

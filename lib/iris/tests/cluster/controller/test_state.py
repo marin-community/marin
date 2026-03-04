@@ -1684,8 +1684,13 @@ def _is_synthetic_demand(state: ControllerState, demand_entry: DemandEntry) -> b
     return False
 
 
-def test_demand_dedup_reservation_absorbs_matching_tasks():
-    """2 H100 reservation + 2 H100 tasks = 2 total (synthetic only, no real task demand)."""
+def test_demand_reservation_all_tasks_generate_demand():
+    """2 H100 reservation + 2 H100 tasks = 4 total demand (no budget dedup).
+
+    All tasks generate demand through a unified path. Holder tasks and real
+    tasks are independent demand sources — preemption during scheduling
+    (not demand) handles the dedup.
+    """
     state = ControllerState()
     req = _make_reservation_job_request(
         task_device=_h100_device(),
@@ -1699,11 +1704,11 @@ def test_demand_dedup_reservation_absorbs_matching_tasks():
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
     assert len(synthetic_demand) == 2
-    assert len(real_demand) == 0
+    assert len(real_demand) == 2
 
 
-def test_demand_dedup_excess_tasks_pass_through():
-    """2 H100 reservation + 5 H100 tasks = 2 synthetic + 3 real task demand."""
+def test_demand_reservation_excess_tasks():
+    """2 H100 reservation + 5 H100 tasks = 2 synthetic + 5 real task demand."""
     state = ControllerState()
     req = _make_reservation_job_request(
         task_device=_h100_device(),
@@ -1717,18 +1722,19 @@ def test_demand_dedup_excess_tasks_pass_through():
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
     assert len(synthetic_demand) == 2
-    assert len(real_demand) == 3
+    assert len(real_demand) == 5
 
 
-def test_demand_dedup_different_device_types_not_absorbed():
-    """2 H100 reservation + 2 A100 tasks = 2 synthetic + 0 real task demand.
+def test_demand_reservation_holder_uses_parent_resources():
+    """Holder tasks use the parent job's resource spec, not reservation entries.
 
-    Synthetic holder tasks use reservation entry resources (H100), real tasks
-    use job resources (A100). The count-based budget suppresses real tasks by
-    count (not by device type), so 2 pending synthetics suppress both real tasks.
+    The holder job inherits the parent's resources and constraints so it
+    schedules onto the same type of workers. Reservation entry resources
+    are not used for demand.
     """
     state = ControllerState()
-    # Job tasks request A100, but reservation is for H100
+    # Job tasks request A100, but reservation entries specify H100.
+    # Holder job inherits the parent's A100 resource spec.
     req = _make_reservation_job_request(
         task_device=_a100_device(),
         reservation_devices=[_h100_device(), _h100_device()],
@@ -1741,18 +1747,20 @@ def test_demand_dedup_different_device_types_not_absorbed():
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
     assert len(synthetic_demand) == 2
-    # Count-based budget: 2 pending synthetics suppress 2 real tasks
-    assert len(real_demand) == 0
+    assert len(real_demand) == 2
+    # Holder demand uses parent's A100 device, not reservation entry's H100
+    for d in synthetic_demand:
+        assert d.device_variant == "A100"
 
 
-def test_demand_dedup_mixed_reservation_entries():
-    """3 reservation entries + 3 H100 tasks + 2 A100 tasks = 5 total."""
+def test_demand_reservation_mixed_jobs():
+    """Reservation job + regular job: demand is independent per job."""
     state = ControllerState()
 
-    # h100-job: 3 H100 tasks + 3 reservation entries (2 H100 + 1 A100)
+    # h100-job: 3 H100 tasks + 3 reservation entries
     h100_req = _make_reservation_job_request(
         task_device=_h100_device(),
-        reservation_devices=[_h100_device(), _h100_device(), _a100_device()],
+        reservation_devices=[_h100_device(), _h100_device(), _h100_device()],
         replicas=3,
     )
     submit_job(state, "h100-job", h100_req)
@@ -1774,17 +1782,16 @@ def test_demand_dedup_mixed_reservation_entries():
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
-    # 3 synthetic holder tasks from h100-job's reservation entries
+    # 3 synthetic holder tasks from h100-job's reservation
     assert len(synthetic_demand) == 3
 
-    # h100-job: 3 real tasks, 3 pending synthetics suppress all 3 → 0 real demand
-    # a100-job: 2 A100 tasks, no reservation → 2 real demand
-    assert len(real_demand) == 2
+    # h100-job: 3 real tasks + a100-job: 2 tasks = 5 real demand
+    assert len(real_demand) == 5
     a100_demand = [d for d in real_demand if d.device_variant == "A100"]
     assert len(a100_demand) == 2
 
 
-def test_demand_dedup_no_reservation_passes_all_tasks():
+def test_demand_no_reservation_passes_all_tasks():
     """Job without reservation emits all task demand entries (no synthetic tasks)."""
     state = ControllerState()
     req = cluster_pb2.Controller.LaunchJobRequest(
@@ -1806,11 +1813,11 @@ def test_demand_dedup_no_reservation_passes_all_tasks():
         assert not _is_synthetic_demand(state, d)
 
 
-def test_demand_dedup_only_deduplicates_own_jobs_tasks():
-    """Dedup is per-job: job A's synthetics don't suppress job B's tasks."""
+def test_demand_reservation_independent_per_job():
+    """Each job's demand is independent — no cross-job interference."""
     state = ControllerState()
 
-    # Job A: 2 H100 reservation, 2 H100 tasks (real tasks absorbed by synthetic budget)
+    # Job A: 2 H100 reservation, 2 H100 tasks
     job_a_req = _make_reservation_job_request(
         task_device=_h100_device(),
         reservation_devices=[_h100_device(), _h100_device()],
@@ -1838,11 +1845,8 @@ def test_demand_dedup_only_deduplicates_own_jobs_tasks():
 
     # Job A's 2 synthetic holder tasks
     assert len(synthetic_demand) == 2
-    # Job A's 2 real tasks absorbed by its synthetic budget, Job B's 2 tasks pass through
-    assert len(real_demand) == 2
-    # All real task demand should be from job B
-    for d in real_demand:
-        assert "/job-b/" in d.task_ids[0]
+    # Job A's 2 real tasks + Job B's 2 tasks = 4 real demand
+    assert len(real_demand) == 4
 
 
 # =============================================================================
@@ -2288,19 +2292,21 @@ def test_demand_includes_resource_exhausted_tasks():
     assert len(task_demand) == 1, "Task exceeding worker CPU should generate demand"
 
 
-def test_demand_still_includes_reservations():
-    """Synthetic holder tasks always generate demand regardless of worker capacity.
+def test_demand_holders_absorbed_by_dry_run():
+    """Holder tasks participate in the dry-run and are absorbed when workers exist.
 
-    Even when workers exist that could absorb real tasks, synthetic holder tasks
-    (excluded from the dry-run) keep generating demand to hold reserved capacity.
+    Unlike the old design where holders always generated demand, they now
+    participate in the dry-run like normal tasks and are absorbed when matching
+    workers have available capacity.
     """
     state = ControllerState()
     scheduler = Scheduler()
 
-    # Register a large GPU worker
-    register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    # Register a large GPU worker with capacity for 1 task
+    register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata(cpu=2, memory_gb=4))
 
-    # Submit a job with reservation
+    # Submit a job with reservation (2 entries) and 2 tasks.
+    # Worker can fit 1 task — so 1 task absorbed, 3 remain as demand.
     req = _make_reservation_job_request(
         task_device=_h100_device(),
         reservation_devices=[_h100_device(), _h100_device()],
@@ -2310,8 +2316,8 @@ def test_demand_still_includes_reservations():
 
     workers = state.get_available_workers()
     demand = compute_demand_entries(state, scheduler, workers)
-    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
-    assert len(synthetic_demand) == 2, "Synthetic demand should always be emitted"
+    # Worker fits 1 task (holder or real). 3 remaining generate demand.
+    assert len(demand) == 3
 
 
 def test_demand_absorbs_capacity_before_emitting():
@@ -2467,3 +2473,124 @@ def test_demand_mixed_building_limited_and_unschedulable():
 
     assert len(task_demand) == 1
     assert "a100-job" in task_demand[0].task_ids[0], "Only A100 task should emit demand"
+
+
+# =============================================================================
+# Holder Task Preemption Tests
+# =============================================================================
+
+
+def test_preempt_holder_tasks_frees_workers():
+    """Preempting holder tasks makes them terminal and frees worker resources."""
+    state = ControllerState()
+
+    # Submit a job with 2 reservation entries
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=2,
+    )
+    submit_job(state, "j1", req)
+
+    # Register a GPU worker and assign a holder task to it
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child("reservation")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 2
+
+    # Dispatch holder task 0 to worker
+    dispatch_task(state, holder_tasks[0], wid)
+
+    # Preempt 1 holder task
+    preempted = state.preempt_holder_tasks(holder_job_id, max_count=1)
+    assert len(preempted) == 1
+
+    # The preempted task should be terminal
+    task = state.get_task(holder_tasks[0].task_id)
+    assert task.is_finished()
+
+    # Worker resources should be freed
+    worker = state.get_worker(wid)
+    assert holder_tasks[0].task_id not in worker.running_tasks
+
+
+def test_preempt_holder_tasks_respects_max_count():
+    """Preemption only kills up to max_count running holders."""
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device(), _h100_device()],
+        replicas=3,
+    )
+    submit_job(state, "j1", req)
+
+    # Register workers and assign all 3 holder tasks
+    wids = []
+    holder_job_id = JobName.root("test-user", "j1").child("reservation")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    for i, ht in enumerate(holder_tasks):
+        wid = register_worker(state, f"w{i}", f"10.0.0.{i}:8080", _gpu_worker_metadata())
+        wids.append(wid)
+        dispatch_task(state, ht, wid)
+
+    # Preempt only 2 of 3
+    preempted = state.preempt_holder_tasks(holder_job_id, max_count=2)
+    assert len(preempted) == 2
+
+    # Check that exactly 1 holder is still running
+    remaining = [t for t in state.get_job_tasks(holder_job_id) if not t.is_finished()]
+    assert len(remaining) == 1
+
+
+def test_preempt_holder_does_not_trigger_job_killed():
+    """Preempted holders use WORKER_FAILED (not KILLED) so the holder job stays alive."""
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=2,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child("reservation")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    dispatch_task(state, holder_tasks[0], wid)
+
+    # Preempt the running holder
+    state.preempt_holder_tasks(holder_job_id, max_count=1)
+
+    # The holder job should NOT be in KILLED state
+    holder_job = state.get_job(holder_job_id)
+    assert holder_job.state != cluster_pb2.JOB_STATE_KILLED
+    # The other holder task should still be schedulable
+    assert holder_tasks[1].can_be_scheduled()
+
+
+def test_holder_tasks_commit_real_resources():
+    """Holder tasks commit real resources when assigned to workers."""
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child("reservation")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 1
+
+    worker_before = state.get_worker(wid)
+    gpus_before = worker_before.available_gpus
+
+    # Assign holder task
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+
+    # Worker's available GPUs should decrease
+    worker_after = state.get_worker(wid)
+    assert worker_after.available_gpus < gpus_before
