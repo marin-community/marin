@@ -34,6 +34,7 @@ from iris.logging import get_global_buffer, slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.time_conversions import timestamp_to_proto
 from rigging.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -615,7 +616,7 @@ class Worker:
                                     state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                                     exit_code=0,
                                     error="Task not found on worker",
-                                    finished_at=Timestamp.now().to_proto(),
+                                    finished_at=timestamp_to_proto(Timestamp.now()),
                                 )
                             )
                         else:

@@ -40,6 +40,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import cluster_pb2
+from iris.rpc.time_conversions import timestamp_from_proto
 from rigging.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -715,7 +716,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     for j in jobs:
         job_id = j.job_id
         state_name = _job_state_name(j.state)
-        submitted = Timestamp.from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
+        submitted = timestamp_from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
         resources = _format_resources(j.resources) if j.HasField("resources") else "-"
 
         # Show error for failed jobs, pending_reason for pending/unschedulable

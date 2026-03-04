@@ -25,6 +25,7 @@ from iris.cluster.types import (
     get_tpu_count,
 )
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, time_pb2, vm_pb2
+from iris.rpc.time_conversions import timestamp_to_proto
 from rigging.time_utils import Deadline, Duration, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
@@ -898,20 +899,20 @@ class ScalingGroup:
                     error_message=slice_state.error_message,
                 )
                 slice_snap.vm_addresses.extend(slice_state.vm_addresses)
-                slice_snap.created_at.CopyFrom(slice_state.handle.created_at.to_proto())
-                slice_snap.last_active.CopyFrom(slice_state.last_active.to_proto())
+                slice_snap.created_at.CopyFrom(timestamp_to_proto(slice_state.handle.created_at))
+                slice_snap.last_active.CopyFrom(timestamp_to_proto(slice_state.last_active))
                 snap.slices.append(slice_snap)
 
         if self._backoff_until is not None:
-            snap.backoff_until.CopyFrom(self._backoff_until.as_timestamp().to_proto())
+            snap.backoff_until.CopyFrom(timestamp_to_proto(self._backoff_until.as_timestamp()))
 
         if self._last_scale_up.epoch_ms() > 0:
-            snap.last_scale_up.CopyFrom(self._last_scale_up.to_proto())
+            snap.last_scale_up.CopyFrom(timestamp_to_proto(self._last_scale_up))
         if self._last_scale_down.epoch_ms() > 0:
-            snap.last_scale_down.CopyFrom(self._last_scale_down.to_proto())
+            snap.last_scale_down.CopyFrom(timestamp_to_proto(self._last_scale_down))
 
         if self._quota_exceeded_until is not None:
-            snap.quota_exceeded_until.CopyFrom(self._quota_exceeded_until.as_timestamp().to_proto())
+            snap.quota_exceeded_until.CopyFrom(timestamp_to_proto(self._quota_exceeded_until.as_timestamp()))
         snap.quota_reason = self._quota_reason
 
         return snap
@@ -959,14 +960,14 @@ class ScalingGroup:
             config=self._config,
             current_demand=self._current_demand,
             peak_demand=self._peak_demand,
-            backoff_until=backoff_ts.to_proto(),
+            backoff_until=timestamp_to_proto(backoff_ts),
             consecutive_failures=self._consecutive_failures,
-            last_scale_up=self._last_scale_up.to_proto(),
-            last_scale_down=self._last_scale_down.to_proto(),
+            last_scale_up=timestamp_to_proto(self._last_scale_up),
+            last_scale_down=timestamp_to_proto(self._last_scale_down),
             availability_status=availability.status.value,
             availability_reason=availability.reason,
-            blocked_until=blocked_until.to_proto(),
-            scale_up_cooldown_until=cooldown_until.to_proto(),
+            blocked_until=timestamp_to_proto(blocked_until),
+            scale_up_cooldown_until=timestamp_to_proto(cooldown_until),
             slices=[slice_state_to_proto(state) for state in snapshot],
         )
         for state_name, count in counts.items():

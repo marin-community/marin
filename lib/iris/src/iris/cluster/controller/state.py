@@ -46,6 +46,7 @@ from iris.cluster.types import (
     get_tpu_count,
 )
 from iris.rpc import cluster_pb2
+from iris.rpc.time_conversions import duration_from_proto
 from rigging.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -1119,7 +1120,7 @@ class ControllerState:
             submitted_at=event.timestamp,
         )
         if job.request.HasField("scheduling_timeout") and job.request.scheduling_timeout.milliseconds > 0:
-            job.scheduling_deadline = Deadline.from_now(Duration.from_proto(job.request.scheduling_timeout))
+            job.scheduling_deadline = Deadline.from_now(duration_from_proto(job.request.scheduling_timeout))
 
         # Resolve root submission time for depth-first priority ordering.
         # Child jobs inherit the root timestamp so the entire tree sorts together.

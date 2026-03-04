@@ -9,7 +9,6 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 
-
 def _now_ms() -> int:
     """Return current Unix timestamp in milliseconds."""
     return int(time.time() * 1000)
@@ -158,17 +157,6 @@ class Duration:
         """Convert to milliseconds."""
         return self._ms
 
-    @classmethod
-    def from_proto(cls, proto: "time_pb2.Duration") -> "Duration":
-        """Create from proto Duration message."""
-        return cls(proto.milliseconds)
-
-    def to_proto(self) -> "time_pb2.Duration":
-        """Convert to proto Duration message."""
-        from iris.rpc import time_pb2  # optional dependency on iris protobuf
-
-        return time_pb2.Duration(milliseconds=self._ms)
-
     def __add__(self, other: "Duration") -> "Duration":
         return Duration(self._ms + other._ms)
 
@@ -234,17 +222,6 @@ class Timestamp:
     def from_seconds(cls, epoch_seconds: float) -> "Timestamp":
         """Create timestamp from seconds since epoch."""
         return cls(int(epoch_seconds * 1000))
-
-    @classmethod
-    def from_proto(cls, proto: "time_pb2.Timestamp") -> "Timestamp":
-        """Create from proto Timestamp message."""
-        return cls(proto.epoch_ms)
-
-    def to_proto(self) -> "time_pb2.Timestamp":
-        """Convert to proto Timestamp message."""
-        from iris.rpc import time_pb2  # optional dependency on iris protobuf
-
-        return time_pb2.Timestamp(epoch_ms=self._epoch_ms)
 
     def epoch_ms(self) -> int:
         """Get milliseconds since epoch."""

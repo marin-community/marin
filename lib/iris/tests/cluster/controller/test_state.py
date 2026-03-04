@@ -32,6 +32,7 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, DeviceType, JobName, WorkerId
 from iris.rpc import cluster_pb2
+from iris.rpc.time_conversions import duration_to_proto
 from rigging.time_utils import Duration, Timestamp
 
 # =============================================================================
@@ -282,7 +283,7 @@ def test_unschedulable_task_finalizes_job_with_timeout_error(job_request, worker
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
     req = job_request("job1")
-    req.scheduling_timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    req.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(300)))
     tasks = submit_job(state, "j1", req)
     task = tasks[0]
     job = state.get_job(JobName.root("test-user", "j1"))

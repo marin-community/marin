@@ -37,6 +37,7 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.time_conversions import duration_from_proto
 from rigging.time_utils import Duration, ExponentialBackoff
 
 
@@ -92,7 +93,7 @@ def create_local_autoscaler(
         gpu_count_by_group=gpu_count_by_group,
     )
 
-    scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
+    scale_up_delay = duration_from_proto(config.defaults.autoscaler.scale_up_delay)
 
     scale_groups: dict[str, ScalingGroup] = {}
     for name, sg_config in config.scale_groups.items():

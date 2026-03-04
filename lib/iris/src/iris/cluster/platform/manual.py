@@ -48,6 +48,7 @@ from iris.cluster.platform.remote_exec import (
     DirectSshRemoteExec,
 )
 from iris.rpc import config_pb2
+from iris.rpc.time_conversions import duration_from_proto
 from rigging.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -471,7 +472,7 @@ class ManualPlatform:
             if self._ssh_config.key_file:
                 key_file = self._ssh_config.key_file
             if self._ssh_config.HasField("connect_timeout"):
-                connect_timeout = Duration.from_proto(self._ssh_config.connect_timeout)
+                connect_timeout = duration_from_proto(self._ssh_config.connect_timeout)
 
         # Per-VM/slice overrides
         if manual_config is not None:

@@ -64,6 +64,7 @@ from iris.logging import get_global_buffer, slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, snapshot_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
+from iris.rpc.time_conversions import duration_from_proto
 from rigging.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
 
 logger = logging.getLogger(__name__)
@@ -981,7 +982,7 @@ class Controller:
         """Mark a task as unschedulable due to timeout."""
         job = self._state.get_job(task.job_id)
         if job and job.request.HasField("scheduling_timeout"):
-            timeout = Duration.from_proto(job.request.scheduling_timeout)
+            timeout = duration_from_proto(job.request.scheduling_timeout)
         else:
             timeout = None
         logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout}), marking as UNSCHEDULABLE")

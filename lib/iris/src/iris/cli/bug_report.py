@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from rigging.time_utils import Timestamp
+from iris.rpc.time_conversions import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +287,7 @@ def _task_state_name(state: cluster_pb2.TaskState) -> str:
 def _format_timestamp(ts) -> str:
     if not ts or not ts.epoch_ms:
         return "-"
-    return Timestamp.from_proto(ts).as_formatted_date()
+    return timestamp_from_proto(ts).as_formatted_date()
 
 
 def _compute_duration(start, end) -> str:

@@ -28,8 +28,8 @@ import levanter.utils.fsspec_utils as fsspec_utils
 from rigging.marin_fs import open_url, url_to_fs
 
 from fray.v2.client import JobHandle, JobStatus
-from rigging.execution.executor_step_status import (
-    STATUS_DEP_FAILED,
+from rigging.distributed_lock import PreviousRunFailedError
+from rigging.status_file import (
     STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,
@@ -38,8 +38,7 @@ from fray.v2.local_backend import LocalJobHandle
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
 
-# Re-export for backward compatibility
-from rigging.execution.executor_step_status import PreviousTaskFailedError, should_run, worker_id  # noqa: F401
+STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency-failed — executor-specific status
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +211,7 @@ class StepRunner:
             return None
 
         if not force_run_failed and status in (STATUS_FAILED, STATUS_DEP_FAILED):
-            raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
+            raise PreviousRunFailedError(f"Step {step_name} failed previously. Status: {status}")
 
         if dry_run:
             logger.info(f"[DRY RUN] Would run {step_name} (status: {status})")

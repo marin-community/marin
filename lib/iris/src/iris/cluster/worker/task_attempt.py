@@ -40,6 +40,7 @@ from iris.cluster.task_logging import LogSink
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
+from iris.rpc.time_conversions import timestamp_to_proto
 from rigging.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -392,13 +393,13 @@ class TaskAttempt:
 
         # Set timestamp fields using proto Timestamp messages
         if self.started_at is not None:
-            proto.started_at.CopyFrom(self.started_at.to_proto())
+            proto.started_at.CopyFrom(timestamp_to_proto(self.started_at))
         if self.finished_at is not None:
-            proto.finished_at.CopyFrom(self.finished_at.to_proto())
+            proto.finished_at.CopyFrom(timestamp_to_proto(self.finished_at))
         if self.build_started is not None:
-            proto.build_metrics.build_started.CopyFrom(self.build_started.to_proto())
+            proto.build_metrics.build_started.CopyFrom(timestamp_to_proto(self.build_started))
         if self.build_finished is not None:
-            proto.build_metrics.build_finished.CopyFrom(self.build_finished.to_proto())
+            proto.build_metrics.build_finished.CopyFrom(timestamp_to_proto(self.build_finished))
 
         return proto
 
@@ -786,9 +787,9 @@ class TaskAttempt:
 
                 # Add timestamps if available
                 if self.started_at:
-                    metadata.start_time.CopyFrom(self.started_at.to_proto())
+                    metadata.start_time.CopyFrom(timestamp_to_proto(self.started_at))
                 if self.finished_at:
-                    metadata.end_time.CopyFrom(self.finished_at.to_proto())
+                    metadata.end_time.CopyFrom(timestamp_to_proto(self.finished_at))
 
                 # Add resource usage if available
                 if self.peak_memory_mb > 0:

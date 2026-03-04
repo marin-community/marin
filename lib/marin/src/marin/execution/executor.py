@@ -100,11 +100,12 @@ from rigging.marin_fs import open_url, marin_prefix
 from fray.v2.types import ResourceConfig
 
 from marin.execution.step_spec import StepSpec
-from marin.execution.step_runner import StepRunner, worker_id
+from marin.execution.step_runner import StepRunner
 from marin.execution.remote import RemoteCallable
-from rigging.execution.executor_step_status import (
+from rigging.status_file import (
     STATUS_SUCCESS,
     StatusFile,
+    worker_id,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
 

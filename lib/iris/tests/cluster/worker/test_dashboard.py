@@ -19,6 +19,7 @@ from iris.cluster.runtime.types import ContainerPhase, ContainerStats, Container
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2
+from iris.rpc.time_conversions import duration_to_proto
 from starlette.testclient import TestClient
 from tests.test_utils import wait_for_condition
 
@@ -119,7 +120,7 @@ def create_run_task_request(
         resources=resources,
         ports=ports or [],
     )
-    request.timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    request.timeout.CopyFrom(duration_to_proto(Duration.from_seconds(300)))
     return request
 
 

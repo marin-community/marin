@@ -40,6 +40,7 @@ from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.proto_utils import job_state_name, task_state_name
+from iris.rpc.time_conversions import timestamp_to_proto
 from rigging.time_utils import Timer, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -102,9 +103,9 @@ def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2
             is_worker_failure=attempt.is_worker_failure,
         )
         if attempt.started_at is not None:
-            proto_attempt.started_at.CopyFrom(attempt.started_at.to_proto())
+            proto_attempt.started_at.CopyFrom(timestamp_to_proto(attempt.started_at))
         if attempt.finished_at is not None:
-            proto_attempt.finished_at.CopyFrom(attempt.finished_at.to_proto())
+            proto_attempt.finished_at.CopyFrom(timestamp_to_proto(attempt.finished_at))
         attempts.append(proto_attempt)
 
     proto = cluster_pb2.TaskStatus(
@@ -119,9 +120,9 @@ def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2
         log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
     )
     if current_attempt and current_attempt.started_at:
-        proto.started_at.CopyFrom(current_attempt.started_at.to_proto())
+        proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at))
     if current_attempt and current_attempt.finished_at:
-        proto.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
+        proto.finished_at.CopyFrom(timestamp_to_proto(current_attempt.finished_at))
     if task.resource_usage:
         proto.resource_usage.CopyFrom(task.resource_usage)
     return proto
@@ -377,11 +378,11 @@ class ControllerServiceImpl:
         if job.request:
             proto_job_status.resources.CopyFrom(job.request.resources)
         if job.started_at:
-            proto_job_status.started_at.CopyFrom(job.started_at.to_proto())
+            proto_job_status.started_at.CopyFrom(timestamp_to_proto(job.started_at))
         if job.finished_at:
-            proto_job_status.finished_at.CopyFrom(job.finished_at.to_proto())
+            proto_job_status.finished_at.CopyFrom(timestamp_to_proto(job.finished_at))
         if job.submitted_at:
-            proto_job_status.submitted_at.CopyFrom(job.submitted_at.to_proto())
+            proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at))
 
         return cluster_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
@@ -503,11 +504,11 @@ class ControllerServiceImpl:
                 pending_reason=pending_reason,
             )
             if j.started_at:
-                proto_job.started_at.CopyFrom(j.started_at.to_proto())
+                proto_job.started_at.CopyFrom(timestamp_to_proto(j.started_at))
             if j.finished_at:
-                proto_job.finished_at.CopyFrom(j.finished_at.to_proto())
+                proto_job.finished_at.CopyFrom(timestamp_to_proto(j.finished_at))
             if j.submitted_at:
-                proto_job.submitted_at.CopyFrom(j.submitted_at.to_proto())
+                proto_job.submitted_at.CopyFrom(timestamp_to_proto(j.submitted_at))
             all_jobs.append(proto_job)
 
         total_count = len(all_jobs)
@@ -707,7 +708,7 @@ class ControllerServiceImpl:
                     worker_id=w.worker_id,
                     healthy=w.healthy,
                     consecutive_failures=w.consecutive_failures,
-                    last_heartbeat=w.last_heartbeat.to_proto(),
+                    last_heartbeat=timestamp_to_proto(w.last_heartbeat),
                     running_job_ids=[task_id.to_wire() for task_id in w.running_tasks],
                     address=w.address,
                     metadata=w.metadata,
@@ -884,7 +885,7 @@ class ControllerServiceImpl:
                                 error=job.error or "",
                             )
                             if job.finished_at:
-                                child_status.finished_at.CopyFrom(job.finished_at.to_proto())
+                                child_status.finished_at.CopyFrom(timestamp_to_proto(job.finished_at))
                             child_job_statuses.append(child_status)
             else:
                 tasks.extend(self._state.get_job_tasks(job_name))
@@ -1051,7 +1052,7 @@ class ControllerServiceImpl:
                     entity_id=action.entity_id,
                     details=details_str,
                 )
-                proto_action.timestamp.CopyFrom(action.timestamp.to_proto())
+                proto_action.timestamp.CopyFrom(timestamp_to_proto(action.timestamp))
                 actions.append(proto_action)
         return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)
 
@@ -1157,7 +1158,7 @@ class ControllerServiceImpl:
                 worker_id=worker.worker_id,
                 healthy=worker.healthy,
                 consecutive_failures=worker.consecutive_failures,
-                last_heartbeat=worker.last_heartbeat.to_proto(),
+                last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
                 running_job_ids=[tid.to_wire() for tid in worker.running_tasks],
                 address=worker.address,
                 metadata=worker.metadata,

@@ -37,6 +37,7 @@ from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, vm_pb2
+from iris.rpc.time_conversions import duration_from_proto, timestamp_to_proto
 from rigging.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -686,7 +687,7 @@ class Autoscaler:
         """
         return cls(
             scale_groups=scale_groups,
-            evaluation_interval=Duration.from_proto(config.evaluation_interval),
+            evaluation_interval=duration_from_proto(config.evaluation_interval),
             platform=platform,
             threads=threads,
             base_worker_config=base_worker_config,
@@ -752,7 +753,7 @@ class Autoscaler:
         """
 
         action = vm_pb2.AutoscalerAction(
-            timestamp=Timestamp.now().to_proto(),
+            timestamp=timestamp_to_proto(Timestamp.now()),
             action_type=action_type,
             scale_group=scale_group,
             slice_id=slice_id,
@@ -1142,7 +1143,7 @@ class Autoscaler:
         status = vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation=self._last_evaluation.to_proto(),
+            last_evaluation=timestamp_to_proto(self._last_evaluation),
             recent_actions=list(self._action_log),
         )
         if self._last_routing_decision is not None:

@@ -65,7 +65,9 @@ def test_marin_prefix_from_env():
 
 def test_marin_prefix_from_metadata():
     with (
-        patch("rigging.marin_fs.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b")),
+        patch(
+            "rigging.marin_fs.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b")
+        ),
         patch.dict(os.environ, {}, clear=True),
     ):
         assert marin_prefix() == "gs://marin-us-central2"
@@ -80,7 +82,9 @@ def test_marin_prefix_falls_back_to_local():
 
 
 def test_marin_region_from_metadata():
-    with patch("rigging.marin_fs.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-east1-c")):
+    with patch(
+        "rigging.marin_fs.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-east1-c")
+    ):
         assert marin_region() == "us-east1"
 
 
@@ -136,7 +140,9 @@ def test_marin_temp_bucket_local_fallback_when_unresolvable():
 
 
 def test_marin_temp_bucket_no_prefix():
-    with patch("rigging.marin_fs.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-east1-c")):
+    with patch(
+        "rigging.marin_fs.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-east1-c")
+    ):
         assert marin_temp_bucket(ttl_days=14) == "gs://marin-tmp-us-east1/ttl=14d"
 
 

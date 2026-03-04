@@ -24,6 +24,7 @@ from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.time_conversions import duration_to_proto
 from rigging.time_utils import Duration
 
 # Factory type for creating per-worker environment providers.
@@ -64,9 +65,9 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     )
     config.scale_groups["local-cpu"].CopyFrom(sg)
 
-    config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
-    config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
-    config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
+    config.defaults.autoscaler.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.5)))
+    config.defaults.autoscaler.scale_up_delay.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
+    config.defaults.autoscaler.scale_down_delay.CopyFrom(duration_to_proto(Duration.from_minutes(5)))
 
     return config
 

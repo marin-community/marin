@@ -19,6 +19,7 @@ from iris.logging import BufferedLogRecord, LogBuffer
 from rigging.marin_fs import filesystem
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
+from iris.rpc.time_conversions import timestamp_to_proto
 from rigging.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,7 @@ class FsspecLogSink:
         if len(data) > MAX_LINE_LENGTH:
             data = data[:MAX_LINE_LENGTH]
         log_entry = logging_pb2.LogEntry(
-            timestamp=Timestamp.now().to_proto(),
+            timestamp=timestamp_to_proto(Timestamp.now()),
             source=source,
             data=data,
             attempt_id=self._config.attempt_id,
@@ -259,7 +260,7 @@ class LocalLogSink:
         if len(data) > MAX_LINE_LENGTH:
             data = data[:MAX_LINE_LENGTH]
         log_entry = logging_pb2.LogEntry(
-            timestamp=Timestamp.now().to_proto(),
+            timestamp=timestamp_to_proto(Timestamp.now()),
             source=source,
             data=data,
             attempt_id=self._config.attempt_id,

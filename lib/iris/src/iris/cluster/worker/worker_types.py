@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState
+from iris.rpc.time_conversions import timestamp_to_proto
 from rigging.time_utils import Timestamp
 
 
@@ -36,7 +37,7 @@ class LogLine(BaseModel):
             source=self.source,
             data=self.data,
         )
-        proto.timestamp.CopyFrom(Timestamp.from_seconds(self.timestamp.timestamp()).to_proto())
+        proto.timestamp.CopyFrom(timestamp_to_proto(Timestamp.from_seconds(self.timestamp.timestamp())))
         return proto
 
 

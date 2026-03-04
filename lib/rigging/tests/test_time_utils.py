@@ -32,8 +32,6 @@ def test_deadline_from_now_with_duration():
     assert deadline.expired()
 
 
-
-
 def test_rate_limiter_throttles():
     """RateLimiter prevents running too frequently."""
     limiter = RateLimiter(interval_seconds=0.2)

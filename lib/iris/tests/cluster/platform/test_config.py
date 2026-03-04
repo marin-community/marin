@@ -22,6 +22,7 @@ from iris.cluster.config import (
 from iris.cluster.platform.factory import create_platform
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, ZONE_ATTRIBUTE_KEY
 from iris.rpc import config_pb2
+from iris.rpc.time_conversions import duration_to_proto
 
 
 class TestConfigRoundTrip:
@@ -475,7 +476,7 @@ class TestSshConfigMerging:
             user="ubuntu",
             key_file="~/.ssh/cluster_key",
         )
-        ssh_config_proto.connect_timeout.CopyFrom(Duration.from_seconds(60).to_proto())
+        ssh_config_proto.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(60)))
 
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.CopyFrom(ssh_config_proto)
@@ -515,7 +516,7 @@ class TestSshConfigMerging:
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
-        config.defaults.ssh.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
+        config.defaults.ssh.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(30)))
 
         manual_config = config_pb2.ScaleGroupConfig(
             name="manual_group",

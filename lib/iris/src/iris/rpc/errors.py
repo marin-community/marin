@@ -15,6 +15,7 @@ from connectrpc.errors import ConnectError
 from google.protobuf.any_pb2 import Any as AnyProto
 
 from iris.rpc import errors_pb2
+from iris.rpc.time_conversions import timestamp_to_proto
 from rigging.time_utils import ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ def connect_error_with_traceback(
     details = errors_pb2.ErrorDetails(
         message=message,
     )
-    details.timestamp.CopyFrom(Timestamp.now().to_proto())
+    details.timestamp.CopyFrom(timestamp_to_proto(Timestamp.now()))
 
     if exc is not None:
         details.exception_type = f"{type(exc).__module__}.{type(exc).__name__}"

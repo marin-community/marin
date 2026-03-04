@@ -79,8 +79,8 @@ class StepSpec:
         entire chain runs inside the Fray job.
         """
         from marin.execution.artifact import Artifact
-        from rigging.execution.disk_cache import disk_cache
-        from rigging.execution.distributed_lock import distributed_lock
+        from rigging.disk_cache import disk_cache
+        from rigging.distributed_lock import distributed_lock
         from marin.execution.remote import RemoteCallable
 
         raw_fn = self.fn.fn if isinstance(self.fn, RemoteCallable) else self.fn

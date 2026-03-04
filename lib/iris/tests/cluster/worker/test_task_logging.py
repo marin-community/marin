@@ -16,6 +16,7 @@ from iris.cluster.task_logging import (
 )
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
+from iris.rpc.time_conversions import timestamp_to_proto
 from rigging.time_utils import Timestamp
 
 TASK_ID = JobName.from_wire("/job/test/task/0")
@@ -123,8 +124,8 @@ def test_log_sink_writes_metadata():
             worker_id="worker-1",
             exit_code=0,
         )
-        metadata.start_time.CopyFrom(Timestamp.now().to_proto())
-        metadata.end_time.CopyFrom(Timestamp.now().to_proto())
+        metadata.start_time.CopyFrom(timestamp_to_proto(Timestamp.now()))
+        metadata.end_time.CopyFrom(timestamp_to_proto(Timestamp.now()))
 
         log_sink.write_metadata(metadata)
 
@@ -408,8 +409,8 @@ def test_read_metadata():
             exit_code=137,
             oom_killed=True,
         )
-        metadata.start_time.CopyFrom(Timestamp.now().to_proto())
-        metadata.end_time.CopyFrom(Timestamp.now().to_proto())
+        metadata.start_time.CopyFrom(timestamp_to_proto(Timestamp.now()))
+        metadata.end_time.CopyFrom(timestamp_to_proto(Timestamp.now()))
         log_sink.write_metadata(metadata)
 
         # Read metadata
@@ -492,13 +493,13 @@ def test_log_reader_seek_to_timestamp():
 
         log_sink._logs = [
             logging_pb2.LogEntry(
-                timestamp=Timestamp.from_seconds(1).to_proto(),
+                timestamp=timestamp_to_proto(Timestamp.from_seconds(1)),
                 source="stdout",
                 data="old",
                 attempt_id=0,
             ),
             logging_pb2.LogEntry(
-                timestamp=Timestamp.from_seconds(2).to_proto(),
+                timestamp=timestamp_to_proto(Timestamp.from_seconds(2)),
                 source="stdout",
                 data="new",
                 attempt_id=0,

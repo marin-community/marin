@@ -25,6 +25,7 @@ from iris.cluster.runtime.types import (
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.rpc.time_conversions import duration_to_proto
 from rigging.time_utils import Duration
 from tests.test_utils import wait_for_condition
 
@@ -233,7 +234,7 @@ def create_run_task_request(
         ports=ports or [],
     )
     # Set timeout to 300 seconds
-    request.timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    request.timeout.CopyFrom(duration_to_proto(Duration.from_seconds(300)))
     return request
 
 
