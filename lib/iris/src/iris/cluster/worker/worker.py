@@ -624,13 +624,14 @@ class Worker:
                             if reported_state == cluster_pb2.TASK_STATE_PENDING:
                                 reported_state = cluster_pb2.TASK_STATE_BUILDING
 
+                            log_entries = task.drain_heartbeat_logs()
                             entry = cluster_pb2.Controller.WorkerTaskStatus(
                                 task_id=task_id,
                                 attempt_id=task_proto.current_attempt_id,
                                 state=reported_state,
                                 exit_code=task_proto.exit_code,
                                 error=task_proto.error or "",
-                                log_directory=task.log_directory,
+                                log_entries=log_entries,
                             )
                             if task.status in self._TERMINAL_STATES:
                                 entry.finished_at.CopyFrom(task_proto.finished_at)

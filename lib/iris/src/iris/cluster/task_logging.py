@@ -61,6 +61,17 @@ class LogSink(Protocol):
         """
         ...
 
+    def drain_since(self, cursor: int) -> tuple[list[logging_pb2.LogEntry], int]:
+        """Return log entries appended since the given cursor.
+
+        Args:
+            cursor: Index into the internal log buffer. Pass 0 on first call.
+
+        Returns:
+            Tuple of (new entries, new cursor to pass next time).
+        """
+        ...
+
     @property
     def log_path(self) -> str:
         """Get storage path for this task attempt's logs."""
@@ -194,6 +205,13 @@ class FsspecLogSink:
                 return list(self._logs)
             return list(self._logs[-max_entries:])
 
+    def drain_since(self, cursor: int) -> tuple[list[logging_pb2.LogEntry], int]:
+        with self._lock:
+            new_cursor = len(self._logs)
+            if cursor >= new_cursor:
+                return [], new_cursor
+            return list(self._logs[cursor:new_cursor]), new_cursor
+
     @property
     def log_path(self) -> str:
         """Get URL path for this task attempt's logs."""
@@ -294,6 +312,14 @@ class LocalLogSink:
                 return list(self._logs)
             # Get last max_entries items from deque
             return list(self._logs)[-max_entries:] if len(self._logs) > max_entries else list(self._logs)
+
+    def drain_since(self, cursor: int) -> tuple[list[logging_pb2.LogEntry], int]:
+        with self._lock:
+            all_logs = list(self._logs)
+            new_cursor = len(all_logs)
+            if cursor >= new_cursor:
+                return [], new_cursor
+            return all_logs[cursor:new_cursor], new_cursor
 
     @property
     def log_path(self) -> str:
