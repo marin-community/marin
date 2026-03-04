@@ -680,67 +680,11 @@ class SmokeTestRunner:
         # Unique bundle prefix for snapshot storage across controller restarts.
         # Must be isolated per run so we don't restore stale snapshots from
         # previous smoke test runs.
-        self._bundle_prefix = self._resolve_bundle_prefix()
-
-    def _resolve_bundle_prefix(self) -> str:
-        """Derive bundle prefix from the cluster config.
-
-        For local mode, returns a file:// URI in a temporary directory.
-        For remote mode, derives the prefix from the cluster config:
-          1. If ``storage.bundle_prefix`` is set in the YAML, use it as a base.
-          2. Otherwise, extract the controller/scale-group region and look up
-             the region-local temp bucket.
-
-        This avoids the problem where ``marin_temp_bucket()`` falls back to a
-        local ``file://`` path when run from a non-GCP machine.
-        """
-        if self.config.local:
+        if config.local:
             self._bundle_dir = Path(tempfile.mkdtemp(prefix="iris-smoke-bundles-"))
-            return f"file://{self._bundle_dir}"
-
-        # If the YAML already specifies a bundle_prefix, use it as the base.
-        yaml_prefix = self._cluster_config.storage.bundle_prefix
-        if yaml_prefix:
-            return f"{yaml_prefix.rstrip('/')}/smoke/{self._run_id}"
-
-        # Derive from the cluster region.
-        region = self._region_from_config()
-        if not region:
-            raise ValueError(
-                "Cannot determine region from cluster config for bundle storage. "
-                "Either add a storage.bundle_prefix to your YAML config, "
-                "set the MARIN_PREFIX env var to a gs:// or s3:// URI, "
-                "or use --mode local."
-            )
-
-        from iris.marin_fs import REGION_TO_TMP_BUCKET
-
-        bucket = REGION_TO_TMP_BUCKET.get(region)
-        if not bucket:
-            raise ValueError(
-                f"No temp bucket configured for region {region!r}. "
-                f"Known regions: {sorted(REGION_TO_TMP_BUCKET.keys())}. "
-                f"Add storage.bundle_prefix to your YAML config."
-            )
-
-        return f"gs://{bucket}/ttl=1d/iris/smoke-bundles/{self._run_id}"
-
-    def _region_from_config(self) -> str | None:
-        """Extract the GCP region from the cluster config.
-
-        Checks the controller zone first, then falls back to the first
-        scale group with a GCP zone.
-        """
-        controller = self._cluster_config.controller
-        if controller.HasField("gcp") and controller.gcp.zone:
-            return controller.gcp.zone.rsplit("-", 1)[0]
-
-        for sg in self._cluster_config.scale_groups.values():
-            template = sg.slice_template
-            if template.HasField("gcp") and template.gcp.zone:
-                return template.gcp.zone.rsplit("-", 1)[0]
-
-        return None
+            self._bundle_prefix = f"file://{self._bundle_dir}"
+        else:
+            self._bundle_prefix = f"gs://marin-tmp-us-central2/ttl=1d/iris/smoke-bundles/{self._run_id}"
 
     def run(self) -> bool:
         """Run the smoke test. Returns True if all tests pass."""
