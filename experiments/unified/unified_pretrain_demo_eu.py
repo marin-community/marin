@@ -67,6 +67,7 @@ VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 
 UNIFIED_TOKENIZER_PATH = "gs://marin-eu-west4/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2"
+VISUAL_ONLY_CACHE_PATH = "gs://marin-vlm-eu/visual_only_cache"
 UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm-eu/unified_eval_cache"
 TEXT_EVAL_CACHE_PATH = "gs://marin-vlm-eu/text_eval_cache"
 
@@ -456,6 +457,61 @@ def unified_data_config(
     return data_config
 
 
+def visual_only_data_config(
+    visual_cache_path: str = VISUAL_ONLY_CACHE_PATH,
+    eval_benchmarks: list[str] | None = None,
+    eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
+) -> LmDataConfig:
+    """Data config for pure visual AR training — no text data.
+
+    Uses a visual-only cache where sequences are:
+    <|vision_start|> V₁..V₅₇₆ <|vision_end|> <|endoftext|>
+    with all loss weights = 1.0.
+    """
+    prebuilt_format = PrebuiltLmDatasetFormat(
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+    )
+    components = {
+        "visual_only": DatasetComponent(
+            cache_dir=f"{visual_cache_path}/train",
+            format=prebuilt_format,
+            pack=True,
+            tags=["visual"],
+        ),
+    }
+    weights: dict[str, float] = {"visual_only": 1.0}
+
+    # Validation
+    components["val_visual"] = DatasetComponent(
+        cache_dir=f"{visual_cache_path}/validation",
+        format=prebuilt_format,
+        pack=True,
+        tags=["visual"],
+    )
+    weights["val_visual"] = 0.0
+
+    # Eval benchmarks (generation only: cifar10, imagenet)
+    if eval_benchmarks is not None:
+        for bench in eval_benchmarks:
+            components[f"eval_{bench}"] = DatasetComponent(
+                cache_dir=f"{eval_cache_path}/{bench}",
+                format=prebuilt_format,
+                pack=True,
+                tags=["eval", "generation"],
+            )
+            weights[f"eval_{bench}"] = 0.0
+
+    return LmDataConfig(
+        tokenizer=UNIFIED_TOKENIZER_PATH,
+        components=components,
+        train_weights=weights,
+        shuffle=True,
+        permutation_type="feistel",
+        block_cross_document_attention=True,
+    )
+
+
 def _demo_train_config(learning_rate: float = 3e-4, num_train_steps: int = NUM_STEPS) -> SimpleTrainConfig:
     return SimpleTrainConfig(
         resources=ResourceConfig.with_tpu(TPU_TYPE, slice_count=1),
@@ -587,8 +643,74 @@ def make_unified_4b(
     return _with_vlm_hlo_dump_env(step)
 
 
+# --- Visual-Only Experiment Step Factories ---
+
+DEFAULT_VISUAL_EVAL_BENCHMARKS = [
+    "cifar10_small",
+    "imagenet_small",
+]
+
+
+def make_visual_only_0_6b(
+    learning_rate: float = 3e-4,
+    num_train_steps: int = NUM_STEPS,
+    eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
+):
+    step = default_train(
+        name=EXP_NAME or "visual-only-qwen3-0.6b",
+        tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
+        model_config=qwen3_0_6b,
+        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps),
+        tags=["visual-only", "scaling", "qwen3", "0.6b"],
+        eval_harness_tasks=[],
+        use_default_validation=False,
+    )
+    step = dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
+    return step
+
+
+def make_visual_only_1_7b(
+    learning_rate: float = 3e-4,
+    num_train_steps: int = NUM_STEPS,
+    eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
+):
+    step = default_train(
+        name=EXP_NAME or "visual-only-qwen3-1.7b",
+        tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
+        model_config=qwen3_1_7b,
+        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps),
+        tags=["visual-only", "scaling", "qwen3", "1.7b"],
+        eval_harness_tasks=[],
+        use_default_validation=False,
+    )
+    step = dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
+    return step
+
+
+def make_visual_only_4b(
+    learning_rate: float = 1.5e-4,
+    num_train_steps: int = NUM_STEPS,
+    eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
+):
+    step = default_train(
+        name=EXP_NAME or "visual-only-qwen3-4b",
+        tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
+        model_config=qwen3_4b,
+        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps),
+        tags=["visual-only", "scaling", "qwen3", "4b"],
+        eval_harness_tasks=[],
+        use_default_validation=False,
+    )
+    step = dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
+    return step
+
+
 if __name__ == "__main__":
-    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, num_train_steps=NUM_STEPS, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
+    # steps = [make_unified_0_6b(
+    #     text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT,
+    #     learning_rate=LEARNING_RATE, num_train_steps=NUM_STEPS,
+    #     w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO,
+    # )]
     steps = [
         make_unified_1_7b(
             text_weight=TEXT_WEIGHT,
@@ -599,7 +721,12 @@ if __name__ == "__main__":
             und_gen_ratio=UND_GEN_RATIO,
         )
     ]
-    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, num_train_steps=NUM_STEPS, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
+    # steps = [make_unified_4b(
+    #     text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT,
+    #     learning_rate=LEARNING_RATE, num_train_steps=NUM_STEPS,
+    #     w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO,
+    # )]
+    # steps = [make_visual_only_1_7b(learning_rate=LEARNING_RATE, num_train_steps=NUM_STEPS)]
     executor_main(
         steps,
         description="Unified image-text model pre-training with Qwen3 architecture",

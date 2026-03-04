@@ -66,7 +66,9 @@ def main():
     parser.add_argument("--row_index", type=int, required=True, help="Record index in the cache")
     parser.add_argument("--cache_path", default="gs://marin-vlm/stage2_sharded_full_tokenized_llama3/train")
     parser.add_argument("--tokenizer", default=UNIFIED_TOKENIZER_PATH)
-    parser.add_argument("--show_visual_tokens", action="store_true", help="Print all visual token IDs with offset subtracted")
+    parser.add_argument(
+        "--show_visual_tokens", action="store_true", help="Print all visual token IDs with offset subtracted"
+    )
     args = parser.parse_args()
 
     from levanter.compat.hf_checkpoints import load_tokenizer
