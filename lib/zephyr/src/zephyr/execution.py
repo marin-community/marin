@@ -1208,6 +1208,7 @@ class ZephyrContext:
             name=f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}-workers",
             count=actual_workers,
             resources=self.resources,
+            actor_config=ActorConfig(max_task_retries=10),
         )
 
         self._worker_count = actual_workers

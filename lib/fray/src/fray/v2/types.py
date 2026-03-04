@@ -377,12 +377,17 @@ class ActorConfig:
     `max_restarts` overrides the backend default for automatic actor restarts.
     Set to 0 for actors that must NOT auto-restart on preemption because they
     require remote initialization beyond __init__.
+
+    `max_task_retries` controls how many times a failed task (or actor
+    initialisation) is retried before being marked as permanently failed.
+    Maps to Ray's ``max_task_retries`` and Iris's ``max_retries_failure``.
     """
 
     max_concurrency: int = 1
     # TODO: max_restarts is conceptually a job-level property, revisit when we
     # drop Ray support.
     max_restarts: int | None = None
+    max_task_retries: int | None = None
 
 
 # ---------------------------------------------------------------------------
