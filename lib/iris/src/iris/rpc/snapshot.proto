@@ -78,6 +78,10 @@ message TaskSnapshot {
   int32 preemption_count = 13;
 
   repeated TaskAttemptSnapshot attempts = 20;
+
+  // Reservation holder: -1 means this is a normal (non-holder) task.
+  // >= 0 is the index of the reservation entry this holder task represents.
+  int32 reservation_entry_idx = 30;
 }
 
 message TaskAttemptSnapshot {

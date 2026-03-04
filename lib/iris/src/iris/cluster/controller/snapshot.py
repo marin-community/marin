@@ -32,6 +32,7 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerTaskAttempt,
     ControllerWorker,
+    Reservation,
     ReservationClaim,
 )
 from iris.cluster.platform.base import CloudWorkerState, CommandResult, Labels, Platform, SliceHandle, WorkerStatus
@@ -169,6 +170,7 @@ def _snapshot_task(task: ControllerTask) -> snapshot_pb2.TaskSnapshot:
         max_retries_preemption=task.max_retries_preemption,
         failure_count=task.failure_count,
         preemption_count=task.preemption_count,
+        reservation_entry_idx=task.reservation_entry_idx if task.reservation_entry_idx is not None else -1,
     )
     snap.submitted_at.CopyFrom(task.submitted_at.to_proto())
     if task.started_at:
@@ -351,6 +353,10 @@ def _restore_attempt(snap: snapshot_pb2.TaskAttemptSnapshot) -> ControllerTaskAt
 
 def _restore_task(snap: snapshot_pb2.TaskSnapshot) -> ControllerTask:
     attempts = [_restore_attempt(a) for a in snap.attempts]
+    # reservation_entry_idx: -1 (or 0 for old snapshots missing the field)
+    # means "not a holder task". >= 0 indicates the reservation entry index.
+    entry_idx = snap.reservation_entry_idx
+    is_holder = entry_idx >= 0
     return ControllerTask(
         task_id=JobName.from_string(snap.task_id),
         job_id=JobName.from_string(snap.job_id),
@@ -365,6 +371,8 @@ def _restore_task(snap: snapshot_pb2.TaskSnapshot) -> ControllerTask:
         preemption_count=snap.preemption_count,
         attempts=attempts,
         submitted_at=Timestamp.from_proto(snap.submitted_at),
+        is_reservation_holder=is_holder,
+        reservation_entry_idx=entry_idx if is_holder else None,
     )
 
 
@@ -467,7 +475,21 @@ def restore_snapshot(
             if task.state in _ACTIVE_TASK_STATES and task.worker_id:
                 worker = workers.get(task.worker_id)
                 if worker:
-                    worker.assign_task(task.task_id, job.request.resources)
+                    if task.is_reservation_holder:
+                        # Synthetic holder tasks occupy the running set but
+                        # commit zero resources (taint system handles isolation).
+                        worker.running_tasks.add(task.task_id)
+                        worker.task_history.add(task.task_id)
+                    else:
+                        worker.assign_task(task.task_id, job.request.resources)
+
+        # Rebuild Reservation objects from synthetic holder tasks.
+        if job.request.HasField("reservation"):
+            reservation = Reservation(job_id=job.job_id)
+            for task in tasks:
+                if task.is_reservation_holder and task.reservation_entry_idx is not None:
+                    reservation.holder_tasks[task.reservation_entry_idx] = task.task_id
+            state._reservations[job.job_id] = reservation
 
     # Restore endpoints with their task associations
     endpoint_count = 0

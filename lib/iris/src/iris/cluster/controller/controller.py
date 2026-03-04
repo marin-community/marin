@@ -7,7 +7,7 @@ import logging
 import queue
 import sys
 import threading
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from time import sleep
 from typing import Protocol
@@ -90,6 +90,22 @@ def job_requirements_from_job(job: ControllerJob) -> JobRequirements:
     )
 
 
+def _get_reservation_entry(task: ControllerTask, job: ControllerJob) -> "cluster_pb2.ReservationEntry | None":
+    """Look up the reservation entry backing a synthetic holder task.
+
+    Returns None for non-holder tasks or when the reservation config is absent.
+    """
+    if not task.is_reservation_holder or task.reservation_entry_idx is None:
+        return None
+    if not job.request.HasField("reservation"):
+        return None
+    entries = job.request.reservation.entries
+    idx = task.reservation_entry_idx
+    if 0 <= idx < len(entries):
+        return entries[idx]
+    return None
+
+
 def compute_demand_entries(
     state: ControllerState,
     scheduler: Scheduler | None = None,
@@ -98,20 +114,16 @@ def compute_demand_entries(
 ) -> list[DemandEntry]:
     """Compute demand entries for the autoscaler from controller state.
 
-    Runs a dry-run scheduling pass with building limits disabled to absorb
-    pending tasks into existing worker capacity. Only tasks that remain
-    unscheduled generate demand entries — this means only tasks that are truly
-    unschedulable (wrong device, insufficient resources, no matching workers).
+    Demand flows through a single path: pending tasks (both real and synthetic
+    reservation holders). Synthetic holder tasks always generate demand when
+    pending, keeping reserved capacity alive. They are excluded from the dry-run
+    because they must always generate demand regardless of worker availability.
 
-    Tasks blocked only by transient conditions like the building-task concurrency
-    limit are absorbed by the dry-run (since it ignores building limits) and do
-    NOT generate demand. This prevents the autoscaler from scaling up for work
-    that existing workers can handle once their current builds complete.
-
-    When no scheduler/workers are provided, falls back to treating all pending
-    tasks as demand (pre-existing behavior for tests that don't set up workers).
-
-    Reservation entries always generate demand regardless of worker capacity.
+    Real tasks go through the normal dry-run scheduling pass: those that fit on
+    existing workers are absorbed and do not generate demand. Because synthetic
+    tasks commit zero resources on workers, claimed workers appear to have full
+    capacity in the dry-run, so real tasks are correctly absorbed when their
+    reserved workers exist.
 
     Args:
         state: Controller state to read pending tasks and jobs from.
@@ -122,20 +134,27 @@ def compute_demand_entries(
     """
     demand_entries: list[DemandEntry] = []
 
-    # Demand from pending tasks
-    tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
-    schedulable_tasks: list[ControllerTask] = []
+    # Partition pending tasks into real and synthetic. Synthetic holder tasks
+    # always generate demand (excluded from the dry-run); real tasks go through
+    # the dry-run to be absorbed by existing capacity.
+    real_tasks_by_job: dict[JobName, list[ControllerTask]] = defaultdict(list)
+    synthetic_tasks: list[ControllerTask] = []
+    schedulable_real_tasks: list[ControllerTask] = []
     for task in state.peek_pending_tasks():
         if not task.can_be_scheduled():
             continue
-        tasks_by_job[task.job_id].append(task)
-        schedulable_tasks.append(task)
+        if task.is_reservation_holder:
+            synthetic_tasks.append(task)
+        else:
+            real_tasks_by_job[task.job_id].append(task)
+            schedulable_real_tasks.append(task)
 
     # Build job requirements once, shared between dry-run and demand emission.
     # Also track which jobs have reservations so we can apply taint injection.
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
-    for task in schedulable_tasks:
+    all_tasks = schedulable_real_tasks + synthetic_tasks
+    for task in all_tasks:
         if task.job_id not in jobs:
             job = state.get_job(task.job_id)
             if job:
@@ -146,17 +165,12 @@ def compute_demand_entries(
                     has_reservation.add(task.job_id)
 
     # Dry-run scheduling with building/assignment limits disabled.
-    # This absorbs all tasks that would fit on existing workers if there were no
-    # per-worker limits. Tasks that remain unscheduled after this pass are truly
-    # unschedulable and need new capacity from the autoscaler.
-    #
-    # We apply the same reservation taint injection as the real scheduler so that
-    # non-reservation tasks don't appear "absorbed" by claimed workers they can't
-    # actually land on.
+    # Only real tasks participate; synthetic tasks are excluded because they
+    # must always generate demand to keep reserved capacity alive.
     absorbed_task_ids: set[JobName] = set()
     if scheduler is not None and workers is not None and workers:
         building_counts = state.snapshot_building_counts()
-        task_ids = [t.task_id for t in schedulable_tasks]
+        task_ids = [t.task_id for t in schedulable_real_tasks]
         claims = reservation_claims or {}
         dry_run_workers = _inject_reservation_taints(workers, claims)
         dry_run_jobs = _inject_taint_constraints(jobs, has_reservation)
@@ -173,7 +187,16 @@ def compute_demand_entries(
         for task_id, _ in result.assignments:
             absorbed_task_ids.add(task_id)
 
-    for job_id, tasks in tasks_by_job.items():
+    # Count pending synthetic holder tasks per job. When both synthetic and
+    # real tasks are pending (e.g. before any workers exist), synthetic tasks
+    # already cover reservation demand. Real tasks that overlap with this
+    # count are suppressed to avoid double-counting.
+    synthetic_pending_count: dict[JobName, int] = {}
+    for task in synthetic_tasks:
+        synthetic_pending_count[task.job_id] = synthetic_pending_count.get(task.job_id, 0) + 1
+
+    # Emit demand for real tasks not absorbed by the dry-run.
+    for job_id, tasks in real_tasks_by_job.items():
         job = state.get_job(job_id)
         if not job:
             continue
@@ -195,27 +218,44 @@ def compute_demand_entries(
         except ValueError as e:
             invalid_reason = f"invalid_constraints: {e}"
 
-        # Build a per-job budget from reservation entries so that task demand
-        # which overlaps with the reservation anchor does not double-count.
-        reservation_budget = _build_reservation_budget(job)
+        budget = synthetic_pending_count.get(job_id, 0)
 
         if job.is_coscheduled:
-            # Coscheduled jobs place exactly 1 task per worker, so the dry-run's
-            # find_assignments correctly absorbs them (it handles coscheduled
-            # atomically via group_by). Any task not absorbed is truly unschedulable.
             remaining_ids = []
             for t in tasks:
                 if t.task_id in absorbed_task_ids:
                     continue
-                key = (device_type, device_variant)
-                if reservation_budget[key] > 0:
-                    reservation_budget[key] -= 1
+                if budget > 0:
+                    budget -= 1
                 else:
                     remaining_ids.append(t.task_id.to_wire())
             if remaining_ids:
-                entry = DemandEntry(
-                    task_ids=remaining_ids,
-                    coschedule_group_id=job.job_id.to_wire(),
+                demand_entries.append(
+                    DemandEntry(
+                        task_ids=remaining_ids,
+                        coschedule_group_id=job.job_id.to_wire(),
+                        device_type=device_type,
+                        device_variant=device_variant,
+                        constraints=list(job.request.constraints),
+                        resources=job.request.resources,
+                        preemptible=preemptible_pref,
+                        required_regions=required_regions,
+                        required_zones=required_zones,
+                        invalid_reason=invalid_reason,
+                    )
+                )
+            continue
+
+        for task in tasks:
+            if task.task_id in absorbed_task_ids:
+                continue
+            if budget > 0:
+                budget -= 1
+                continue
+            demand_entries.append(
+                DemandEntry(
+                    task_ids=[task.task_id.to_wire()],
+                    coschedule_group_id=None,
                     device_type=device_type,
                     device_variant=device_variant,
                     constraints=list(job.request.constraints),
@@ -225,112 +265,50 @@ def compute_demand_entries(
                     required_zones=required_zones,
                     invalid_reason=invalid_reason,
                 )
-                demand_entries.append(entry)
+            )
+
+    # Emit demand for synthetic holder tasks. Each maps 1:1 to a reservation
+    # entry and uses that entry's resources and constraints, which may differ
+    # from the job's own resource spec.
+    for task in synthetic_tasks:
+        job = state.get_job(task.job_id)
+        if not job or job.is_finished():
+            continue
+        res_entry = _get_reservation_entry(task, job)
+        if res_entry is None:
             continue
 
-        for task in tasks:
-            if task.task_id in absorbed_task_ids:
-                continue
-            key = (device_type, device_variant)
-            if reservation_budget[key] > 0:
-                reservation_budget[key] -= 1
-                continue
-            entry = DemandEntry(
+        device = res_entry.resources.device
+        device_type = get_device_type_enum(device)
+        device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
+        preemptible_pref: bool | None = None
+        required_regions: frozenset[str] | None = None
+        required_zones: frozenset[str] | None = None
+        invalid_reason: str | None = None
+        try:
+            normalized = normalize_constraints(res_entry.constraints)
+            preemptible_pref = normalized.preemptible
+            required_regions = normalized.required_regions
+            required_zones = normalized.required_zones
+        except ValueError as e:
+            invalid_reason = f"invalid_constraints: {e}"
+
+        demand_entries.append(
+            DemandEntry(
                 task_ids=[task.task_id.to_wire()],
                 coschedule_group_id=None,
                 device_type=device_type,
                 device_variant=device_variant,
-                constraints=list(job.request.constraints),
-                resources=job.request.resources,
+                constraints=list(res_entry.constraints),
+                resources=res_entry.resources,
                 preemptible=preemptible_pref,
                 required_regions=required_regions,
                 required_zones=required_zones,
                 invalid_reason=invalid_reason,
             )
-            demand_entries.append(entry)
-
-    # Demand from reservations (persistent demand that keeps capacity alive)
-    demand_entries.extend(_demand_from_reservations(state))
+        )
 
     return demand_entries
-
-
-def _demand_from_reservations(state: ControllerState) -> list[DemandEntry]:
-    """Generate demand entries from non-terminal jobs with reservations.
-
-    Each reservation entry maps 1:1 to a DemandEntry. All entries always
-    generate demand, which prevents the autoscaler from scaling down
-    reserved capacity regardless of whether tasks are running.
-
-    TODO: Reservation entries should be locked to the same scaling group so the
-    autoscaler doesn't scatter them across regions. Currently each entry is an
-    independent DemandEntry, which means the autoscaler can provision workers in
-    different scaling groups for the same reservation. This will be addressed
-    when reservations become top-level objects (see GitHub issue).
-    """
-    entries: list[DemandEntry] = []
-    for job in state.list_all_jobs():
-        if job.is_finished():
-            continue
-        if not job.request.HasField("reservation"):
-            continue
-
-        job_wire = job.job_id.to_wire()
-        for idx, res_entry in enumerate(job.request.reservation.entries):
-            device = res_entry.resources.device
-            device_type = get_device_type_enum(device)
-            device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
-
-            preemptible_pref: bool | None = None
-            required_regions: frozenset[str] | None = None
-            required_zones: frozenset[str] | None = None
-            invalid_reason: str | None = None
-            try:
-                normalized = normalize_constraints(res_entry.constraints)
-                preemptible_pref = normalized.preemptible
-                required_regions = normalized.required_regions
-                required_zones = normalized.required_zones
-            except ValueError as e:
-                invalid_reason = f"invalid_constraints: {e}"
-
-            entries.append(
-                DemandEntry(
-                    task_ids=[f"{job_wire}:reservation:{idx}"],
-                    coschedule_group_id=None,
-                    device_type=device_type,
-                    device_variant=device_variant,
-                    constraints=list(res_entry.constraints),
-                    resources=res_entry.resources,
-                    preemptible=preemptible_pref,
-                    required_regions=required_regions,
-                    required_zones=required_zones,
-                    invalid_reason=invalid_reason,
-                )
-            )
-    return entries
-
-
-def _build_reservation_budget(job: ControllerJob) -> Counter[tuple[DeviceType, str | None]]:
-    """Build a deduplication budget from a job's reservation entries.
-
-    Returns a Counter keyed by (device_type, device_variant). Task demand that
-    matches a budget entry consumes one unit; unmatched task demand passes through.
-    Jobs without reservations return an empty counter.
-
-    TODO: Budget key only matches (device_type, device_variant). If a reservation entry
-    has different constraints or resource quantities than the job's tasks, dedup may
-    incorrectly suppress task demand. In practice this is fine because reservation
-    entries are expected to match the job's own resource spec. Tighten if needed.
-    """
-    budget: Counter[tuple[DeviceType, str | None]] = Counter()
-    if not job.request.HasField("reservation"):
-        return budget
-    for res_entry in job.request.reservation.entries:
-        device = res_entry.resources.device
-        dt = get_device_type_enum(device)
-        dv = get_device_variant(device) if dt != DeviceType.CPU else None
-        budget[(dt, dv)] += 1
-    return budget
 
 
 def _worker_matches_reservation_entry(
@@ -1007,18 +985,26 @@ class Controller:
             if job is None:
                 continue
 
+            has_real_dispatch = False
             for task_id, worker_id in job_assignments:
                 task = self._state.get_task(task_id)
                 if task is None:
                     continue
 
-                # Commit resources via event
+                # Commit resources via event (handles synthetic vs real internally)
                 self._state.handle_event(
                     TaskAssignedEvent(
                         task_id=task_id,
                         worker_id=worker_id,
                     )
                 )
+
+                # Synthetic holder tasks hold the worker alive but are never
+                # dispatched — there is no entrypoint to run.
+                if task.is_reservation_holder:
+                    continue
+
+                has_real_dispatch = True
 
                 # Build the run request.
                 # For reservation jobs, inject region constraints derived from
@@ -1035,7 +1021,7 @@ class Controller:
                 )
                 request = cluster_pb2.Worker.RunTaskRequest(
                     task_id=task_id.to_wire(),
-                    num_tasks=len(self._state.get_job_tasks(job_id)),
+                    num_tasks=job.num_tasks,
                     entrypoint=job.request.entrypoint,
                     environment=job.request.environment,
                     bundle_gcs_path=job.request.bundle_gcs_path,
@@ -1052,7 +1038,7 @@ class Controller:
                 self._state.buffer_dispatch(worker_id, request)
 
             # Wake heartbeat thread to deliver buffered dispatches immediately
-            if job_assignments:
+            if has_real_dispatch:
                 self._heartbeat_event.set()
 
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:

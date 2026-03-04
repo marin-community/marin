@@ -64,6 +64,21 @@ class ReservationClaim:
     entry_idx: int
 
 
+@dataclass
+class Reservation:
+    """Reserved capacity for a job.
+
+    Created when a job with a ``reservation`` field is submitted. Each
+    reservation entry produces one synthetic holder task that occupies a
+    worker slot and generates demand through the normal task path,
+    eliminating the need for a parallel demand path.
+    """
+
+    job_id: JobName
+    holder_tasks: dict[int, JobName] = field(default_factory=dict)
+    """entry_idx → synthetic task_id."""
+
+
 MAX_REPLICAS_PER_JOB = 10000
 """Maximum replicas allowed per job to prevent resource exhaustion."""
 
@@ -266,6 +281,16 @@ class ControllerTask:
 
     # Latest resource usage reported by the worker (RAM, CPU, disk)
     resource_usage: cluster_pb2.ResourceUsage | None = None
+
+    # Reservation holder flag. Synthetic tasks are created for reservation
+    # entries — one per entry — to hold capacity on claimed workers. They
+    # commit zero resources (the taint system handles isolation), are never
+    # dispatched, and are excluded from job completion accounting.
+    is_reservation_holder: bool = False
+
+    # Index of the reservation entry this holder task represents (0-based).
+    # None for real tasks.
+    reservation_entry_idx: int | None = None
 
     # --- Read-only properties that derive from attempts ---
 
@@ -940,6 +965,7 @@ class ControllerState:
         self._endpoints_by_task: dict[JobName, set[str]] = {}  # task_id -> endpoint_ids
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
         self._pending_dispatch: dict[WorkerId, PendingDispatch] = {}  # Buffered heartbeat dispatches
+        self._reservations: dict[JobName, Reservation] = {}  # job_id -> reservation
 
     # =========================================================================
     # Event-Driven State Transitions
@@ -1141,6 +1167,30 @@ class ControllerState:
             job.task_state_counts[task.state] += 1
             txn.log("task_created", task.task_id, job_id=str(event.job_id))
 
+        # Create synthetic holder tasks for reservation entries. These
+        # placeholder tasks generate demand through the normal task path and
+        # hold claimed workers active, replacing the parallel demand path.
+        # They commit zero resources (taint system handles isolation), are
+        # never dispatched, and don't count toward job completion.
+        if job.request.HasField("reservation"):
+            reservation = Reservation(job_id=job.job_id)
+            num_replicas = job.request.replicas
+            for i in range(len(job.request.reservation.entries)):
+                synth_task = ControllerTask(
+                    task_id=job.job_id.task(num_replicas + i),
+                    job_id=job.job_id,
+                    is_reservation_holder=True,
+                    reservation_entry_idx=i,
+                    max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
+                    submitted_at=job.submitted_at,
+                )
+                reservation.holder_tasks[i] = synth_task.task_id
+                self._tasks[synth_task.task_id] = synth_task
+                self._tasks_by_job[event.job_id].append(synth_task.task_id)
+                self._enqueue_task(synth_task.task_id)
+                txn.log("reservation_holder_created", synth_task.task_id, reservation_entry=i)
+            self._reservations[job.job_id] = reservation
+
         txn.log("job_submitted", event.job_id, num_tasks=job.num_tasks)
 
     def _on_job_cancelled(self, txn: TransactionLog, event: JobCancelledEvent) -> None:
@@ -1200,13 +1250,21 @@ class ControllerState:
         old_state = task.state
         task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_ASSIGNED)
 
-        # Commit resources and add to running_tasks
-        worker.assign_task(event.task_id, job.request.resources)
+        if task.is_reservation_holder:
+            # Synthetic holder tasks occupy the worker's running set (preventing
+            # idle scale-down) but commit zero resources — capacity isolation is
+            # handled by the taint system, not resource consumption.
+            worker.running_tasks.add(event.task_id)
+            worker.task_history.add(event.task_id)
+        else:
+            worker.assign_task(event.task_id, job.request.resources)
 
-        # Update job counters (state stays PENDING, so no job state change expected)
-        new_job_state = job.on_task_transition(old_state, task.state)
-        if new_job_state is not None:
-            job.state = new_job_state
+        # Synthetic tasks are excluded from num_tasks and task_state_counts,
+        # so they must not drive job state transitions.
+        if not task.is_reservation_holder:
+            new_job_state = job.on_task_transition(old_state, task.state)
+            if new_job_state is not None:
+                job.state = new_job_state
 
         txn.log("task_assigned", event.task_id, worker_id=str(event.worker_id))
 
@@ -1340,11 +1398,12 @@ class ControllerState:
                 is_finished,
             )
 
-        # Coscheduled group failure: if one task fails terminally, kill all running siblings.
-        # For multi-host TPU jobs, if one host fails the other hosts cannot continue
-        # (collective ops will timeout), so we immediately kill all running siblings.
+        # Coscheduled group failure: if one real task fails terminally, kill all
+        # running siblings. Synthetic holder tasks neither trigger nor participate
+        # in the cascade (they are never dispatched so there is nothing to abort).
         if (
             job.is_coscheduled
+            and not task.is_reservation_holder
             and task.is_finished()
             and task.state
             in (
@@ -1354,11 +1413,13 @@ class ControllerState:
         ):
             self._cascade_coscheduled_failure(task, job, txn)
 
-        # Update job state counters and finalize if needed
-        new_job_state = job.on_task_transition(old_state, task.state)
-        if new_job_state is not None:
-            killed_tasks = self._finalize_job_state(job, new_job_state, txn)
-            txn.tasks_to_kill.update(killed_tasks)
+        # Synthetic tasks are excluded from num_tasks and task_state_counts,
+        # so they must not drive job state transitions.
+        if not task.is_reservation_holder:
+            new_job_state = job.on_task_transition(old_state, task.state)
+            if new_job_state is not None:
+                killed_tasks = self._finalize_job_state(job, new_job_state, txn)
+                txn.tasks_to_kill.update(killed_tasks)
 
         txn.log(
             "task_state_changed",
@@ -1406,7 +1467,12 @@ class ControllerState:
         if worker_id:
             worker = self._workers.get(worker_id)
             if worker and task.task_id in worker.running_tasks:
-                worker.unassign_task(task.task_id, job.request.resources)
+                if task.is_reservation_holder:
+                    # Synthetic tasks never committed resources; just remove
+                    # from the running set.
+                    worker.running_tasks.discard(task.task_id)
+                else:
+                    worker.unassign_task(task.task_id, job.request.resources)
                 txn.log("task_unassigned", task.task_id, worker_id=str(worker_id))
 
         self._remove_endpoints_for_task(task.task_id)
@@ -1435,6 +1501,8 @@ class ControllerState:
                 continue
 
             sibling = self._tasks[sibling_id]
+            if sibling.is_reservation_holder:
+                continue
             if sibling.state not in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_ASSIGNED):
                 continue
 
@@ -1500,19 +1568,24 @@ class ControllerState:
             if tasks is None:
                 tasks = expand_job_to_tasks(job)
 
-            # Initialize task state counts
-            job.num_tasks = len(tasks)
+            # Initialize task state counts (excluding synthetic holder tasks)
+            job.num_tasks = sum(1 for t in tasks if not t.is_reservation_holder)
             for task in tasks:
                 self._tasks[task.task_id] = task
                 self._tasks_by_job[job.job_id].append(task.task_id)
                 self._enqueue_task(task.task_id)
-                job.task_state_counts[task.state] += 1
+                if not task.is_reservation_holder:
+                    job.task_state_counts[task.state] += 1
 
             return tasks
 
     def get_job(self, job_id: JobName) -> ControllerJob | None:
         with self._lock:
             return self._jobs.get(job_id)
+
+    def get_reservation(self, job_id: JobName) -> Reservation | None:
+        with self._lock:
+            return self._reservations.get(job_id)
 
     def list_all_jobs(self) -> list[ControllerJob]:
         with self._lock:
@@ -1641,7 +1714,12 @@ class ControllerState:
             job.error = self._get_first_task_error(job.job_id)
             killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job exceeded max_task_failures", txn)
         elif new_state == cluster_pb2.JOB_STATE_SUCCEEDED:
-            pass
+            # Kill synthetic holder tasks still holding capacity. Real tasks
+            # are all succeeded at this point, but holders may still be
+            # assigned to workers.
+            killed_tasks = self._mark_remaining_tasks_killed(
+                job.job_id, "Job succeeded, releasing reservation holders", txn
+            )
         elif new_state == cluster_pb2.JOB_STATE_KILLED:
             job.error = self._get_first_task_error(job.job_id)
             killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job was terminated.", txn)
@@ -1735,21 +1813,25 @@ class ControllerState:
             task.finished_at = now
             task.error = error
 
-            # Update job's task state counts
-            if job:
+            # Synthetic tasks are excluded from task_state_counts.
+            if not task.is_reservation_holder and job:
                 job.task_state_counts[old_state] -= 1
                 job.task_state_counts[cluster_pb2.TASK_STATE_KILLED] += 1
 
             tasks_to_remove_from_queue.add(task_id)
 
-            # Only track tasks with workers assigned for kill RPC
-            if had_worker:
+            # Only real tasks with workers assigned need kill RPCs.
+            # Synthetic tasks were never dispatched so there is nothing to abort.
+            if had_worker and not task.is_reservation_holder:
                 tasks_needing_kill_rpc.add(task_id)
 
             if task.worker_id and job:
                 worker = self._workers.get(task.worker_id)
                 if worker:
-                    worker.unassign_task(task_id, job.request.resources)
+                    if task.is_reservation_holder:
+                        worker.running_tasks.discard(task_id)
+                    else:
+                        worker.unassign_task(task_id, job.request.resources)
             self._remove_endpoints_for_task(task_id)
 
             txn.log("task_killed", task_id, old_state=old_state, error=error)
