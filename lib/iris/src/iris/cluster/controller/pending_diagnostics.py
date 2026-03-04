@@ -18,8 +18,6 @@ from collections import Counter, defaultdict
 from iris.cluster.types import JobName
 from iris.rpc import vm_pb2
 
-ACTIVE_HINT_PREFIXES = ("Waiting for worker scale-up in scale group",)
-
 
 def _task_id_to_job_id(task_id: str) -> str | None:
     """Return parent job wire id for a task id, or None for invalid input."""
@@ -88,8 +86,3 @@ def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str,
         hints[job_id] = f"Unsatisfied autoscaler demand: {reason}"
 
     return hints
-
-
-def is_active_scale_up_hint(hint: str) -> bool:
-    """Whether a hint indicates the autoscaler is actively provisioning capacity."""
-    return any(hint.startswith(prefix) for prefix in ACTIVE_HINT_PREFIXES)
