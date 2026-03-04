@@ -11,6 +11,7 @@ knowledge of logical operation types.
 from __future__ import annotations
 
 import heapq
+import inspect
 import logging
 import os
 import zlib
@@ -154,8 +155,12 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
 
 
 def _reduce_gen(shard: Any, key_fn: Callable, reducer_fn: Callable) -> Iterator:
+    is_gen = inspect.isgeneratorfunction(reducer_fn)
     for key, items_iter in _merge_sorted_chunks(shard, key_fn):
-        yield reducer_fn(key, items_iter)
+        if is_gen:
+            yield from reducer_fn(key, items_iter)
+        else:
+            yield reducer_fn(key, items_iter)
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
