@@ -724,6 +724,16 @@ def test_get_worker_status_by_worker_id(client, state, make_worker_metadata):
     assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
 
 
+def test_get_worker_status_by_address(client, state, make_worker_metadata):
+    """GetWorkerStatus falls back to matching by address host when worker_id lookup fails."""
+    register_worker(state, "my-vm-name-0", "10.0.0.5:8080", make_worker_metadata())
+
+    # Lookup by IP (host portion of address) should find the worker
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "10.0.0.5"})
+    assert resp.get("worker", {}).get("workerId") == "my-vm-name-0"
+    assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
+
+
 def test_get_worker_status_unknown_id_returns_error(client):
     """GetWorkerStatus returns 404 for unknown IDs (no VM fallback)."""
     resp = client.post(
